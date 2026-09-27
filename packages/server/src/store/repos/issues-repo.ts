@@ -270,12 +270,22 @@ export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
   /**
-   * MUL-400 E3 gate 3. `blocked_by` is created together with the issue, so a
-   * rejected dependency (cycle, ancestor, cross-workspace) leaves no half-created
-   * issue behind, and an issue with an unmet prerequisite always parks at
-   * `backlog` whatever `status` asked for.
+   * MUL-400 E3 gate 3. The whole creation — the issue row, its number, its
+   * dependencies and the cycle/ancestor checks — is one transaction, so a
+   * rejected dependency leaves nothing behind: no orphan issue, no consumed
+   * number. Dispatch is the caller's business and happens after this commits.
+   *
+   * The body runs through {@link createIssueWithinTransaction}; the wrapper only
+   * decides whether it owns the transaction, because Postgres has no savepoints
+   * here and callers such as Feishu ingestion and autopilots already hold one.
    */
   createIssue(input: CreateIssueInput): MultiremiIssue {
+    if (this.ctx.db.inTransaction) return this.createIssueWithinTransaction(input);
+    return this.ctx.db.transaction(() => this.createIssueWithinTransaction(input))();
+  }
+
+  /** Caller owns the transaction (see {@link createIssue}). */
+  private createIssueWithinTransaction(input: CreateIssueInput): MultiremiIssue {
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
@@ -1095,7 +1105,7 @@ export class IssuesRepo {
   private listPrerequisites(issueId: string): IssueDependencyUnmetRef[] {
     const rows = this.ctx.db.query(
       `SELECT d.id AS dependency_id,
-              d.issue_id AS dependent_issue_id,
+              CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END AS dependent_issue_id,
               prereq.id AS prerequisite_issue_id,
               prereq.issue_key,
               prereq.title,
@@ -1157,6 +1167,9 @@ export class IssuesRepo {
     dependency: MultiremiIssueDependency,
     perspectiveIssueId: string,
   ): MultiremiIssueDependencyView {
+    // `related` is neither a prerequisite nor a dependent, so inventing a
+    // direction for it would let a client render "waits for" on a peer link.
+    if (dependency.type === "related") return { ...dependency, direction: null };
     const callerIsIssue = dependency.issueId === perspectiveIssueId;
     const callerWaits = dependency.type === "blocks" ? !callerIsIssue : callerIsIssue;
     return {
@@ -1387,6 +1400,11 @@ export class IssuesRepo {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
+    // MUL-400 E3: a member override that starts a parked issue has to really
+    // start it. The dispatch decision is captured inside the transaction (where
+    // the pre-write status is known) and executed after it commits, through
+    // `assignIssue` so there is still exactly one dispatch path.
+    let forcedStart = false;
     const updated = this.ctx.db.transaction(() => {
       if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
         const initial = this.getIssue(id);
@@ -1467,6 +1485,10 @@ export class IssuesRepo {
       // issue that still waits on a prerequisite cannot leave backlog unless a
       // member forces it.
       this.assertDependenciesMetForStatus(id, current, nextStatus, input);
+      forcedStart = input.force === true
+        && current.status === "backlog"
+        && (nextStatus === "todo" || nextStatus === "in_progress")
+        && this.listUnmetPrerequisites(id).length > 0;
       // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
       // children cannot be parked in review or closed, and only a member may
       // override. Runs before the write so a rejected request changes nothing.
@@ -1571,12 +1593,59 @@ export class IssuesRepo {
     if (previous!.status !== "done" && updated.status === "done") {
       this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
     }
+    if (forcedStart) this.dispatchForcedStart(updated, input);
     this.notifyChildStatusChange(
       previous!,
       updated,
       cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
     );
     return { issue: updated, cancelledTasks };
+  }
+
+  /**
+   * MUL-400 E3 forced start, after the status write committed.
+   *
+   * A member overriding the gate must get a running issue, not a `todo` with
+   * nothing queued — otherwise no automatic path can pick it up again, because
+   * both the gate and the automatic start only look at `backlog`. The dispatch
+   * goes through `assignIssue` (with `force`, so the gate lets it through)
+   * exactly like every other start, so the owner rules and the skip reporting
+   * stay in one place.
+   *
+   * Only an agent or squad owner gets a task. A member owner, or none at all,
+   * is a status change only: there is no agent to run it.
+   */
+  private dispatchForcedStart(issue: MultiremiIssue, input: UpdateIssueInput): void {
+    if (!issue.assigneeType || !issue.assigneeId || issue.assigneeType === "member") return;
+    try {
+      this.assignIssue(issue.id, {
+        assigneeType: issue.assigneeType,
+        assigneeId: issue.assigneeId,
+        actorType: input.actorType ?? "member",
+        actorId: input.actorId ?? null,
+        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        force: true,
+      });
+    } catch (err) {
+      // The status change already committed and is what the member asked for;
+      // a dispatch that cannot run (archived owner, no runnable agent) is
+      // reported rather than rolled back, mirroring assign-on-update.
+      log.warn(`dependency force-start dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+      this.ctx.appendIssueActivity(issue.id, {
+        actorType: "system",
+        actorId: null,
+        type: "dispatch_skipped",
+        body: err instanceof Error ? err.message : String(err),
+        data: {
+          reason: "force_start_dispatch_failed",
+          error: err instanceof Error ? err.message : String(err),
+          assigneeType: issue.assigneeType,
+          assignee_type: issue.assigneeType,
+          assigneeId: issue.assigneeId,
+          assignee_id: issue.assigneeId,
+        },
+      });
+    }
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -1676,8 +1745,10 @@ export class IssuesRepo {
     // MUL-400 E3: the dependency side of the same hook. It runs before the
     // parent notification so the report the parent owner reads already carries
     // the "your prerequisite failed" lines, and it is independent of whether
-    // this issue has a parent at all.
-    this.reactToIssueDependencyOutcome(previous, issue, parentTaskId);
+    // this issue has a parent at all. It also returns the readiness lines for
+    // dependents that share this issue's parent, which join the same report
+    // instead of queuing a round of their own.
+    const readinessLines = this.reactToIssueDependencyOutcome(previous, issue, parentTaskId);
 
     if (!issue.parentIssueId) return;
     const parent = this.getIssue(issue.parentIssueId);
@@ -1687,7 +1758,7 @@ export class IssuesRepo {
     const entered = previous.status !== issue.status;
     const reported = entered ? childTerminalOutcome(issue.status) : null;
     const outcome = reported === "blocked" && options.taskTerminalStatus === "failed" ? "failed" : reported;
-    if (outcome) this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId);
+    if (outcome) this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, readinessLines);
 
     if (parentStatusGuardEnabled()) this.rederiveParentStatus(parent, issue);
   }
@@ -1709,24 +1780,165 @@ export class IssuesRepo {
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
-  ): void {
-    if (!dependencyGateEnabled()) return;
-    if (previous.status === issue.status) return;
+  ): string[] {
+    if (!dependencyGateEnabled()) return [];
+    if (previous.status === issue.status) return [];
     if (issue.status !== "done" && issue.status !== "cancelled" && issue.status !== "blocked" && issue.status !== "failed") {
-      return;
+      return [];
     }
     const dependents = this.listDependencyDependents(issue.id);
-    if (!dependents.length) return;
+    if (!dependents.length) return [];
     const satisfied = issue.status === "done";
+    // Readiness lines for dependents that share this issue's parent: they belong
+    // in the E2 report for this issue rather than in a report of their own, so
+    // the parent owner reads one round instead of two.
+    const mergedLines: string[] = [];
     for (const dependent of dependents) {
       if (dependent.status !== "backlog") continue;
       const unmet = this.listUnmetPrerequisites(dependent.id);
       if (satisfied && unmet.length === 0) {
-        this.autoStartDependent(dependent, issue, parentTaskId);
+        const line = this.autoStartDependent(dependent, issue, parentTaskId);
+        if (line) mergedLines.push(line);
         continue;
       }
       if (!satisfied) this.recordPrerequisiteFailure(dependent, issue, unmet, parentTaskId);
     }
+    return mergedLines;
+  }
+
+  /**
+   * MUL-400 E3 readiness report for a dependent that has no agent to start it.
+   *
+   * Returns a line for the shared-parent case (the caller folds it into the
+   * prerequisite's E2 report, so the parent owner still gets one round); for
+   * every other case the report is delivered here and `null` comes back. The
+   * plan's wording is "the parent owner's next round", so an owner with no
+   * queued round is not given a new one — only an existing one is extended.
+   */
+  private reportDependencyReady(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+  ): string | null {
+    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
+    const line = `${dependent.key}: all prerequisites are done (${satisfiedBy.key}); it has no agent owner, so assign one or move it to todo to run it.`;
+    if (parent && parent.id === satisfiedBy.parentIssueId) {
+      // Same parent as the prerequisite: the dependent already carries the
+      // `dependency_satisfied` activity, and the line rides along in the
+      // prerequisite's E2 report. No second comment and no round of its own.
+      this.markDependencySatisfiedMerged(dependent, satisfiedBy, parent);
+      return line;
+    }
+    if (parent) {
+      // A different parent (or a prerequisite with none): keep the report on
+      // that parent as an activity and extend its owner's queued round if one
+      // is already waiting.
+      this.ctx.appendIssueActivity(parent.id, {
+        actorType: "system",
+        actorId: SYSTEM_AUTHOR_ID,
+        type: "dependency_satisfied",
+        body: dependent.key,
+        data: {
+          dependentIssueId: dependent.id,
+          dependent_issue_id: dependent.id,
+          dependentKey: dependent.key,
+          dependent_key: dependent.key,
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+          satisfiedByKey: satisfiedBy.key,
+          satisfied_by_key: satisfiedBy.key,
+        },
+      });
+      this.appendToQueuedParentRound(parent, line);
+      return null;
+    }
+    // No parent at all: the dependent's own owner (or its subscribers) hears
+    // about it, exactly as before.
+    for (const memberId of this.dependentReportRecipients(dependent)) {
+      this.ctx.createInboxItem({
+        issueId: dependent.id,
+        memberId,
+        type: "dependency_satisfied",
+        title: `${dependent.key}: all prerequisites are done`,
+        body: `${dependent.key} is ready to start.`,
+        actorType: "system",
+        actorId: null,
+        details: {
+          dependentIssueId: dependent.id,
+          dependent_issue_id: dependent.id,
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+        },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * Record on the dependent that its readiness line was folded into the
+   * prerequisite's report rather than delivered on its own. The activity type
+   * stays `dependency_satisfied` (the report is still what the plan asks for);
+   * the flag is what makes the merge auditable.
+   */
+  private markDependencySatisfiedMerged(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    parent: MultiremiIssue,
+  ): void {
+    this.ctx.appendIssueActivity(dependent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "dependency_satisfied",
+      body: satisfiedBy.key,
+      data: {
+        satisfiedBy: satisfiedBy.id,
+        satisfied_by: satisfiedBy.id,
+        satisfiedByKey: satisfiedBy.key,
+        satisfied_by_key: satisfiedBy.key,
+        parentIssueId: parent.id,
+        parent_issue_id: parent.id,
+        mergedIntoPrerequisiteReport: true,
+        merged_into_prerequisite_report: true,
+      },
+    });
+  }
+
+  /**
+   * Extend the parent owner's already-queued round with one line. Nothing is
+   * created when no round is waiting, and the guarded UPDATE means a round that
+   * stopped being queued between the read and the write is simply left alone.
+   */
+  private appendToQueuedParentRound(parent: MultiremiIssue, line: string): boolean {
+    if (!parent.assigneeType || !parent.assigneeId || parent.assigneeType === "member") return false;
+    const agent = this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId);
+    if (!agent) return false;
+    const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+    const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
+    if (!queued) return false;
+    const appended = appendChildStatusReport(queued.prompt, {
+      commentId: queued.triggerCommentId ?? "",
+      outcome: "done",
+      actorId: parent.assigneeId,
+      extraLine: line,
+    });
+    const guarded = this.ctx.db.run(
+      `UPDATE multiremi_tasks SET prompt = ?, updated_at = ?
+       WHERE id = ? AND status = 'queued' AND continued_from_task_id IS NULL`,
+      [appended, nowIso(), queued.id],
+    );
+    if (guarded.changes === 0) return false;
+    this.ctx.appendIssueActivity(parent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "dependency_satisfied_coalesced",
+      body: line,
+      data: {
+        taskId: queued.id,
+        task_id: queued.id,
+        agentId: agent.id,
+        agent_id: agent.id,
+      },
+    });
+    return true;
   }
 
   /**
@@ -1763,7 +1975,11 @@ export class IssuesRepo {
    * queued round for its owner; `assignIssue` re-checks the gate, so a
    * prerequisite that appeared in between still wins.
    */
-  private autoStartDependent(dependent: MultiremiIssue, satisfiedBy: MultiremiIssue, parentTaskId: string | null): void {
+  private autoStartDependent(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    parentTaskId: string | null,
+  ): string | null {
     const ownerType = dependent.assigneeType;
     if (!ownerType || !dependent.assigneeId || ownerType === "member") {
       this.ctx.appendIssueActivity(dependent.id, {
@@ -1784,8 +2000,7 @@ export class IssuesRepo {
           auto_started: false,
         },
       });
-      this.reportDependencySatisfiedToOwner(dependent, satisfiedBy);
-      return;
+      return this.reportDependencyReady(dependent, satisfiedBy);
     }
     try {
       const assigned = this.assignIssue(dependent.id, {
@@ -1830,6 +2045,7 @@ export class IssuesRepo {
       });
       log.warn(`dependency auto-start skipped for ${dependent.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
+    return null;
   }
 
   /**
@@ -1915,40 +2131,6 @@ export class IssuesRepo {
         type: "dependency_prerequisite_failed",
         title: summary,
         body: `${dependent.key} is parked in backlog. ${commands[0]}`,
-        actorType: "system",
-        actorId: null,
-        details,
-      });
-    }
-  }
-
-  /** A human-owned dependent that just became startable: report, never start. */
-  private reportDependencySatisfiedToOwner(dependent: MultiremiIssue, satisfiedBy: MultiremiIssue): void {
-    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
-    const details = {
-      dependentIssueId: dependent.id,
-      dependent_issue_id: dependent.id,
-      satisfiedBy: satisfiedBy.id,
-      satisfied_by: satisfiedBy.id,
-    };
-    if (parent) {
-      const comment = this.createSystemIssueComment(parent.id, [
-        `All prerequisites of ${dependent.key} are done, so it can start.`,
-        `Its owner is a member, so the platform left it in backlog: assign an agent or move it to todo to run it.`,
-      ].join(" "), {
-        type: "dependency_satisfied",
-        ...details,
-      });
-      this.triggerParentAssigneeForChildDone(parent, comment, "done", null);
-      return;
-    }
-    for (const memberId of this.dependentReportRecipients(dependent)) {
-      this.ctx.createInboxItem({
-        issueId: dependent.id,
-        memberId,
-        type: "dependency_satisfied",
-        title: `${dependent.key}: all prerequisites are done`,
-        body: `${dependent.key} is ready to start.`,
         actorType: "system",
         actorId: null,
         details,
@@ -2060,6 +2242,7 @@ export class IssuesRepo {
     child: MultiremiIssue,
     outcome: ChildTerminalOutcome,
     parentTaskId: string | null,
+    readinessLines: string[] = [],
   ): void {
     if (parent.assigneeType === "member" && parent.assigneeId) {
       this.notifyParentMemberOfChildOutcome(parent, child, outcome);
@@ -2077,6 +2260,7 @@ export class IssuesRepo {
       childTitle: child.title,
       outcome,
       childStatus: child.status,
+      readinessLines,
     });
     const comment = this.createSystemIssueComment(parent.id, body, {
       type: "child_status_parent_notification",
@@ -2134,6 +2318,7 @@ export class IssuesRepo {
       childTitle: child.title,
       outcome,
       childStatus: child.status,
+      readinessLines: [],
     }), {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -2464,7 +2649,8 @@ export class IssuesRepo {
     // MUL-400 E3 gate 1. Every "start this issue" call funnels through here, so
     // this is where an unmet prerequisite stops one: the owner is recorded and
     // the skip is visible, but the status and the task queue stay untouched.
-    const unmetDependencies = this.dependenciesBlockDispatch(current);
+    const forcedDispatch = input.force === true;
+    const unmetDependencies = this.dependenciesBlockDispatch(current, forcedDispatch);
     if (unmetDependencies) {
       this.ctx.db.run(
         "UPDATE multiremi_issues SET assignee_type = ?, assignee_id = ?, updated_at = ? WHERE id = ?",
@@ -2596,11 +2782,15 @@ export class IssuesRepo {
     const unmet = this.listUnmetPrerequisites(id);
     if (!unmet.length) return;
     if (input.force === true) {
+      // The override is auditable, and the work really starts: the caller
+      // dispatches through `assignIssue` once the status write commits (see
+      // `dispatchForcedStart`), so a forced issue is never left as a `todo`
+      // with nothing queued.
       this.ctx.appendIssueActivity(id, {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
         type: "dependency_force_started",
-        body: "todo",
+        body: nextStatus,
         data: {
           status: nextStatus,
           previousStatus: current.status,
@@ -2624,12 +2814,22 @@ export class IssuesRepo {
    *
    * `assignIssue` is the single funnel for every "start this issue" call —
    * create-with-assignee, a changed assignee, `backlog -> todo` through
-   * `maybeDispatchOnIssueUpdate`, and an explicit assign. An issue with unmet
-   * prerequisites records the owner but neither moves status nor creates a task,
-   * so the work stays visibly parked instead of silently queued.
+   * `maybeDispatchOnUpdate`, and an explicit assign.
+   *
+   * The gate only holds an issue that is **waiting**: `status = backlog` with an
+   * unmet prerequisite. That is the definition the plan gives "waiting for a
+   * prerequisite", and it is what keeps the gate from strangling work that is
+   * already moving — an issue that is `todo`/`in_progress` and merely has a
+   * dependency recorded on it carries information, not a hold, so re-assigning
+   * it (or dispatching it) is allowed to proceed.
+   *
+   * A member may override with `force`; the rows stay so the page still shows
+   * the unmet prerequisite.
    */
-  private dependenciesBlockDispatch(issue: MultiremiIssue): IssueDependencyUnmetRef[] | null {
+  private dependenciesBlockDispatch(issue: MultiremiIssue, force = false): IssueDependencyUnmetRef[] | null {
     if (!dependencyGateEnabled()) return null;
+    if (issue.status !== "backlog") return null;
+    if (force) return null;
     const unmet = this.listUnmetPrerequisites(issue.id);
     return unmet.length ? unmet : null;
   }
@@ -4723,6 +4923,8 @@ function childStatusSystemCommentBody(input: {
   childTitle: string;
   outcome: ChildTerminalOutcome;
   childStatus: string;
+  /** MUL-400 E3: dependents that became startable because of this child. */
+  readinessLines?: string[];
 }): string {
   const title = sanitizeChildDoneTitle(input.childTitle);
   const verb = childOutcomeSentence(input.outcome);
@@ -4730,6 +4932,9 @@ function childStatusSystemCommentBody(input: {
     `${input.mentionPrefix}Sub-issue [${input.childKey}](mention://issue/${input.childId}) - "${title}" - ${verb}.`,
     `Its status is now ${input.childStatus}; a platform round was queued for the owner of this issue.`,
     "Children whose dependencies are declared as `blocked_by` are promoted automatically, so this report only needs a review of the outcome.",
+    ...(input.readinessLines?.length
+      ? [`Dependencies satisfied: ${input.readinessLines.join(" ")}`]
+      : []),
   ].join(" ");
 }
 
@@ -4761,15 +4966,22 @@ function childStatusInboxBody(child: MultiremiIssue, outcome: ChildTerminalOutco
  */
 function appendChildStatusReport(
   prompt: string,
-  input: { commentId: string; outcome: ChildTerminalOutcome; actorId: string | null },
+  input: {
+    commentId: string;
+    outcome: ChildTerminalOutcome;
+    actorId: string | null;
+    /** MUL-400 E3: a readiness line folded into an already-queued round. */
+    extraLine?: string;
+  },
 ): string {
   return [
     prompt.trimEnd(),
     "",
     "## Additional Sub-Issue Report",
     `Outcome: ${input.outcome}`,
-    `Platform comment: ${input.commentId}`,
+    ...(input.commentId ? [`Platform comment: ${input.commentId}`] : []),
     ...(input.actorId ? [`Parent assignee: ${input.actorId}`] : []),
+    ...(input.extraLine ? ["", input.extraLine] : []),
   ].join("\n");
 }
 

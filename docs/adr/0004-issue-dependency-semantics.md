@@ -27,41 +27,74 @@ squad rule about ordering was prose. The observable failures were:
    `(issue_id = A, depends_on_issue_id = B, type = 'blocked_by')` reads "A waits
    for B". A write with `type: blocks` is normalized before storage by flipping
    the pair, and pre-existing `blocks` rows are interpreted reversed at read
-   time, so no migration is required. `related` stays direction-free and keeps
-   its current meaning (none). Every dependency row returned to a caller carries
-   a computed `direction` relative to the issue being read.
+   time, so no migration is required. `related` keeps its current meaning (none)
+   and is reported with `direction: null` from either end: it is neither a
+   prerequisite nor a dependent, so assigning it a direction would let a client
+   render a peer link as a wait. Every other dependency row returned to a caller
+   carries a computed `direction` relative to the issue being read.
 2. **Satisfied means `done`.** `in_review`, `blocked` and `cancelled` are unmet:
    the gate exists so a dependent never starts on half-finished work, and a
    parked or abandoned prerequisite is exactly what a human must rule on.
 3. **The gate lives in the status transitions, not in claim.** Three places, all
    in the store:
-   - `assignIssue` — the funnel for every "start this issue" call. An issue with
-     an unmet prerequisite records the assignee, keeps its status, creates no
-     task, and writes `dispatch_skipped` with `dependencies_unmet`.
+   - `assignIssue` — the funnel for every "start this issue" call. The gate
+     holds an issue only when it is **waiting**: `status = backlog` with an unmet
+     prerequisite. Such an issue records the assignee, keeps its status, creates
+     no task, and writes `dispatch_skipped` with `dependencies_unmet`. An issue
+     that is already `todo`/`in_progress` carries the dependency as information
+     only — the plan's rule that adding a dependency to a running issue is just
+     information — so re-assigning or dispatching it proceeds normally. That is
+     also the rescue path for a row the pre-fix force path stranded at `todo`
+     with nothing queued.
    - `updateIssueWithOutcome` — `backlog -> todo`/`in_progress` with an unmet
      prerequisite is a 409 `dependencies_unmet`. A member may override with
-     `force: true`, which writes `dependency_force_started` and keeps the rows.
-   - `POST /api/issues` with `blocked_by` — prerequisites are created in the same
-     transaction as the issue, and an issue with an unmet prerequisite parks at
-     `backlog` whatever status was requested.
+     `force: true`: the status change commits, `dependency_force_started` is
+     recorded, the rows stay, and the store then dispatches through
+     `assignIssue` with the same `force`, so an agent- or squad-owned issue
+     really gets a round. A member-owned or unowned issue is a status change
+     only, because there is no agent to run it. A dispatch that cannot run
+     (archived owner, no runnable agent) is reported as `dispatch_skipped`
+     rather than rolled back, matching assign-on-update.
+   - `POST /api/issues` with `blocked_by` — the issue row, its number, its
+     dependency rows and the cycle/ancestor checks are **one transaction**, so a
+     rejected prerequisite leaves nothing behind: no orphan issue and no
+     consumed number. The body runs through `createIssueWithinTransaction`; the
+     wrapper opens the transaction only when the caller does not already own one
+     (Feishu ingestion and autopilots do), because Postgres has no savepoints on
+     this bridge. An issue with an unmet prerequisite parks at `backlog`
+     whatever status was requested.
    Keeping claim untouched means a task that is already queued is never silently
-   dropped: the gate decides before the task exists.
+   dropped: the gate decides before the task exists. Dispatch is always the
+   caller's step *after* these transactions commit.
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.
 5. **Automatic start is a post-commit hook on the prerequisite's own terminal
    write.** When B enters `done`, each dependent still in `backlog` whose own
    prerequisites are all satisfied is dispatched by the server
-   (`dependency_auto_started`) if its owner is an agent or a squad, and only
-   reported (`dependency_satisfied`, reaching the parent owner or the member's
-   inbox) if its owner is a human or nobody. The hook is idempotent: the second
-   `done` finds no `backlog` dependent, and the gate inside `assignIssue` refuses
-   a start that is not actually unblocked.
+   (`dependency_auto_started`) if its owner is an agent or a squad. The hook is
+   idempotent: the second `done` finds no `backlog` dependent, and the gate
+   inside `assignIssue` refuses a start that is not actually unblocked.
+   A dependent with no agent owner is **only reported**, never started, and the
+   report must not cost the parent owner an extra round:
+   - same parent as the prerequisite — the readiness line is folded into the
+     prerequisite's E2 report (`dependency_satisfied_reported` on the
+     dependent), so the owner reads one round instead of two;
+   - a different parent, or a prerequisite with no parent — the activity
+     `dependency_satisfied` is written on that parent, and the line is appended
+     to its owner's **already-queued** round when one exists. Nothing is created
+     when no round is waiting, because the plan says the owner's *next* round;
+   - no parent at all — the dependent's own member owner, or its subscribers,
+     get an inbox item.
 6. **A failing prerequisite is a report, not an automatic cancel.** When B
-   enters `cancelled` or `blocked`, each waiting A records
+   enters `cancelled` or `blocked`, each **waiting** dependent (the same
+   `backlog` + unmet definition the gate uses) records
    `dependency_prerequisite_failed` and the report that reaches A's owner (or
    A's parent owner) lists the three concrete ways out: re-plan with a
-   replacement prerequisite, cancel A, or drop the dependency row.
+   replacement prerequisite, cancel A, or drop the dependency row. A dependent
+   that is already `todo`/`in_progress` is deliberately not notified: the
+   dependency is information for it, the platform is not holding it, and the
+   prerequisite ending does not change what it should do.
 7. **Cycles and ancestor dependencies are refused, not repaired.** A bounded
    depth-first walk (200 nodes) from the proposed prerequisite over the
    "waits for" graph answers 409 `dependency_cycle` with the key path, and

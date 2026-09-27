@@ -2530,6 +2530,48 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
   });
 
+  /**
+   * MUL-409 fix round, blocking 2: issue creation is one transaction on this
+   * bridge. Postgres has no savepoint here, so a nested `BEGIN` would commit the
+   * issue row early and let it survive the rollback — exactly the orphan the QA
+   * pass found. The depth counter is asserted alongside the data, so a future
+   * refactor that reintroduces nesting fails here rather than in production.
+   */
+  it("rolls a rejected blocked_by creation back and stays a single transaction (PG)", () => {
+    const parent = store.createIssue({ title: "PG rollback parent", status: "in_progress" });
+    const issuesBefore = store.listIssues({ workspaceId: "local" }).length;
+    const childrenBefore = store.listChildIssues(parent.id).length;
+    const dependenciesBefore = (db.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n;
+    // The next number is the workspace maximum, not the row count: earlier tests
+    // in this file archive rows, and `listIssues` hides those.
+    const nextNumberBefore = Number((db.query(
+      "SELECT COALESCE(MAX(issue_number), 0) + 1 AS next FROM multiremi_issues WHERE workspace_id = ?",
+    ).get("local") as { next: number }).next);
+
+    db.resetTransactionDepthStats();
+    let failure: Error & { code?: string } | null = null;
+    try {
+      store.createIssue({
+        title: "PG rejected child",
+        status: "todo",
+        parentIssueId: parent.id,
+        blockedBy: [parent.id],
+      });
+    } catch (err) {
+      failure = err as Error & { code?: string };
+    }
+
+    expect(failure?.code).toBe("dependency_on_ancestor");
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.listIssues({ workspaceId: "local" }).length).toBe(issuesBefore);
+    expect(store.listChildIssues(parent.id).length).toBe(childrenBefore);
+    expect((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n)
+      .toBe(dependenciesBefore);
+    // The consumed number is rolled back with everything else.
+    expect(store.createIssue({ title: "PG after the rejection" }).key)
+      .toBe(`MUL-${nextNumberBefore}`);
+  });
+
   it("creates a fresh terminal return when comment editing cancels the explicit return first (PG)", () => {
     const fixture = createDelegationFixture();
     store.updateIssueComment(fixture.report.id, { body: "Intermediate report withdrawn." });

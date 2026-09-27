@@ -275,6 +275,155 @@ async function main(): Promise<void> {
       c2: store.getIssue(secondId)?.status,
     });
 
+    // ── MUL-409 fix round: the four scenarios QA found ──────────────────────
+    //
+    // (a) A member forced start must produce a real round. The dependent parks
+    // in backlog because its prerequisite is unfinished; the override starts it
+    // anyway, and the dependency row stays so the page still explains why.
+    const prereqA = await post("/api/issues", {
+      title: "Force prerequisite",
+      status: "in_progress",
+    });
+    const forced = await post("/api/issues", {
+      title: "Forced child",
+      status: "todo",
+      parent_issue_id: parentId,
+      assignee_type: "agent",
+      assignee_id: agent.id,
+      blocked_by: [prereqA.body.id],
+    });
+    const forcedId = forced.body.id as string;
+    check("forced child starts parked", forced.body.status === "backlog", { status: forced.body.status });
+    const forceWrite = await json(`/api/issues/${forcedId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    check("member override is accepted", forceWrite.status === 200, { status: forceWrite.status, code: forceWrite.body.code });
+    const forcedRounds = pendingRounds(forcedId);
+    check("forced child owns exactly one round", forcedRounds.length === 1, { rounds: forcedRounds.length });
+    check("forced child status is todo", store.getIssue(forcedId)?.status === "todo", { status: store.getIssue(forcedId)?.status });
+    check("forced child keeps its dependency row", store.listUnmetPrerequisites(forcedId).length === 1, {});
+    check("forced start is audited",
+      store.listIssueActivity(forcedId).some((entry) => entry.type === "dependency_force_started"), {});
+    // Once the prerequisite finishes, the forced child must not gain a second
+    // round: it is already running, so the automatic start has nothing to do.
+    const forcedClaim = store.claimTask(runtime.id);
+    check("the forced round is claimable", forcedClaim?.id === forcedRounds[0]!.id, {
+      claimed: forcedClaim?.id ?? null, expected: forcedRounds[0]!.id,
+    });
+    if (forcedClaim) {
+      store.startTask(forcedClaim.id);
+      store.completeTask(forcedClaim.id, { output: "Forced child finished" });
+    }
+    const roundsBeforePrereqDone = tasksOf(forcedId).length;
+    await json(`/api/issues/${prereqA.body.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    check("a finished prerequisite adds no second round to a forced child",
+      tasksOf(forcedId).length === roundsBeforePrereqDone, {
+      before: roundsBeforePrereqDone, after: tasksOf(forcedId).length,
+    });
+
+    // (b) A dependency rejection must leave nothing behind: no orphan issue, no
+    // consumed number, no half-written dependency row. The creation must also
+    // stay a single transaction on this bridge: Postgres has no savepoints, so a
+    // nested `BEGIN` would commit the issue row early and survive the rollback.
+    const issuesBefore = store.listIssues({ workspaceId: "local" }).length;
+    const childrenBefore = store.listChildIssues(parentId).length;
+    const rejected = await post("/api/issues", {
+      title: "Rejected child",
+      status: "todo",
+      parent_issue_id: parentId,
+      blocked_by: [parentId],
+    });
+    check("depending on an ancestor is refused", rejected.status === 409 && rejected.body.code === "dependency_on_ancestor", {
+      status: rejected.status, code: rejected.body.code,
+    });
+    check("the rejected creation leaves no orphan issue",
+      store.listIssues({ workspaceId: "local" }).length === issuesBefore, {
+      before: issuesBefore, after: store.listIssues({ workspaceId: "local" }).length,
+    });
+    check("the rejected creation leaves no child row",
+      store.listChildIssues(parentId).length === childrenBefore, {
+      before: childrenBefore, after: store.listChildIssues(parentId).length,
+    });
+    const afterRejection = await post("/api/issues", { title: "After the rejection", status: "todo" });
+    check("the rejected creation consumes no issue number",
+      afterRejection.body.identifier === `MUL-${issuesBefore + 1}`, {
+      expected: `MUL-${issuesBefore + 1}`, actual: afterRejection.body.identifier,
+    });
+    // A successful creation with a prerequisite exercises the same wrapper.
+    db.resetTransactionDepthStats();
+    await post("/api/issues", {
+      title: "Depth probe",
+      status: "todo",
+      parent_issue_id: parentId,
+      blocked_by: [firstId],
+    });
+    check("issue creation stays a single transaction on Postgres",
+      db.maxTransactionDepth === 1, { maxTransactionDepth: db.maxTransactionDepth });
+
+    // (c) A readiness report for an unowned dependent that shares the
+    // prerequisite's parent must not queue a round of its own.
+    const sharedParent = await post("/api/issues", {
+      title: "Shared parent",
+      status: "in_progress",
+      assignee_type: "agent",
+      assignee_id: agent.id,
+    });
+    const sharedParentId = sharedParent.body.id as string;
+    const donePrereq = await post("/api/issues", {
+      title: "Sibling prerequisite",
+      status: "in_progress",
+      parent_issue_id: sharedParentId,
+    });
+    const readySibling = await post("/api/issues", {
+      title: "Ready sibling",
+      status: "backlog",
+      parent_issue_id: sharedParentId,
+      assignee_type: "member",
+      assignee_id: human.id,
+      blocked_by: [donePrereq.body.id],
+    });
+    const sharedRoundsBefore = tasksOf(sharedParentId).filter((task) => task.status === "queued").length;
+    await json(`/api/issues/${donePrereq.body.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    const sharedRounds = tasksOf(sharedParentId).filter((task) => task.status === "queued");
+    // The parent owner already had one queued round (its own assign-on-create
+    // dispatch). The readiness line must ride along in that round's report
+    // rather than queuing a second one.
+    check("a shared-parent readiness report adds no extra round",
+      sharedRounds.length === sharedRoundsBefore, {
+      before: sharedRoundsBefore, after: sharedRounds.length,
+    });
+    check("exactly one round is queued on the shared parent", sharedRounds.length === 1, {
+      rounds: sharedRounds.length,
+    });
+    // System comments store `type = "system"`; the notification kind lives in the
+    // session-event metadata, so filter on the body instead.
+    const sharedReports = store.listIssueComments(sharedParentId)
+      .filter((comment) => comment.type === "system");
+    check("the merged report mentions the ready sibling",
+      sharedReports.some((comment) => comment.body.includes(readySibling.body.identifier)), {
+      bodies: sharedReports.map((comment) => comment.body.slice(0, 120)),
+    });
+    check("the merged report mentions the prerequisite",
+      sharedReports.some((comment) => comment.body.includes(donePrereq.body.identifier)), {});
+    check("the ready sibling records the merge",
+      store.listIssueActivity(readySibling.body.id)
+        .some((entry) => entry.type === "dependency_satisfied"
+          && (entry.data as Record<string, unknown>)?.mergedIntoPrerequisiteReport === true), {});
+    check("the ready sibling stays parked",
+      store.getIssue(readySibling.body.id)?.status === "backlog", {
+      status: store.getIssue(readySibling.body.id)?.status,
+    });
+
   } finally {
     db.close();
     const cleanup = new Bun.SQL(ADMIN_URL, { max: 1 });

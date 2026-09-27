@@ -4,7 +4,7 @@
   "database": "throwaway PG database, dropped after the run",
   "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
   "testDoubles": "execution agent and worker only (no provider is run)",
-  "ranAt": "2026-09-26T23:22:15.365Z",
+  "ranAt": "2026-09-27T02:46:59.186Z",
   "steps": [
     {
       "step": "create parent",
@@ -18,9 +18,9 @@
       "step": "create chain C1 <- C2 <- C3",
       "status": "ok",
       "detail": {
-        "c1": "iss_32s5z2n0sfi8",
-        "c2": "iss_2h0q8o9mx6zq",
-        "c3": "iss_y4bn23bwqr17"
+        "c1": "iss_owanr7kuwrzp",
+        "c2": "iss_9yg8fxekeyas",
+        "c3": "iss_bnklvx1qp3j5"
       }
     },
     {
@@ -79,7 +79,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_apomvcdicw0n",
+          "parentIssueId": "iss_9vntgbqzdctt",
           "total": 3,
           "done": 0,
           "cancelled": 0,
@@ -96,22 +96,22 @@
         "waitingOn": {
           "unmet": [
             {
-              "issueId": "iss_y4bn23bwqr17",
-              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "issueId": "iss_bnklvx1qp3j5",
+              "dependsOnIssueId": "iss_9yg8fxekeyas",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_b2taaka9yccm"
+              "dependencyId": "dep_exjq3yaawk1a"
             }
           ],
           "prerequisites": [
             {
-              "issueId": "iss_y4bn23bwqr17",
-              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "issueId": "iss_bnklvx1qp3j5",
+              "dependsOnIssueId": "iss_9yg8fxekeyas",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_b2taaka9yccm"
+              "dependencyId": "dep_exjq3yaawk1a"
             }
           ]
         }
@@ -143,7 +143,7 @@
       "step": "C1: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_1k26uan354n2"
+        "taskId": "tsk_6ykdscziqioa"
       }
     },
     {
@@ -196,7 +196,7 @@
       "step": "C2: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_eetl656zjefw"
+        "taskId": "tsk_ltgjizy1hpi3"
       }
     },
     {
@@ -238,7 +238,7 @@
       "step": "C3: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_s0uc24dawbas"
+        "taskId": "tsk_w6c4yhilocgb"
       }
     },
     {
@@ -275,12 +275,12 @@
           "unmet": [],
           "prerequisites": [
             {
-              "issueId": "iss_y4bn23bwqr17",
-              "dependsOnIssueId": "iss_2h0q8o9mx6zq",
+              "issueId": "iss_bnklvx1qp3j5",
+              "dependsOnIssueId": "iss_9yg8fxekeyas",
               "key": "MUL-3",
               "title": "C2",
               "status": "done",
-              "dependencyId": "dep_b2taaka9yccm"
+              "dependencyId": "dep_exjq3yaawk1a"
             }
           ]
         }
@@ -302,7 +302,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_apomvcdicw0n",
+          "parentIssueId": "iss_9vntgbqzdctt",
           "total": 3,
           "done": 3,
           "cancelled": 0,
@@ -325,6 +325,140 @@
       "status": "ok",
       "detail": {
         "c2": "done"
+      }
+    },
+    {
+      "step": "forced child starts parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "member override is accepted",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "forced child owns exactly one round",
+      "status": "ok",
+      "detail": {
+        "rounds": 1
+      }
+    },
+    {
+      "step": "forced child status is todo",
+      "status": "ok",
+      "detail": {
+        "status": "todo"
+      }
+    },
+    {
+      "step": "forced child keeps its dependency row",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "forced start is audited",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the forced round is claimable",
+      "status": "ok",
+      "detail": {
+        "claimed": "tsk_u1h6kzzxqe3j",
+        "expected": "tsk_u1h6kzzxqe3j"
+      }
+    },
+    {
+      "step": "a finished prerequisite adds no second round to a forced child",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "depending on an ancestor is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependency_on_ancestor"
+      }
+    },
+    {
+      "step": "the rejected creation leaves no orphan issue",
+      "status": "ok",
+      "detail": {
+        "before": 6,
+        "after": 6
+      }
+    },
+    {
+      "step": "the rejected creation leaves no child row",
+      "status": "ok",
+      "detail": {
+        "before": 4,
+        "after": 4
+      }
+    },
+    {
+      "step": "the rejected creation consumes no issue number",
+      "status": "ok",
+      "detail": {
+        "expected": "MUL-7",
+        "actual": "MUL-7"
+      }
+    },
+    {
+      "step": "issue creation stays a single transaction on Postgres",
+      "status": "ok",
+      "detail": {
+        "maxTransactionDepth": 1
+      }
+    },
+    {
+      "step": "a shared-parent readiness report adds no extra round",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "exactly one round is queued on the shared parent",
+      "status": "ok",
+      "detail": {
+        "rounds": 1
+      }
+    },
+    {
+      "step": "the merged report mentions the ready sibling",
+      "status": "ok",
+      "detail": {
+        "bodies": [
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_n270f9s3p8db) - \"Sibling prerequisite\" -"
+        ]
+      }
+    },
+    {
+      "step": "the merged report mentions the prerequisite",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the ready sibling records the merge",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the ready sibling stays parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
       }
     }
   ],

@@ -263,3 +263,52 @@ describe("formatActivity", () => {
     expect(formatActivity(activity(undefined as unknown as string), t)).toBe("");
   });
 });
+
+/**
+ * MUL-400 E3 (MUL-409): the dependency gate and automatic start introduced
+ * these activity types. Each one has to map to its own locale key with the
+ * right interpolation — a missing case would fall through to the raw action.
+ */
+describe("formatActivity — dependency activities", () => {
+  it("renders an automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_started", { details: { satisfiedByKey: "MUL-7" } }), t),
+    ).toBe('activity.dependency_auto_started {"key":"MUL-7"}');
+  });
+
+  it("renders a readiness report with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_satisfied", { details: { satisfied_by_key: "MUL-8" } }), t),
+    ).toBe('activity.dependency_satisfied {"key":"MUL-8"}');
+  });
+
+  it("renders a skipped automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_start_skipped", { details: { satisfied_by_key: "MUL-9" } }), t),
+    ).toBe('activity.dependency_auto_start_skipped {"key":"MUL-9"}');
+  });
+
+  it("renders a failed prerequisite with the dead prerequisite's key", () => {
+    expect(
+      formatActivity(activity("dependency_prerequisite_failed", { details: { prerequisite_key: "MUL-10" } }), t),
+    ).toBe('activity.dependency_prerequisite_failed {"key":"MUL-10"}');
+  });
+
+  it("renders the waiting marker of a creation that parked in backlog", () => {
+    expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
+  });
+
+  it("renders a member forced start", () => {
+    expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+  });
+
+  it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {
+    expect(
+      formatActivity(activity("dispatch_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe("activity.dependency_gate_reason_dependencies_unmet");
+  });
+
+  it("falls back to ? when the satisfying key is missing", () => {
+    expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
+  });
+});

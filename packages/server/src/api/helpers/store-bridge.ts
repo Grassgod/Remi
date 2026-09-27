@@ -70,6 +70,9 @@ export function maybeDispatchOnIssueUpdate(
       actorType: input.actorType,
       actorId: input.actorId,
       parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+      // MUL-400 E3: the routes already stripped `force` for task identities, so
+      // reaching here with it means a member asked to override the gate.
+      force: input.force === true,
     });
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);

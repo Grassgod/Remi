@@ -38,16 +38,26 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://<user>@127.0.0.1:5432/postgres \
 | Parent stays open | The parent remains `in_progress` through every child round |
 | Last child | Only after `C3` is done does the parent accept `in_review` (200) |
 | Idempotency | Replaying `done → in_review → done` on `C1` creates no second round and leaves the dependent `done` |
+| Forced start (MUL-409 fix) | A member `PATCH {status: todo, force: true}` on a parked child leaves exactly one round, keeps the dependency row, and records `dependency_force_started`; the prerequisite finishing later adds no second round |
+| Creation rollback (MUL-409 fix) | Depending on an ancestor answers 409 `dependency_on_ancestor` with no orphan issue, no child row and no consumed issue number; a successful creation with a prerequisite stays a single transaction (`maxTransactionDepth === 1`) |
+| Readiness report (MUL-409 fix) | A shared-parent dependent becoming ready adds no extra round; the line is merged into the prerequisite's report, which names both issues, and the dependent records `dependency_satisfied_reported` |
 
 ## Result
 
 `PASS` — 33 steps, 0 failures, on PostgreSQL 18.4 (2026-09-27).
 
-Two product defects were found by this run and fixed before it passed:
+Defects this run has found and driven to a fix:
 
 1. `listPrerequisites` read only the `blocked_by` spelling and reported the
    dependent as its own prerequisite for legacy `blocks` rows; the gate never
    opened for the chain. Fixed to resolve both spellings and report the correct
-   pair.
+   pair — including `issueId`, which QA caught still naming the prerequisite.
 2. `child-progress` counted `waiting` children as `active` as well, so a parked
    child looked like work in flight. The buckets are now disjoint.
+3. A member forced start only moved the status: the issue landed in `todo` with
+   no queued round, and neither the gate nor the automatic start would look at
+   it again. The override now dispatches through `assignIssue`, and the gate
+   only holds issues that are actually waiting (`backlog` + unmet prerequisite).
+4. A rejected `blocked_by` left an orphan issue behind, because creation ran
+   outside a transaction. Creation is now one transaction on both backends, and
+   the Postgres bridge reports the nesting depth so the assertion is explicit.

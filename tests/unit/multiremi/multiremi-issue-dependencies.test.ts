@@ -71,6 +71,56 @@ describe("MUL-400 E3 — dependency semantics", () => {
     expect(store.listIssueDependencies(c.id)[0]!.dependsOnIssueId).toBe(a.id);
   });
 
+  /**
+   * MUL-409 fix round, QA suggestion 2: a pre-existing `blocks` row is stored
+   * against the *other* column, so the reported pair has to be read back the
+   * same way. `unmet[0].issueId` must name the waiter, not the prerequisite.
+   */
+  it("reads a legacy blocks row as (waiter blocked_by prerequisite)", () => {
+    const store = createStore();
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const waiter = store.createIssue({ title: "Waiter", status: "backlog" });
+    db!.run(
+      `INSERT INTO multiremi_issue_dependencies (id, workspace_id, issue_id, depends_on_issue_id, type, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ["dep_legacy_blocks", "local", prerequisite.id, waiter.id, "blocks", new Date().toISOString()],
+    );
+
+    const unmet = store.listUnmetPrerequisites(waiter.id);
+    expect(unmet).toHaveLength(1);
+    expect(unmet[0]!.issueId).toBe(waiter.id);
+    expect(unmet[0]!.dependsOnIssueId).toBe(prerequisite.id);
+    expect(unmet[0]!.key).toBe(prerequisite.key);
+    expect(store.getIssueWaitingOn(waiter.id).unmet).toHaveLength(1);
+
+    // The gate's 409 body carries the same pair, so a client can render it.
+    const held = catchError(() => store.updateIssue(waiter.id, { status: "todo" }));
+    expect(held.code).toBe("dependencies_unmet");
+    const details = held.details as { unmet?: Array<{ issueId: string; dependsOnIssueId: string }> };
+    expect(details.unmet?.[0]).toMatchObject({ issueId: waiter.id, dependsOnIssueId: prerequisite.id });
+  });
+
+  /**
+   * MUL-409 fix round, QA suggestion 8: `related` is not a dependency in either
+   * direction, so it must not be given one.
+   */
+  it("reports no direction for a related row from either end", () => {
+    const store = createStore();
+    const a = store.createIssue({ title: "A" });
+    const b = store.createIssue({ title: "B" });
+    store.createIssueDependency(a.id, { dependsOnIssueId: b.id, type: "related" });
+
+    expect(store.listIssueDependencies(a.id)[0]!.direction).toBeNull();
+    expect(store.listIssueDependencies(b.id)[0]!.direction).toBeNull();
+    // A `related` row is neither a prerequisite nor a dependent.
+    expect(store.listUnmetPrerequisites(a.id)).toEqual([]);
+    expect(store.listUnmetPrerequisites(b.id)).toEqual([]);
+    expect(store.getIssueWaitingOn(b.id)).toMatchObject({ unmet: [], prerequisites: [] });
+    // So it never triggers the gate.
+    store.updateIssue(b.id, { status: "todo" });
+    expect(store.getIssue(b.id)!.status).toBe("todo");
+  });
+
   it("treats only done as satisfied and reports the unmet list", () => {
     const store = createStore();
     const prereq = store.createIssue({ title: "Prerequisite" });
@@ -156,6 +206,110 @@ describe("MUL-400 E3 — gate", () => {
     expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({ previousStatus: "backlog" });
   });
 
+  /**
+   * MUL-409 fix round, blocking 1: a forced start must really start. The status
+   * alone is not the deliverable — the issue has to own a round, otherwise no
+   * automatic path can pick it up again.
+   */
+  it.each(["agent", "squad"] as const)("forces a %s-owned issue into a real round", (ownerKind) => {
+    const { store, agent } = storeWithAgent();
+    const squad = store.createSquad({ name: "Force squad", workspaceId: "local", leaderId: agent.id });
+    const ownerId = ownerKind === "agent" ? agent.id : squad.id;
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependent",
+      status: "backlog",
+      assigneeType: ownerKind,
+      assigneeId: ownerId,
+      blockedBy: [prereq.id],
+    });
+
+    const forced = store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+    expect(forced.status).toBe("todo");
+
+    const rounds = store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled");
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0]!.status).toBe("queued");
+    // The owner the member asked for is the one that got the round.
+    expect(rounds[0]!.agentId).toBe(ownerKind === "agent" ? agent.id : agent.id);
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    // The dependency rows stay: the issue is running *despite* an unmet
+    // prerequisite, and the page has to keep saying so.
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
+  it("creates only one round when the same issue is forced twice", () => {
+    const { store, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependent",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      blockedBy: [prereq.id],
+    });
+
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+    // The second call no longer leaves backlog, so the gate has nothing to
+    // override and no dispatch runs again.
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+
+    // A forced issue that moves on is no longer waiting, so further writes are
+    // ordinary status changes and must not queue another round either.
+    store.updateIssue(dependent.id, { status: "in_progress", force: true, actorType: "member", actorId: "mem_local" });
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    expect(store.getIssue(dependent.id)!.status).toBe("in_progress");
+  });
+
+  it("does not dispatch a second round when a forced issue's prerequisite later finishes", () => {
+    const { store, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependent",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      blockedBy: [prereq.id],
+    });
+
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+
+    // The prerequisite finishing only auto-starts issues still parked in
+    // backlog; a forced one is already running and must keep its single round.
+    store.updateIssue(prereq.id, { status: "done" });
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    expect(activityOf(store, dependent.id, "dependency_auto_started")).toHaveLength(0);
+  });
+
+  /**
+   * MUL-409 fix round, blocking 1: the gate only holds an issue that is
+   * *waiting*. An issue that is already `todo` with an unmet prerequisite is
+   * information, not a hold, so the same agent can be assigned again and the
+   * round is created — the rescue path for rows stranded by the old behavior.
+   */
+  it("lets the same agent pick up a todo issue that carries an unmet prerequisite", () => {
+    const { store, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Stranded",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      blockedBy: [prereq.id],
+    });
+    // The shape the old force path left behind: todo with an unmet prerequisite.
+    db!.run("UPDATE multiremi_issues SET status = 'todo' WHERE id = ?", [dependent.id]);
+
+    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
+    expect(assigned.task?.id).toBeDefined();
+    expect(assigned.issue.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+  });
+
   it("parks a created issue in backlog when blocked_by is unmet", () => {
     const store = createStore();
     const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
@@ -171,23 +325,48 @@ describe("MUL-400 E3 — gate", () => {
     expect(started.status).toBe("todo");
   });
 
-  it("rejects the whole creation when a prerequisite would create a cycle", () => {
+  it.each([
+    ["dependency_on_ancestor", (store: Store) => {
+      const parent = store.createIssue({ title: "Parent" });
+      const child = store.createIssue({ title: "Child", parentIssueId: parent.id });
+      return { blockedBy: [parent.id], parent, expectCode: "dependency_on_ancestor" };
+    }],
+    ["a missing prerequisite", (store: Store) => ({
+      blockedBy: ["iss_does_not_exist"],
+      parent: undefined,
+      expectCode: "not_found",
+    })],
+    ["a prerequisite in another workspace", (store: Store) => {
+      const remote = store.createIssue({ title: "Remote", workspaceId: "remote" });
+      return { blockedBy: [remote.id], parent: undefined, expectCode: "cross_workspace" };
+    }],
+  ])("rolls the whole creation back when %s rejects the dependency", (_label, build) => {
     const store = createStore();
-    const first = store.createIssue({ title: "First" });
-    const second = store.createIssue({ title: "Second", blockedBy: [first.id] });
-    // `second` already waits on `first`; making `first` wait on `second` closes
-    // the loop, and the whole creation must be rolled back.
-    const before = store.listIssues({ workspaceId: "local" }).length;
-    const cyclic = catchError(() => store.createIssue({
-      title: "Cyclic",
+    store.ensureLocalWorkspace();
+    const { blockedBy, parent, expectCode } = build(store);
+    const issuesBefore = store.listIssues({ workspaceId: "local" }).length;
+    const childrenBefore = parent ? store.listChildIssues(parent.id).length : 0;
+    const dependenciesBefore = (db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n;
+    const nextKeyBefore = `MUL-${issuesBefore + 1}`;
+
+    const failure = catchError(() => store.createIssue({
+      title: "Rejected child",
       status: "todo",
-      blockedBy: [first.id],
-      // The new issue is `second`'s prerequisite, so `first` waiting for it
-      // would mean first -> new -> second -> first.
-      id: second.id,
+      parentIssueId: parent?.id,
+      blockedBy,
     }));
-    expect(cyclic).toBeDefined();
-    expect(store.listIssues({ workspaceId: "local" }).length).toBe(before);
+    // The dependency error is what surfaced, not a constraint violation.
+    if (expectCode === "not_found") expect(failure.message).toContain("Dependent issue not found");
+    else if (expectCode === "cross_workspace") expect(failure.message).toContain("within a workspace");
+    else expect(failure.code).toBe(expectCode);
+
+    // Nothing survives the failed creation: no orphan issue row, no child row,
+    // no dependency row, and the next issue number is unchanged.
+    expect(store.listIssues({ workspaceId: "local" }).length).toBe(issuesBefore);
+    if (parent) expect(store.listChildIssues(parent.id).length).toBe(childrenBefore);
+    expect((db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n)
+      .toBe(dependenciesBefore);
+    expect(store.createIssue({ title: "After the rejection" }).key).toBe(nextKeyBefore);
   });
 });
 
@@ -241,6 +420,92 @@ describe("MUL-400 E3 — automatic start", () => {
     expect(activityOf(store, dependent.id, "dependency_satisfied")).toHaveLength(1);
   });
 
+  /**
+   * MUL-409 fix round, QA suggestion 6 / blocking-1 follow-up: a readiness
+   * report must not queue a round of its own. With a shared parent the line
+   * joins the prerequisite's E2 report — one round for the parent owner, and it
+   * mentions the dependent.
+   */
+  it("folds the readiness line into the prerequisite's report when both share a parent", () => {
+    const { store, agent } = storeWithAgent();
+    const member = store.listWorkspaceMembers("local")[0]!;
+    const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress", parentIssueId: parent.id });
+    const dependent = store.createIssue({
+      title: "Human-owned sibling",
+      status: "backlog",
+      parentIssueId: parent.id,
+      blockedBy: [prerequisite.id],
+      assigneeType: "member",
+      assigneeId: member.id,
+    });
+
+    store.updateIssue(prerequisite.id, { status: "done" });
+
+    // Exactly one round: the E2 report for the prerequisite, not one per report.
+    const rounds = store.listTasksForIssue(parent.id).filter((task) => task.status !== "cancelled");
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0]!.triggerCommentId).toBeTruthy();
+    const comment = store.getIssueComment(rounds[0]!.triggerCommentId!)!;
+    expect(comment.body).toContain(prerequisite.key);
+    expect(comment.body).toContain(dependent.key);
+    // The dependent records the merge under the same activity type; the flag is
+    // what distinguishes "folded into the prerequisite's report" from "reported
+    // on its own".
+    const satisfied = activityOf(store, dependent.id, "dependency_satisfied");
+    expect(satisfied).toHaveLength(2);
+    expect(satisfied.some((entry) => entry.data?.mergedIntoPrerequisiteReport === true)).toBe(true);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  it("does not queue a round when a differently-parented dependent becomes ready", () => {
+    const { store, agent } = storeWithAgent();
+    const member = store.listWorkspaceMembers("local")[0]!;
+    const prerequisiteParent = store.createIssue({ title: "Prerequisite parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const dependentParent = store.createIssue({ title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    const dependent = store.createIssue({
+      title: "Human-owned",
+      status: "backlog",
+      parentIssueId: dependentParent.id,
+      blockedBy: [prerequisite.id],
+      assigneeType: "member",
+      assigneeId: member.id,
+    });
+
+    const before = store.listTasksForIssue(dependentParent.id).length;
+    store.updateIssue(prerequisite.id, { status: "done" });
+
+    // No queued round on the dependent's parent, so none is created either.
+    expect(store.listTasksForIssue(dependentParent.id).length).toBe(before);
+    expect(activityOf(store, dependentParent.id, "dependency_satisfied")).toHaveLength(1);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  it("extends the dependent parent's queued round instead of creating another", () => {
+    const { store, agent } = storeWithAgent();
+    const member = store.listWorkspaceMembers("local")[0]!;
+    const prerequisiteParent = store.createIssue({ title: "Prerequisite parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const dependentParent = store.createIssue({ title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const queued = store.createTask({ agentId: agent.id, issueId: dependentParent.id, prompt: "waiting round" });
+    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    const dependent = store.createIssue({
+      title: "Human-owned",
+      status: "backlog",
+      parentIssueId: dependentParent.id,
+      blockedBy: [prerequisite.id],
+      assigneeType: "member",
+      assigneeId: member.id,
+    });
+
+    store.updateIssue(prerequisite.id, { status: "done" });
+
+    const rounds = store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled");
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0]!.id).toBe(queued.id);
+    expect(rounds[0]!.prompt).toContain(dependent.key);
+  });
+
   it("is idempotent when the prerequisite is written done twice", () => {
     const { store, agent, prereq, dependent } = chain();
     store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
@@ -282,6 +547,40 @@ describe("MUL-400 E3 — prerequisite failure", () => {
     expect(items.some((item) => item.type === "dependency_prerequisite_failed")).toBe(true);
     // The dependent stays parked: only a human chooses between the three ways out.
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  /**
+   * MUL-409 fix round, QA suggestion 5: the no-owner dependent. With no parent
+   * the report falls back to the dependent's subscribers; with a parent it
+   * joins the parent's report.
+   */
+  it.each(["cancelled", "blocked"] as const)("reports a %s prerequisite for an unowned dependent with a parent", (terminal) => {
+    const { store, agent } = storeWithAgent();
+    const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Unowned", status: "backlog", parentIssueId: parent.id, blockedBy: [prereq.id] });
+
+    store.updateIssue(prereq.id, { status: terminal });
+
+    const failed = activityOf(store, dependent.id, "dependency_prerequisite_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({ prerequisiteStatus: terminal });
+    const comments = store.listIssueComments(parent.id).filter((comment) => comment.type === "system");
+    expect(comments.some((comment) => comment.body.includes(dependent.key))).toBe(true);
+  });
+
+  it.each(["cancelled", "blocked"] as const)("reports a %s prerequisite to the subscribers of an unowned dependent with no parent", (terminal) => {
+    const { store } = storeWithAgent();
+    const member = store.listWorkspaceMembers("local")[0]!;
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Unowned", status: "backlog", blockedBy: [prereq.id] });
+    store.addIssueSubscriber(dependent.id, member.id, "manual");
+
+    store.updateIssue(prereq.id, { status: terminal });
+
+    expect(activityOf(store, dependent.id, "dependency_prerequisite_failed")).toHaveLength(1);
+    const items = store.listInboxItems(member.id, "local");
+    expect(items.some((item) => item.type === "dependency_prerequisite_failed")).toBe(true);
   });
 
   it("folds the failure into the parent report when the dependent has a parent", () => {

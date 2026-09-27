@@ -31,6 +31,12 @@ export interface SqlDatabase {
    * checks this instead of guessing from its call site.
    */
   readonly inTransaction?: boolean;
+  /**
+   * Deepest `transaction()` nesting seen by this handle. Postgres has no
+   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
+   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   */
+  readonly maxTransactionDepth?: number;
   close(): void;
 }
 
@@ -248,12 +254,26 @@ class PgStatement implements SqlStatement {
 export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
+  private peakTransactionDepth = 0;
   constructor(url: string) {
     this.bridge = new PgBridge(url);
   }
   /** True while a `transaction()` callback runs; its writes are not committed yet. */
   get inTransaction(): boolean {
     return this.transactionDepth > 0;
+  }
+  /**
+   * Deepest nesting reached so far. A caller that must stay a single atomic
+   * unit (issue creation, for example) opens its transaction only when it does
+   * not already own one and then checks this is 1, because a nested `BEGIN`
+   * cannot be rolled back independently on this bridge.
+   */
+  get maxTransactionDepth(): number {
+    return this.peakTransactionDepth;
+  }
+  /** Drop the observed peak, e.g. before asserting on one operation. */
+  resetTransactionDepthStats(): void {
+    this.peakTransactionDepth = this.transactionDepth;
   }
   query(sql: string): SqlStatement {
     return new PgStatement(this.bridge, translateSqliteToPg(sql));
@@ -274,6 +294,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
     return (...args: any[]): T => {
       this.bridge.exec("BEGIN", []);
       this.transactionDepth += 1;
+      this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
       try {
         const result = fn(...args);
         this.bridge.exec("COMMIT", []);

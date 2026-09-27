@@ -1289,6 +1289,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
+    // MUL-400 E3: `force` is the same member-only override as on PATCH, so a run
+    // cannot use the assign route to start a parked issue.
+    const forceDenied = denyTaskIdentityIssueForce(c, { force: body.force });
+    if (forceDenied) return forceDenied;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, issue.workspaceId,
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;

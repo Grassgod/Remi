@@ -815,6 +815,9 @@ export async function issueAssign(issueId: string, options: CliOptions): Promise
     if (!hasTarget) throw new Error("provide --to <id|name|email> [--to-type agent|member|squad] or --unassign");
     addAssigneeBodyFields(body, options, "to-id", "to-type", "to");
   }
+  // MUL-400 E3: to start a parked issue, use `issue update --status todo
+  // --force`. Assignment alone never moves an issue out of backlog, so an
+  // `--force` here would silently do nothing and is deliberately not offered.
   const response = await multiremiApiRequest<Record<string, unknown>>("PUT", `/api/issues/${encodeURIComponent(issueId)}`, body, options);
   printJson({ ...response, task_id: response.task_id ?? null, cancelled_tasks: response.cancelled_tasks ?? 0 });
 }

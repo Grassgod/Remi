@@ -1997,8 +1997,13 @@ export interface MultiremiIssueChildProgress {
   active: number;
 }
 
-/** MUL-400 E3: which column the caller is on for this dependency row. */
-export type MultiremiIssueDependencyDirection = "blocked_by" | "blocks";
+/**
+ * MUL-400 E3: which side of the relation the caller is on. `blocked_by` means
+ * the caller waits for the other issue, `blocks` means the other issue waits
+ * for the caller, and `null` is `related`, which carries no direction at all —
+ * it is neither a prerequisite nor a dependent.
+ */
+export type MultiremiIssueDependencyDirection = "blocked_by" | "blocks" | null;
 
 export interface MultiremiIssueDependency {
   id: string;
@@ -2023,6 +2028,7 @@ export interface MultiremiIssueDependencyView {
   issueId: string;
   dependsOnIssueId: string;
   type: MultiremiIssueDependencyType;
+  /** `null` for `related`, which has no direction. */
   direction: MultiremiIssueDependencyDirection;
   /** The issue on the other side of the relation, relative to the queried issue. */
   issue: MultiremiIssue | null;
@@ -2307,6 +2313,14 @@ export interface AssignIssueInput {
   assigneeId?: string | null;
   assignee_id?: string | null;
   prompt?: string | null;
+  /**
+   * MUL-400 E3: member-only override for the dependency gate. The gate only
+   * holds issues that are *waiting* — `backlog` with an unmet prerequisite — so
+   * this lets a member start one anyway; the dependency rows stay. Task
+   * identities are refused by the routes, exactly like {@link
+   * UpdateIssueInput.force}.
+   */
+  force?: boolean;
   actorType?: string | null;
   actor_type?: string | null;
   actorId?: string | null;
