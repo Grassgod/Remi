@@ -856,7 +856,10 @@ export function denyDaemonTokenTaskRuntimeIdentity(
 ): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
-  const task = store.getTask(taskId);
+  // MUL-474: identity only. This guard runs on every task-level poll, so reading
+  // the whole row made a 2.5 s `status` payload carry the task's `prompt`,
+  // `result` and `usage` columns across the bridge.
+  const task = store.getTaskIdentity(taskId);
   if (!task) return c.json({ error: "task not found" }, 404);
   const workspaceDenied = denyDaemonTokenWorkspace(c, task.workspaceId, options);
   if (workspaceDenied) return workspaceDenied;

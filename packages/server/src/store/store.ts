@@ -123,9 +123,11 @@ import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import {
   TasksRepo,
   type ClaimTaskOptions,
+  type MultiremiTaskIdentity,
   type TaskListCandidate,
   type TaskRef,
   type TaskListCursor,
+  type TaskStatusSnapshot,
 } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
@@ -4520,6 +4522,16 @@ runMigrations(this.db);
 
   getTask(id: string): MultiremiTask | null {
     return this.tasks.getTask(id);
+  }
+
+  /** MUL-474: identity/status columns only, request-scoped. */
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
+    return this.tasks.getTaskIdentity(id);
+  }
+
+  /** MUL-474: the `status` route's projection, without the prompt column. */
+  getTaskStatusSnapshot(id: string): TaskStatusSnapshot | null {
+    return this.tasks.getTaskStatusSnapshot(id);
   }
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {

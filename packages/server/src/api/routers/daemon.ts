@@ -1118,7 +1118,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
       return c.json({ error: "too many messages" }, 413);
     }
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    // MUL-474: identity only — this route writes messages and never reads the
+    // prompt, result or usage columns.
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     // Whitelist each message to the known TaskMessageInput fields (accepting
     // both camel and snake casing) so a compromised/buggy daemon can't smuggle
     // arbitrary JSON into the row; the store layer additionally byte-caps every
@@ -1153,7 +1155,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const task = store.getTask(taskId);
+    // MUL-474: the wire payload reads `issue_id` only.
+    const task = store.getTaskIdentity(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
     if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
@@ -1296,7 +1299,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const task = store.getTask(taskId);
+    // MUL-474: the response fields, projected without `prompt`. The body is a
+    // contract (the Feishu host renders `getFeishuBotTaskSnapshot` from it), so
+    // every field it returned before is still returned here.
+    const task = store.getTaskStatusSnapshot(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     const snapshot: FeishuBotTaskSnapshot = {
       taskId: task.id,
@@ -1326,7 +1332,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    // MUL-474: the poll only needs to know the Task exists; the guard already
+    // resolved the row it is re-reading.
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     return c.json({ messages: store.listPendingTaskSteerMessages(taskId) });
   });
   app.post("/api/daemon/tasks/:taskId/steer/consume", async (c) => {
@@ -1335,7 +1343,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
     return c.json({ consumed: store.consumeTaskSteerMessages(taskId, ids) });
   });
