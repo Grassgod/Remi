@@ -1676,12 +1676,9 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
   }
 
   function expectSingleStart(store: Store, issueId: string, label: string) {
-    expect({
-      label,
-      tasks: allTaskRows(store, issueId).length,
-      start: classifyStart(store, issueId),
-      status: store.getIssue(issueId)!.status,
-    }).toEqual({ label, tasks: 1, start: expect.not.stringMatching(/^(none|both)$/) as unknown as string, status: "todo" });
+    expect({ label, status: store.getIssue(issueId)!.status }).toEqual({ label, status: "todo" });
+    expect({ label, start: classifyStart(store, issueId), tasks: allTaskRows(store, issueId).length })
+      .toEqual({ label, start: expect.not.stringMatching(/^(none|both)$/), tasks: 1 });
   }
 
   it("commits the status, the force record, the assignment and the round together", () => {
@@ -1705,7 +1702,7 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
         status: "backlog",
         blockedBy: [prereq2.id],
         assigneeType: "agent",
-        assigneeId: store.listAgents("local")[0]!.id,
+        assigneeId: store.listAgents()[0]!.id,
       });
 
       let injected = false;
@@ -1737,7 +1734,7 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
         StoreContext.prototype.appendIssueActivity = function patched(
           this: StoreContext,
           issueId: string,
-          input: { type: string },
+          input: { actorType: string; type: string },
           queue?: CommitEventQueue,
         ) {
           if (!injected && input.type === step) fail();
@@ -1816,6 +1813,116 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
     // `issue_updated` as the actor's own request (status, force, actor), which is
     // the third start kind this ruling names.
     const updated = allActivityRows(store, dependent.id, "issue_updated");
-    expect(updated.some((entry) => entry.data?.status === "todo" && entry.data?.force === true)).toBe(true);
+    expect(updated.some((entry) => {
+      const data = (entry.data ?? null) as Record<string, unknown> | null;
+      return data?.status === "todo" && data?.force === true;
+    })).toBe(true);
+  });
+});
+
+/**
+ * MUL-409 QA round 4, blocker 2 — a refused session task must not mutate the
+ * session.
+ *
+ * `createSessionTask` added the agent as a participant (which also creates its
+ * lane) before the round went through the dependency gate, so a 409 left
+ * `participants: [] -> [agent]` and `lanes: 0 -> 1` behind. The participant,
+ * the lane and the round now share one transaction, so every rejection —
+ * `dependencies_unmet` or any failure in task creation — leaves the session
+ * exactly as it was.
+ */
+describe("MUL-409 — fix round 5: a refused session task leaves no participant or lane", () => {
+  function waiting(name: string) {
+    const { store, runtime, agent } = storeWithAgent(name);
+    const prereq = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const session = store.getOrCreateDefaultIssueSession(dependent.id);
+    return { store, runtime, agent, prereq, dependent, session };
+  }
+
+  function sessionShape(store: Store, sessionId: string) {
+    return {
+      participants: store.listSessionParticipants(sessionId).map((row) => row.participantId),
+      lanes: db!.query("SELECT agent_id FROM multiremi_session_agent_lanes WHERE session_id = ?").all(sessionId).length,
+      tasks: db!.query("SELECT id FROM multiremi_tasks WHERE issue_session_id = ?").all(sessionId).length,
+    };
+  }
+
+  it("answers 409 dependencies_unmet and leaves participants, lanes and tasks unchanged", async () => {
+    const { store, agent, dependent, session, prereq } = waiting("session_409");
+    const app = createMultiremiApp({ store });
+    const before = sessionShape(store, session.id);
+    expect(before).toEqual({ participants: [], lanes: 0, tasks: 0 });
+
+    const response = await app.request(`/api/issues/${dependent.id}/sessions/${session.id}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, prompt: "Start blocked work" }),
+    });
+    const payload = await response.json() as { code?: string; error?: string; unmet?: Array<{ key: string }> };
+
+    expect(response.status).toBe(409);
+    expect(payload.code).toBe("dependencies_unmet");
+    // The report names the prerequisite that holds the issue.
+    const prerequisite = store.getIssue(prereq.id)!;
+    expect(payload.unmet).toHaveLength(1);
+    expect(payload.unmet![0]).toMatchObject({ key: prerequisite.key, status: "in_progress" });
+
+    // Nothing about the session moved.
+    expect(sessionShape(store, session.id)).toEqual(before);
+  });
+
+  it("still creates the participant, the lane and the round for an ordinary issue", async () => {
+    const { store, agent } = storeWithAgent("session_ok");
+    const issue = store.createIssue({
+      title: "Ready", status: "todo", assigneeType: "agent", assigneeId: agent.id,
+    });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, prompt: "Run ready work" }),
+    });
+
+    expect(response.status).toBe(201);
+    const shape = sessionShape(store, session.id);
+    expect(shape.participants).toEqual([agent.id]);
+    expect(shape.lanes).toBe(1);
+    expect(shape.tasks).toBe(1);
+  });
+
+  it("rolls the participant back when task creation itself throws", () => {
+    // A ready issue, so the refusal cannot come from the dependency gate: the
+    // failure is injected inside the task insert, after the participant and its
+    // lane were written in the same transaction.
+    const { store, agent } = storeWithAgent("session_throw");
+    const issue = store.createIssue({
+      title: "Ready", status: "todo", assigneeType: "agent", assigneeId: agent.id,
+    });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const before = sessionShape(store, session.id);
+
+    const original = TasksRepo.prototype.createTaskWithinTransaction;
+    TasksRepo.prototype.createTaskWithinTransaction = function patched(this: TasksRepo) {
+      throw new Error("injected session task failure");
+    } as typeof TasksRepo.prototype.createTaskWithinTransaction;
+    try {
+      expect(() => store.createSessionTask(session.id, { agentId: agent.id, prompt: "Explode" }))
+        .toThrow(/injected session task failure/);
+    } finally {
+      TasksRepo.prototype.createTaskWithinTransaction = original;
+    }
+
+    expect(sessionShape(store, session.id)).toEqual(before);
+    // The round itself never landed either.
+    expect(db!.query("SELECT id FROM multiremi_tasks WHERE issue_id = ?").all(issue.id)).toEqual([]);
   });
 });
