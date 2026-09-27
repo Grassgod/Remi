@@ -96,44 +96,55 @@ export function stripParentTaskLineage<T extends object>(input: T): T {
  * The body a task-creation route hands to the store.
  *
  * A verified credential's request cannot name its own lineage, so both
- * spellings are dropped. Anonymous compatibility keeps the old behaviour,
- * where a body-supplied `parent_task_id` alias reached the store's `??` read.
+ * spellings are dropped. Anonymous compatibility keeps the old behaviour: the
+ * route's camelCase stamp used to override a camelCase body value while the
+ * snake_case alias survived the store's `??`, so only the camelCase key is
+ * dropped here and the alias stays available to the helper below.
  */
 export function requestTaskLineageBody<T extends object>(c: Context, body: T): T {
-  return hasVerifiedRequestIdentity(c) ? stripParentTaskLineage(body) : body;
+  if (hasVerifiedRequestIdentity(c)) return stripParentTaskLineage(body);
+  const out = { ...(body as Record<string, unknown>) };
+  delete out.parentTaskId;
+  return out as T;
 }
 
 /**
  * The lineage override a task-creation route stamps over the body.
  *
- * A task credential yields its own task id. Any other verified credential
- * (member PAT, login JWT, daemon) contributes *no key at all* — paired with the
- * strip above, that leaves the store with nothing to fall back to, so the
- * historical `??` read cannot resurrect a body alias. Anonymous compatibility
- * resolves the body's snake_case alias, which is exactly the value the old
- * `null ?? body.parent_task_id` store read produced; the camelCase spelling
- * stays overridden by the route, as it always was.
+ * A verified credential always stamps the key: its own task id for a task
+ * token, and an explicit `null` for a member PAT, login JWT or daemon. The
+ * explicit key is what stops the store's historical fallbacks (the snake_case
+ * alias and a trigger comment's run id) from being steered by a request body.
+ *
+ * Anonymous compatibility reproduces the old `null ?? body.parent_task_id`
+ * read exactly: the alias is stamped when the body carries it, and otherwise no
+ * key is stamped at all, leaving the store's other fallbacks in charge as
+ * before.
  */
 export function requestParentTaskLineage(
   c: Context,
   body: object,
 ): { parentTaskId?: string | null } {
   if (hasVerifiedRequestIdentity(c)) {
-    const taskId = currentTaskAccessToken(c)?.taskId;
-    return taskId ? { parentTaskId: taskId } : {};
+    return { parentTaskId: currentTaskAccessToken(c)?.taskId ?? null };
   }
+  if (!Object.hasOwn(body, "parent_task_id")) return {};
   const lineage = (body as { parent_task_id?: unknown }).parent_task_id;
   return { parentTaskId: cleanString(typeof lineage === "string" ? lineage : null) ?? null };
 }
 
 /**
- * The `/api/multiremi/tasks` variant of the stamp.
+ * The `/api/multiremi/tasks` variant.
  *
- * That route has always dropped both spellings from the body before stamping,
- * so an anonymous request there resolves to `null` instead of its body alias.
- * Keeping the same expression preserves that difference between the surfaces.
+ * That route has always destructured both spellings out of the body before it
+ * stamped anything, so a body could never supply the value. A verified
+ * credential still stamps its own (an explicit `null` for a member PAT, which
+ * also forbids the store's trigger-comment fallback from being steered), while
+ * anonymous compatibility stamps nothing and leaves the store's historical
+ * fallbacks in charge.
  */
-export function requestStrippedParentTaskLineage(c: Context): { parentTaskId: string | null } {
+export function requestStrippedParentTaskLineage(c: Context): { parentTaskId?: string | null } {
+  if (!hasVerifiedRequestIdentity(c)) return {};
   return { parentTaskId: currentTaskAccessToken(c)?.taskId ?? null };
 }
 

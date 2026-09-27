@@ -244,6 +244,42 @@ for (const backend of ["sqlite", "postgres"] as const) {
       });
     }, PG_TEST_TIMEOUT);
 
+    it("cannot steer the trigger-comment lineage fallback through the public task route", async () => {
+      // Third door to the same field: the store falls back to
+      // `triggerComment.taskId`, and a delegated run's own comment carries that
+      // run's task id — which a member can read. Naming it here would otherwise
+      // produce the same D4 suppression as a forged `parent_task_id`.
+      await withStore(backend, async (store) => {
+        const f = await fixture(store, "lineage-guard-root");
+        // The comment sits on the parent issue, where the wake task is created,
+        // and carries the delegated run's task id — exactly what a member would
+        // read back from the run's own progress notes.
+        const workerComment = store.createIssueComment(f.parent.id, {
+          authorType: "agent", authorId: f.workerId, taskId: f.delegatedTask.id,
+          issueSessionId: f.leaderSessionId, body: "Worker progress note",
+        });
+        for (const spelling of ["triggerCommentId", "trigger_comment_id"] as const) {
+          const response = await f.app.request("/api/multiremi/tasks", {
+            method: "POST",
+            headers: f.memberHeaders,
+            body: JSON.stringify({
+              agentId: f.leaderId,
+              issueId: f.parent.id,
+              issueSessionId: f.leaderSessionId,
+              prompt: `trigger-comment ${spelling}`,
+              [spelling]: workerComment.id,
+            }),
+          });
+          expect(response.status, spelling).toBe(201);
+          const created = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+          expect(created.parentTaskId, spelling).toBeNull();
+          // The trigger comment is still recorded for the transcript (it really
+          // is the trigger); only its lineage fallback must not apply.
+          expect(created.triggerCommentId, spelling).toBe(workerComment.id);
+        }
+      });
+    }, PG_TEST_TIMEOUT);
+
     it("drops parent_task_id on the Chat message routes for a member PAT", async () => {
       await withStore(backend, async (store) => {
         const f = await fixture(store, "lineage-guard-root");

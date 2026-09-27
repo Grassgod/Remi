@@ -767,7 +767,17 @@ export class TasksRepo {
     // exactly when the server stamped `null`, which is the D4 manual-wake-up
     // forgery this round closes (see api/wire/context.ts).
     const requestedParentTaskId = resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id");
-    const parentTaskId = requestedParentTaskId ?? triggerComment?.taskId ?? null;
+    // The trigger comment's run id is the historical fallback for the server's
+    // own comment dispatchers, which pass no explicit lineage. A caller that DID
+    // pass a lineage key (every public route now always does) has made the
+    // decision, so the fallback must not override its `null`: otherwise naming a
+    // delegated run's comment would recreate the same D4 forgery through a
+    // different field.
+    const hasExplicitParentLineage = Object.hasOwn(input, "parentTaskId")
+      || Object.hasOwn(input, "parent_task_id");
+    const parentTaskId = hasExplicitParentLineage
+      ? requestedParentTaskId
+      : triggerComment?.taskId ?? null;
     const parentTask = parentTaskId ? this.getTask(parentTaskId) : null;
     if (parentTaskId && !parentTask) throw new Error(`Parent task not found: ${parentTaskId}`);
     if (parentTask && parentTask.workspaceId !== agent.workspaceId) {

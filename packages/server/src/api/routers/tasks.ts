@@ -252,10 +252,11 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // so every completed child Task must remain independently returnable.
     //
     // MUL-456 fix round 1: `parentTaskId` / `parent_task_id` are server-owned
-    // lineage. The destructure above drops both spellings from `publicInput`,
-    // so the only value that can reach the store is the credential's own task
-    // id — `null` for a member PAT or a login session. This route has always
-    // ignored body lineage, including in the anonymous compatibility modes.
+    // lineage. The destructure above drops both spellings from `publicInput`;
+    // this override supplies the credential's own task id (or an explicit null
+    // for a member PAT), which also forbids the store's trigger-comment
+    // fallback from being steered by the body. Anonymous compatibility keeps
+    // the historical alias/fallback behaviour.
     const lineage = requestStrippedParentTaskLineage(c);
     const createInput: CreateTaskInput = {
       ...publicInput,

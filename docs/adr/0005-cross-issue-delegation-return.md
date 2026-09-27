@@ -88,7 +88,12 @@ Two further behaviours were decided with the fix's reviewers:
    stamping, so no nested or alias spelling can outrank it. The store reads a
    present camelCase key as authoritative *including an explicit `null`*
    (`resolveCamelOrSnakeString`) instead of the historical
-   `camel ?? snake` fallback. Comment bodies obey the same rule: a comment's
+   `camel ?? snake` fallback. The store's older fallback to a trigger comment's
+   run id also stays off once the caller has supplied an explicit lineage key,
+   which every public route now does; a delegated run's own comment carries that
+   run's task id and is readable, so leaving the fallback steerable would reopen
+   the same forgery through `triggerCommentId`. Comment bodies obey the same
+   rule: a comment's
    `task_id` links it to its run, and the mention dispatcher and assignee
    auto-response read that link back as `parent_task_id`, so only the task-token
    branch of `issueCommentCreateInput` may set it. Anonymous compatibility
