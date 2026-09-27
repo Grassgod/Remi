@@ -102,6 +102,12 @@ describe("application compose stack", () => {
     // captured too.
     expect(splitLocations).not.toMatch(/\^~\s*\/api\/daemon\//u);
     expect(splitLocations).not.toMatch(/location \/api\/daemon[^/\s]/u);
+    // MUL-462's peer endpoints (`/internal/peer/events`, `/internal/peer/health`)
+    // are for container-to-container traffic only. Today nothing routes them
+    // from the public server, but that is an accident of the current rewrite and
+    // catch-all; this location makes the boundary explicit so a future routing
+    // change cannot quietly publish them.
+    expect(splitLocations).toMatch(/^location \/internal\/ \{ return 404; \}$/mu);
   });
 
   test("grants no container the Docker socket or host control", () => {

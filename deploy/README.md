@@ -355,6 +355,13 @@ Prerequisites:
      block** (the :80 and the :443 one), next to
      [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf).
      Point that file's archive location at `multica_api_runtime` as well.
+     Both `server` blocks need it: the two listen on the same host, and an
+     include in only one of them would leave the other public path different.
+     The file also carries `location /internal/ { return 404; }` so the peer
+     endpoints (`/internal/peer/events`, `/internal/peer/health`) can never be
+     reached from the public server. Those are container-to-container calls;
+     today's rewrite and catch-all already leave them unreachable, and the
+     explicit rule keeps that true through later routing changes.
 
    Putting the `upstream` line inside a `server` block is the mistake this split
    exists to prevent: `nginx -t` fails with
@@ -421,6 +428,15 @@ being served by the wrong process.
    up on a direct probe).
 
 ### Rollback
+
+> **Precondition for rolling back MUL-405 while the split is live:** return to a
+> single process first (stage B rollback, then stage A rollback, below), and only
+> then roll back the MUL-405 image. MUL-405 adds defensive unique indexes plus a
+> migration/id lock, and its unique indexes stay in the database when the code is
+> rolled back. That is safe only while a single writer exists. With two API
+> processes still running, an older image without the guard could race the
+> indexes. Reverting the code and the topology in the other order is not
+> supported.
 
 The stage boundary is what makes the first rollback cheap, and the order inside
 stage B is not interchangeable: rolling the routing back before the role would
