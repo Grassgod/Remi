@@ -3,16 +3,19 @@
 ## Status
 
 Draft (MUL-403, message architecture v2-C). Written at C0, before the
-implementation, per the plan's §4 outline (MUL-403 `cmt_8u0ols22z3a1`). C1–C11
-fill in the code this ADR describes; the six decisions below are the ones the
+implementation, per the plan's §4 outline (MUL-403 `cmt_8u0ols22z3a1`), and
+revised when A-0's final commit (`43e41952`) merged into this branch. C1–C11 fill
+in the code this ADR describes; the decisions below are the ones the
 implementation must not contradict without a new ADR.
 
 Ten questions were put to the product owner (MUL-403 `cmt_7fdlky2b1tp4`). This
-document records the **recommended** answer for each and marks it 「待确认」.
-Q1, Q2 and Q5 are invisible to users and are already being built against the
-recommendation; Q3, Q4, Q6 and Q7 are user-visible and stay unbuilt until they are
-confirmed; Q8–Q10 are cross-issue scope and test environment, still open. A
-different answer changes the named sub-deliverable and nothing else.
+document records the answer for each and marks every one that is still unconfirmed
+as 「待确认」. Q1, Q2 and Q5 are invisible to users and are already being built
+against the recommendation; Q3, Q4, Q6 and Q7 are user-visible and stay unbuilt
+until they are confirmed; **Q8 is confirmed** (the product owner chose option A on
+2026-09-27) and the change is recorded below; Q9 and Q10 are test-environment
+questions and remain open. A different answer to an open question changes the
+named sub-deliverable and nothing else.
 
 | # | Question | Assumed answer | Status |
 |---|---|---|---|
@@ -23,7 +26,7 @@ different answer changes the named sub-deliverable and nothing else.
 | Q5 | Feishu receipt fails after 6 retries | Silent: audit and log only; messages and cards unaffected | 待确认 |
 | Q6 | 「执行过程」 loads on open only | All five entry points lazy | 待确认 (user-visible) |
 | Q7 | Six further user-visible changes | All confirmed | 待确认 (user-visible) |
-| Q8 | `useAnchoredReveal` / `useStickToBottom` move into C8 | Yes; MUL-390 becomes a consumer and keeps ADR 0008 | 待确认 (cross-issue) |
+| Q8 | `useAnchoredReveal` / `useStickToBottom` move into C8 | Yes (option A) — but they land in main first with MUL-450; C8 only calls them | **已确认 (option A)** |
 | Q9 | When S1 (p75 ≤ 0.5s) is accepted | Local seed environment before release as a gate; 209 peak/off-peak after release | 待确认 (test environment) |
 | Q10 | Environment for the Feishu receipt-failure check | A non-production test bot and group | 待确认 (test environment) |
 
@@ -143,8 +146,14 @@ the same frame; scrolling up enters `released`, where appends only increment a
 「N 条新消息」 chip; the chip returns to `pinned`. Deep links open `released`
 centred on the target row. `useAnchoredReveal` keeps the scroll root hidden until
 the anchor has a position and its reserved height is measured, then publishes
-`data-perf-state=ready` (forced after an 800ms budget). Both hooks are C's (Q8),
-named as MUL-390 planned them; ADR 0008 stays with MUL-390.
+`data-perf-state=ready` (forced after an 800ms budget).
+
+**Q8 (confirmed, option A):** the two hooks are not written by this issue. They
+land in `main` first with MUL-450 and keep the names MUL-390 planned; C8 imports
+and calls them, and owns nothing but their call sites. MUL-390 stays a consumer
+and keeps ADR 0008. This supersedes the plan's "both hooks are C's" wording, which
+was written when MUL-390 had no branch and would have blocked every frontend
+sub-issue behind it.
 
 ### 5. The adapter seam, not a bus
 
@@ -154,7 +163,26 @@ interface exists so that C2's re-evaluation can add a cross-process adapter by
 publishing every frame that entered a ring and feeding remote frames into the
 local ring first. Ordering stays the hub's job; the bus only moves bytes.
 
-### 6. What the browser socket carries
+### 6. Close codes: four are terminal, everything else reconnects
+
+The daemon's close codes have an explicit terminal set — **`4401`**
+(authority revoked), **`4403`** (token lacks the scope), **`4410`** (daemon
+retired) and **`4426`** (protocol v2 required). Any other code, including the
+`1006` / `1011` / `1012` / `1013` / `1000` / `1001` the WebSocket stack produces
+on its own, is an ordinary connection loss and is retried with backoff.
+
+The set is deliberately a deny-list rather than an allow-list of retryable codes.
+Defaulting to terminal is the dangerous direction: the code a daemon actually
+observes when the network drops or a server is killed is `1006` (abnormal
+closure, which the peer never emits), so an allow-list would make every one of
+those "terminal" and leave a daemon unreachable until someone intervened.
+Defaulting to retry costs a little reconnect churn for a code nobody anticipated.
+
+`4426` is on the list although it is not permanent: the daemon must not retry the
+socket, because the server rejects it again until the binary is upgraded. It
+enters `upgrade_wait` and polls the HTTP upgrade channel instead.
+
+### 7. What the browser socket carries
 
 The browser WebSocket keeps its `auth` / `auth_ack` handshake and gains
 `stream.subscribe` / `stream.unsubscribe` / `ping` upward and `stream.ack` /
@@ -218,6 +246,15 @@ state of `agent/MUL-403` still runs.
 - **Neutral / open:** whether `trace-reader` exposes `head(taskId)` for a cold
   `trace:` stream's warm-up is still being aligned with MUL-402; until then a cold
   trace stream reports `head: null` and the subscriber backfills the whole range.
-- **Neutral / open:** the trace termination signal for the Feishu connector (a
-  `trace.end` row or an `ended` flag on the push frame) is still being aligned
-  with the daemon side, and the 400ms `/status` poll is not deleted until it is.
+- **Settled (was open in the C0 draft):** the trace completeness signal is the
+  subscription's `closed` flag and nothing else. There is no `trace.end` event
+  type and no `ended` field on any frame — MUL-402 ruled a terminator row out, and
+  A-0's final `TraceSinkSubscription` carries `closed` as a live getter
+  (`{first_seq, head, gap, closed, unsubscribe}`) beside `close?(taskId)`, which
+  the hub calls when the task's trace is final. `task.complete` / `task.fail`
+  frames carry `trace{head, event_count, closed: true, ...}`, so a receiver that
+  sees the completion frame knows the trace it names is final. The Feishu
+  connector therefore waits on `closed` instead of polling `/status`; C6 deletes
+  that 400ms poll. Reading `closed` live is what makes it work without
+  re-subscribing: a caller that holds one subscription for the life of a turn sees
+  the flag flip.

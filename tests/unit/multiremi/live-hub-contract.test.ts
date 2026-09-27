@@ -28,16 +28,20 @@ import {
   createEmptyLiveHub,
 } from "@multiremi/api/hub/live-hub";
 import type {
-  A0TraceEvent,
-  A0TraceSink,
-  A0TraceSinkListener,
-  A0TraceSinkSubscription,
   B0ConversationLogEntry,
   ConversationLogListener,
   ConversationLogPatch,
   HumanRequestEvent,
   LiveHub,
 } from "@multiremi/api/hub/live-hub";
+// A-0's real modules: `43e41952` is merged into this branch, so these are the
+// upstream signatures themselves rather than a transcription to compare against.
+import type { TraceEvent } from "@multiremi/contracts/trace";
+import type {
+  TraceSink,
+  TraceSinkListener,
+  TraceSinkSubscription,
+} from "@multiremi/api/trace/trace-sink";
 import {
   HUB_TRANSPORT_KINDS,
   LocalHubTransport,
@@ -55,19 +59,30 @@ import type { HubTransport } from "@multiremi/api/hub/hub-transport";
 
 // ── A-0 compatibility: the hub satisfies the published TraceSink seam ───────────────────────────
 
-function a0TraceEvent(seq: number): A0TraceEvent {
-  return { seq, ts: 1_700_000_000_000 + seq, type: "text", content: `event-${seq}` };
+/** A-0 `TraceEvent`: `ts` is an ISO string and `type` is an open string. */
+function a0TraceEvent(seq: number): TraceEvent {
+  return {
+    seq,
+    ts: new Date(1_700_000_000_000 + seq).toISOString(),
+    type: "text",
+    content: `event-${seq}`,
+  };
+}
+
+/** An event whose `type` no enum lists, to prove it passes through verbatim. */
+function unknownTypeEvent(seq: number, type: string): TraceEvent {
+  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type, content: "x" };
 }
 
 /** The wiring C1/A-6 use: the hub is handed to a consumer of A-0's `TraceSink`. */
-function consumeTraceSink(sink: A0TraceSink): { head: number | null } {
+function consumeTraceSink(sink: TraceSink): { head: number | null } {
   return { head: sink.head("task_a") };
 }
 
 function traceSinkShape(hub: LiveHub): {
   appended: { head: number };
   head: number | null;
-  subscription: A0TraceSinkSubscription;
+  subscription: TraceSinkSubscription;
 } {
   return {
     appended: hub.append("task_a", [a0TraceEvent(1)]),
@@ -76,9 +91,18 @@ function traceSinkShape(hub: LiveHub): {
   };
 }
 
-/** The sink subscription keeps A-0's boolean `gap`, not the keyed range. */
-function a0SubscriptionProbe(hub: LiveHub): boolean {
-  return hub.subscribe("task_a", 0, (_taskId, _events) => {}).gap;
+/**
+ * A-0's subscription carries `closed` as well as `gap`, and both `gap` and the
+ * getter-backed fields must be present. Reading them through the upstream type
+ * (rather than a local restatement) is what makes a drift a compile error.
+ */
+function a0SubscriptionProbe(hub: LiveHub): {
+  gap: boolean;
+  closed: boolean;
+  head: number;
+} {
+  const subscription: TraceSinkSubscription = hub.subscribe("task_a", 0, (_taskId, _events) => {});
+  return { gap: subscription.gap, closed: subscription.closed, head: subscription.head };
 }
 
 // ── The keyed subscription is the browser/A-6 shape ─────────────────────────────────────────────
@@ -198,11 +222,17 @@ describe("live hub contract", () => {
     expect(transport.healthy?.()).toBe(false);
   });
 
-  it("says out loud which upstream commits the hand-written seams must be replaced by", () => {
-    // Both upstream contracts are off-branch at C0; if these notes disappear
-    // without the imports changing, the alignment promise was quietly dropped.
-    expect(EMPTY_LIVE_HUB_ALIGNMENT_NOTES.join("\n")).toContain("5fa2a3e2");
-    expect(EMPTY_LIVE_HUB_ALIGNMENT_NOTES.join("\n")).toContain("fe7810c9");
+  it("records that A-0 is aligned and B0 is still pending", () => {
+    const notes = EMPTY_LIVE_HUB_ALIGNMENT_NOTES.join("\n");
+    // A-0's final commit, and the fact that no stand-in is left for it. The
+    // superseded 5fa2a3e must not come back: it is the transcription this
+    // revision replaced.
+    expect(notes).toContain("43e41952");
+    expect(notes).toContain("A-0 aligned");
+    expect(notes).not.toContain("5fa2a3e2");
+    // B0 is still hand-written, and the note names the commit it was written from.
+    expect(notes).toContain("B0 pending");
+    expect(notes).toContain("fe7810c9");
   });
 });
 
@@ -225,7 +255,13 @@ describe("EmptyLiveHub", () => {
     expect(logKeyed.head).toBe(0);
 
     const sinkSub = hub.subscribe("task_a", 0, () => {});
-    expect(sinkSub).toEqual({ first_seq: 1, head: 0, gap: false, unsubscribe: expect.any(Function) });
+    // A-0's shape: `closed` is part of it, and `head`/`closed` are getters rather
+    // than snapshot properties, so `toEqual` on the object is not how to read it.
+    expect(sinkSub.first_seq).toBe(1);
+    expect(sinkSub.head).toBe(0);
+    expect(sinkSub.gap).toBe(false);
+    expect(sinkSub.closed).toBe(false);
+    expect(typeof sinkSub.unsubscribe).toBe("function");
 
     // The handles are inert but real, so a caller's cleanup path is exercised.
     expect(() => keyed.unsubscribe()).not.toThrow();
@@ -254,7 +290,7 @@ describe("EmptyLiveHub", () => {
     // runtime companion and the file fails loudly rather than at lint time.
     expect(consumeTraceSink(hub)).toEqual({ head: null });
     expect(traceSinkShape(hub).appended).toEqual({ head: 0 });
-    expect(a0SubscriptionProbe(hub)).toBe(false);
+    expect(a0SubscriptionProbe(hub)).toEqual({ gap: false, closed: false, head: 0 });
     expect(keyedSubscriptionProbe(hub)).toEqual({
       first_seq: 1,
       head: 0,
@@ -276,6 +312,38 @@ describe("EmptyLiveHub", () => {
     const sink = hub.subscribe("task_a", 0, () => {});
     expect(sink.gap).toBe(false);
     expect(sink).not.toHaveProperty("log_version");
+  });
+
+  it("flips `closed` for a task it never appended to, read live through the getter", () => {
+    // `isClosed` is on the empty implementation, not on `LiveHub`: C1's hub keeps
+    // its retention state internally, so the interface stays the A-0/B1 surface.
+    const hub = new EmptyLiveHub(createLocalHubTransport());
+    // A zero-event turn, or a cold hub that sees the completion frame before any
+    // `trace.append`: A-0 says a later subscriber must still see `closed: true`.
+    const subscriber = hub.subscribe("task_empty", 0, () => {});
+    expect(subscriber.closed).toBe(false);
+
+    expect(hub.head("task_empty")).toBeNull();
+    hub.close?.("task_empty");
+
+    // The getter reads live state, so a subscription created *before* the close
+    // already reports it — no re-subscribe needed.
+    expect(subscriber.closed).toBe(true);
+    expect(hub.isClosed("task_empty")).toBe(true);
+    // Closing is per task and does not leak to a sibling.
+    expect(hub.isClosed("task_other")).toBe(false);
+    // A-0 types `close` as optional, so callers must guard it; this hub implements it.
+    expect(typeof hub.close).toBe("function");
+  });
+
+  it("carries an unknown `type` through untouched instead of normalizing it", () => {
+    const hub = createEmptyLiveHub(createLocalHubTransport());
+    // `TraceEvent.type` is an open string (MUL-402 ruling 1). The 13 known values
+    // are for enumeration and bucketing, not validation, so the hub must not be
+    // the layer that drops or rewrites a type it has not seen.
+    const exotic = unknownTypeEvent(1, "some_future_type");
+    expect(exotic.type).toBe("some_future_type");
+    expect(() => hub.append("task_a", [exotic])).not.toThrow();
   });
 
   it("never fabricates a sequence for a caller", () => {
@@ -303,11 +371,12 @@ const typeOnlyProbes = {
   gap: null as unknown as HubStreamGapPayload,
   clientFrame: null as unknown as BrowserWsClientFrame,
   serverFrame: null as unknown as BrowserWsServerFrame,
-  traceListener: null as unknown as A0TraceSinkListener,
+  traceListener: null as unknown as TraceSinkListener,
+  traceSink: null as unknown as TraceSink,
 };
 
 describe("live hub contract probes", () => {
   it("keeps the erased type probes referenced", () => {
-    expect(Object.keys(typeOnlyProbes)).toHaveLength(10);
+    expect(Object.keys(typeOnlyProbes)).toHaveLength(11);
   });
 });

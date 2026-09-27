@@ -19,9 +19,15 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 const A0_MODULES = [
   // Imported by nothing outside tests until A-1/A-2/A-5/A-6 wire them up.
   { specifier: "@multiremi/contracts/daemon-protocol", wired: false },
-  { specifier: "@multiremi/contracts/trace", wired: false },
+  // Flipped to wired by MUL-435 (C0): the Live Hub's `LiveHub` interface extends
+  // A-0's `TraceSink` and annotates its events with `TraceEvent`, so
+  // `packages/server/src/api/hub/live-hub.ts` imports both. That import is a type
+  // import and the hub is still imported by nothing on the request path (see
+  // `c0-live-hub-isolation.test.ts`), so A-0's own rule is intact: no runtime
+  // behaviour reaches these modules yet.
+  { specifier: "@multiremi/contracts/trace", wired: true },
   { specifier: "@multiremi/worker/trace-store", wired: false },
-  { specifier: "@multiremi/api/trace/trace-sink", wired: false },
+  { specifier: "@multiremi/api/trace/trace-sink", wired: true },
   { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: false },
   // A-0b additions: the shared sanitize point and the derived read-side values.
   // Both are called only by tests and by other A-0 modules so far. A-6 wires
@@ -91,6 +97,8 @@ const A0_SOURCES = new Set([
 
 /** Notes on who will consume each module once it is wired. */
 const WIRING_OWNER = new Map<string, string>([
+  ["@multiremi/contracts/trace", "MUL-435 C0: the Live Hub annotates its events with TraceEvent"],
+  ["@multiremi/api/trace/trace-sink", "MUL-435 C0: LiveHub extends A-0's TraceSink"],
   ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
   ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
 ]);
@@ -130,6 +138,33 @@ describe("A-0 modules are not yet wired into runtime code", () => {
       }
     });
   }
+
+  it("names the C0 hub as the consumer that flipped trace/trace-sink to wired", () => {
+    // The two entries above went from `false` to `true` in MUL-435. Pin *who* the
+    // consumer is, so the flip cannot be satisfied by an unrelated runtime import
+    // appearing somewhere and leaving this guard green for the wrong reason.
+    const hubPath = join(REPO_ROOT, "packages/server/src/api/hub/live-hub.ts");
+    const hub = readFileSync(hubPath, "utf8");
+    const specs = [...hub.matchAll(IMPORT_RE)].map((match) => match[1]!);
+    for (const specifier of ["@multiremi/contracts/trace", "@multiremi/api/trace/trace-sink"]) {
+      // Both the bare and the `.js` ESM spelling count.
+      expect(
+        specs.includes(specifier) || specs.includes(`${specifier}.js`),
+        `live-hub.ts does not import ${specifier}`,
+      ).toBe(true);
+      // It is a *type* import: A-0 keeps its "no runtime behaviour" claim only
+      // while nothing pulls these modules into a request path at runtime. A value
+      // import here would be a real wiring, not a contract reference.
+      // Written as `import type`, so nothing pulls these modules into the module
+      // graph at runtime; a value import would be a real wiring, not a contract
+      // reference, and A-0's "no runtime behaviour" claim would stop being true.
+      const escaped = specifier.replace(/[/.]/g, "\\$&");
+      expect(
+        new RegExp(`import type\\s*\\{[^}]*\\}\\s*from\\s*"${escaped}\\.js";`).test(hub),
+        `${specifier} must be imported with \`import type\``,
+      ).toBe(true);
+    }
+  });
 
   it("scans a root set broad enough to catch a real wiring", () => {
     // Guard against the failure mode this file itself hit: a scan that finds
