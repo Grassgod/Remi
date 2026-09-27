@@ -58,6 +58,27 @@ export interface SqlDatabase {
    * above; go through `advisoryXactLock(db, key)` rather than calling it here.
    */
   advisoryXactLock?(key: string): void;
+  /**
+   * Run `fn` after the transaction that is currently open commits, and drop it
+   * if that transaction rolls back (MUL-405).
+   *
+   * A writer inside a nested `transaction()` has no way to know whether the
+   * outermost caller will commit: on Postgres the inner call only released a
+   * SAVEPOINT, so an event published there can still be invalidated by an outer
+   * ROLLBACK. Handing the event to the outermost transaction's queue is what
+   * makes "publish after COMMIT" true at every nesting depth.
+   *
+   * The callback must not touch the database through the same connection: it
+   * runs after the transaction ended, so a deferred event's readers (listener
+   * registries, not queries) are the intended work. Outside any transaction the
+   * callback runs immediately, which keeps callers that never opened one (and
+   * SQLite, whose writers hold the file lock) on the old path.
+   *
+   * Optional for the same structural-typing reason as the advisory locks: a raw
+   * bun:sqlite handle does not implement it, and the helper below falls back to
+   * running the callback immediately.
+   */
+  afterCommit?(fn: () => void): void;
   close(): void;
 }
 
@@ -91,6 +112,33 @@ export function advisoryLock<T>(db: SqlDatabase, key: string, fn: () => T): T {
  */
 export function advisoryXactLock(db: SqlDatabase, key: string): void {
   db.advisoryXactLock?.call(db, key);
+}
+
+/**
+ * Run \`fn\` after the transaction that is currently open commits (MUL-405).
+ *
+ * A writer nested inside a caller-owned transaction cannot know whether that
+ * caller will commit — on Postgres the inner \`transaction()\` only released a
+ * SAVEPOINT — so publishing a realtime event there can still be invalidated by an
+ * outer ROLLBACK. Handing the event to the outermost transaction's queue is what
+ * makes "publish only after COMMIT" true at every nesting depth. A database that
+ * cannot queue (a raw \`bun:sqlite\` handle passed straight to a repo by a test)
+ * runs the callback immediately: outside a transaction the two are the same.
+ */
+export function afterCommit(db: SqlDatabase, fn: () => void): void {
+  if (typeof db.afterCommit === "function") db.afterCommit(fn);
+  else fn();
+}
+
+/** Best-effort drain: a failing listener must not fail the caller's commit. */
+function runAfterCommitCallbacks(queue: Array<() => void>): void {
+  for (const callback of queue) {
+    try {
+      callback();
+    } catch {
+      // Realtime publication is best-effort by contract; the write is committed.
+    }
+  }
 }
 
 // ────────────────────────────── sqlite → postgres ──────────────────────────────
@@ -358,6 +406,16 @@ class PgStatement implements SqlStatement {
 export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
+  /**
+   * One frame per open \`transaction()\` call, innermost last (MUL-405).
+   *
+   * An inner frame's callbacks must not run when that frame only released a
+   * SAVEPOINT: the outer transaction can still roll back. On a clean inner exit
+   * the frame is merged into its parent; on an inner ROLLBACK TO SAVEPOINT the
+   * frame is dropped, because the rows it would publish were undone. Only the
+   * outermost frame, after a real COMMIT, runs the merged queue.
+   */
+  private afterCommitFrames: Array<Array<() => void>> = [];
   constructor(url: string) {
     this.bridge = new PgBridge(url);
   }
@@ -428,10 +486,13 @@ export class PostgresSyncDatabase implements SqlDatabase {
       if (outermost) this.bridge.exec("BEGIN", []);
       else this.bridge.exec(`SAVEPOINT ${savepoint}`, []);
       this.transactionDepth += 1;
+      this.afterCommitFrames.push([]);
+      let committed = false;
       try {
         const result = fn(...args);
         if (outermost) this.bridge.exec("COMMIT", []);
         else this.bridge.exec(`RELEASE SAVEPOINT ${savepoint}`, []);
+        committed = true;
         return result;
       } catch (err) {
         try {
@@ -443,9 +504,33 @@ export class PostgresSyncDatabase implements SqlDatabase {
         throw err;
       } finally {
         this.transactionDepth -= 1;
+        const frame = this.afterCommitFrames.pop()!;
+        if (committed) {
+          if (outermost) runAfterCommitCallbacks(frame);
+          else this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
+        }
       }
     };
   }
+  /**
+   * Queue \`fn\` until the OUTERMOST transaction on this connection commits, and
+   * drop it when that transaction rolls back (MUL-405).
+   *
+   * A writer that runs inside a nested \`transaction()\` cannot tell whether the
+   * caller above it will commit: the inner call only released a SAVEPOINT, so a
+   * realtime event published there can still be invalidated by an outer
+   * ROLLBACK. Queueing on the outermost depth is what makes "publish after
+   * COMMIT" true at every nesting level. Outside a transaction the callback runs
+   * immediately, so autocommit callers keep the old behavior.
+   */
+  afterCommit(fn: () => void): void {
+    if (this.transactionDepth === 0) {
+      fn();
+      return;
+    }
+    this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(fn);
+  }
+
   /**
    * Transaction-scoped lock on this bridge's single connection, so it is
    * released by the caller's COMMIT or ROLLBACK rather than by a callback.

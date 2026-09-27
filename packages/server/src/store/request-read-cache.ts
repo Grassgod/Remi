@@ -158,6 +158,13 @@ function writtenTable(sql: string): string | null {
  * lock before its first read.
  */
 export function invalidatingDatabase<T extends object>(database: T): T {
+  /**
+   * One frame per transaction, innermost last (MUL-405). Callbacks queued via
+   * the `afterCommit` key above run only once the outermost frame commits;
+   * an inner frame that rolls back drops its own callbacks. Mirrors the native
+   * implementation on `PostgresSyncDatabase`.
+   */
+  const afterCommitFrames: Array<Array<() => void>> = [];
   const interceptStatement = (statement: unknown, sql: string): unknown => {
     if (READ_ONLY_STATEMENT.test(sql)) return statement;
     const table = writtenTable(sql);
@@ -188,7 +195,37 @@ export function invalidatingDatabase<T extends object>(database: T): T {
       if (key === "transaction" && typeof value === "function") {
         return (fn: (...args: unknown[]) => unknown) => {
           const runTransaction = value.apply(target, [fn]) as (...args: unknown[]) => unknown;
-          return (...args: unknown[]) => withinTransaction(() => runTransaction(...args));
+          return (...args: unknown[]) => withinTransaction(() => {
+            afterCommitFrames.push([]);
+            let committed = false;
+            try {
+              const result = runTransaction(...args);
+              committed = true;
+              // The real transaction committed (for SQLite there is no nesting:
+              // bun:sqlite joins the open transaction). Publish only here, so a
+              // throwing callback cannot be reported as a committed write.
+              return result;
+            } finally {
+              const frame = afterCommitFrames.pop()!;
+              if (committed) {
+                if (afterCommitFrames.length === 0) {
+                  for (const callback of frame) {
+                    try { callback(); } catch { /* best-effort realtime */ }
+                  }
+                } else {
+                  afterCommitFrames[afterCommitFrames.length - 1]!.push(...frame);
+                }
+              }
+            }
+          });
+        };
+      }
+      if (key === "afterCommit" && value === undefined) {
+        // bun:sqlite has no queue of its own; the wrapper provides the same
+        // contract the Postgres handle implements natively.
+        return (fn: () => void) => {
+          if (afterCommitFrames.length === 0) fn();
+          else afterCommitFrames[afterCommitFrames.length - 1]!.push(fn);
         };
       }
       return typeof value === "function" ? value.bind(target) : value;

@@ -191,6 +191,22 @@ function injectFailures(): Wrapped {
         };
         return originalTransaction(wrapped as never);
       }) as SqlDatabase["transaction"];
+      // MUL-406 turned the nested call inside a caller-owned transaction into a
+      // direct \`createIssueWithinTransaction\` (no second \`db.transaction\`), so
+      // counting nesting depth alone no longer sees it. Both entry points are
+      // wrapped: the transaction counter covers a self-owned inner transaction
+      // and this covers the "caller already owns the transaction" form.
+      const issues = (store as unknown as {
+        issues: { createIssueWithinTransaction: (...args: any[]) => unknown };
+      }).issues;
+      const originalCreateWithin = issues.createIssueWithinTransaction.bind(issues);
+      issues.createIssueWithinTransaction = (...args: any[]) => {
+        if (failInner) {
+          innerCalls += 1;
+          throw new Error("injected inner failure");
+        }
+        return originalCreateWithin(...args);
+      };
       (db as { run: SqlDatabase["run"] }).run = ((sql: string, ...params: unknown[]) => {
         if (failPattern && failPattern.test(sql)) {
           failPattern = null;

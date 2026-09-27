@@ -250,7 +250,11 @@ export class FeishuBotRepo {
 
   setSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null): FeishuBotSender | null {
     return this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N before the sender row UPDATE and
+      // the audit row it writes. The audit seq is allocated under the number
+      // lock, so taking it here keeps D after both.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const config = this.getConfig(workspaceId);
       if (!config) return null;
       const row = this.ctx.db.query(
@@ -788,7 +792,14 @@ export class FeishuBotRepo {
     const submitEvents = createCommitEventQueue();
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
+      // Global lock order (MUL-405): W then N, before any domain row lock.
+      // Whether this message auto-creates an Issue is only known after the
+      // sender is resolved, and resolving it writes the sender row (D). The
+      // number lock is therefore taken unconditionally — it is per workspace
+      // and held for the rest of this transaction, which is what keeps the
+      // order the same on every path instead of depending on the payload.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
       const sender = this.resolveSender(workspaceId, config.appId, input, config.senderAccessPolicy);
       let binding = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_bot_chat_bindings

@@ -13,6 +13,8 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
@@ -1291,6 +1293,12 @@ export class AutopilotsRepo {
       // the row lock only later would reverse the order Feishu ingest uses and
       // deadlock the two paths against each other.
       this.ctx.lockWorkspaceRuntimeLifecycle(autopilotWorkspaceId);
+      // Global lock order (MUL-405): W then N, before the autopilot row lock.
+      // The create_issue mode reaches N again inside createIssue; taking it here
+      // first is what keeps every mode of this method on one order. run_only
+      // modes do not need it, but the lock is per workspace and cheap, and a
+      // conditional form would let the order depend on the execution mode.
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${autopilotWorkspaceId}`));
       this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
       const autopilot = this.getAutopilot(autopilotId);
       if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
