@@ -393,6 +393,101 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     return { store, a, b, agent, project, issue, session };
   }
 
+  // MUL-449 follow-up: one machine normally runs one Runtime per provider, and
+  // the claim SQL admits a workspace through daemon aliases. Comparing Runtime
+  // ids alone called a same-machine sibling provider a conflict and threw away
+  // a perfectly resumable session on every turn.
+  it("keeps a sibling provider's lane on the machine that holds the workspace", () => {
+    const store = createLocalStore();
+    const codex = store.registerRuntime({
+      id: "rt_sib_codex", name: "codex", provider: "codex", workspaceId: "local", daemonId: "dev-sib",
+    });
+    const claude = store.registerRuntime({
+      id: "rt_sib_claude", name: "claude", provider: "claude", workspaceId: "local", daemonId: "dev-sib",
+    });
+    const codexAgent = store.createAgent({ name: "Sibling codex", provider: "codex", workspaceId: "local" });
+    const claudeAgent = store.createAgent({ name: "Sibling claude", provider: "claude", workspaceId: "local" });
+    const project = store.createProject({ title: "Sibling project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-sib" });
+    const issue = store.createIssue({ title: "Sibling issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Shared", holdsWorkspace: true });
+
+    // The codex Runtime on the machine builds the workspace.
+    const built = store.createTask({
+      agentId: codexAgent.id, issueId: issue.id, issueSessionId: session.id, prompt: "build",
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: codex.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(codex.id)?.id).toBe(built.id);
+    store.startTask(built.id);
+    store.completeTask(built.id, { output: "ok", sessionId: "sess_sib_codex" });
+
+    // The claude Agent gets its own lane on the SAME machine.
+    const claudeTurn = store.createTask({
+      agentId: claudeAgent.id, issueId: issue.id, issueSessionId: session.id, prompt: "claude turn",
+    });
+    expect(store.claimTask(claude.id)?.id).toBe(claudeTurn.id);
+    store.startTask(claudeTurn.id);
+    store.completeTask(claudeTurn.id, { output: "ok", sessionId: "sess_sib_claude" });
+    expect(store.getSessionAgentLane(session.id, claudeAgent.id)).toMatchObject({
+      runtimeId: claude.id, providerSessionId: "sess_sib_claude",
+    });
+
+    // A later claude turn must keep that lane: the machine matches the
+    // workspace even though the Runtime id does not.
+    const followUp = store.createTask({
+      agentId: claudeAgent.id, issueId: issue.id, issueSessionId: session.id, prompt: "claude again",
+    });
+    expect(store.getTask(followUp.id)).toMatchObject({
+      runtimeId: claude.id, sessionId: "sess_sib_claude",
+    });
+    // Any claim runs the refresh first; it must not treat this pin as a conflict.
+    expect(store.claimTask(codex.id)).toBeNull();
+    expect(store.getSessionAgentLane(session.id, claudeAgent.id)).toMatchObject({
+      runtimeId: claude.id, providerSessionId: "sess_sib_claude",
+    });
+    expect(db!.query(
+      `SELECT COUNT(*) AS count FROM multiremi_issue_activity
+        WHERE issue_id = ? AND type = 'session_agent_lane_reset'
+          AND data LIKE '%issue_workspace_elsewhere%'`,
+    ).get(issue.id)).toEqual({ count: 0 });
+    expect(store.claimTask(claude.id)?.id).toBe(followUp.id);
+  });
+
+  it("lets a discussion turn keep its lane while the Issue workspace lives elsewhere", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_disc_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-disc-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_disc_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-disc-b",
+    });
+    const agent = store.createAgent({ name: "Discussion", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Discussion project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-disc-a" });
+    const issue = store.createIssue({ title: "Discussion issue", projectId: project.id, workspaceId: "local" });
+    // A discussion session holds no workspace, so the workspace clause does
+    // not apply to its turns (the claim SQL guards it with holds_workspace).
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_disc" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(second).toMatchObject({ holdsWorkspace: false, runtimeId: a.id, sessionId: "sess_disc" });
+    expect(store.claimTask(a.id)?.id).toBe(second.id);
+  });
+
   it("names the Issue workspace machine, not the stale pin, when only A is allowed", () => {
     const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a"]);
     const first = store.createTask({

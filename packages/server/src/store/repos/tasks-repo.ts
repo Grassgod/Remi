@@ -468,20 +468,37 @@ function liveIssueWorkspaceMachines(
 }
 
 /**
- * True when a cached session on this Runtime may still be resumed for the
- * Issue. A live workspace only permits its own machines; an Issue with no live
- * workspace (never created, or already cleaned) imposes no machine constraint
- * and therefore keeps its lane.
+ * True when a Runtime may hold a session for an Issue that owns a live
+ * workspace. A live workspace only admits its own machines; an Issue with no
+ * live workspace (never created, or already cleaned) imposes no machine
+ * constraint at all, so any Runtime qualifies.
+ *
+ * The comparison is by MACHINE, not by Runtime id: one machine normally runs
+ * one Runtime per provider, and the claim SQL admits a workspace through
+ * `daemon_id` / `legacy_daemon_id` as well. Comparing ids would reset a
+ * perfectly resumable session that merely belongs to the sibling provider on
+ * the same box. Only a Runtime that no longer exists falls back to its id.
  */
+function runtimeMatchesIssueWorkspaceMachines(
+  ctx: StoreContext,
+  runtimeId: string | null | undefined,
+  machines: { count: number; aliases: string[] },
+): boolean {
+  const id = cleanOptionalString(runtimeId);
+  if (!id) return true;
+  if (machines.count === 0) return true;
+  const runtime = ctx.runtimes().getRuntime(id);
+  const own = new Set(runtime ? runtimeDaemonAliases(runtime) : [id]);
+  return machines.aliases.some((alias) => own.has(alias));
+}
+
+/** Convenience wrapper for callers that hold the Issue id, not the machine set. */
 function laneMatchesIssueWorkspace(
   ctx: StoreContext,
-  runtime: MultiremiRuntime,
+  runtimeId: string | null | undefined,
   issueId: string,
 ): boolean {
-  const machines = liveIssueWorkspaceMachines(ctx, issueId);
-  if (machines.count === 0) return true;
-  const own = new Set(runtimeDaemonAliases(runtime));
-  return machines.aliases.some((alias) => own.has(alias));
+  return runtimeMatchesIssueWorkspaceMachines(ctx, runtimeId, liveIssueWorkspaceMachines(ctx, issueId));
 }
 
 function hardTaskAffinity(
@@ -1011,10 +1028,16 @@ export class TasksRepo {
       // claim predicate demands the workspace machine while the lane pins a
       // different one, and neither machine can ever claim the task (MUL-449).
       // `with_code` snapshots keep their own hard pin and stay exempt.
-      const laneWorkspaceCompatible = laneRuntime == null
+      // Only a task that HOLDS the workspace is bound by it: the claim SQL
+      // applies the workspace clause under `t.holds_workspace = 0 OR ...`, and
+      // `hardTaskAffinity` likewise classifies only holding tasks. A discussion
+      // turn (including the migrated Feishu topic reports) may keep resuming
+      // its session on another machine (MUL-449).
+      const laneWorkspaceCompatible = !holdsWorkspace
+        || laneRuntime == null
         || issue == null
         || Boolean(issueSession?.withCode)
-        || laneMatchesIssueWorkspace(this.ctx, laneRuntime, issue.id);
+        || laneMatchesIssueWorkspace(this.ctx, laneRuntime.id, issue.id);
       const laneResumable =
         !input.resetProviderSession
         && !!issueLane.providerSessionId
@@ -2513,12 +2536,10 @@ export class TasksRepo {
       // predicate already demands the workspace machine, so keeping that pin
       // would strand the turn on a machine the SQL refuses. Drop it and let the
       // workspace constraint place the task (MUL-449).
-      const workspaceConflict = affinity?.workspaceCount
-        ? !(affinity.workspaceAliases ?? []).some((alias) => {
-          const candidate = this.ctx.runtimes().getRuntime(alias);
-          return candidate ? runtimeDaemonAliases(candidate).includes(task.runtimeId!) : alias === task.runtimeId;
-        })
-        : false;
+      const workspaceConflict = !runtimeMatchesIssueWorkspaceMachines(this.ctx, task.runtimeId, {
+        count: affinity?.workspaceCount ?? 0,
+        aliases: affinity?.workspaceAliases ?? [],
+      });
       if (affinity && !workspaceConflict) continue;
       const runtime = this.ctx.runtimes().getRuntime(task.runtimeId);
       const issue = session.issueId ? this.ctx.issues().getIssue(session.issueId) : null;
