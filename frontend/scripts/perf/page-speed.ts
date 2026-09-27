@@ -32,31 +32,27 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { arch, cpus, hostname, platform, release as osRelease, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  computeAppReadyMs,
-  computeFirstRealMs,
-  computeJumps,
-  computeReadyWindow,
+  computeApiPathStats,
   computeScenarioStats,
-  computeSelectorEquivalence,
-  computeWaves,
-  frameAt,
   installRecorderOnContext,
   ROUND_TIMEOUT_MS,
-  summarizeLayoutShifts,
-  type PerfFrame,
-  type PerfLayoutShift,
-  type PerfProfileConfig,
+  type PerfApiEntry,
   type PerfProfileName,
   type PerfRecorderBuffer,
   type PerfRecorderSummary,
 } from "./lib/jump-recorder";
+import {
+  computeRoundMeasurement,
+  entryQuietVerdict,
+  roundSummary,
+  type RoundMeasurement,
+} from "./lib/round-measurement";
 import {
   ambientProbe,
   attachCollectors,
   launchBrowser,
   median,
   mktContext,
-  parseServerTiming,
   readDeployedVersion,
   readResourceEntries,
   readWebVitals,
@@ -89,34 +85,36 @@ import {
   type InboxCandidateInput,
 } from "./lib/deeplink-target";
 import { injectInboxTarget, STUBBED_WRITES, stubLoopNotTerminated } from "./lib/stub-writes";
+import {
+  entryPathFor,
+  PAGE_SEQUENCE,
+  warmEntryForPage,
+  type WarmEntry,
+} from "./lib/page-sequence";
+import {
+  collectExcludedRunningIssueIds,
+  ENTRY_API_POLL_MS,
+  ENTRY_QUIET_CAP_MS,
+  EXCLUDED_RUNNING_ISSUE_PARENTS,
+  parseArgs,
+  usageLines,
+  type Options,
+} from "./lib/options";
 import type { InboxItem } from "../../packages/core/types/inbox";
 import {
   buildCompare,
   buildHtml,
   buildMarkdown,
   fmtMs,
+  REPORT_SCHEMA,
   type CompareRow,
   type CompareWarning,
-  type ReportRoundSummary,
   type ReportScenario,
 } from "./lib/report";
 
-const DEFAULT_BASE_URL = "http://n37-117-209.byted.org";
-const DEFAULT_ROUNDS = 3;
-const DEFAULT_OUT_DIR = "reports/performance";
-const DEFAULT_QUIET_MS = 500;
-const DEFAULT_HOVER_LEAD_MS = 150;
-/**
- * How many inbox API pages the deep-link probe reads before giving up.
- *
- * The target must exist in the account's inbox, not necessarily on page one: the
- * first page only covers a few hours on a busy account, so a page-one-only rule
- * made the scenario untestable for most of the day (MUL-384 `cmt_sr7dl2nrdyq7`).
- * Ten pages at `limit=100` reach roughly the last 1000 notifications.
- */
-const DEFAULT_INBOX_PROBE_PAGES = 10;
-/** Page size for the probe reads; 100 is the server's maximum. */
+/** Page size for the deep-link probe reads; 100 is the server's maximum. */
 const INBOX_PROBE_PAGE_SIZE = 100;
+
 const RECORDER_GLOBAL = "__mul383Recorder";
 /** Entry-page rows appear only after the route's data lands; dev servers also compile on first hit. */
 const WARM_ENTRY_TIMEOUT_MS = 15_000;
@@ -132,26 +130,6 @@ const WARM_NAV_TIMEOUT_MS = 10_000;
  */
 const URL_COMMIT_TIMEOUT_MS = 10_000;
 
-/** The eleven MUL-367 pages, in the order one round visits them. */
-const PAGE_SEQUENCE = [
-  { key: "issues", path: "/issues" },
-  { key: "my-issues", path: "/my-issues" },
-  { key: "chat", path: "/chat" },
-  { key: "inbox", path: "/inbox" },
-  { key: "agents", path: "/agents" },
-  { key: "runtimes", path: "/runtimes" },
-  { key: "projects", path: "/projects" },
-  { key: "workbench", path: "/workbench" },
-  { key: "settings", path: "/settings" },
-  { key: "autopilots", path: "/autopilots" },
-  { key: "skills", path: "/skills" },
-] as const;
-
-type PageKey = (typeof PAGE_SEQUENCE)[number]["key"];
-
-/** MUL-383 and every child of it: excluded from the running-issue pick. */
-const EXCLUDED_RUNNING_ISSUES = ["iss_j67lb0r8djw4"];
-
 /**
  * Inbox notification types that render `AutopilotRunReport` instead of an issue
  * timeline, so a deep link into them would not exercise the timeline path.
@@ -161,160 +139,7 @@ const AUTOPILOT_INBOX_TYPES = ["autopilot_run", "autopilot_run_report", "autopil
 const READING_RULE =
   "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
 
-interface Options {
-  baseUrl: string;
-  rounds: number;
-  outDir: string;
-  name: string | null;
-  compare: string | null;
-  quietMs: number;
-  window: "peak" | "offpeak";
-  selectors: SelectorModeOption;
-  issueShort: string;
-  issueLong: string;
-  issueRunning: string | null;
-  inboxItem: string | null;
-  /** How many inbox API pages the probe may read to find a target (default 10). */
-  inboxProbePages: number;
-  hoverLeadMs: number;
-  only: string | null;
-  /**
-   * Visit every scenario once before measuring. Only for a `next dev` server,
-   * which compiles a route the first time it is requested; a warmup keeps that
-   * one-off cost out of the numbers. Production runs a built image, so the
-   * baselines are collected without it.
-   */
-  warmup: boolean;
-}
-
-function parseArgs(argv: string[]): Options {
-  const opts: Options = {
-    baseUrl: DEFAULT_BASE_URL,
-    rounds: DEFAULT_ROUNDS,
-    outDir: DEFAULT_OUT_DIR,
-    name: null,
-    compare: null,
-    quietMs: DEFAULT_QUIET_MS,
-    window: "offpeak",
-    selectors: "auto",
-    issueShort: "iss_in41j1x1dq66",
-    issueLong: "iss_enbrunyg86jc",
-    issueRunning: null,
-    inboxItem: null,
-    inboxProbePages: DEFAULT_INBOX_PROBE_PAGES,
-    hoverLeadMs: DEFAULT_HOVER_LEAD_MS,
-    only: null,
-    warmup: false,
-  };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    const next = (): string => {
-      const value = argv[++i];
-      if (value === undefined) throw new Error(`missing value for ${arg}`);
-      return value;
-    };
-    switch (arg) {
-      case "--base-url":
-        opts.baseUrl = next().replace(/\/+$/, "");
-        break;
-      case "--rounds":
-        opts.rounds = Number.parseInt(next(), 10);
-        break;
-      case "--out":
-        opts.outDir = next();
-        break;
-      case "--name":
-        opts.name = next();
-        break;
-      case "--compare":
-        opts.compare = next();
-        break;
-      case "--quiet-ms":
-        opts.quietMs = Number.parseInt(next(), 10);
-        break;
-      case "--window": {
-        const value = next();
-        if (value !== "peak" && value !== "offpeak") throw new Error("--window must be peak or offpeak");
-        opts.window = value;
-        break;
-      }
-      case "--selectors": {
-        const value = next();
-        if (value !== "auto" && value !== "contract" && value !== "legacy") {
-          throw new Error("--selectors must be auto, contract or legacy");
-        }
-        opts.selectors = value;
-        break;
-      }
-      case "--issue-short":
-        opts.issueShort = next();
-        break;
-      case "--issue-long":
-        opts.issueLong = next();
-        break;
-      case "--issue-running":
-        opts.issueRunning = next();
-        break;
-      case "--inbox-item":
-        opts.inboxItem = next();
-        break;
-      case "--inbox-probe-pages":
-        opts.inboxProbePages = Number.parseInt(next(), 10);
-        break;
-      case "--hover-lead-ms":
-        opts.hoverLeadMs = Number.parseInt(next(), 10);
-        break;
-      case "--only":
-        opts.only = next();
-        break;
-      case "--warmup":
-        opts.warmup = true;
-        break;
-      case "--help":
-      case "-h":
-        printUsage();
-        process.exit(0);
-        break;
-      default:
-        throw new Error(`unknown argument: ${arg}`);
-    }
-  }
-  if (!Number.isFinite(opts.rounds) || opts.rounds < 1) throw new Error("--rounds must be >= 1");
-  if (!Number.isFinite(opts.inboxProbePages) || opts.inboxProbePages < 1) {
-    throw new Error("--inbox-probe-pages must be >= 1");
-  }
-  return opts;
-}
-
-function printUsage(): void {
-  process.stdout.write(
-    [
-      `Read-only MUL-383 page-speed probe. Token comes from ${TOKEN_ENV} only.`,
-      "",
-      `  --base-url <url>       target origin (default ${DEFAULT_BASE_URL})`,
-      `  --rounds <n>           repetitions per scenario, each in a fresh context (default ${DEFAULT_ROUNDS})`,
-      `  --window peak|offpeak  label recorded in the report (default offpeak)`,
-      "  --selectors auto|contract|legacy   DOM contract to use (default auto)",
-      "  --issue-short <id>     short issue for detail-short (default iss_in41j1x1dq66, MUL-67)",
-      "  --issue-long <id>      long issue for detail-long (default iss_enbrunyg86jc, MUL-70)",
-      "  --issue-running <id>   agent-running issue; auto-selected when omitted",
-      "  --inbox-item <id>      deep-link inbox item; auto-selected from the probe window when omitted",
-      `  --inbox-probe-pages <n>  how many inbox API pages the target probe may read (default ${DEFAULT_INBOX_PROBE_PAGES})`,
-      `  --hover-lead-ms <n>    hover lead before an in-app click (default ${DEFAULT_HOVER_LEAD_MS})`,
-      `  --out <dir>            output directory (default ${DEFAULT_OUT_DIR})`,
-      "  --name <stem>          output file stem (default mul383-page-speed-<timestamp>)",
-      "  --compare <baseline>   also emit a before/after comparison",
-      "  --only <prefix>        run only scenarios whose key starts with this prefix",
-      "  --warmup               visit every scenario once first (for a `next dev` server; not for baselines)",
-      "",
-    ].join("\n"),
-  );
-}
-
 // ── Scenario model ───────────────────────────────────────────────────────────
-
-/** Where a warm round starts from before it clicks into the measured page. */
-type WarmEntry = "issues-list" | "inbox";
 
 interface Scenario {
   key: string;
@@ -374,58 +199,6 @@ interface RunningIssue {
   taskCount: number;
 }
 
-/** One measured round. */
-interface RoundMeasurement {
-  round: number;
-  url: string;
-  selectorMode: SelectorMode;
-  readyMs: number | null;
-  readyTimeout: boolean;
-  firstRealMs: number | null;
-  anchorVisibleMs: number | null;
-  anchorName: string | null;
-  /** Root-relative anchor rect at the ready frame; raw numbers, no verdict. */
-  anchorRectAtReady: { top: number; bottom: number; height: number; rootHeight: number } | null;
-  anchorRule: string;
-  appReadyMs: number | null;
-  appReadyForced: boolean;
-  dataFreshAtReady: boolean;
-  jumpCount: number;
-  jumpPx: number;
-  jumpScrollPx: number;
-  jumps: Array<{ startMs: number; endMs: number; px: number; scrollPx: number; kind: string; frames: number }>;
-  layoutShiftCount: number;
-  cls: number;
-  serialDepth: number | null;
-  serialChain: string[];
-  apiCallsTotal: number;
-  apiFirstScreen: number;
-  chunksLoaded: number;
-  chunkBytes: number;
-  /** Writes the guard stopped. Always aborted, never sent. */
-  blockedWrites: number;
-  /** Writes the allow-list fulfilled inside the browser (see lib/stub-writes). */
-  stubbedWrites: number;
-  selectorEquivalence: ReturnType<typeof computeSelectorEquivalence>;
-  navStartMs: number;
-  clickT: number | null;
-  /** Milliseconds from the click to the URL committing `?issue=`; null when N/A. */
-  urlCommitMs: number | null;
-  /** Text of the row the warm click targeted, for post-hoc attribution. */
-  clickedRowText: string | null;
-  /** True when the browser's first page had to have the target injected. */
-  inboxInjected: boolean;
-  /** GET `/api/inbox/page` responses served before the first stubbed write. */
-  inboxPageRequestsBeforeStub: number | null;
-  timelineRequests: number;
-  targetIndexFromLatest: number | null;
-  slowestServerTotalMs: number | null;
-  lcpMs: number | null;
-  /** Set when the round never left its entry page, so it is a skip not a timeout. */
-  entryFailed: boolean;
-  error?: string;
-}
-
 /**
  * Copies the guard's counters onto the round.
  *
@@ -437,49 +210,6 @@ function recordWriteCounts(measurement: RoundMeasurement, collectors: ApiCollect
   measurement.stubbedWrites = collectors.stubbedWrites.reduce((sum, write) => sum + write.attempts, 0);
   measurement.inboxInjected = collectors.inboxInjected;
   measurement.inboxPageRequestsBeforeStub = collectors.inboxPageRequestsAtFirstStub;
-}
-
-function roundSummary(round: RoundMeasurement): ReportRoundSummary {
-  return {
-    round: round.round,
-    readyMs: round.readyMs,
-    readyTimeout: round.readyTimeout,
-    firstRealMs: round.firstRealMs,
-    anchorVisibleMs: round.anchorVisibleMs,
-    anchorName: round.anchorName,
-    anchorRule: round.anchorRule,
-    appReadyMs: round.appReadyMs,
-    appReadyForced: round.appReadyForced,
-    dataFreshAtReady: round.dataFreshAtReady,
-    jumpCount: round.jumpCount,
-    jumpPx: round.jumpPx,
-    jumps: round.jumps,
-    layoutShiftCount: round.layoutShiftCount,
-    cls: round.cls,
-    serialDepth: round.serialDepth,
-    apiCallsTotal: round.apiCallsTotal,
-    apiFirstScreen: round.apiFirstScreen,
-    chunksLoaded: round.chunksLoaded,
-    chunkBytes: round.chunkBytes,
-    lcpMs: round.lcpMs,
-    slowestServerTotalMs: round.slowestServerTotalMs,
-    ...(round.error ? { error: round.error } : null),
-    blockedWrites: round.blockedWrites,
-    stubbedWrites: round.stubbedWrites,
-    urlCommitMs: round.urlCommitMs,
-    inboxInjected: round.inboxInjected,
-    inboxPageRequestsBeforeStub: round.inboxPageRequestsBeforeStub,
-    clickedRowText: round.clickedRowText,
-    heapBytes: null,
-    anchorRectAtReady: round.anchorRectAtReady,
-    // Only the deep link has a target inside the timeline; every other scenario
-    // leaves both fields at zero/null so the JSON shape stays uniform.
-    targetDepth: {
-      timelineRequests: round.timelineRequests,
-      targetIndexFromLatest: round.targetIndexFromLatest,
-    },
-    selectorEquivalence: round.selectorEquivalence,
-  };
 }
 
 function workspaceUrl(baseUrl: string, slug: string, path: string): string {
@@ -813,20 +543,23 @@ async function probeRunningIssue(options: {
 /** Every issue id that must stay out of the running-issue pick: MUL-383 and its children. */
 async function loadExcludedIssueIds(baseUrl: string, token: string): Promise<Set<string>> {
   const headers = { Authorization: `Bearer ${token}` };
-  const excluded = new Set(EXCLUDED_RUNNING_ISSUES);
-  for (const parentId of EXCLUDED_RUNNING_ISSUES) {
+  const children: string[] = [];
+  for (const parentId of EXCLUDED_RUNNING_ISSUE_PARENTS) {
     try {
       const res = await fetch(`${baseUrl}/api/issues/children?parent_ids=${encodeURIComponent(parentId)}`, {
         headers,
       });
       if (!res.ok) continue;
       const body = (await res.json()) as { issues?: Array<{ id?: string }> };
-      for (const child of body.issues ?? []) if (child.id) excluded.add(child.id);
+      for (const child of body.issues ?? []) if (child.id) children.push(child.id);
     } catch {
       // The parent itself remains excluded; a failure here only widens the pick.
     }
   }
-  return excluded;
+  // Leaves and parents are fixed constants (MUL-454 is the ≥200-comment fixture
+  // and must never become `detail-running`'s target); the children come from the
+  // API because new MUL-383 sub-issues appear over time.
+  return collectExcludedRunningIssueIds(children);
 }
 
 async function fetchJson<T>(url: string, headers: Record<string, string>): Promise<T | null> {
@@ -846,13 +579,13 @@ function blankRound(round: number, url: string): RoundMeasurement {
     round,
     url,
     selectorMode: "legacy",
+    anchorRule: "",
     readyMs: null,
     readyTimeout: false,
     firstRealMs: null,
     anchorVisibleMs: null,
     anchorName: null,
     anchorRectAtReady: null,
-    anchorRule: "",
     appReadyMs: null,
     appReadyForced: false,
     dataFreshAtReady: false,
@@ -862,25 +595,29 @@ function blankRound(round: number, url: string): RoundMeasurement {
     jumps: [],
     layoutShiftCount: 0,
     cls: 0,
-    serialDepth: null,
+    serialDepth: 0,
     serialChain: [],
     apiCallsTotal: 0,
     apiFirstScreen: 0,
+    apiFirstScreenEntries: [],
     chunksLoaded: 0,
     chunkBytes: 0,
+    slowestServerTotalMs: null,
+    selectorEquivalence: null,
+    lcpMs: null,
+    navStartMs: 0,
+    clickT: null,
+    entryReadyMs: null,
+    entryInflightAtClick: null,
+    entrySettled: null,
     blockedWrites: 0,
     stubbedWrites: 0,
-    selectorEquivalence: null,
-    navStartMs: 0,
     urlCommitMs: null,
     clickedRowText: null,
     inboxInjected: false,
     inboxPageRequestsBeforeStub: null,
-    clickT: null,
     timelineRequests: 0,
     targetIndexFromLatest: null,
-    slowestServerTotalMs: null,
-    lcpMs: null,
     entryFailed: false,
   };
 }
@@ -1004,18 +741,28 @@ async function measureRound(options: {
     inboxTarget: scenario.inboxTarget,
   });
 
+  // Attached before the first navigation: an entry-page request that starts
+  // during the initial load still has to count as activity, and the tracker has to
+  // see it start rather than only its settled response.
+  const activity = trackEntryApiActivity(page);
+
   try {
     if (cold) {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
     } else {
-      const entryUrl = workspaceUrl(baseUrl, slug, scenario.entry === "inbox" ? "/inbox" : "/issues");
-      await page.goto(entryUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+      const entryUrl = workspaceUrl(baseUrl, slug, entryPathFor(scenario.entry));
+      const entryStartedAt = Date.now();
+      const entryNavigate = page.goto(entryUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
+      await entryNavigate;
       // The row poll inside `clickWarmTarget` is the entry page's readiness
       // condition: a rendered row in a skeleton-free content region. The recorder
       // cannot judge this page, because it samples the *target* page's shape.
-      const warm = await clickWarmTarget(page, scenario, opts, options.token);
+      const warm = await clickWarmTarget(page, scenario, opts, options.token, activity, entryStartedAt);
       measurement.urlCommitMs = warm.urlCommitMs;
       measurement.clickedRowText = warm.clickedRowText;
+      measurement.entryReadyMs = warm.entryReadyMs;
+      measurement.entrySettled = warm.entrySettled;
+      measurement.entryInflightAtClick = warm.inflightAtClick;
       const clickT = await page
         .evaluate((name) => {
           const recorder = (window as unknown as Record<string, { read?: () => { clicks: Array<{ t: number }> } }>)[name];
@@ -1145,6 +892,66 @@ function timelineInfo(bodies: Map<string, unknown>, targetCommentId: string | nu
 }
 
 /**
+ * The entry page's API activity, as seen by the driver itself.
+ *
+ * Resource Timing cannot answer "was a request still in flight at the click": an
+ * entry only lands in the buffer once the response settled. Playwright's own
+ * request lifecycle can, and it fires on the driver's clock, so both the quiet
+ * rule and the in-flight count come from here. Requests the write guard aborts
+ * are included — an aborted request is still the entry page doing work.
+ */
+function trackEntryApiActivity(page: Page): {
+  /** Requests started but not yet finished or failed. */
+  inflight: () => number;
+  /** `Date.now()` when the last `/api/**` request started; 0 when none has. */
+  lastStartAt: () => number;
+} {
+  const inflight = new Set<unknown>();
+  let lastStartAt = 0;
+  page.on("request", (request) => {
+    if (!request.url().includes("/api/")) return;
+    inflight.add(request);
+    lastStartAt = Date.now();
+  });
+  const settle = (request: unknown): void => {
+    inflight.delete(request);
+  };
+  page.on("requestfinished", settle);
+  page.on("requestfailed", settle);
+  return { inflight: () => inflight.size, lastStartAt: () => lastStartAt };
+}
+
+/**
+ * Waits for the entry page to go quiet: no new `/api/**` request started within
+ * `quietMs`, capped at {@link ENTRY_QUIET_CAP_MS}.
+ *
+ * Off by default (`--entry-quiet-ms`), because clicking as soon as a row renders
+ * versus waiting for the entry page to settle measure different things and the
+ * choice is a contract change the issue owner owns (plan §0 item 1). Timed out
+ * is not an error: the click goes ahead and the round records
+ * `entrySettled: false`, so the reader can tell a quiet click from a busy one.
+ */
+async function waitForEntryQuiet(
+  page: Page,
+  activity: { lastStartAt: () => number },
+  quietMs: number,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  for (;;) {
+    const lastStartAt = activity.lastStartAt();
+    const verdict = entryQuietVerdict({
+      sinceLastApiMs: lastStartAt > 0 ? Date.now() - lastStartAt : null,
+      quietMs,
+      waitedMs: Date.now() - startedAt,
+      capMs: ENTRY_QUIET_CAP_MS,
+    });
+    if (verdict === "settled") return true;
+    if (verdict === "timeout") return false;
+    await page.waitForTimeout(ENTRY_API_POLL_MS);
+  }
+}
+
+/**
  * Hovers then clicks the row that opens this scenario's page.
  *
  * The click target lives on the *entry* page (the issues list or the inbox),
@@ -1159,7 +966,15 @@ async function clickWarmTarget(
   scenario: Scenario,
   opts: Options,
   token: string,
-): Promise<{ urlCommitMs: number | null; clickedRowText: string | null }> {
+  activity: { inflight: () => number; lastStartAt: () => number },
+  entryStartedAt: number,
+): Promise<{
+  urlCommitMs: number | null;
+  clickedRowText: string | null;
+  entryReadyMs: number;
+  inflightAtClick: number | null;
+  entrySettled: boolean | null;
+}> {
   const selectors: string[] = [];
   if (scenario.shape === "issue-detail" && scenario.inboxItemId !== null) {
     selectors.push(inboxRowSelector("contract"), inboxRowSelector("legacy"));
@@ -1206,6 +1021,16 @@ async function clickWarmTarget(
   if (chosen === null) {
     throw new Error(`warm target not found for ${scenario.key}`);
   }
+  const entryReadyMs = Date.now() - entryStartedAt;
+
+  // Entry-page quiet rule (`--entry-quiet-ms`), off by default. It has to run
+  // after the row exists — the row is the entry page's readiness condition — and
+  // before the hover lead, so the hover's own prefetch does not read as activity.
+  let entrySettled: boolean | null = null;
+  if (opts.entryQuietMs !== null) {
+    entrySettled = await waitForEntryQuiet(page, activity, opts.entryQuietMs);
+  }
+  const inflightAtClick = activity.inflight();
 
   let lastError: string | null = null;
   let clickedRowText: string | null = null;
@@ -1238,7 +1063,9 @@ async function clickWarmTarget(
   // commit is asynchronous (`replace` runs inside `startTransition`) and, while the
   // guard is fulfilling the auto mark-read, it can take seconds; 10 s is the agreed
   // bound. This is a correctness check on the click, never part of `readyMs`.
-  if (scenario.expectIssueId === null) return { urlCommitMs: null, clickedRowText };
+  if (scenario.expectIssueId === null) {
+    return { urlCommitMs: null, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
+  }
   const startedAt = Date.now();
   const issueParam = await waitForUrlIssue(page, scenario.expectIssueId, URL_COMMIT_TIMEOUT_MS);
   const urlCommitMs = Date.now() - startedAt;
@@ -1247,7 +1074,7 @@ async function clickWarmTarget(
       `deeplink warm: url issue=${issueParam ?? "(none)"} expected ${scenario.expectIssueId}`,
     );
   }
-  return { urlCommitMs, clickedRowText };
+  return { urlCommitMs, clickedRowText, entryReadyMs, inflightAtClick, entrySettled };
 }
 
 /**
@@ -1321,21 +1148,12 @@ async function waitForUrlIssue(page: Page, expected: string, timeoutMs = 3_000):
 }
 
 /**
- * Row index to click for a warm round.
+ * Applies {@link computeRoundMeasurement} to a round and stamps the driver's own
+ * counters onto it.
  *
- * The deep link knows its row from `inboxDomRowIndex`; every other scenario
- * clicks the first matching row.
- */
-function warmRowIndex(scenario: Scenario, count: number): number {
-  if (scenario.inboxItemId === null || scenario.inboxRowIndex === null) return 0;
-  return Math.min(scenario.inboxRowIndex, Math.max(0, count - 1));
-}
-
-/**
- * Post-processes one round's raw buffer into the reported numbers.
- *
- * All the arithmetic lives in `lib/jump-recorder.ts`; this function's job is to
- * pick the profile, feed the right windows and keep the report shape stable.
+ * The arithmetic lives in `lib/round-measurement.ts` (pure, unit-tested); this
+ * function only supplies the browser-side inputs and keeps the report shape
+ * stable.
  */
 function buildRoundMeasurement(input: {
   measurement: RoundMeasurement;
@@ -1350,116 +1168,29 @@ function buildRoundMeasurement(input: {
 }): RoundMeasurement {
   const { measurement, scenario, summary, measuredProfile, buffer, vitals, resources, collectors, quietMs } = input;
   const mode: SelectorMode = measuredProfile ?? (summary?.contractDom ? "contract" : "legacy");
-  measurement.selectorMode = mode;
-  const frames: PerfFrame[] = buffer?.frames ?? [];
-  const profile = profileForMeasurement(mode, scenario.shape, scenario.targetCommentId);
-  measurement.anchorRule = profile.anchorRule;
-
-  const profileSummary = summary?.profiles[mode] ?? null;
-  const firstRealMs = computeFirstRealMs(frames, mode);
-  const ready = computeReadyWindow(frames, { profile: profile.config, quietMs, firstRealMs });
-
-  measurement.firstRealMs = firstRealMs;
-  measurement.anchorVisibleMs = ready.anchorVisibleMs;
-  measurement.anchorRectAtReady = ready.anchorRectAtReady;
-  measurement.anchorName = ready.anchorName ?? profile.anchorName;
-  measurement.readyMs = ready.readyMs;
-  measurement.readyTimeout = ready.readyTimeout || !ready.readyMs && profileSummary?.ready !== true;
-
-  const jumps = computeJumps(frames, { profile: mode, fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
-  measurement.jumpCount = jumps.jumpCount;
-  measurement.jumpPx = jumps.jumpPx;
-  measurement.jumpScrollPx = jumps.jumpScrollPx;
-  measurement.jumps = jumps.jumps.map((jump) => ({
-    startMs: jump.startMs,
-    endMs: jump.endMs,
-    px: jump.px,
-    scrollPx: jump.scrollPx,
-    kind: jump.kind,
-    frames: jump.frames,
-  }));
-
-  const shifts = summarizeLayoutShifts(buffer?.shifts ?? [], { fromMs: firstRealMs, toMs: ready.readyMs ?? undefined });
-  measurement.layoutShiftCount = shifts.layoutShiftCount;
-  measurement.cls = shifts.cls;
-
-  const appReady = computeAppReadyMs(buffer?.stateTransitions ?? []);
-  measurement.appReadyMs = appReady.appReadyMs;
-  measurement.appReadyForced = appReady.forced;
-  // `data-perf-state` is the app's own verdict; comparing it with the probe's
-  // ready window is the cross-check the plan asks for.
-  measurement.dataFreshAtReady = appReady.appReadyMs !== null
-    && measurement.readyMs !== null
-    && Math.abs(appReady.appReadyMs - measurement.readyMs) < 1_000;
-
-  const readiness = ready.readyMs ?? measurement.readyMs ?? firstRealMs ?? ROUND_TIMEOUT_MS;
-  const apiEntries = resources.filter(
-    (entry) => entry.path.startsWith("/api") && entry.startMs <= readiness,
-  );
-  const waves = computeWaves(
-    apiEntries.map((entry) => ({
-      index: entry.index,
-      path: entry.path,
-      startMs: entry.startMs,
-      responseEndMs: entry.responseEndMs,
-    })),
-  );
-  measurement.serialDepth = waves.serialDepth;
-  measurement.serialChain = waves.chain.map((index) => {
-    const entry = apiEntries.find((candidate) => candidate.index === index);
-    return entry ? entry.path : String(index);
+  const computed = computeRoundMeasurement({
+    mode,
+    shape: scenario.shape,
+    targetCommentId: scenario.targetCommentId,
+    navStartMs: measurement.navStartMs,
+    frames: buffer?.frames ?? [],
+    shifts: buffer?.shifts ?? [],
+    stateTransitions: buffer?.stateTransitions ?? [],
+    resources,
+    quietMs,
+    profileReady: summary?.profiles[mode]?.ready ?? null,
   });
-  measurement.apiFirstScreen = apiEntries.length;
-  measurement.apiCallsTotal = resources.filter((entry) => entry.path.startsWith("/api")).length;
-
-  const chunks = resources.filter((entry) => entry.initiatorType === "script");
-  measurement.chunksLoaded = chunks.length;
-  measurement.chunkBytes = chunks.reduce((sum, entry) => sum + entry.encodedBytes, 0);
-
-  let slowest = 0;
-  for (const entry of apiEntries) {
-    const timing = parseServerTiming(entry.serverTiming);
-    if (timing.total !== null && timing.total > slowest) slowest = timing.total;
-  }
-  measurement.slowestServerTotalMs = slowest > 0 ? Math.round(slowest * 10) / 10 : null;
+  Object.assign(measurement, computed);
   measurement.lcpMs = vitals.lcpMs;
 
   const timeline = timelineInfo(collectors.timelineBodies, scenario.targetCommentId);
   measurement.timelineRequests = timeline.requests;
   measurement.targetIndexFromLatest = timeline.targetIndexFromLatest;
 
-  // Contract/legacy agreement, taken at the ready frame. Only meaningful when
-  // both profiles sampled the same DOM.
-  if (mode === "contract") {
-    const referenceT = ready.readyMs ?? measurement.anchorVisibleMs;
-    measurement.selectorEquivalence = computeSelectorEquivalence(frameAt(frames, referenceT));
-  }
-
   if (buffer && buffer.errors.length > 0) {
     measurement.error = [...(measurement.error ? [measurement.error] : []), ...buffer.errors].join("; ");
   }
   return measurement;
-}
-
-/** The readiness profile used for one measurement, in the mode that actually matched. */
-function profileForMeasurement(
-  mode: SelectorMode,
-  shape: PageShape,
-  targetCommentId: string | null,
-): { config: PerfProfileConfig; anchorName: string; anchorRule: string } {
-  const plan = anchorPlan({ mode, shape, targetCommentId });
-  return {
-    config: {
-      name: mode,
-      scrollRoot: "",
-      items: "",
-      skeleton: "",
-      anchors: plan.specs,
-      rule: plan.rule,
-    },
-    anchorName: plan.anchorName,
-    anchorRule: plan.anchorRule,
-  };
 }
 
 // ── Scenario matrix ──────────────────────────────────────────────────────────
@@ -1471,9 +1202,12 @@ function buildScenarios(options: {
   runningSkip: string;
   issueShort: string;
   issueLong: string;
+  /** The ≥200-comment fixture for `detail-xlong`, or null to skip that scenario. */
+  issueXlong: string | null;
   /** Fixture state from the API: identifiers, comment counts and eligibility. */
   shortFixture: FixtureState;
   longFixture: FixtureState;
+  xlongFixture: FixtureState;
   pinnedInboxItem: string | null;
   deepLinkAuto: boolean;
 }): Scenario[] {
@@ -1498,6 +1232,18 @@ function buildScenarios(options: {
       skipReason: options.longFixture.skipReason,
     },
   ];
+  // The ≥200-comment scenario (MUL-454). It is a sibling of `detail-long`, not a
+  // replacement: MUL-395's before/after comparison is pinned to MUL-70, and
+  // existing scenario keys must keep pairing. `--issue-xlong ''` drops the row.
+  if (options.issueXlong !== null) {
+    detailScenarios.push({
+      key: "detail-xlong",
+      issueId: options.issueXlong,
+      identifier: options.xlongFixture.identifier,
+      note: withCount("超长", options.xlongFixture.commentCount),
+      skipReason: options.xlongFixture.skipReason,
+    });
+  }
   detailScenarios.push({
     key: "detail-running",
     issueId: options.runningIssue?.issueId ?? "",
@@ -1587,7 +1333,9 @@ function buildScenarios(options: {
         shape,
         path: page.path,
         targetCommentId: null,
-        entry: "issues-list" as WarmEntry,
+        // `page-issues` enters from the inbox: entering from the issues list and
+        // clicking the issues link is a same-page click (S9-0.1 item 2).
+        entry: warmEntryForPage(page.key),
         clickIssueId: null,
         sidebarPath: mode === "warm" ? page.path : null,
         inboxRowIndex: null,
@@ -1637,7 +1385,7 @@ async function warmupScenarios(options: {
   for (const scenario of scenarios) entries.add(scenario.entry);
   try {
     for (const entry of entries) {
-      const entryPath = entry === "inbox" ? "/inbox" : "/issues";
+      const entryPath = entryPathFor(entry);
       await page.goto(workspaceUrl(baseUrl, slug, entryPath), { waitUntil: "load", timeout: ROUND_TIMEOUT_MS }).catch(() => {});
       // Let the client finish its first data fetch before moving on: a route is
       // only compiled past the point the compiler has seen it.
@@ -1659,6 +1407,10 @@ async function warmupScenarios(options: {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.help) {
+    process.stdout.write(`${usageLines().join("\n")}\n`);
+    return;
+  }
   const token = process.env[TOKEN_ENV];
   if (!token) {
     throw new Error(
@@ -1730,12 +1482,26 @@ async function main(): Promise<void> {
     phaseStarted = Date.now();
     // One read per fixture gives the identifier, the comment count and whether
     // the fixture is still enterable from the default list.
-    const [shortFixture, longFixture] = await Promise.all([
+    const [shortFixture, longFixture, xlongFixture] = await Promise.all([
       probeFixture(opts.baseUrl, token, opts.issueShort),
       probeFixture(opts.baseUrl, token, opts.issueLong),
+      opts.issueXlong === null
+        ? Promise.resolve<FixtureState>({
+          identifier: "(skipped)",
+          status: null,
+          archived: false,
+          commentCount: null,
+          timelineEntries: null,
+          skipReason: "scenario-disabled",
+        })
+        : probeFixture(opts.baseUrl, token, opts.issueXlong),
     ]);
     phase("probeFixtures", phaseStarted);
-    for (const [key, fixture] of [["detail-short", shortFixture], ["detail-long", longFixture]] as const) {
+    for (const [key, fixture] of [
+      ["detail-short", shortFixture],
+      ["detail-long", longFixture],
+      ["detail-xlong", xlongFixture],
+    ] as const) {
       process.stdout.write(
         `  ${key}: ${fixture.identifier}${fixture.skipReason ? ` SKIPPED (${fixture.skipReason})` : ""}` +
           `, ${fixture.commentCount ?? "?"} comment(s), ${fixture.timelineEntries ?? "?"} timeline entries\n`,
@@ -1751,6 +1517,7 @@ async function main(): Promise<void> {
     const fixtureByScenario = new Map<string, FixtureState>([
       ["detail-short", shortFixture],
       ["detail-long", longFixture],
+      ["detail-xlong", xlongFixture],
     ]);
 
     const scenarios = buildScenarios({
@@ -1760,8 +1527,10 @@ async function main(): Promise<void> {
       runningSkip: "all-running-issues-in-mul383-family",
       issueShort: opts.issueShort,
       issueLong: opts.issueLong,
+      issueXlong: opts.issueXlong,
       shortFixture,
       longFixture,
+      xlongFixture,
       pinnedInboxItem: opts.inboxItem,
       deepLinkAuto: deepLinkProbe.target !== null,
     });
@@ -1814,7 +1583,7 @@ async function main(): Promise<void> {
           skipReason: scenario.skipReason,
           hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
           rounds: [],
-          stats: computeScenarioStats([]),
+          stats: { ...computeScenarioStats([]), apiByPath: [] },
           ...(fixtureByScenario.has(scenario.key)
             ? { timelineEntries: fixtureByScenario.get(scenario.key)!.timelineEntries }
             : null),
@@ -1878,18 +1647,24 @@ async function main(): Promise<void> {
         ...deepLinkScenarioFields(scenario, deepLinkProbe.target),
         hoverLeadMs: scenario.mode === "warm" ? opts.hoverLeadMs : null,
         rounds: rounds.map(roundSummary),
-        stats: computeScenarioStats(
-          rounds.map((round) => ({
-            readyMs: round.readyMs,
-            readyTimeout: round.readyTimeout,
-            firstRealMs: round.firstRealMs,
-            jumpCount: round.jumpCount,
-            jumpPx: round.jumpPx,
-            serialDepth: round.serialDepth,
-            apiCallsTotal: round.apiFirstScreen,
-            slowestServerTotalMs: round.slowestServerTotalMs,
-          })),
-        ),
+        stats: {
+          ...computeScenarioStats(
+            rounds.map((round) => ({
+              readyMs: round.readyMs,
+              readyTimeout: round.readyTimeout,
+              firstRealMs: round.firstRealMs,
+              jumpCount: round.jumpCount,
+              jumpPx: round.jumpPx,
+              serialDepth: round.serialDepth,
+              apiCallsTotal: round.apiFirstScreen,
+              slowestServerTotalMs: round.slowestServerTotalMs,
+            })),
+          ),
+          // Per path, not per round: the acceptance rule is stated per path, and a
+          // round-level "slowest API" cannot answer "did /api/inbox/summary get
+          // faster" (plan §9).
+          apiByPath: computeApiPathStats(rounds.map((round) => ({ apiFirstScreenEntries: round.apiFirstScreenEntries }))),
+        },
       });
     }
 
@@ -1897,7 +1672,7 @@ async function main(): Promise<void> {
     const webVersions = [...new Set(deployed.webVersion ? [deployed.webVersion] : [])];
     const generatedAt = new Date().toISOString();
     const meta: Record<string, unknown> = {
-      schema: 2,
+      schema: REPORT_SCHEMA,
       issue: "MUL-383",
       task: "MUL-384",
       generatedAt,
@@ -1915,6 +1690,17 @@ async function main(): Promise<void> {
       selectorMode: opts.selectors,
       hoverLeadMs: opts.hoverLeadMs,
       quietMs: opts.quietMs,
+      // The entry-page quiet rule (MUL-383 pending item A1, answered 2026-09-27)
+      // is on by default: a warm round waits for the entry page to go quiet before
+      // clicking. The meta records the exact window and cap this run used, so a
+      // reader can tell an A1 run from a pre-A1 one, and `--entry-quiet-ms 0`
+      // records null.
+      entryQuietMs: opts.entryQuietMs,
+      entryQuietCapMs: ENTRY_QUIET_CAP_MS,
+      entryQuietNote:
+        "warm 轮点击前等入口页在阈值内没有新的 /api 请求开始；超过上限照点并记 entrySettled=false。0/关闭时 entryQuietMs 为 null。",
+      timeBase:
+        "cold 从文档 origin 起算；warm 从页面内记录的 click（navStartMs）起算。帧、跳动、首屏集合都先减 navStartMs，首屏集合另有 startMs >= navStartMs 下界。",
       roundTimeoutMs: ROUND_TIMEOUT_MS,
       byteAccounting:
         "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
@@ -1942,8 +1728,11 @@ async function main(): Promise<void> {
 
     const compare = opts.compare
       ? buildCompare(
-          JSON.parse(readFileSync(resolve(opts.compare), "utf8")) as { scenarios: ReportScenario[] },
-          { scenarios: byScenario },
+          JSON.parse(readFileSync(resolve(opts.compare), "utf8")) as {
+            scenarios: ReportScenario[];
+            meta?: { schema?: number };
+          },
+          { scenarios: byScenario, meta },
         )
       : null;
 
@@ -1952,7 +1741,9 @@ async function main(): Promise<void> {
       scenarios: byScenario,
       blockedWrites: allBlocked,
       stubbedWrites: allStubbed,
-      ...(compare ? { compare: { rows: compare.rows, warnings: compare.warnings } } : {}),
+      ...(compare
+        ? { compare: { rows: compare.rows, pathRows: compare.pathRows, warnings: compare.warnings } }
+        : {}),
     };
 
     const outDir = resolve(opts.outDir);
@@ -1981,6 +1772,7 @@ async function main(): Promise<void> {
         blockedWrites: allBlocked,
         stubbedWrites: allStubbed,
         compareTable: compare?.rows ?? null,
+        comparePathTable: compare?.pathRows ?? null,
       }),
       "utf8",
     );

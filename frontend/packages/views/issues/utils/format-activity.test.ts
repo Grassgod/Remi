@@ -161,11 +161,12 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("child_done_parent_triggered"), t)).toBe(
       "activity.child_done_parent_triggered",
     );
+    // MUL-400 E2 retired `active_task_exists`: a busy owner coalesces the report
+    // into its queued round instead of skipping the wakeup.
     const reasons = {
       no_assignee: "no_assignee",
       agent_unavailable: "agent_unavailable",
       squad_leader_unavailable: "squad_leader_unavailable",
-      active_task_exists: "active_task_exists",
     };
     for (const [reason, key] of Object.entries(reasons)) {
       expect(
@@ -180,6 +181,46 @@ describe("formatActivity", () => {
         t,
       ),
     ).toBe('activity.child_done_parent_skipped {"reason":"future_reason"}');
+
+    // MUL-400 E1/E2 activities the parent and child pages now render.
+    expect(formatActivity(activity("child_status_parent_coalesced"), t)).toBe(
+      "activity.child_status_parent_coalesced",
+    );
+    expect(formatActivity(activity("parent_status_derived"), t)).toBe(
+      "activity.parent_status_derived",
+    );
+    expect(
+      formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
+    ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "grant_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_grant_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "final_summary_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_final_summary_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_done_grant_created", { details: { agentId: "agt_owner" } }), t, () => "Owner"))
+      .toBe('activity.parent_done_grant_created {"agent":"Owner"}');
+    expect(formatActivity(activity("parent_done_grant_revoked"), t)).toBe("activity.parent_done_grant_revoked");
+    expect(formatActivity(activity("parent_done_grant_used", { details: { source: "scm_merge" } }), t))
+      .toBe('activity.parent_done_grant_used {"source":"activity.parent_done_grant_source_scm_merge"}');
+    expect(
+      formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
+    ).toBe('activity.issue_status_forced {"status":"status.done"}');
+    // A child that ends after its parent was closed: activity only, and the
+    // copy names both the child and its outcome.
+    expect(
+      formatActivity(
+        activity("child_status_after_parent_closed", {
+          details: { childIssueKey: "MUL-2", outcome: "failed" },
+        }),
+        t,
+      ),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"MUL-2","outcome":"activity.child_outcome_failed"}',
+    );
+    expect(
+      formatActivity(activity("child_status_after_parent_closed", { details: { outcome: "done" } }), t),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"?","outcome":"activity.child_outcome_done"}',
+    );
   });
 
   it("explains why an agent comment mention was skipped", () => {

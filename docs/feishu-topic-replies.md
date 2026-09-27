@@ -90,6 +90,131 @@ The Feishu message ID is persisted before event consumption; retries replay into
 that card, with the delivery UUID deduplicating initial sends. Delivery failures
 remain retryable. Settled human requests are not reopened during replay.
 
+## Decision Cards For Human Requests
+
+An Issue task that asks a human for input no longer wakes a relay Agent to ask in
+prose. The control plane builds the card itself and queues it as a
+`decision_card` outbound delivery; the bot host resolves the @, sends it,
+registers the click, and later rewrites it. `buildTaskInteractionCard` and the
+`encodeDecisionCardBody`/`decodeDecisionCardBody` pair live in
+`packages/shared/src/feishu-task-card.ts`, so the writer and the reader cannot
+disagree about the body shape.
+
+The lane is gated on the host's own declaration: a daemon that reports
+`feishu_decision_card: 1` on its heartbeat gets cards, and one that does not keeps
+the previous relay-wake behavior. Silence is an answer, so a downgraded build
+stops receiving cards on its next heartbeat. A host that lacks the flag skips only
+card rows; the claim filter is part of the query, so ordinary deliveries queueing
+behind a card still go out.
+
+Who may press the button comes from the topic's `notifyMode`. `person` names the
+open ID in `interaction_open_id` before the delivery is queued; `group_owner` is
+resolved by the host with the bot token, and the recipient it used is
+checkpointed when it reports the send; `none` never produces a card. A click is
+accepted only when the callback's chat matches and the operator's open ID equals
+the checkpointed recipient — anyone else gets the 「请由卡片中指定的处理人提交」
+toast.
+
+The click handler lives in the bot host process. Since this lane has no Task
+stream, there is no presentation checkpoint to replay: the host registers a card
+as it sends it, and rebuilds its registrations after a restart from
+`GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`, which lists the
+pending requests whose cards it sent. The route answers in the daemon protocol's
+snake_case shape (`request_id`, `task_id`, `chat_id`, `message_id`,
+`recipient_open_id`) and is readable only by that Runtime's own daemon token.
+
+The heartbeat's `pending_feishu_outbound` carries the same decision fields as the
+recovery route — `kind`, `human_request_id`, `human_request_task_id`,
+`target_message_id`, `expires_at` and `degraded` — because it is the path a host
+actually receives work on. A missing `human_request_task_id` left a freshly sent
+card unclickable until the next restart, and a missing `degraded` made an
+already-plain-text row look like a malformed card worth retrying.
+
+`multiremi_task_human_requests.expires_at` carries the deadline (the server
+defaults to one hour when an older daemon sends no `timeout_ms`). The lifecycle
+feeds three delivery kinds, keyed by request id: `decision_card` (send),
+`decision_card_patch` (rewrite in place after a response, timeout, or
+cancellation) and `decision_reminder` (one text nudge that @s the person who was
+asked). MUL-403 replaces the event source — the request write plus host polling
+today, a Live Hub subscription later — without changing these kinds or the
+checkpoint fields.
+
+A reminder is due at `expires_at - min(10min, half the request's lifetime)`, so a
+five-minute unattended request is not already due the moment its card is sent. It
+is materialized inside the claim transaction and deduplicated by
+`reminder_sent_at`; a request whose card has not gone out yet does not consume
+that one slot, so a host that was offline across the window still delivers exactly
+one nudge after it returns.
+
+The one floor on that: a reminder is only worth sending while it leaves the reader
+time to act. With less than a minute of lifetime left the nudge is suppressed
+entirely — the same predicate gates the normal window and the catch-up, and it is
+evaluated inside the claim transaction so SQLite and Postgres agree.
+
+Whichever side decides it, the degradation lands on the Issue as one
+`decision_card_degraded` activity with the same fields (`request_id`,
+`source_task_id`, `delivery_id`, `kind`, `reason`), written once per delivery. The
+control plane writes it when it already knows there is nobody to ask; the host
+writes it when its own lookup or the send fails. Every reverse lookup of an Issue
+from a binding, Task or request goes through one workspace check, so the pointer
+being stale or wrong cannot aim the activity at another workspace: the delivery's
+own binding counts only when the Issue it names is in the delivery's workspace,
+the fallback to the asking Task requires the Task and its Issue to agree, the
+push itself refuses a Task whose `issue_id` belongs elsewhere, and the reminder
+resolves its Issue the same way before it spends `reminder_sent_at` — a CAS that
+ran first would burn the one reminder on a row it then skipped.
+
+Degradations all end in the same place — plain text carrying the question, its
+numbered options and the parent Issue's workbench link, with no internal ids and
+no @. Three cases reach it: `notifyMode = none`, an unusable `person` target, and
+a `group_owner` the host cannot resolve. Those rows are written as `decision_card`
+with a `degraded` reason, so the host posts text and the control plane skips both
+the terminal patch and the reminder's @. A fourth case is decided at send time: a
+non-retryable Feishu rejection replaces the card with the same text twin and
+reports `send_failed`. Retryable failures stay on the outbox backoff.
+
+An Issue whose topic has no seed message gets no delivery at all and records the
+`decision_card_skipped` activity, so the request is visible on the web workbench
+only.
+
+A stored topic config that the current validation would reject — most often a
+`person` mode whose `notify_open_id` is missing or malformed, which a database
+written before that validation existed can still hold — is read leniently rather
+than throwing. Save-time validation is unchanged, and such a config degrades to
+the text delivery above instead of producing a request that reaches nobody.
+
+That leniency has to cover every reader a daemon request runs through, not only
+the delivery writes. The directive is read on every heartbeat, before the
+outbound claim, so a strict read there answered 500 and the text delivery the
+same request had already queued never reached the host. The directive uses only
+`enabled` and `chatId`, so it reads the config the same forgiving way: a rejected
+`person` target, a missing field, a wrong type or a settings blob that is not JSON
+all leave the host running with an empty `no_mention_chat_ids` rather than
+failing the heartbeat. The claim derives the `@` for an older relay row (a Task
+id with no stored mention) from the same config, and that read sits ahead of every
+delivery in the batch: a rejection there stranded the whole queue, so it tolerates
+exactly `IssueTopicConfigError` — the old row goes out as plain text with no `@`,
+and the next row still ships. Any other failure still propagates.
+
+One reader stays strict on purpose and is outside this change: the
+inbound-message path (`submitMessage`). It is `origin/main` behavior, and a config
+that reaches it has already been rejected at save time; the queue is where the
+outage actually showed up.
+
+An expired request is never an approval: the terminal card reads
+「已超时，未回答」and the task takes the existing cancel path. The decision lanes
+carry no receipt or reaction target (`task_id` is NULL), so their failure modes do
+not exist here. The tests hold that down at the transport rather than the handler
+surface: the lane is driven through a real `FeishuConnector` with the Lark SDK's
+own HTTP layer pointed at a recorder, and the assertion is over the requests that
+crossed the wire. Recording only the mocked card/text/patch methods missed a
+request inserted straight into the transport.
+
+A retryable send failure stays on the outbox: the row returns to `pending`, its
+`attempt_count` is not reset, `last_error` records the Feishu code, and
+`available_at` moves out by the exponential backoff, so the next claim after that
+moment picks up the same delivery instead of a second card.
+
 An additive nullable `mention_snapshot` column on outbound deliveries stores
 recipient policy/resolution. Existing settings default to `group_owner`, with no
 history backfill or resend. Old v2/v3 daemons keep receiving final-body deliveries
@@ -98,6 +223,68 @@ bot-hosting daemon together to enable proactive mentions and final-only timing.
 
 Issue-associated Chat tasks keep their Chat directory and provider session.
 Only genuine Issue discussion tasks require an Issue Session lifecycle lock.
+
+## 真人验收步骤
+
+前置条件（每一步都适用，不再重复）：
+
+- 一个 workspace 已配置飞书机器人并在线，话题群已通过
+  `remi workspace issue-topics set --enabled --chat-id <chat>` 绑定，`notifyMode`
+  为此处的默认值 `group_owner`，父单在该 workspace 里有一个可执行任务。
+- bot host 已经换成本分支的 daemon（heartbeat 上报 `feishu_decision_card = 1`），
+  API 侧也是同一版本；老 host 会退回转述唤醒，看不到卡片。
+- 「谁来操作」列写的是机器或人：**发起人**负责让父单任务提问，**被问的人**是
+  卡片上被 @ 的那个人，**第二个人**是任意另一个飞书成员。
+- 「父单活动」指父单详情页时间线或 `remi issue timeline <issue-id> --json` 里的
+  `activity` 条目；`degraded` 指投递行
+  `multiremi_feishu_bot_outbound_deliveries.degraded` 的取值。
+
+| # | 谁来操作 | 操作 | 飞书上看到什么 | 父单活动 / `degraded` |
+|---|---|---|---|---|
+| 1 | 发起人 | 让父单任务问一个 AskUserQuestion（`notifyMode=group_owner`，话题已有 seed） | 话题里出现一张**独立卡片**：头部 Agent 名与时间、原问题、编号选项、自定义输入框、提交按钮 | `decision_card_queued`（`kind=decision_card`）；`degraded` 为 NULL |
+| 2 | 第二个人，然后被问的人 | 第二个人点提交；被问的人再点提交 | 第二个人得到 toast「请由卡片中指定的处理人提交」，卡片不变、问题仍在；被问的人点后提示「已提交」，同一张卡片**原地**变为终态（答案、答者、时间），不新增消息 | 第二个人点击不写活动；被问的人提交后请求变 `responded`，卡片走后一条 `decision_card_patch` 投递；`degraded=NULL` |
+| 3 | 发起人，在被问的人之外 | 再问一次，这次在 Remi 工作台（网页）回答 | 飞书那张卡片同样**原地**变终态，并回显原问题 | 同第 2 步：`decision_card_patch`，无新增卡片；`degraded=NULL` |
+| 4 | 发起人 | 再问一次，放着不答；需要快速看到结果时用较短的 `timeout_ms` | 提醒时刻为 `expires_at − min(10 分钟, 总时长的一半)`：默认 60 分钟超时即 T−10min，15 分钟超时即 T−7.5min。话题里出现**一条 @ 被问的人**的文字提醒，且只出现一次；到点后卡片变「已超时，未回答」，任务按既有 cancel 结果继续，授权类请求不会被自动批准 | `decision_card_reminder` 恰一条；卡片终态仍走 `decision_card_patch`；正常卡片与提醒行 `degraded=NULL` |
+| 5 | **不执行**（自动化覆盖） | — | — | 见下方说明 |
+| 6 | 发起人 | `remi workspace issue-topics set --enabled --chat-id <chat> --notify none`，再问一次 | **只有文字**、不出卡片、不 @ 任何人，文字含问题、编号选项与父单网页链接 | `decision_card_degraded`，`reason=notify_none`；`degraded=notify_none` |
+| 7 | 发起人 + 被问的人 | 发一张卡片后，在 bot host 机器上重启该 runtime 的 daemon（或 kill 掉让平台重拉），等它重新上线，再由被问的人点之前那张卡片的提交按钮 | 重启后旧卡片仍然可点：提交成功、卡片**原地**变终态 | 恢复来自 `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`；活动同第 2 步；`degraded=NULL` |
+
+第 4 步的提醒时刻按公式算，不要按固定 T−10min 期待。
+
+### 第 5 步：自动化覆盖，真人不执行
+
+原第 5 步要求「把话题指向一个 bot 没有发言权限的 chat」，预期卡片被拒后改发
+文字。这一步**无法按原样执行**：卡片被拒后，文字仍发往同一个
+`delivery.chatId`（`apps/remi/cli/multiremi.ts:754-761,775-788`），bot 对那个
+chat 没有发言权限时文字同样会被拒，而 `onDecisionSent` 只在文字发送成功后才
+调用，所以拿不到「文字已送达、活动为 `send_failed`」的预期结果。
+
+因此第 5 步改为自动化覆盖，覆盖它的测试是
+`tests/unit/multiremi/multiremi-feishu-decision-card.test.ts`
+的 `step 5: a card Feishu rejects non-retryably becomes one sent text, once`。
+
+该用例走完整回报链，而不是在发送之后手工写一条回报：真实
+`MultiremiDaemon.handleHeartbeatAck` → 真实 `queueFeishuBotOutbound` →
+`handleFeishuBotOutbound` → 真实 `deliverFeishuOutbound` → 真实 `sendDecisionLane`
+（真实 `FeishuConnector`，只在 SDK 传输层把卡片的 `POST .../reply` 应答改为不可
+重试错误码 `230001`、文字的应答放行）→ 真实 `MultiremiDaemonClient`
+→ 真实 `POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:id/result`
+回报路由 → 真实 `reportFeishuBotOutbound`。测试自己只提供两样东西：进程内
+不存在的 Feishu channel handle（本例用真实 connector、只包一层记账），以及
+HTTP 到测试内 API 的那一跳。
+
+回报链跑完后它断言四件事——卡片被不可重试地拒绝、文字发送成功、父单活动恰好
+一条且 `reason=send_failed`（`degraded=send_failed`）、这条投递变 `sent` 后不再
+作为坏卡被重试（同一请求只有一条投递，也没有 `decision_card_patch`）。
+
+`tests/unit/multiremi/feishu-concierge-host.test.ts` 的
+`degrades a rejected decision card to its text twin instead of retrying it`
+只断言 host 本地的 degrade 分支与它交给 `onDecisionSent` 的回执，不经过 daemon
+回报链，因此与第 5 步不重复——完整回报链由第 5 步覆盖。
+
+第 6 步（`notifyMode=none`）验证的是**预先降级**：控制面在建请求时就判定没人
+可问，直接把文字行排进队列。它不经过「卡片被飞书拒绝」这条路径，因此**不能替代
+第 5 步**。
 
 ## Continuing Issue Work From a Topic
 
