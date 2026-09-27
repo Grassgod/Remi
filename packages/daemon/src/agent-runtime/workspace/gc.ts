@@ -28,6 +28,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
+import { TRACE_END_STATUSES } from "@multiremi/contracts/trace-file.js";
 import { createLogger } from "@shared/logger.js";
 import {
   OWNED_DIRECTORY_QUARANTINE,
@@ -323,6 +324,10 @@ async function collectTopicWorkspace(
         summary.skipped++;
         return;
       }
+      if (hasUnclosedTrace(topicDir)) {
+        summary.skipped++;
+        return;
+      }
       options.assertRootOwner?.();
       removeGcWorkDir(root, topicDir, options.assertRootOwner);
       summary.orphaned++;
@@ -400,6 +405,13 @@ async function collectWorkspaceGcDecisionUnlocked(
     return;
   }
   const issueId = stringField(readGcMeta(workspaceDir)?.issue_id);
+  // A trace without its terminal trailer is still owned by this daemon. Keep
+  // the entire root until its task closes, even if the server reports terminal.
+  if (hasUnclosedTrace(workspaceDir)
+    || (issueId && issueRuntimeRoots(root, issueId).some(hasUnclosedTrace))) {
+    summary.skipped++;
+    return;
+  }
   let reportReceipt: string | null = null;
   if (
     decision === "clean"
@@ -753,10 +765,42 @@ function hasIssueRuntimeState(root: string, issueId: string): boolean {
 }
 
 function removeIssueRuntimeRoots(root: string, issueId: string, assertRootOwner?: () => void): void {
-  for (const sessionRoot of issueRuntimeRoots(root, issueId)) {
+  const roots = issueRuntimeRoots(root, issueId);
+  if (roots.some(hasUnclosedTrace)) throw new Error(`Issue ${issueId} has an unclosed trace`);
+  for (const sessionRoot of roots) {
     assertRootOwner?.();
     removeGcWorkDir(root, sessionRoot, assertRootOwner);
   }
+}
+
+/** Treat malformed or unreadable trace state as open so GC fails closed. */
+export function hasUnclosedTrace(workspaceDir: string): boolean {
+  const traces = join(workspaceDir, "traces");
+  let info: Stats;
+  try { info = lstatSync(traces); }
+  catch (error) { return !isFsNotFoundError(error); }
+  if (!info.isDirectory() || info.isSymbolicLink()) return true;
+  const files = safeReadDir(traces);
+  if (!files) return true;
+  for (const file of files) {
+    if (!file.name.endsWith(".jsonl")) continue;
+    const path = join(traces, file.name);
+    const stat = safeLstat(path);
+    if (!stat?.isFile() || stat.isSymbolicLink()) return true;
+    try {
+      const bytes = readFileSync(path);
+      if (bytes.length === 0 || bytes[bytes.length - 1] !== 10) return true;
+      const previousNewline = bytes.lastIndexOf(10, bytes.length - 2);
+      const last = JSON.parse(bytes.subarray(previousNewline + 1, bytes.length - 1).toString("utf8")) as unknown;
+      const end = last && typeof last === "object" && "end" in last ? last.end as Record<string, unknown> : null;
+      if (!end || !TRACE_END_STATUSES.includes(end.status as typeof TRACE_END_STATUSES[number])
+        || !Number.isSafeInteger(end.head) || !Number.isSafeInteger(end.event_count)
+        || typeof end.ended_at !== "string") return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
 }
 
 function issueRuntimeRoots(root: string, issueId: string): string[] {

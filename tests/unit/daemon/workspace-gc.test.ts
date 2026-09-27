@@ -8,6 +8,7 @@ import { basename, join } from "node:path";
 import { runWorkspaceGcOnce, type WorkspaceGcClient } from "@daemon/agent-runtime/workspace/gc.js";
 import { OWNED_DIRECTORY_QUARANTINE } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TraceFileStore } from "@multiremi/worker/trace-file-store.js";
 
 const roots: string[] = [];
 
@@ -16,6 +17,34 @@ afterEach(() => {
 });
 
 describe("Issue workspace GC", () => {
+  it("keeps an Issue runtime root with an open trace until the task closes", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-trace-open", "iss_trace_open");
+    const runtime = join(root, ".runtime", "ises_trace_open");
+    mkdirSync(join(runtime, ".multiremi"), { recursive: true });
+    writeFileSync(join(runtime, ".multiremi", "gc.json"), JSON.stringify({
+      version: 2, kind: "issue_runtime", issue_id: "iss_trace_open", issue_session_id: "ises_trace_open",
+    }));
+    const trace = new TraceFileStore({
+      workspacesRoot: root,
+      resolveTask: () => ({ sessionId: "ises_trace_open", agentId: "agt_one", provider: "codex", startedAt: "2026-09-27T00:00:00.000Z" }),
+    });
+    trace.append("tsk_trace_open", [{ type: "text", content: "working" }]);
+    const options = {
+      root, ttlMs: 0, orphanTtlMs: 0, runtimeId: "rt_1", client: gcClient(),
+      requireIssueSessionArchive: true,
+      ensureIssueSessionArchive: async () => archiveBinding(),
+      now: Date.now() + 1_000,
+    };
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(runtime)).toBe(true);
+
+    trace.close("tsk_trace_open", { status: "completed", ended_at: "2026-09-27T00:01:00.000Z" });
+    expect(await runWorkspaceGcOnce(options)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(runtime)).toBe(false);
+  });
+
   it("cleans discussion Session roots without archiving or reporting the shared workspace", async () => {
     const root = tempRoot();
     const sessionRoot = join(root, "discussions", "MUL-136", "ises_discussion");
