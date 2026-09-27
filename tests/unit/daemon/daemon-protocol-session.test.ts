@@ -486,16 +486,21 @@ describe("MUL-417 daemon protocol session — the downlink window is enforced", 
     expect(h.session.sendEvent({ t: "task.offer", p: { padding } })).toEqual({ ok: true, seq: 2 });
   });
 
-  it("refuses a single frame larger than the protocol frame cap", async () => {
+  it("calls an oversized single frame too_large, because no ack can make it fit", async () => {
     const h = harness();
     await handshake(h);
-    // The socket would accept it (maxPayloadLength is 4 MiB) but the daemon was
-    // told `frame_bytes: 1 MiB`, so sending it would violate what was negotiated.
+    // The window is empty, so `window_full` would be a lie: this frame is over the
+    // `frame_bytes: 1 MiB` the daemon was told about, and free space never changes
+    // that. A pump reading `window_full` would park the task waiting for room.
+    expect(h.session.windowUsage()).toEqual({ frames: 0, bytes: 0 });
     expect(h.session.sendEvent({
       t: "task.offer",
-      p: { padding: "x".repeat(DAEMON_FRAME_MAX_BYTES + 128) },
-    })).toEqual({ ok: false, reason: "window_full" });
+      p: { padding: "x".repeat(DAEMON_FRAME_MAX_BYTES + 1) },
+    })).toEqual({ ok: false, reason: "too_large" });
     expect(h.session.lastSentSeq).toBe(0);
+
+    // The refusal burned no sequence: the next, normal frame still fits.
+    expect(h.session.sendEvent({ t: "task.offer", p: { task_id: "t1" } })).toEqual({ ok: true, seq: 1 });
   });
 
   it("keeps res, ack and heartbeat replies outside the window", async () => {
@@ -546,7 +551,29 @@ describe("MUL-417 daemon protocol session — rpc dispatch and unknown frames", 
     });
   });
 
-  it("answers an unknown frame with res{ok:false, code:unknown_frame} and keeps the socket", async () => {
+  it("answers an unknown reliable frame by seq, so its outbox row can be retired", async () => {
+    const h = harness();
+    await handshake(h);
+    const frame = JSON.stringify({ v: 2, t: "future.reliable", seq: 17, rt: "rt_one", ts: 3, p: {} });
+
+    await h.session.handleMessage(frame);
+    expect(h.socket.lastOfType("res")).toMatchObject({
+      t: "res",
+      re: "17",
+      p: { ok: false, code: "unknown_frame", retryable: false },
+    });
+
+    // A replay after a reconnect has to get the same answer, or the row stays in
+    // the daemon's outbox and is replayed forever.
+    await h.session.handleMessage(frame);
+    const replies = h.socket.sent.filter((sent) => sent.t === "res");
+    expect(replies).toHaveLength(2);
+    expect(replies.map((reply) => reply.re)).toEqual(["17", "17"]);
+    expect(h.session.isClosed).toBe(false);
+    expect(h.socket.closed).toEqual([]);
+  });
+
+  it("answers an unknown frame that only carries an RPC id by id", async () => {
     const h = harness();
     await handshake(h);
 
@@ -559,6 +586,22 @@ describe("MUL-417 daemon protocol session — rpc dispatch and unknown frames", 
     });
     expect(h.session.isClosed).toBe(false);
     expect(h.socket.closed).toEqual([]);
+  });
+
+  it("ignores an unknown frame with neither seq nor id instead of answering with an empty re", async () => {
+    const h = harness();
+    await handshake(h);
+    const before = h.socket.sent.filter((sent) => sent.t === "res").length;
+
+    // A newer daemon may send a notification this server version does not know.
+    // There is no row to name, so a `res` would carry nothing actionable; the
+    // frame is counted and the connection stays up.
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "future.notice", ts: 3, p: { note: "hi" } }));
+
+    expect(h.socket.sent.filter((sent) => sent.t === "res")).toHaveLength(before);
+    expect(h.session.isClosed).toBe(false);
+    expect(h.socket.closed).toEqual([]);
+    expect(h.frames.at(-1)).toMatchObject({ type: "future.notice", errorCode: "unknown_frame" });
   });
 
   it("refuses an rpc nobody registered yet instead of answering ok", async () => {
@@ -818,6 +861,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       session_id: "dws_test",
       frame_type: "trace.head",
       direction: "rpc",
+      error_class: "Error",
     });
     expect(lines[0]).not.toContain("sensitive payload");
 
@@ -846,6 +890,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       session_id: "dws_test",
       frame_type: "hb",
       direction: "uplink",
+      error_class: "Error",
     });
     expect(lines[0]).not.toContain("sensitive payload");
   });
@@ -871,6 +916,97 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
     expect(session.isClosed).toBe(true);
     expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
     expect(socket.lastOfType("welcome")).toBeNull();
+    expect(registry.size).toBe(0);
+    expect(registry.daemonIdForRuntime("rt_one")).toBeNull();
+  });
+
+  it("rolls the registration back when onHello throws, so the daemon can just reconnect", async () => {
+    const registry = new DaemonSessionRegistry();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_onhello",
+      socket: new FakeDaemonSocket(),
+      registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+      onHello: () => {
+        throw new Error("onHello failed");
+      },
+    });
+
+    await captureWarnings(() => session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1, p: helloPayload(),
+    })));
+
+    // The whole registration is one transaction: nothing may stay registered for
+    // a session the daemon was never told about.
+    expect(session.isClosed).toBe(true);
+    expect(session.isHandshakeComplete).toBe(false);
+    expect(registry.size).toBe(0);
+    expect(registry.daemonIdForRuntime("rt_one")).toBeNull();
+
+    // The same daemon reconnecting is not blocked by a ghost entry, and neither
+    // is another daemon's registration.
+    const retrySocket = new FakeDaemonSocket();
+    const retry = new DaemonProtocolSession({
+      sessionId: "dws_onhello_retry",
+      socket: retrySocket,
+      registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+    });
+    await retry.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 2, p: helloPayload() }));
+    expect(retry.isHandshakeComplete).toBe(true);
+    expect(retrySocket.lastOfType("welcome")).not.toBeNull();
+    expect(registry.get("dmn_test")).toBe(retry);
+
+    const otherSocket = new FakeDaemonSocket();
+    const other = new DaemonProtocolSession({
+      sessionId: "dws_other",
+      socket: otherSocket,
+      registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+    });
+    await other.handleMessage(JSON.stringify({
+      v: 2,
+      t: "hello",
+      ts: 3,
+      p: helloPayload({
+        daemon_id: "dmn_other",
+        runtimes: [{ runtime_id: "rt_other", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
+      }),
+    }));
+    expect(otherSocket.lastOfType("welcome")).not.toBeNull();
+    expect(registry.daemonIdForRuntime("rt_other")).toBe("dmn_other");
+  });
+
+  it("rolls back and closes 4001 when traceHeads throws while building welcome", async () => {
+    const registry = new DaemonSessionRegistry();
+    const socket = new FakeDaemonSocket();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_trace_heads",
+      socket,
+      registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+      traceHeads: () => {
+        throw new Error("trace store unavailable");
+      },
+    });
+
+    await captureWarnings(() => session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1, p: helloPayload(),
+    })));
+
+    expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+    expect(socket.lastOfType("welcome")).toBeNull();
+    expect(session.isHandshakeComplete).toBe(false);
+    expect(registry.size).toBe(0);
+    expect(registry.daemonIdForRuntime("rt_one")).toBeNull();
   });
 
   it("records one frame sample per dispatched frame with its type and direction", async () => {

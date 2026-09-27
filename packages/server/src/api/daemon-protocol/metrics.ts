@@ -265,6 +265,19 @@ function wsRingFor(capacity: number): WsFrameMetricsRing {
 }
 
 /**
+ * One warn line when a summary cannot be built.
+ *
+ * Fixed shape: the event name and the error CLASS only. An exception message or
+ * stack can carry a payload, a filesystem path or a credential, and this line
+ * goes to stdout where it gets persisted and copied into logs; the class is
+ * enough to tell "the aggregator is broken" from "the sink is broken".
+ */
+function warnSummaryFailed(error: unknown): void {
+  const errorClass = error instanceof Error ? error.name : typeof error;
+  console.warn(JSON.stringify({ event: "ws_minute_summary_failed", error_class: errorClass }));
+}
+
+/**
  * Start the per-window summary for WebSocket frames.
  *
  * Mirrors `startRequestMetricsSummary`: one line per interval even when idle, so
@@ -300,7 +313,7 @@ export function startWsFrameMetricsSummary(
     try {
       emit();
     } catch (error) {
-      console.warn(`[ws-metrics] ws_minute_summary failed: ${(error as Error)?.message ?? String(error)}`);
+      warnSummaryFailed(error);
     }
   }, options.summaryIntervalMs);
   timer.unref?.();
@@ -310,7 +323,7 @@ export function startWsFrameMetricsSummary(
       try {
         emit();
       } catch (error) {
-        console.warn(`[ws-metrics] ws_minute_summary failed: ${(error as Error)?.message ?? String(error)}`);
+        warnSummaryFailed(error);
       }
     },
     stop: () => clearInterval(timer),

@@ -14,9 +14,11 @@
  *     so a replacement looks like an ordinary reconnect to the losing side and
  *     never looks like an authority failure.
  *   - A runtime may only be owned by one connection. If a second daemon claims a
- *     runtime the first one already serves, the first loses its session for that
- *     same reason - the alternative is two process-level command streams driving
- *     one runtime, which is exactly what the single-socket design exists to stop.
+ *     runtime the first one already serves, the FIRST keeps it and the newcomer
+ *     reports that runtime as unavailable (`runtime_gone` on its next heartbeat).
+ *     Evicting the first would take every other runtime on that machine down with
+ *     it, and one stale id is not worth that; the alternative of letting both
+ *     drive it is exactly what the single-socket design exists to stop.
  *
  * The registry holds sessions, never sockets: closing is the session's business,
  * which keeps this file testable with fakes and keeps close codes out of the
@@ -35,7 +37,7 @@ export interface DaemonProtocolSessionHandle {
 }
 
 export interface DaemonSessionRegistration {
-  /** Sessions this registration evicted. Already closed when returned. */
+  /** Sessions this registration replaced (same daemon id). Already closed. */
   replaced: DaemonProtocolSessionHandle[];
   /**
    * Runtimes this session asked for that a DIFFERENT daemon is already serving.
@@ -54,9 +56,15 @@ export class DaemonSessionRegistry {
   private readonly runtimeIndex = new Map<string, string>();
 
   /**
-   * Register a session, evicting any session that already owns this daemon or one
-   * of its runtimes. Eviction is close-then-forget, so a session cannot be
-   * discovered here after it has been closed.
+   * Register a session.
+   *
+   * A newer connection for the same daemon replaces the older one (4001,
+   * close-then-forget, so a replaced session cannot be discovered here again).
+   *
+   * A runtime already held by a DIFFERENT daemon is not taken from it: it is
+   * returned in `conflictedRuntimeIds` and stays out of this session's index, so
+   * the caller can report it as `runtime_gone` without disturbing the machine
+   * that is already serving it.
    */
   register(session: DaemonProtocolSessionHandle): DaemonSessionRegistration {
     const replaced: DaemonProtocolSessionHandle[] = [];
@@ -71,7 +79,8 @@ export class DaemonSessionRegistry {
     evict(this.byDaemon.get(session.daemonId));
 
     // A runtime another daemon is serving is a per-runtime fact. Index nothing for
-    // it and leave the other session running; the caller reports it as gone.
+    // it and leave the other session running; the caller reports it as gone. Only
+    // the same daemon id replaces a connection, above.
     const conflictedRuntimeIds: string[] = [];
     const indexed: string[] = [];
     for (const runtimeId of session.runtimeIds) {

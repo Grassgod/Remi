@@ -246,6 +246,40 @@ describe("MUL-417 ws_minute_summary — timer", () => {
     expect(drainWsFrameMetricsForTest()).toEqual({ samples: [], dropped: 0 });
   });
 
+  it("warns about a failed summary with the error class only, from both emit paths", async () => {
+    // A sentinel that would be obvious if it leaked into stdout. The aggregation
+    // is forced to throw so both the timer path and `flush()` take the catch.
+    const sentinel = "SENTINEL_EXCEPTION_TEXT";
+
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(" "));
+    };
+    const realLog = console.log;
+    console.log = () => {
+      throw new Error(sentinel);
+    };
+    try {
+      const runtime = startWsFrameMetricsSummary({ ...OPTIONS, summaryIntervalMs: 10 });
+      runtime!.flush();
+      await Bun.sleep(40);
+      runtime!.stop();
+    } finally {
+      console.log = realLog;
+      console.warn = realWarn;
+    }
+
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
+    for (const line of warnings) {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      expect(Object.keys(parsed).sort()).toEqual(["error_class", "event"]);
+      expect(parsed.event).toBe("ws_minute_summary_failed");
+      expect(parsed.error_class).toBe("Error");
+      expect(line).not.toContain(sentinel);
+    }
+  });
+
   it("never writes payload content, credentials, paths or frame ids into the line", async () => {
     const runtime = startWsFrameMetricsSummary(OPTIONS);
     runtime!.record(sample({

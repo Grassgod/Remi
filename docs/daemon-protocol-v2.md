@@ -156,7 +156,7 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 
 `server_error` 是服务端自己处理某一帧时抛异常时给出的答复（可重试）：它表示「这一次是我的问题，
 你按退避重发就好」，而不是「你的帧不对」。这类异常同时会往 stdout 写一条 warn，只带帧类型、方向、
-会话 id 和异常信息，不带 payload。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
+会话 id 与异常的类名，不带异常内容和 payload。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
 `invalid_report`）会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
 （`isTerminalDaemonAuthorityError` 的 401/403/410）。
 
@@ -184,6 +184,18 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 | 1006 | 异常关闭（断网、服务端被杀） | 是，走退避 |
 | 1011 / 1012 / 1013 | 服务端错误 / 重启 / 稍后重试 | 是，走退避 |
 | 其他未知码 | — | 是，走退避 |
+
+**未知类型的帧。** 服务端不认识的 `t` 按「能答复就答复、答复不了就忽略」处理，规则与超限帧同源：
+`re` 要指向发送方需要处置的那一行，所以取址顺序是 `seq` 优先、`id` 其次。
+
+| 未知类型的帧 | 处理 |
+|---|---|
+| 带 `seq`（可靠事件） | 回 `res{re: seq, ok:false, code:"unknown_frame", retryable:false}`，连接保持 |
+| 只带 `id`（RPC） | 回 `res{re: id}`，其余同上 |
+| 两个都没有 | 不回 `res`，只记帧指标，连接保持。新版 daemon 可能发来旧服务端不认识的通知类帧，忽略它比关连接更利于前向兼容 |
+
+`unknown_frame` 是传输层的答复码，**不是**业务错误码：它不在 `DAEMON_PROTOCOL_ERROR_CODES` 里，
+没有重试策略应该把它读成业务结果。
 
 **升级阶段的 HTTP 拒绝 → 等价关闭码。** 同样的 daemon 级事实在升级握手时表现为 HTTP 状态码
 （那时还没有 socket 可关）。A-2 的客户端必须把它映射成同一个动作，两张表是一份判定：
@@ -752,7 +764,16 @@ v2 显式设置：
 
 **下行窗口要真正执行。** `welcome` 里的 `window_frames: 64` / `window_bytes: 1 MiB` 不只是宣告：
 `sendEvent` 在发送前按未确认帧数与字节数记账，窗口满时**拒绝发送且不占用 seq**（与暂停同一个规则）。
-返回值区分三种拒绝——窗口满、暂停、连接已关闭——调用方据此决定等 ack 还是等 drain。ack 腾出空间后
+返回值区分**四种**拒绝，调用方的下一步动作各不相同：
+
+| 拒发原因 | 含义 | 调用方动作 |
+|---|---|---|
+| `window_full` | 未确认帧数或字节数已到窗口上限 | 等 ack 腾出空间，从 DB 重新推导后重推 |
+| `paused` | socket 处于背压暂停 | 等 drain 后重推 |
+| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | **不要重试**：ack 不能让它变小。置任务失败或丢弃该实体，不能无限等 ack |
+| `closed` | 连接已关闭或 socket 丢弃了帧 | 放弃这条连接，等重连后重建 |
+
+`too_large` 是服务端内部类型（`DaemonSessionSendRefusal`），不是协议契约的一部分。ack 腾出空间后
 由回调通知重推，**不建内存队列**：§2.1 已经规定 DB 就是下行队列，推送方从 DB 重新推导。
 
 发送侧：服务端读 `ws.send` 返回值，`-1` 表示已排队但有背压 → 暂停 offer 与非关键推送，等恢复；

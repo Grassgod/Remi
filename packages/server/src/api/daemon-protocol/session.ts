@@ -80,12 +80,20 @@ export type DaemonSessionSendOutcome =
 /**
  * Why a reliable downlink frame was not sent.
  *
- * The three refusals are separate values rather than one `null` because the
- * caller's next move differs: `window_full` means "wait for an ack and push
- * again from the database", `paused` means "wait for drain", and `closed` means
- * "give up on this connection". A single null would leave an offer pump guessing.
+ * The four refusals are separate values rather than one `null` because the
+ * caller's next move differs:
+ *
+ *   - `window_full` - wait for an ack, then push the same frame again from the
+ *     database (the DB is the downlink queue, §2.1).
+ *   - `paused` - wait for the socket to drain.
+ *   - `too_large` - never retry this frame: it is over `frame_bytes` and stays
+ *     over it however empty the window gets, so the caller has to fail the task
+ *     or drop the entity instead of parking it forever.
+ *   - `closed` - give up on this connection.
+ *
+ * A single null would leave an offer pump guessing between those four.
  */
-export type DaemonSessionSendRefusal = "closed" | "paused" | "window_full";
+export type DaemonSessionSendRefusal = "closed" | "paused" | "too_large" | "window_full";
 
 export type DaemonSessionSendResult =
   | { ok: true; seq: number }
@@ -361,8 +369,10 @@ export class DaemonProtocolSession {
     const encoded = encodeDaemonProtocolFrame({ ...frame, seq: this.downlinkSeq + 1 }, this.clock.now());
     const bytes = Buffer.byteLength(encoded, "utf8");
     // `frame_bytes` is the single-frame ceiling the daemon was told about; a frame
-    // over it could never be delivered, so it is refused rather than sent.
-    if (bytes > DAEMON_FRAME_MAX_BYTES) return { ok: false, reason: "window_full" };
+    // over it could never be delivered, so it is refused rather than sent. This is
+    // `too_large`, not `window_full`: an ack frees window space, but nothing makes
+    // this frame fit, so the caller must not sit waiting for one.
+    if (bytes > DAEMON_FRAME_MAX_BYTES) return { ok: false, reason: "too_large" };
     const inFlight = this.windowUsage();
     if (
       this.pendingAcks.size + 1 > DAEMON_UPLINK_WINDOW_FRAMES
@@ -511,12 +521,22 @@ export class DaemonProtocolSession {
         // on, not a dead socket. `unknown_frame` is deliberately not one of
         // DAEMON_PROTOCOL_ERROR_CODES - no retry policy should read it as a
         // business outcome.
-        this.sendReply(frame.id ?? "", {
-          ok: false,
-          code: unknownFrameType,
-          message: `unknown frame type: ${frame.type}`,
-          retryable: false,
-        });
+        //
+        // `re` has to name the row the sender must isolate, so the address rule is
+        // the same as for a failed frame: `seq` first (a reliable event names its
+        // outbox row with it), then `id` (an RPC). A frame carrying neither cannot
+        // be addressed at all - a newer daemon may be sending a notification this
+        // server version does not know yet, so it is ignored rather than answered
+        // with a `res` that names nothing.
+        const replyTo = frame.seq !== null ? String(frame.seq) : frame.id;
+        if (replyTo) {
+          this.sendReply(replyTo, {
+            ok: false,
+            code: unknownFrameType,
+            message: `unknown frame type: ${frame.type}`,
+            retryable: false,
+          });
+        }
         this.emitFrameSample(frame.type, startedAt, dbBefore, { errorCode: unknownFrameType, violation: false });
         return;
       }
@@ -592,6 +612,9 @@ export class DaemonProtocolSession {
         frame_type: frame.type,
         direction,
         handshake_complete: this.handshakeComplete,
+        // The class only. A message or a stack can carry a payload, a path or a
+        // credential, and this line goes to stdout where it would be persisted.
+        error_class: error instanceof Error ? error.name : typeof error,
       }));
     } catch {
       // A hostile console is not worth failing the connection over.
@@ -679,7 +702,17 @@ export class DaemonProtocolSession {
     this.advertisedRuntimeIdList = parsed.hello.runtimes.map((runtime) => runtime.runtime_id);
     this.runtimeIdList = serving;
     this.unavailableRuntimeIdList = unavailable;
-    this.handshakeComplete = true;
+    // `registered` is set before `registry.register` on purpose: the whole step
+    // from here to the `welcome` send is one transaction, and `close()` uses this
+    // flag to take the session back out of the registry (and, through it, out of
+    // the runtime index) if any step throws. Registering and then failing before
+    // `welcome` would otherwise leave the registry holding a session the daemon
+    // does not know about and can never use.
+    //
+    // `handshakeComplete` is NOT set here. It is what `handleFrameFailure` reads
+    // to choose between "roll the handshake back with 4001" and "answer the
+    // established session's frame with `server_error`", so it may only become true
+    // once the daemon has actually received its `welcome`.
     this.registered = true;
     // The registry is the authority on who owns a runtime right now: it may report
     // that another live daemon already holds one of ours. That is a runtime-level
@@ -721,7 +754,17 @@ export class DaemonProtocolSession {
       trace_heads: this.options.traceHeads?.() ?? {},
       caps: [],
     };
-    this.sendDirect({ t: "welcome", p: welcome });
+    const welcomeSent = this.sendDirect({ t: "welcome", p: welcome });
+    if (!welcomeSent) {
+      // The socket was already gone. Nothing was negotiated, so this is not a
+      // live session: roll the registration back and let the daemon reconnect.
+      this.close(DAEMON_PROTOCOL_CLOSE_CODES.server_closing, "welcome could not be sent");
+      return "server_error";
+    }
+    // Only now is the handshake real: the daemon has the session id and the
+    // negotiated limits, so later frame failures are answered instead of rolling
+    // the session back.
+    this.handshakeComplete = true;
     return null;
   }
 
