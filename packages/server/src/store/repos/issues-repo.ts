@@ -305,11 +305,32 @@ export class IssuesRepo {
    * transaction and the lock lives until that outer commit.
    */
   createIssue(input: CreateIssueInput): MultiremiIssue {
-    return this.ctx.db.transaction(() => this.createIssueWithinTransaction(input))();
+    // MUL-400 S1: the realtime pushes this write produces are queued and only
+    // published after COMMIT, the same way updateIssue does it. The insert and
+    // the number allocation must share one transaction (that is what the number
+    // lock protects), but a browser must never see an Issue that a later
+    // ROLLBACK can still erase.
+    const deferredEvents = createCommitEventQueue();
+    const created = this.ctx.db.transaction(() =>
+      this.createIssueWithinTransaction(input, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(created.childStatusChanges);
+    return created.issue;
   }
 
-  /** Caller already holds the transaction that takes the number lock. */
-  private createIssueWithinTransaction(input: CreateIssueInput): MultiremiIssue {
+  /**
+   * Caller owns the transaction that takes the number lock.
+   *
+   * Everything this returns must be published by the caller after COMMIT: the
+   * realtime events ride on `deferredEvents`, and the E1 parent re-derivation
+   * hops on `childStatusChanges` (its replay opens its own transactions, which
+   * must not start inside this one).
+   */
+  private createIssueWithinTransaction(
+    input: CreateIssueInput,
+    deferredEvents: CommitEventQueue,
+  ): { issue: MultiremiIssue; childStatusChanges: ChildStatusChangeCollector } {
+    const childStatusChanges: ChildStatusChangeCollector = [];
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
@@ -414,7 +435,7 @@ export class IssuesRepo {
       type: "issue_created",
       body: input.title,
       data: { projectId, parentIssueId, issueKind, sourceIssueId, priority, startDate, dueDate },
-    });
+    }, deferredEvents);
     // MUL-400 E1 re-derivation: a child created under an in_review parent puts
     // that parent back to in_progress. `createIssue` is the third entry point
     // the plan names alongside status change and re-parenting. This method owns
@@ -423,11 +444,7 @@ export class IssuesRepo {
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
       if (parent) {
-        const collector: ChildStatusChangeCollector = [];
-        const deferredEvents = createCommitEventQueue();
-        this.rederiveParentStatus(parent, this.getIssue(id)!, collector, deferredEvents);
-        this.ctx.emitCommitEvents(deferredEvents);
-        this.ctx.tasks().runCollectedChildStatusChanges(collector);
+        this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
     if (sourceIssueId) {
@@ -438,7 +455,7 @@ export class IssuesRepo {
         type: "issue_generated",
         body: input.title,
         data: { issueId: id, issueKey, projectId },
-      });
+      }, deferredEvents);
     }
     if (createdBy) {
       const creator = this.ctx.workspaces().getWorkspaceMember(createdBy) ?? this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
@@ -447,7 +464,7 @@ export class IssuesRepo {
       }
     }
     this.ctx.issueSessions().getOrCreateDefaultIssueSession(id, createdBy);
-    return this.getIssue(id)!;
+    return { issue: this.getIssue(id)!, childStatusChanges };
   }
 
   getIssue(id: string): MultiremiIssue | null {

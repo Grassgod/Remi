@@ -73,5 +73,63 @@ harness 不读也不写生产库，只使用 `MULTIREMI_TEST_POSTGRES_URL` 指�
 ## 本次未覆盖
 
 - 生产 209 的真实数据分布与双容器同时启动：由 Explorer 在低峰只读核查，结果贴 MUL-405；本报告只证明机制在真实 PostgreSQL 上成立。
-- `api_minute_summary` / `api_slow_request` 的 `pid` 字段：等 MUL-386（PR #255）合入 main 后单独做，不在本 PR。
+- `api_minute_summary` / `api_slow_request` 的 `pid` 字段：MUL-386（PR #255，`fd52ff9e`）已合入 main，本轮已实现并有单测覆盖，见上文「pid 观测字段」。
 - 发布后在 209 只读确认两个容器的启动日志都没有迁移报错：属于上线后动作，不在本 PR 范围。
+
+## 锁顺序死锁：QA 复现、修复与回归测试
+
+QA 在 `512332dd` 上用两条 PostgreSQL 事务按相反顺序交错两条真实业务路径，得到 `deadlock detected`，其中一条事务被回滚。根因是 Issue 编号锁当时不是叶子锁：
+
+- Feishu 摄取（`feishu-bot-repo.ts`）：先取 workspace 行锁，再经 `createIssue` 取 Issue 编号锁；
+- Autopilot `create_issue`（`autopilots-repo.ts`）：先取 Issue 编号锁，再经 `createTaskWithinTransaction`（`tasks-repo.ts`）取同一 workspace 行锁。
+
+两条路径顺序相反，形成环。修复方式是在 `store/advisory-locks.ts` 里写下一个全局取锁顺序，并让所有同时需要这两类锁的路径都遵守：
+
+```
+workspace 生命周期行锁  ->  编号分配锁  ->  领域行锁
+```
+
+选这个顺序而不是把编号锁改成严格叶子锁，原因是：`createIssue` 的调用方在持有编号锁之后本来就要写 Issue 行、序列事件、创建 Issue Session，把所有这些都排除在编号锁之外会改变现有事务语义；而「先取 workspace 行锁」与既有 Feishu 路径、`createTaskWithinTransaction` 的既有顺序一致，改动只影响取锁时机，不改业务语义、不改 API/CLI。
+
+改动文件：
+
+- `packages/server/src/store/advisory-locks.ts`（顺序契约与理由）
+- `packages/server/src/store/repos/issues-repo.ts`（`createIssueWithinTransaction` 先取 workspace 行锁）
+- `packages/server/src/store/repos/autopilots-repo.ts`（`runAutopilot`、`enqueueScheduleTargets`、调度分发先取 workspace 行锁）
+- `packages/server/src/store/repos/feishu-bot-repo.ts`（`recordAudit` 先取 workspace 行锁）
+- `packages/server/src/store/repos/projects-repo.ts`（`createPinnedItem` 先取 workspace 行锁）
+
+回归测试 `tests/unit/multiremi/mul405-lock-order.test.ts`（fixture：`tests/unit/multiremi/fixtures/postgres-lock-order-interleave-worker.ts`）分两步：先从 store 真实代码里推导每条路径的取锁顺序（用一个记录型 `SqlDatabase` 包住真实 SQLite store），再把推导出的顺序放到**两条独立的 PostgreSQL 连接**上用 barrier 交错回放。
+
+| 树 | 测试结果 |
+|---|---|
+| 改前 `512332dd`（同一份测试文件拷入） | **复现**：`autopilot [error] deadlock detected — derived orders: feishu workspace -> number, autopilot number -> workspace`；顺序断言也失败 |
+| 修复后 `d6dd448f` | **通过**：2 pass / 0 fail，两条事务都提交，Issue 编号唯一且连续 |
+
+测试用 `MULTIREMI_TEST_POSTGRES_URL` 开关；未设置时 skip，CI 口径不变。
+
+## 嵌套事务回滚
+
+`tests/unit/multiremi/mul405-nested-rollback.test.ts` 覆盖三处真实嵌套调用，SQLite 与 PostgreSQL 各跑一遍（PG 同上开关）：
+
+- Feishu bot 摄取：内层失败、内层成功但后续步骤失败，两种情况都断言 12 张相关表的行数与调用前完全一致；
+- messaging outcomes：内层失败后 Issue 与 outcome 都不落库，且消息保持未处理以便重试；
+- Autopilot `create_issue`：内层失败后 run / Issue / Session / Task 均无残留；
+- 捕获内层失败后外层仍可提交：断言外层事务仍可用并能正常提交。
+
+修复后 12 pass / 0 fail（改前树上同文件也通过，因为 SAVEPOINT 修复在 `512332dd` 里已经存在；这组测试补的是当时缺失的验收覆盖）。
+
+## `pid` 观测字段
+
+MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给两条日志加 `pid`：
+
+- `packages/server/src/observability/request-metrics.ts`：`api_minute_summary` 与 `api_slow_request` 各加 `pid: process.pid`；
+- `tests/unit/multiremi/request-metrics.test.ts`：断言两条日志都带 `pid`，精确字段集随之更新，并断言事件名、其余字段、采样、阈值与 `Server-Timing` 响应头均未变化。
+
+测试：`bun test tests/unit/multiremi/request-metrics.test.ts` → 30 pass / 0 fail（含 PG 集成）。
+
+## 本轮新 head
+
+- 锁顺序修复：`d4254edd`
+- 合并 `origin/main`（`d905961b`，含 `fd52ff9e`）：`2a802b67`
+- `pid` 观测字段：`d6dd448f`
