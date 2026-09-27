@@ -35,8 +35,12 @@ squad rule about ordering was prose. The observable failures were:
 2. **Satisfied means `done`.** `in_review`, `blocked` and `cancelled` are unmet:
    the gate exists so a dependent never starts on half-finished work, and a
    parked or abandoned prerequisite is exactly what a human must rule on.
-3. **The gate lives in the status transitions, not in claim.** Three places, all
-   in the store:
+3. **The gate has two layers: the status transitions and the task-creation
+   funnel.** Crucially, nothing is added to `claim`: the gate decides before a
+   task exists, so an already-queued task is never silently dropped, and a
+   daemon never sees a half-rejected claim.
+
+   *Layer 1 — status transitions (three places, all in the store):*
    - `assignIssue` — the funnel for every "start this issue" call. The gate
      holds an issue only when it is **waiting**: `status = backlog` with an unmet
      prerequisite. Such an issue records the assignee, keeps its status, creates
@@ -50,9 +54,9 @@ squad rule about ordering was prose. The observable failures were:
      prerequisite is a 409 `dependencies_unmet`. A member may override with
      `force: true`: the status change commits, `dependency_force_started` is
      recorded, the rows stay, and the store then dispatches through
-     `assignIssue` with the same `force`, so an agent- or squad-owned issue
-     really gets a round. A member-owned or unowned issue is a status change
-     only, because there is no agent to run it. A dispatch that cannot run
+     `assignIssue` with the internal force option, so an agent- or squad-owned
+     issue really gets a round. A member-owned or unowned issue is a status
+     change only, because there is no agent to run it. A dispatch that cannot run
      (archived owner, no runnable agent) is reported as `dispatch_skipped`
      rather than rolled back, matching assign-on-update.
    - `POST /api/issues` with `blocked_by` — the issue row, its number, its
@@ -63,9 +67,42 @@ squad rule about ordering was prose. The observable failures were:
      (Feishu ingestion and autopilots do), because Postgres has no savepoints on
      this bridge. An issue with an unmet prerequisite parks at `backlog`
      whatever status was requested.
-   Keeping claim untouched means a task that is already queued is never silently
-   dropped: the gate decides before the task exists. Dispatch is always the
-   caller's step *after* these transactions commit.
+
+   *Layer 2 — task creation (`createTaskWithinWorkspaceLock` in tasks-repo),
+   the single funnel every task is born in:* creating the **first** task of a
+   waiting issue is refused with `IssueDependencyError("dependencies_unmet")`,
+   regardless of who is asking. Because the check sits at the funnel rather than
+   at each caller, a path that does not exist yet is covered too. The check runs
+   after the issue is resolved and before any `INSERT`, so a refusal leaves no
+   partial row.
+
+   *Structural exemptions (never identity-based).* A round that continues an
+   existing conversation is not the issue's first execution, so the funnel lets
+   it through: a retry (`attempt > 1`), a continuation naming
+   `continuedFromTaskId`, the E2 parent wake-up (`preserveIssueStatus`), and a
+   delegation return (`delegationId` with `delegatedByAgentId === agentId`).
+   Identity is deliberately not consulted: the funnel sees the request body,
+   which a caller can claim anything about. The dispatch behaviour around these
+   exemptions is:
+   - a comment-driven dispatch on a waiting issue records the hold and does not
+     create a task — `dispatch_skipped` with `dependencies_unmet` for the
+     assignee auto-response, `comment_mention_skipped` with the same reason for
+     an agent mention — and **the comment itself is still persisted**;
+   - an Autopilot `trigger_issue` on a waiting issue settles its run as
+     `skipped` with reason `dependencies_unmet` and creates no task;
+   - `POST /api/multiremi/tasks` and `POST /api/issues/:id/rerun` answer 409
+     `dependencies_unmet`, with a message telling the caller to force-start.
+
+   **There is exactly one way across the dependency: a member's `force`.** It
+   works only through the audited status write — CLI
+   `remi issue update <A> --status todo --force`, or the web "强制开工" button —
+   which moves the issue out of `backlog` and records `dependency_force_started`.
+   Once the issue is no longer waiting, both layers treat it as an ordinary
+   running issue. There is no second override, and in particular the assign
+   route does **not** accept one: `force` is a server-internal parameter
+   (`AssignIssueOptions`, mirroring `UpdateIssueOptions`), never a field of the
+   request-bound `AssignIssueInput`, and a request body that supplies it is
+   ignored so an override can never happen without its audit record.
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.

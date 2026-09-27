@@ -177,6 +177,7 @@ import type {
   AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   CreateAccessTokenInput,
   CreateBotMenuPublishRequestInput,
@@ -3280,8 +3281,8 @@ runMigrations(this.db);
     return this.issues.issueArchiveSweepIntervalMs();
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
-    return this.issues.assignIssue(id, input);
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
+    return this.issues.assignIssue(id, input, options);
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {

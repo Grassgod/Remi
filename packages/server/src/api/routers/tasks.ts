@@ -28,6 +28,7 @@ import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multi
 import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -252,6 +253,11 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ task: taskPublicResponse(task) }, 201);
     } catch (error) {
       if (error instanceof ChatIssueTaskConflictError) return c.json({ error: error.message }, 400);
+      // MUL-400 E3 gate 3: this funnel refuses the first task of a waiting
+      // issue; the caller has to force-start it explicitly first.
+      if (error instanceof IssueDependencyError) {
+        return c.json({ error: error.message, code: error.code }, 409);
+      }
       throw error;
     }
   });

@@ -670,37 +670,64 @@ describe("MUL-400 E3 — surfaces", () => {
   });
 
   /**
-   * MUL-409 fix round, QA suggestion 1: `AssignIssueInput.force` reaches the
-   * gate through the dedicated assign route, so a member can start a parked
-   * issue by assigning it. A task identity is refused, same as the PATCH routes.
+   * MUL-409 fix round 2: the assign route must NOT accept an override. `force`
+   * is a server-internal dispatch option (the audited member status write sets
+   * it), so a request body that supplies it is ignored — the assignment behaves
+   * exactly like one without it, which keeps the plan's "one override, always
+   * audited" rule true.
    */
-  it("lets the assign route force a parked issue into a round", async () => {
+  it.each([
+    ["camelCase member", { assigneeType: "agent", force: true }],
+    ["snake_case member", { assignee_type: "agent", force: true }],
+  ])("ignores a body-supplied force on the assign route (%s)", async (_label, overrides) => {
     const { store, agent } = storeWithAgent();
     const app = createMultiremiApp({ store });
     const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
     const dependent = store.createIssue({ title: "Dependent", status: "backlog", blockedBy: [prereq.id] });
-    const assign = (body: unknown) => app.request(`/api/multiremi/issues/${dependent.id}/assign`, {
+    const camel = "assigneeType" in overrides;
+    const body = camel
+      ? { ...overrides, assigneeId: agent.id }
+      : { ...overrides, assignee_id: agent.id };
+
+    const response = await app.request(`/api/multiremi/issues/${dependent.id}/assign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { issue: { status: string; assigneeId?: string | null }; task: unknown };
 
-    // Without force the gate holds: the owner is recorded, no round appears.
-    const held = await assign({ assigneeType: "agent", assigneeId: agent.id });
-    expect(held.status).toBe(200);
-    const heldBody = await held.json() as { issue: { status: string }; task: unknown };
-    expect(heldBody.issue.status).toBe("backlog");
-    expect(heldBody.task).toBeNull();
+    // Same outcome as a plain assign: owner recorded, still waiting, no round.
+    expect(payload.issue.status).toBe("backlog");
+    expect(payload.task).toBeNull();
+    expect(store.getIssue(dependent.id)!.assigneeId).toBe(agent.id);
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
-
-    const forced = await assign({ assigneeType: "agent", assigneeId: agent.id, force: true });
-    expect(forced.status).toBe(200);
-    const forcedBody = await forced.json() as { issue: { status: string }; task: { id: string } | null };
-    expect(forcedBody.issue.status).toBe("todo");
-    expect(forcedBody.task?.id).toBeDefined();
-    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
-    // The rows stay, so the page still explains why this one started early.
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(0);
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  });
+
+  it("keeps the PATCH status override as the only way across, with its audit record", async () => {
+    const { store, agent } = storeWithAgent();
+    const app = createMultiremiApp({ store });
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+
+    const response = await app.request(`/api/issues/${dependent.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    // Exactly one record, and only the PATCH path can produce it.
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
   });
 
   it("reports dependencies_unmet on create instead of backlog_status", async () => {
@@ -748,5 +775,204 @@ describe("MUL-400 E3 — the kill switch", () => {
       if (previous === undefined) delete process.env.MULTIREMI_DEPENDENCY_GATE;
       else process.env.MULTIREMI_DEPENDENCY_GATE = previous;
     }
+  });
+});
+
+/**
+ * MUL-409 fix round 2, blocking 3 (Senior大哥 ruling `cmt_am1o8xnzkwy0`): the
+ * dependency gate gains a second layer at the single task-creation funnel, so
+ * every path that can start work on a waiting issue is covered, and the only
+ * way across stays the audited member `force`.
+ */
+describe("MUL-400 E3 — task-creation gate", () => {
+  function parked() {
+    const { store, runtime, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Waiting", status: "backlog", blockedBy: [prereq.id] });
+    return { store, runtime, agent, prereq, dependent };
+  }
+
+  it("refuses a task-identity call through POST /api/multiremi/tasks with 409", async () => {
+    const { store, agent, dependent } = parked();
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early" }),
+    });
+    expect(response.status).toBe(409);
+    const body = await response.json() as { code?: string; error?: string };
+    expect(body.code).toBe("dependencies_unmet");
+    expect(body.error).toContain("force");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+  });
+
+  it("refuses a member call through POST /api/multiremi/tasks with 409 too", async () => {
+    // The gate is structural: a member passes the route's auth but not the gate.
+    const { store, agent, dependent } = parked();
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-multiremi-actor": "member" },
+      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "member start" }),
+    });
+    expect(response.status).toBe(409);
+    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  it("lets assignIssue dispatch once a member force moved the issue out of backlog", () => {
+    const { store, agent, dependent } = parked();
+    // The forced start needs an owner to dispatch to, so record one first.
+    store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
+    expect(store.getIssue(dependent.id)!.assigneeId).toBe(agent.id);
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+
+    // The issue is no longer waiting, so the task-creation gate lets a further
+    // dispatch through instead of refusing it: replacing the owner is allowed.
+    const second = store.createAgent({ name: "Second owner", provider: "claude" });
+    const reassigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: second.id });
+    expect(reassigned.task?.id).toBeDefined();
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+  });
+
+  it("settles an Autopilot trigger_issue run as skipped without creating a task", () => {
+    const { store, agent, dependent } = parked();
+    const autopilot = store.createAutopilot({
+      workspaceId: "local",
+      title: "Run the waiting issue",
+      assigneeId: agent.id,
+      createdById: "local",
+      createdByType: "member",
+      executionMode: "trigger_issue",
+    });
+    const run = store.runAutopilot(autopilot.id, { triggerIssueId: dependent.id, source: "manual" });
+    expect(run.status).toBe("skipped");
+    expect(run.failureReason).toBe("dependencies_unmet");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  });
+
+  it("keeps a human comment and records a dispatch_skipped hold on a waiting issue", () => {
+    const { store, agent, dependent } = parked();
+    store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
+    expect(activityOf(store, dependent.id, "dispatch_skipped")).toHaveLength(1);
+
+    const comment = store.createIssueComment(dependent.id, { body: "please start", authorType: "member", authorId: "local" });
+    expect(store.getIssueComment(comment.id)).not.toBeNull();
+    // The comment landed, no round was created, and the hold is visible.
+    const skips = activityOf(store, dependent.id, "dispatch_skipped");
+    expect(skips.length).toBeGreaterThanOrEqual(2);
+    expect(skips.at(-1)!.data).toMatchObject({ reason: "dependencies_unmet", commentId: comment.id });
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+  });
+
+  it("keeps an agent mention and records comment_mention_skipped", () => {
+    const { store, agent, dependent } = parked();
+    const leader = store.createAgent({ name: "Leader", provider: "claude" });
+    const comment = store.createIssueComment(dependent.id, {
+      body: `[@${agent.name}](mention://agent/${agent.id}) please start`,
+      authorType: "member",
+      authorId: "local",
+    });
+
+    expect(store.getIssueComment(comment.id)).not.toBeNull();
+    const skipped = activityOf(store, dependent.id, "comment_mention_skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]!.data).toMatchObject({ reason: "dependencies_unmet", agentId: agent.id });
+    expect(activityOf(store, dependent.id, "comment_mention_triggered")).toHaveLength(0);
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(leader.archivedAt).toBeNull();
+  });
+
+  it("does not block a retry of an existing round on a waiting issue", () => {
+    // The round exists BEFORE the dependency is declared — the only way an
+    // issue can be both waiting and already have tasks — and its retry is a
+    // continuation of that round, not the issue's first execution.
+    const { store, runtime, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Existing work", status: "in_progress" });
+    const first = store.createTask({ agentId: agent.id, issueId: dependent.id, prompt: "run" });
+    let claimed = store.claimTask(runtime.id);
+    while (claimed && claimed.id !== first.id) claimed = store.claimTask(runtime.id);
+    store.startTask(first.id);
+    store.failTask(first.id, { error: "boom" });
+
+    // Now the issue gains an unmet prerequisite and is parked again.
+    store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
+    store.updateIssue(dependent.id, { status: "backlog" });
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+
+    const retried = store.createTask({
+      agentId: agent.id,
+      issueId: dependent.id,
+      prompt: "retry",
+      attempt: 2,
+      continuedFromTaskId: first.id,
+    });
+    expect(retried.attempt).toBe(2);
+    expect(store.getIssue(prereq.id)!.status).toBe("in_progress");
+  });
+
+  it("returns 409 from the rerun route for a waiting issue", async () => {
+    const { store, agent, dependent } = parked();
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id }),
+    });
+    expect(response.status).toBe(409);
+    const body = await response.json() as { code?: string };
+    expect(body.code).toBe("dependencies_unmet");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+  });
+
+  it("does not block a continuation that names continuedFromTaskId", () => {
+    // Same history: the previous round predates the dependency.
+    const { store, agent } = storeWithAgent();
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Existing work", status: "in_progress" });
+    const previous = store.createTask({ agentId: agent.id, issueId: dependent.id, prompt: "previous" });
+    store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
+    store.updateIssue(dependent.id, { status: "backlog" });
+    // Structural exemption: the round continues an existing conversation.
+    const continuation = store.createTask({
+      agentId: agent.id,
+      issueId: dependent.id,
+      prompt: "continue",
+      continuedFromTaskId: previous.id,
+    });
+    expect(continuation.continuedFromTaskId).toBe(previous.id);
+  });
+
+  it("does not block the E2 wake-up that carries preserveIssueStatus", () => {
+    const { store, agent } = storeWithAgent();
+    const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const other = store.createIssue({ title: "Other prerequisite", status: "in_progress" });
+    const parkedParent = store.createIssue({
+      title: "Parked parent",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      blockedBy: [other.id],
+    });
+
+    // A wake-up round for a child's outcome is a notification, not a start.
+    const wakeup = store.createTask({
+      agentId: agent.id,
+      issueId: parkedParent.id,
+      prompt: "child reported",
+      preserveIssueStatus: true,
+    });
+    expect(wakeup.id).toBeDefined();
+    expect(store.getIssue(parkedParent.id)!.status).toBe("backlog");
+    expect(store.getIssue(parent.id)!.status).toBe("in_progress");
   });
 });

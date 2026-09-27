@@ -2289,6 +2289,18 @@ export interface UpdateIssueOptions {
   holdParentStatusData?: Record<string, unknown> | null;
 }
 
+/**
+ * MUL-400 E3: server-internal dispatch options. The dependency override is
+ * deliberately NOT part of {@link AssignIssueInput}: that type is bound straight
+ * from request bodies, and a body-reachable bypass would let a caller start a
+ * waiting issue without the `dependency_force_started` record the plan requires.
+ * Only `IssuesRepo.dispatchForcedStart` passes it, after the member-only status
+ * write has already been validated and audited.
+ */
+export interface AssignIssueOptions {
+  force?: boolean;
+}
+
 export interface BatchUpdateIssuesInput {
   issueIds?: string[];
   issue_ids?: string[];
@@ -2340,14 +2352,6 @@ export interface AssignIssueInput {
   assigneeId?: string | null;
   assignee_id?: string | null;
   prompt?: string | null;
-  /**
-   * MUL-400 E3: member-only override for the dependency gate. The gate only
-   * holds issues that are *waiting* — `backlog` with an unmet prerequisite — so
-   * this lets a member start one anyway; the dependency rows stay. Task
-   * identities are refused by the routes, exactly like {@link
-   * UpdateIssueInput.force}.
-   */
-  force?: boolean;
   actorType?: string | null;
   actor_type?: string | null;
   actorId?: string | null;

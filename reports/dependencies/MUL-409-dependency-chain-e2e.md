@@ -40,7 +40,8 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://<user>@127.0.0.1:5432/postgres \
 | Idempotency | Replaying `done → in_review → done` on `C1` creates no second round and leaves the dependent `done` |
 | Forced start (MUL-409 fix) | A member `PATCH {status: todo, force: true}` on a parked child leaves exactly one round, keeps the dependency row, and records `dependency_force_started`; the prerequisite finishing later adds no second round |
 | Creation rollback (MUL-409 fix) | Depending on an ancestor answers 409 `dependency_on_ancestor` with no orphan issue, no child row and no consumed issue number; a successful creation with a prerequisite stays a single transaction (`maxTransactionDepth === 1`) |
-| Readiness report (MUL-409 fix) | A shared-parent dependent becoming ready adds no extra round; the line is merged into the prerequisite's report, which names both issues, and the dependent records `dependency_satisfied_reported` |
+| Readiness report (MUL-409 fix) | A shared-parent dependent becoming ready adds no extra round; the line is merged into the prerequisite's report, which names both issues, and the dependent records the merge flag |
+| Task-creation gate (MUL-409 fix round 2) | Rerun and task create on a waiting issue both answer 409 `dependencies_unmet` and leave no round; an assign carrying a body `force` still parks the issue and writes no override record; the member `PATCH {status: todo, force: true}` dispatches exactly one round and records `dependency_force_started` exactly once; a comment still lands; the prerequisite finishing later adds no second round |
 
 ## Result
 

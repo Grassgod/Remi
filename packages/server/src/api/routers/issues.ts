@@ -1022,7 +1022,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ...body,
       parentTaskId: currentTaskParentId(c),
     });
-    if ("error" in result) return c.json({ error: result.error }, result.status);
+    if ("error" in result) {
+      // MUL-400 E3: the task-creation gate reports the same 409 code as the
+      // status gate, so a client handles both with one branch.
+      return result.code
+        ? c.json({ error: result.error, code: result.code }, result.status)
+        : c.json({ error: result.error }, result.status);
+    }
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
   app.post("/api/issues/:id/tasks/:taskId/cancel", async (c) => {
@@ -1306,11 +1312,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const body = await readJson<AssignIssueInput>(c);
-    // MUL-400 E3: `force` is the same member-only override as on PATCH, so a run
-    // cannot use the assign route to start a parked issue.
-    const forceDenied = denyTaskIdentityIssueForce(c, { force: body.force });
-    if (forceDenied) return forceDenied;
+    const body = await readJson<AssignIssueInput & { force?: unknown }>(c);
+    // MUL-400 E3: assignment never overrides the dependency gate. `force` is a
+    // server-internal dispatch option (see AssignIssueOptions) that only the
+    // audited member status write sets, so a request body carrying it is ignored
+    // rather than honored: the caller changes nothing and gets the hold behavior
+    // of a plain assign.
+    delete body.force;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, issue.workspaceId,
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;

@@ -47,6 +47,9 @@ function commentMentionReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.comment_mention_reason_unlinked_agent_comment);
     case "target_unavailable":
       return t(($) => $.activity.comment_mention_reason_target_unavailable);
+    case "dependencies_unmet":
+      // MUL-400 E3 gate 3: the mention landed but the issue is still waiting.
+      return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }

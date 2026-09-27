@@ -3,6 +3,7 @@
 import { computeScheduleNextRun } from "@multiremi/store/schedule.js";
 import { availableScheduleTargets, normalizeScheduleTargets } from "@multiremi/store/schedule-targets.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import {
   cleanOptionalString,
   isRecord,
@@ -1407,18 +1408,34 @@ export class AutopilotsRepo {
         issueSessionId = issueSession.id;
       }
 
-      const task = this.ctx.tasks().createTaskWithinTransaction({
-        agentId: agent.id,
-        issueId: issue?.id ?? null,
-        issueSessionId,
-        workspaceId: autopilot.workspaceId,
-        prompt,
-        assignmentAuthorType: "system",
-        assignmentAuthorId: autopilot.id,
-        assignmentSourceEventId: eventId,
-        parentTaskId: sourceTaskId,
-        issueCreationRestricted,
-      });
+      let task: MultiremiTask;
+      try {
+        task = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: agent.id,
+          issueId: issue?.id ?? null,
+          issueSessionId,
+          workspaceId: autopilot.workspaceId,
+          prompt,
+          assignmentAuthorType: "system",
+          assignmentAuthorId: autopilot.id,
+          assignmentSourceEventId: eventId,
+          parentTaskId: sourceTaskId,
+          issueCreationRestricted,
+        });
+      } catch (err) {
+        // MUL-400 E3 gate 3: a `trigger_issue` autopilot on a waiting issue must
+        // not start it. The run settles as skipped carrying the reason instead of
+        // failing, mirroring the "no runnable agent" skip above, so the operator
+        // sees why nothing ran.
+        if (!(err instanceof IssueDependencyError) || err.code !== "dependencies_unmet") throw err;
+        this.ctx.db.run(
+          `UPDATE multiremi_autopilot_runs
+           SET status = 'skipped', completed_at = ?, failure_reason = ?
+           WHERE id = ?`,
+          [nowIso(), "dependencies_unmet", runId],
+        );
+        return this.getAutopilotRun(runId)!;
+      }
       taskToNotify = task;
       issueSessionId = task.issueSessionId ?? issueSessionId;
       this.ctx.db.run(

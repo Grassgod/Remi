@@ -84,6 +84,11 @@ import type {
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
 
+import {
+  dependencyGateEnabled,
+  IssueDependencyError,
+} from "@multiremi/store/repos/issue-dependencies.js";
+
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
@@ -626,6 +631,44 @@ export class TasksRepo {
   }
 
   /** Caller holds the task workspace row lock in an open transaction. */
+  /**
+   * MUL-400 E3 gate 3: no first task for an issue that is still waiting.
+   *
+   * "Waiting" means `backlog` with an unmet `blocked_by` prerequisite — the same
+   * definition the status-transition gates use. Anything else is a normal issue.
+   *
+   * Exemptions are structural, not identity-based: a round that continues an
+   * existing conversation (retry, continuation, E2 wake-up, delegation return)
+   * is not the issue's first execution, so it proceeds. Identity is deliberately
+   * not consulted: the funnel sees whatever the request body claimed.
+   *
+   * The one way to override is a member's `force` on the status write, which
+   * moves the issue out of `backlog` first (and records
+   * `dependency_force_started`); by the time it dispatches, the issue is no
+   * longer waiting and this gate has nothing to hold.
+   */
+  private assertIssueDispatchable(issue: MultiremiIssue, input: CreateTaskInput): void {
+    if (!dependencyGateEnabled()) return;
+    if (issue.status !== "backlog") return;
+    // Retries keep `attempt > 1`; continuations name the task they continue.
+    if (normalizePositiveInt(input.attempt, 1) > 1) return;
+    if (cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id)) return;
+    // The E2 parent wake-up carries `preserveIssueStatus` so the parent keeps
+    // its derived status; it is a notification round, not a new start.
+    if (input.preserveIssueStatus === true || input.preserve_issue_status === true) return;
+    // A delegation return belongs to the delegator's existing conversation.
+    const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
+    const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
+    if (delegationId && delegatedByAgentId === input.agentId) return;
+    const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
+    if (unmet.length === 0) return;
+    throw new IssueDependencyError(
+      "dependencies_unmet",
+      `${issue.key} is waiting on ${unmet.length} unfinished prerequisite issue(s): ${unmet.map((row) => row.key).join(", ")}; start it explicitly with force, or finish the prerequisites first`,
+      { unmet },
+    );
+  }
+
   private createTaskWithinWorkspaceLock(input: CreateTaskInput): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -701,6 +744,11 @@ export class TasksRepo {
     // reference that would drive B's agent + machine + credentials from A).
     if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
     if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
+    // MUL-400 E3 gate 3 (task-creation layer). This is the single funnel every
+    // task is born in, so a waiting issue cannot acquire a first round through
+    // any path — CLI task create, rerun, autopilot, comments, mention dispatch.
+    // The check is structural, never identity-based, and runs before any write.
+    if (issue) this.assertIssueDispatchable(issue, input);
     if (chatSession && issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id) !== issueId) {
       throw new ChatIssueTaskConflictError("Only Feishu Issue topics can create Chat transport tasks with an Issue");

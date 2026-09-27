@@ -4,7 +4,7 @@
   "database": "throwaway PG database, dropped after the run",
   "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
   "testDoubles": "execution agent and worker only (no provider is run)",
-  "ranAt": "2026-09-27T03:26:45.385Z",
+  "ranAt": "2026-09-27T04:43:13.701Z",
   "steps": [
     {
       "step": "create parent",
@@ -18,9 +18,9 @@
       "step": "create chain C1 <- C2 <- C3",
       "status": "ok",
       "detail": {
-        "c1": "iss_w5ffga97pqxl",
-        "c2": "iss_3bxmdnqszvw4",
-        "c3": "iss_16w5rd2jo04x"
+        "c1": "iss_geg8ih88ndqv",
+        "c2": "iss_maiiw1uheqx8",
+        "c3": "iss_q75s9i5cq28v"
       }
     },
     {
@@ -79,7 +79,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_elp43pzzqqjx",
+          "parentIssueId": "iss_x2myb2mjgj9g",
           "total": 3,
           "done": 0,
           "cancelled": 0,
@@ -96,22 +96,22 @@
         "waitingOn": {
           "unmet": [
             {
-              "issueId": "iss_16w5rd2jo04x",
-              "dependsOnIssueId": "iss_3bxmdnqszvw4",
+              "issueId": "iss_q75s9i5cq28v",
+              "dependsOnIssueId": "iss_maiiw1uheqx8",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_hf1r2z0qt6mq"
+              "dependencyId": "dep_zl3tceona3ed"
             }
           ],
           "prerequisites": [
             {
-              "issueId": "iss_16w5rd2jo04x",
-              "dependsOnIssueId": "iss_3bxmdnqszvw4",
+              "issueId": "iss_q75s9i5cq28v",
+              "dependsOnIssueId": "iss_maiiw1uheqx8",
               "key": "MUL-3",
               "title": "C2",
               "status": "backlog",
-              "dependencyId": "dep_hf1r2z0qt6mq"
+              "dependencyId": "dep_zl3tceona3ed"
             }
           ]
         }
@@ -143,7 +143,7 @@
       "step": "C1: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_zeq5n0nvs8gr"
+        "taskId": "tsk_qz0r81k1fu3r"
       }
     },
     {
@@ -196,7 +196,7 @@
       "step": "C2: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_m0umcy215j6l"
+        "taskId": "tsk_c1mvtqislqt4"
       }
     },
     {
@@ -238,7 +238,7 @@
       "step": "C3: round completed",
       "status": "ok",
       "detail": {
-        "taskId": "tsk_6w7qe1fjzgcz"
+        "taskId": "tsk_bcq1irdiblan"
       }
     },
     {
@@ -275,12 +275,12 @@
           "unmet": [],
           "prerequisites": [
             {
-              "issueId": "iss_16w5rd2jo04x",
-              "dependsOnIssueId": "iss_3bxmdnqszvw4",
+              "issueId": "iss_q75s9i5cq28v",
+              "dependsOnIssueId": "iss_maiiw1uheqx8",
               "key": "MUL-3",
               "title": "C2",
               "status": "done",
-              "dependencyId": "dep_hf1r2z0qt6mq"
+              "dependencyId": "dep_zl3tceona3ed"
             }
           ]
         }
@@ -302,7 +302,7 @@
       "status": "ok",
       "detail": {
         "progress": {
-          "parentIssueId": "iss_elp43pzzqqjx",
+          "parentIssueId": "iss_x2myb2mjgj9g",
           "total": 3,
           "done": 3,
           "cancelled": 0,
@@ -369,8 +369,8 @@
       "step": "the forced round is claimable",
       "status": "ok",
       "detail": {
-        "claimed": "tsk_9dkdvshe7jmd",
-        "expected": "tsk_9dkdvshe7jmd"
+        "claimed": "tsk_pyyhf69aj620",
+        "expected": "tsk_pyyhf69aj620"
       }
     },
     {
@@ -440,7 +440,7 @@
       "status": "ok",
       "detail": {
         "bodies": [
-          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_bis0bmyl78db) - \"Sibling prerequisite\" -"
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_ri8kiuyscs3w) - \"Sibling prerequisite\" -"
         ]
       }
     },
@@ -459,6 +459,89 @@
       "status": "ok",
       "detail": {
         "status": "backlog"
+      }
+    },
+    {
+      "step": "gated child parks in backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "rerun on a waiting issue answers 409 dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create on a waiting issue answers 409 dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "no round was created by either attempt",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "assign with a body force leaves the issue waiting",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "assign with a body force creates no round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "assign with a body force records no override",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the member status override is accepted",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "the override dispatches exactly one round",
+      "status": "ok",
+      "detail": {
+        "tasks": 1
+      }
+    },
+    {
+      "step": "the override is audited exactly once",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "a comment on a prerequisite still lands",
+      "status": "ok",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "step": "a finished prerequisite adds no second round to a forced-over child",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
       }
     }
   ],

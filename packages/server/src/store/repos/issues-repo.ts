@@ -24,6 +24,7 @@ import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
@@ -1682,8 +1683,7 @@ export class IssuesRepo {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
         parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-        force: true,
-      });
+      }, { force: true });
     } catch (err) {
       // The status change already committed and is what the member asked for;
       // a dispatch that cannot run (archived owner, no runnable agent) is
@@ -2710,7 +2710,7 @@ export class IssuesRepo {
     return cancelled;
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const requestedAssigneeType = input.assigneeType ?? input.assignee_type ?? null;
@@ -2744,7 +2744,10 @@ export class IssuesRepo {
     // MUL-400 E3 gate 1. Every "start this issue" call funnels through here, so
     // this is where an unmet prerequisite stops one: the owner is recorded and
     // the skip is visible, but the status and the task queue stay untouched.
-    const forcedDispatch = input.force === true;
+    // Server-internal only: a request body can never set this (see
+    // AssignIssueOptions), so an override is always paired with the member-only
+    // status write that recorded `dependency_force_started`.
+    const forcedDispatch = options.force === true;
     const unmetDependencies = this.dependenciesBlockDispatch(current, forcedDispatch);
     if (unmetDependencies) {
       this.ctx.db.run(
@@ -2932,7 +2935,13 @@ export class IssuesRepo {
   private recordDependencyDispatchSkipped(
     issue: MultiremiIssue,
     unmet: IssueDependencyUnmetRef[],
-    actor: { actorType?: string; actorId?: string | null; parentTaskId?: string | null },
+    actor: {
+      actorType?: string;
+      actorId?: string | null;
+      parentTaskId?: string | null;
+      /** Set when the skip came from a comment-driven dispatch. */
+      commentId?: string | null;
+    },
   ): void {
     const data = {
       reason: "dependencies_unmet",
@@ -2947,6 +2956,9 @@ export class IssuesRepo {
       assignee_type: issue.assigneeType,
       assigneeId: issue.assigneeId,
       assignee_id: issue.assigneeId,
+      ...(actor.commentId
+        ? { commentId: actor.commentId, comment_id: actor.commentId }
+        : {}),
       ...sourceTaskActivityData(actor.parentTaskId ?? null),
     };
     this.ctx.appendIssueActivity(issue.id, {
@@ -3164,13 +3176,29 @@ export class IssuesRepo {
     if (!issue.assigneeId) return null;
     const agent = this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId);
     if (!agent) return null;
-    const task = this.ctx.tasks().createTask({
-      agentId: agent.id,
-      issueId: issue.id,
-      triggerCommentId: comment.id,
-      workspaceId: issue.workspaceId,
-      prompt: assigneeCommentPrompt(comment),
-    });
+    let task: MultiremiTask;
+    try {
+      task = this.ctx.tasks().createTask({
+        agentId: agent.id,
+        issueId: issue.id,
+        triggerCommentId: comment.id,
+        workspaceId: issue.workspaceId,
+        prompt: assigneeCommentPrompt(comment),
+      });
+    } catch (err) {
+      // MUL-400 E3 gate 3: the comment still lands (it was persisted before the
+      // dispatch), but a waiting issue does not get a first round from it. The
+      // skip is recorded so the author sees that the platform held the round
+      // rather than silently doing nothing.
+      if (!(err instanceof IssueDependencyError)) throw err;
+      this.recordDependencyDispatchSkipped(issue, this.listUnmetPrerequisites(issue.id), {
+        actorType: "system",
+        actorId: null,
+        parentTaskId: null,
+        commentId: comment.id,
+      });
+      return null;
+    }
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
       actorId: null,
@@ -4772,17 +4800,27 @@ export class IssuesRepo {
       const delegationId = leaderDelegation
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
-      const task = this.ctx.tasks().createTask({
-        agentId: agent.id,
-        issueId: issue.id,
-        triggerCommentId: comment.id,
-        workspaceId: issue.workspaceId,
-        prompt: commentMentionPrompt(comment),
-        delegationId,
-        delegatedByAgentId: delegationId ? comment.authorId : null,
-        assignmentAuthorType: comment.authorType,
-        assignmentAuthorId: comment.authorId,
-      });
+      let task: MultiremiTask;
+      try {
+        task = this.ctx.tasks().createTask({
+          agentId: agent.id,
+          issueId: issue.id,
+          triggerCommentId: comment.id,
+          workspaceId: issue.workspaceId,
+          prompt: commentMentionPrompt(comment),
+          delegationId,
+          delegatedByAgentId: delegationId ? comment.authorId : null,
+          assignmentAuthorType: comment.authorType,
+          assignmentAuthorId: comment.authorId,
+        });
+      } catch (err) {
+        // MUL-400 E3 gate 3: the mention is persisted either way; on a waiting
+        // issue the platform records the hold instead of starting a round, and
+        // the mention's own skip activity says so.
+        if (!(err instanceof IssueDependencyError)) throw err;
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "dependencies_unmet");
+        continue;
+      }
       tasks.push(task);
       this.ctx.appendIssueActivity(issue.id, {
         actorType: "system",
@@ -4808,7 +4846,13 @@ export class IssuesRepo {
     comment: MultiremiIssueComment,
     agent: MultiremiAgent | null,
     target: { assigneeType: "agent" | "squad"; assigneeId: string },
-    reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable" | "side_session_delegation_blocked",
+    reason:
+      | "self_mention"
+      | "unsupported_direction"
+      | "unlinked_agent_comment"
+      | "target_unavailable"
+      | "side_session_delegation_blocked"
+      | "dependencies_unmet",
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",

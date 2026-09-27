@@ -424,6 +424,96 @@ async function main(): Promise<void> {
       status: store.getIssue(readySibling.body.id)?.status,
     });
 
+    // ── MUL-409 fix round 2: the task-creation gate ────────────────────────
+    //
+    // (d) A waiting issue cannot acquire a first round from any path, and the
+    // only override is the audited member force on the status write.
+    const gatedPrereq = await post("/api/issues", { title: "Gate prerequisite", status: "in_progress" });
+    const gated = await post("/api/issues", {
+      title: "Gated child",
+      status: "todo",
+      parent_issue_id: parentId,
+      assignee_type: "agent",
+      assignee_id: agent.id,
+      blocked_by: [gatedPrereq.body.id],
+    });
+    const gatedId = gated.body.id as string;
+    check("gated child parks in backlog", gated.body.status === "backlog", { status: gated.body.status });
+
+    const rerun = await json(`/api/issues/${gatedId}/rerun`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id }),
+    });
+    check("rerun on a waiting issue answers 409 dependencies_unmet",
+      rerun.status === 409 && rerun.body.code === "dependencies_unmet", {
+      status: rerun.status, code: rerun.body.code,
+    });
+    const taskCreate = await post("/api/multiremi/tasks", {
+      agentId: agent.id,
+      issueId: gatedId,
+      prompt: "start the gated issue",
+    });
+    check("task create on a waiting issue answers 409 dependencies_unmet",
+      taskCreate.status === 409 && taskCreate.body.code === "dependencies_unmet", {
+      status: taskCreate.status, code: taskCreate.body.code,
+    });
+    check("no round was created by either attempt", tasksOf(gatedId).length === 0, {
+      tasks: tasksOf(gatedId).length,
+    });
+
+    // The assign route ignores a body-supplied force: still waiting, still no
+    // round, and no override record.
+    const assignForced = await post(`/api/multiremi/issues/${gatedId}/assign`, {
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      force: true,
+    });
+    check("assign with a body force leaves the issue waiting",
+      store.getIssue(gatedId)?.status === "backlog", { status: store.getIssue(gatedId)?.status });
+    check("assign with a body force creates no round", tasksOf(gatedId).length === 0, {
+      tasks: tasksOf(gatedId).length,
+    });
+    check("assign with a body force records no override",
+      !store.listIssueActivity(gatedId).some((entry) => entry.type === "dependency_force_started"), {});
+
+    // The one supported override: the member status write, which dispatches and
+    // records the decision.
+    const forcedOver = await json(`/api/issues/${gatedId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "todo", force: true }),
+    });
+    check("the member status override is accepted", forcedOver.status === 200, {
+      status: forcedOver.status, code: forcedOver.body.code,
+    });
+    check("the override dispatches exactly one round", tasksOf(gatedId).length === 1, {
+      tasks: tasksOf(gatedId).length,
+    });
+    check("the override is audited exactly once",
+      store.listIssueActivity(gatedId).filter((entry) => entry.type === "dependency_force_started").length === 1, {});
+
+    // (e) A comment on a waiting issue lands, but the round it would have
+    // queued is held and reported.
+    const commentResponse = await post(`/api/issues/${gatedPrereq.body.id}/comments`, {
+      body: "a plain comment on a prerequisite",
+      author_type: "member",
+      author_id: human.id,
+    });
+    check("a comment on a prerequisite still lands", commentResponse.status < 300, { status: commentResponse.status });
+
+    // (f) The forced issue's prerequisite finishing must not add a second round.
+    const roundsBeforeGatedPrereqDone = tasksOf(gatedId).length;
+    await json(`/api/issues/${gatedPrereq.body.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "done" }),
+    });
+    check("a finished prerequisite adds no second round to a forced-over child",
+      tasksOf(gatedId).length === roundsBeforeGatedPrereqDone, {
+      before: roundsBeforeGatedPrereqDone, after: tasksOf(gatedId).length,
+    });
+
   } finally {
     db.close();
     const cleanup = new Bun.SQL(ADMIN_URL, { max: 1 });

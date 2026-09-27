@@ -2572,6 +2572,107 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       .toBe(`MUL-${nextNumberBefore}`);
   });
 
+  /**
+   * MUL-409 fix round 2, blocking 4: the automatic-start chain must not nest a
+   * transaction on this bridge. `transaction()` is a bare BEGIN/COMMIT with no
+   * savepoint, so a nested BEGIN lets the inner COMMIT end the outer unit and a
+   * later ROLLBACK cannot undo it. S1 moved the E1/E2 hook post-commit; these
+   * three scenarios pin that the S2 dependency logic (auto-start on `done`, the
+   * two-prerequisite case, and the member forced start) now runs at depth 1.
+   */
+  it("keeps the automatic-start chain at one transaction (PG)", () => {
+    const runtime = store.registerRuntime({ id: "rt_dep_depth", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Depth owner", provider: "claude", runtimeId: runtime.id });
+
+    // (a) prerequisite done -> dependent auto-starts
+    const prereq = store.createIssue({ title: "Depth prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+    const dependent = store.createIssue({
+      title: "Depth dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+    const prereqTask = store.createTask({ agentId: owner.id, issueId: prereq.id, prompt: "finish the prerequisite" });
+    let claimed = store.claimTask(runtime.id);
+    while (claimed && claimed.id !== prereqTask.id) claimed = store.claimTask(runtime.id);
+    store.startTask(prereqTask.id);
+    store.completeTask(prereqTask.id, { output: "prerequisite finished" });
+
+    db.resetTransactionDepthStats();
+    store.updateIssue(prereq.id, { status: "done" });
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+
+    // (b) two prerequisites finishing: one dispatch, still depth 1
+    const first = store.createIssue({ title: "Depth first", status: "in_progress" });
+    const second = store.createIssue({ title: "Depth second", status: "in_progress" });
+    const bothWaiting = store.createIssue({
+      title: "Depth both",
+      status: "backlog",
+      blockedBy: [first.id, second.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+    db.resetTransactionDepthStats();
+    store.updateIssue(first.id, { status: "done" });
+    store.updateIssue(second.id, { status: "done" });
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(bothWaiting.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(bothWaiting.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+
+    // (c) member forced start: the override dispatches after its own commit
+    const forcedPrereq = store.createIssue({ title: "Depth forced prerequisite", status: "in_progress" });
+    const forced = store.createIssue({
+      title: "Depth forced",
+      status: "backlog",
+      blockedBy: [forcedPrereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+    db.resetTransactionDepthStats();
+    store.updateIssue(forced.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(forced.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(forced.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
+  });
+
+  /**
+   * MUL-409 fix round 2, blocking 4, failure half: when the dispatch itself
+   * fails the prerequisite's `done` must not roll back, and the dependent must
+   * stay in a state a human can retry from. The hook records
+   * `dependency_auto_start_skipped` so the hold is visible.
+   */
+  it("keeps the prerequisite done and the dependent retryable when auto-start dispatch fails (PG)", () => {
+    const runtime = store.registerRuntime({ id: "rt_dep_fail", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Doomed owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+    // The dependent's owner disappears, so the dispatch the hook attempts will
+    // throw (Agent not found) after the prerequisite's transition committed.
+    db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
+
+    db.resetTransactionDepthStats();
+    store.updateIssue(prereq.id, { status: "done" });
+
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    // Still waiting, so the automatic path can pick it up again once a human
+    // fixes the owner: backlog + unmet prerequisite is the retryable state.
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
+    expect(skipped).toHaveLength(1);
+    expect(String(skipped[0]?.body ?? "")).toContain("Agent not found");
+  });
+
   it("creates a fresh terminal return when comment editing cancels the explicit return first (PG)", () => {
     const fixture = createDelegationFixture();
     store.updateIssueComment(fixture.report.id, { body: "Intermediate report withdrawn." });
