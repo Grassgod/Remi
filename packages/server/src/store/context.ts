@@ -30,6 +30,7 @@ import type {
   ListIssuesInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   MultiremiAgent,
   MultiremiAgentPlugin,
   MultiremiAgentPluginBinding,
@@ -203,11 +204,19 @@ export interface IssuesSurface {
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
+  updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
-  /** MUL-400 E1 guard B: hold a parent at in_progress while children are open. */
-  holdParentStatusForOpenChildren(issueId: string, requested: string): string;
+  /**
+   * MUL-400 E1 guard B: hold a parent at in_progress while children are open.
+   * `exempt` is for transitions the guard deliberately leaves alone (the
+   * human-request `in_review` transient).
+   */
+  holdParentStatusForOpenChildren(
+    issueId: string,
+    requested: string,
+    options?: { exempt?: boolean },
+  ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
   /** MUL-400 E3: page data for the detail surface. */
@@ -403,7 +412,10 @@ export interface TasksSurface {
   hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
   cancelTask(taskId: string): MultiremiTask;
-  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult;
+  cancelTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChange[] | null,
+  ): import("./repos/tasks-repo.js").CancelTaskResult;
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void;
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number;
   listAgentTasks(agentId: string): MultiremiTask[];

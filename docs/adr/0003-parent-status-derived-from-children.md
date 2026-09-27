@@ -58,6 +58,11 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    routes and batch update), and A4 additionally rejects a task identity closing
    any Issue that has children (`parent_done_requires_member`). Workflow:
    attempt without `--force` to see the reason, then repeat with it.
+   The system-only bypass is deliberately NOT a field on `UpdateIssueInput`: it
+   is an `UpdateIssueOptions` argument passed positionally by the store, because
+   the wire layer builds `UpdateIssueInput` straight from the request body, and
+   any field on that shape is client-reachable. A body that sends a bypass-looking
+   key is simply ignored, for members and task identities alike.
 5. **Child endings always notify the parent owner through one hook.**
    `notifyChildStatusChange` is called post-commit by both Issue write paths, so
    `done`, `failed`, `blocked` and `cancelled` all report. Agent and squad owners
@@ -69,9 +74,24 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    owners get the `child_issue_terminal` inbox type, warning for failed/blocked
    and info otherwise. A parent with no assignee keeps its historic comment and
    skip record and now also reaches subscribers.
-6. **The wakeup round carries `preserveIssueStatus`,** which stops
-   `createTaskWithinWorkspaceLock` from parking the parent at `todo` when a
-   member edits a child by hand.
+6. **The merge-completion path respects the child count instead of bypassing it.**
+   The SCM merge effect closes a linked Issue when the merge lands, and a merge
+   that a human authorized is the confirmation guard A exists to obtain — so A1
+   and A4 do not apply and no `issue_status_forced` row is written. But that
+   authorization covers *the merge*, not the closure of a parent whose children
+   are still running, so the effect branches on `open_children`:
+   - **children still open** — the parent's status does not move. The effect
+     records `parent_status_held` (with `requested: "done"`, `source:
+     "scm_merge"`, and the change request's number and url) and marks itself
+     applied. A hold is a settled outcome, not a retry, and it never re-closes
+     the parent later: when the last child finishes, `done` is the human's call
+     under E1. Without this branch, a *child's* PR — which routinely names the
+     parent key in its title, and which auto-link matches by key word boundary —
+     would close a parent with live children the moment that child merged.
+   - **children all finished, or none** — the Issue closes, as before.
+
+   The exemption itself never travels through the wire: it is a server-only
+   argument on `updateIssue`, so no request body can reach it.
 7. **No backfill.** Existing parents are not rewritten in bulk. A parent sitting
    at `in_review` with open children moves the next time a child event fires, and
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`

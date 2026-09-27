@@ -1691,6 +1691,13 @@ export interface CreateTaskInput {
    */
   preserveIssueStatus?: boolean;
   preserve_issue_status?: boolean;
+  /**
+   * Server-internal: exempt this task's Issue transition from guard B.
+   * `createTaskHumanRequest` parks the Issue at `in_review` while its owner waits
+   * for an answer; that transient is deliberately outside the guard.
+   */
+  exemptFromParentStatusGuard?: boolean;
+  exempt_from_parent_status_guard?: boolean;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -2260,6 +2267,26 @@ export interface UpdateIssueInput {
    * either guard on its own.
    */
   force?: boolean;
+}
+
+/**
+ * Server-internal options for {@link UpdateIssueInput} writes. These deliberately
+ * live OUTSIDE the input object: the wire layer builds `UpdateIssueInput` straight
+ * from the request body, so anything on that shape is client-reachable. The SCM
+ * merge effect is the only caller and passes this positionally on the server.
+ */
+export interface UpdateIssueOptions {
+  /**
+   * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
+   * Issue after a merge that already required a human authorization carries the
+   * same decision the guard exists to protect. A parent with unfinished children
+   * is still held — the effect handles that itself, with `parent_status_held`.
+   */
+  allowParentStatusGuardBypass?: boolean;
+  /** Record `parent_status_held` instead of applying the requested status. */
+  holdParentStatus?: boolean;
+  /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
+  holdParentStatusData?: Record<string, unknown> | null;
 }
 
 export interface BatchUpdateIssuesInput {

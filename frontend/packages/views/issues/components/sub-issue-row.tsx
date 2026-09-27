@@ -44,6 +44,8 @@ export function SubIssueRow({ child }: { child: Issue }) {
   // and no risk of the native checkbox / picker triggers being blocked.
   return (
     <div
+      data-perf-item="sub-issue"
+      data-perf-key={child.id}
       className={cn(
         "flex items-center gap-2.5 px-3 py-2 hover:bg-accent/50 transition-colors group/row",
         selected && "bg-accent/30",

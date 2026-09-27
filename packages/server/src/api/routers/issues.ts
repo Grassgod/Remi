@@ -613,9 +613,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (forceDenied) return forceDenied;
     const denied = issueBatchUpdateAccess(c, body) ?? validateBatchWorkspaceBinding(c, body);
     if (denied) return denied;
+    // The batch writer needs the same attribution the PATCH routes stamp, or
+    // guards that branch on `actorType` (A4) silently do not apply.
+    const { actorType, actorId } = issueMutationActor(c);
     return c.json(store.batchUpdateIssues({
       ...body,
-      updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
+      updates: body.updates
+        ? {
+          ...body.updates,
+          actorType,
+          actorId,
+          parentTaskId: currentTaskParentId(c),
+        }
+        : body.updates,
     }));
   });
   app.post("/api/issues/batch-update", async (c) => {
@@ -626,9 +636,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (forceDenied) return forceDenied;
       const denied = issueBatchUpdateAccess(c, input) ?? validateBatchWorkspaceBinding(c, input);
       if (denied) return denied;
+      const { actorType, actorId } = issueMutationActor(c);
       const result = store.batchUpdateIssues({
         ...input,
-        updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
+        updates: input.updates
+          ? {
+            ...input.updates,
+            actorType,
+            actorId,
+            parentTaskId: currentTaskParentId(c),
+          }
+          : input.updates,
       });
       return c.json({ updated: result.updated });
     } catch (err) {

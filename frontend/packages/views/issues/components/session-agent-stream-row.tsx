@@ -62,7 +62,10 @@ export function SessionAgentStreamRow({ issueId, issueSessionId }: { issueId: st
 
   if (rows.length === 0) return null;
   return (
-    <div className="space-y-1 pb-2">
+    // MUL-384 measurement contract: this row is the terminal element for a
+    // `detail-running` round. It only exists while a task row is rendered, so
+    // the probe's "agent-stream else latest-comment" rule needs no extra flag.
+    <div className="space-y-1 pb-2" data-perf-anchor="agent-stream">
       {rows.map((task) => (
         <AgentStreamRow key={task.id} task={task} />
       ))}
