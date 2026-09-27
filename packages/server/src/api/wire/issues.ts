@@ -46,6 +46,9 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    parent_done_grant_at: issue.parentDoneGrantAt,
+    parent_done_grant_by: issue.parentDoneGrantBy,
+    parent_done_grant_agent_id: issue.parentDoneGrantAgentId,
     issue_kind: issue.issueKind,
     source_issue_id: issue.sourceIssueId,
     project_id: issue.projectId,
@@ -256,14 +259,20 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       return c.json({
         error: err.message,
         code: err.code,
+        reason: err.details.reason ?? "grant_missing",
         ...rejectedIssueIds(err),
       }, 403);
     }
     return c.json({
       error: err.message,
       code: err.code,
-      reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
+      reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
       open_children: err.details.openChildren ?? 0,
+      // MUL-400 S1c (QA round 1): same shape as the native route — the guard's
+      // structured detail rides under `data.lastChildClosedAt`.
+      ...(err.details.lastChildClosedAt !== undefined
+        ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
+        : {}),
       ...rejectedIssueIds(err),
     }, 409);
   }
@@ -434,6 +443,7 @@ export function issueDetailCompatibilityResponse(
     ? issue.labels
     : store.listLabelsForExistingIssue(issue.id);
   const response = issueCompatibilityResponse({ ...issue, labels }, { includeLabels: true });
+  response.parent_done_grant = store.issueParentDoneGrantView(issue);
   // `getIssueWithTasks` hangs reactions/attachments off the object; a plain
   // hydrated issue does not, so read them from the store when absent.
   const withExtras = issue as MultiremiIssue & {
