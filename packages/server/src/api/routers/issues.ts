@@ -39,7 +39,10 @@ import {
   cleanString,
   commentCompatibilityResponse,
   currentTaskAccessToken,
+  authenticatedRequestUserId,
+  currentRequestUserId,
   currentAccessToken,
+  currentWorkspaceMember,
   hasRequestField,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
@@ -75,6 +78,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -85,6 +89,8 @@ import type {
   CreateIssueDependencyInput,
   CreateIssueSessionInput,
   CreateIssueWithTaskInput,
+  CreateIssueDecisionInput,
+  IssueDecisionActor,
   CreateMultiremiReactionInput,
   CreateSessionTaskInput,
   ListIssuesInput,
@@ -104,6 +110,20 @@ import {
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type { RouterDeps } from "./deps.js";
+import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+
+function decisionActor(c: Context, store: MultiremiStore, workspaceId: string): IssueDecisionActor | null {
+  const token = currentTaskAccessToken(c);
+  if (token) return token.agentId && token.taskId
+    ? { type: "agent", id: token.agentId, taskId: token.taskId } : null;
+  const member = currentWorkspaceMember(c, store, workspaceId);
+  return member ? { type: "member", id: member.id, taskId: null } : null;
+}
+
+function decisionError(c: Context, error: unknown): Response {
+  if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
+  throw error;
+}
 
 // Check trusted caller lineage before an Issue mutation can cancel existing
 // work, change assignment, or create a new Issue and then dispatch an agent.
@@ -851,7 +871,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({
       // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
       // detail surfaces can show "N sub-issues" without the MUL-385 cost.
-      issue: { ...issue, tasks, child_count: issue.childProgress.total },
+      issue: { ...issue, tasks, child_count: issue.childProgress.total,
+        parent_done_grant: store.issueParentDoneGrantView(issue),
+        pending_decision_count: store.countPendingIssueDecisions(issue.id) },
       children: issue.children,
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
@@ -869,7 +891,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     // `issueFromParam` returns a hydrated issue: its labels are already loaded.
-    return c.json(issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }));
+    return c.json({
+      ...issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }),
+      pending_decision_count: store.countPendingIssueDecisions(issue.id),
+    });
   });
   app.get("/api/issues/:id/workspace", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1062,6 +1087,69 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       total: children.length,
     });
   });
+  app.get("/api/issues/:id/decisions", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    return c.json(store.listIssueDecisions(issue.id));
+  });
+  app.post("/api/issues/:id/decisions", async (c) => {
+    const source = issueFromParam(store, c, "id", "compat");
+    if (!source) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, source.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, source.workspaceId);
+    if (!actor) return c.json({ error: "member or issue task credential required" }, 403);
+    const body = await readJsonStrict<CreateIssueDecisionInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const input: CreateIssueDecisionInput = {
+        kind: body.kind, title: body.title, body: body.body,
+        options: body.options,
+      };
+      return c.json({ decision: store.createIssueDecision(source.id, input, actor) }, 201);
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/answer", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or parent owner task credential required" }, 403);
+    const body = await readJsonStrict<Record<string, unknown>>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ decision: store.answerIssueDecision(issue.id, c.req.param("decisionId"), {
+        answer: String(body.answer ?? body.text ?? ""),
+        reason: String(body.reason ?? ""),
+        overturn: String(body.overturn ?? body.how_to_overturn ?? ""),
+      }, actor) });
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/escalate", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or parent owner task credential required" }, 403);
+    try {
+      return c.json({ decision: store.escalateIssueDecision(issue.id, c.req.param("decisionId"), actor) });
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/withdraw", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or requesting task credential required" }, 403);
+    try {
+      return c.json({ decision: store.withdrawIssueDecision(issue.id, c.req.param("decisionId"), actor) });
+    } catch (error) { return decisionError(c, error); }
+  });
   app.get("/api/multiremi/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -1127,6 +1215,35 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
+  for (const prefix of ["/api/issues/:id", "/api/multiremi/issues/:id"]) {
+    app.post(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can authorize parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      try {
+        const updated = store.grantParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+        return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+      } catch (error) {
+        if (error instanceof ParentDoneGrantOwnerError) return c.json({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    });
+    app.delete(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can revoke parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      const updated = store.revokeParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+      return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+    });
+  }
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);

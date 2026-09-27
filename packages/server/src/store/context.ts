@@ -255,6 +255,40 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
+  /**
+   * MUL-400 S1c (QA round 1): the same write as {@link updateIssue} but owned by
+   * the caller's transaction. The status row, its audit activities and (for the
+   * SCM merge effect) the effect's own bookkeeping commit together; every
+   * outbound event goes on `deferredEvents` and only flushes after COMMIT.
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number };
+  /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
+  runIssueUpdatePostCommit(
+    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    input: UpdateIssueInput,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  hasChildIssues(issueId: string): boolean;
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: import("./repos/issues-repo.js").ParentDoneGrantRefusalReason | null;
+  };
+  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }): {
+    satisfied: boolean;
+    lastChildClosedAt: string | null;
+  };
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /**

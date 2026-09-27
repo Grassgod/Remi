@@ -1,5 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
-import type { StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type StoreContext, type WorkspaceEvent } from "@multiremi/store/context.js";
+import type { ChildStatusChangeCollector } from "./tasks-repo.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/credentials.js";
 import { assertScmRepositoryMatchesConnection } from "@multiremi/scm/repository-url.js";
@@ -1718,7 +1719,6 @@ export class ScmRepo {
       const effectId = String(row.id);
       const issueId = String(row.issue_id);
       try {
-        const current = this.ctx.issues().getIssue(issueId);
         const changeRequestRow = this.ctx.db.query(
           `SELECT cr.id AS change_request_id, cr.number, cr.url, cr.source_branch,
                   cr.title, cr.body, l.source AS link_source
@@ -1728,73 +1728,113 @@ export class ScmRepo {
            WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?`,
         ).get(issueId, event.connectionId, event.repositoryId, event.subjectId) as Row | null;
         if (!changeRequestRow) throw new Error("SCM change request for merge completion could not be found");
-        // MUL-400 E1: a merge authorizes the MERGE, not the parent's closure.
-        // The governing rule is the child count:
-        //
-        // - No children, or every child finished: close the Issue. A1 and A4 do
-        //   not apply — the human-authorized merge is the confirmation.
-        // - A child is still running: the parent's status must NOT move. The
-        //   effect is marked applied (a hold is a settled outcome, not a retry)
-        //   and leaves a `parent_status_held` row naming the change request. It
-        //   never re-closes the parent later; when the last child finishes, `done`
-        //   is the human's call under E1.
-        //
-        // Child PRs routinely carry the parent key in their title (`MUL-400 S1: …`),
-        // and auto-link matches keys by word boundary, so closing on merge alone
-        // would shut a parent that still has running children.
-        const openChildren = this.ctx.issues().countOpenChildIssues(issueId);
-        const holdForOpenChildren = openChildren > 0;
-        const updated = current && current.status !== "done"
-          ? this.ctx.issues().updateIssue(issueId, { status: "done" }, {
-            allowParentStatusGuardBypass: !holdForOpenChildren,
-            holdParentStatus: holdForOpenChildren,
-            holdParentStatusData: holdForOpenChildren
-              ? {
-                source: "scm_merge",
+        // MUL-400 S1c (QA round 1): the parent's status, the grant-used audit,
+        // `scm_merge_completed` and the effect's own `applied` mark are one
+        // transaction. A failure after the grant-used row leaves the parent
+        // untouched and the effect pending, so the next dispatch retries it.
+        const collector: ChildStatusChangeCollector = [];
+        const deferredEvents = createCommitEventQueue();
+        const applied = this.ctx.db.transaction(() => {
+          const current = this.ctx.issues().getIssue(issueId);
+          // A linked parent closes only after children, an effective owner-agent
+          // grant and a final summary. A held effect is settled and not retried.
+          const issues = this.ctx.issues();
+          const hasChildren = issues.hasChildIssues(issueId);
+          const openChildren = hasChildren ? issues.countOpenChildIssues(issueId) : 0;
+          const grant = current && hasChildren ? issues.parentDoneGrantStatus(current) : null;
+          const summary = hasChildren && openChildren === 0 && grant?.effective
+            ? issues.finalSummaryAfterLastChild(issueId, { acceptCommentBy: grant.agentId })
+            : null;
+          const holdReason = openChildren > 0 ? "children_open"
+            : hasChildren && !grant?.effective ? "grant_missing"
+            : hasChildren && !summary?.satisfied ? "final_summary_missing"
+            : null;
+          const result = current && current.status !== "done"
+            ? issues.updateIssueWithinTransaction(issueId, {
+              status: "done",
+              // The merge acts as the authorized owner agent for the grant-use
+              // audit row; without the identity the shared writer has nothing to
+              // attribute and would skip the row entirely.
+              ...(hasChildren && grant?.effective
+                ? { actorType: "agent" as const, actorId: grant.agentId }
+                : {}),
+            }, {
+              allowParentStatusGuardBypass: holdReason == null,
+              holdParentStatus: holdReason != null,
+              holdParentStatusData: holdReason
+                ? {
+                  source: "scm_merge",
+                  reason: holdReason,
+                  grant_reason: grant?.reason ?? null,
+                  changeRequestNumber: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                  change_request_number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                  changeRequestUrl: nullableString(changeRequestRow.url),
+                  change_request_url: nullableString(changeRequestRow.url),
+                }
+                : null,
+              // The status writer owns the `parent_done_grant_used` row so it is
+              // atomic with the status; the merge supplies its own source/id.
+              parentDoneGrantSource: "scm_merge",
+              parentDoneGrantData: {
                 changeRequestNumber: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
-                change_request_number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
                 changeRequestUrl: nullableString(changeRequestRow.url),
-                change_request_url: nullableString(changeRequestRow.url),
-              }
-              : null,
-          })
-          : null;
-        // A held write returns the untouched Issue, so gate the completion
-        // records on the status actually having moved.
-        const closed = updated?.status === "done" ? updated : null;
-        if (closed) {
-          this.ctx.appendIssueActivity(issueId, {
-            actorType: "system",
-            actorId: null,
-            type: "scm_merge_completed",
-            data: {
-              change_request_id: String(changeRequestRow.change_request_id),
-              number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
-              url: nullableString(changeRequestRow.url),
-              source_branch: nullableString(changeRequestRow.source_branch),
-              event_id: event.id,
-              attribution: scmIssueOwnershipAttribution({
-                issueKey: closed.key,
-                linkSource: String(changeRequestRow.link_source ?? ""),
-                title: String(changeRequestRow.title ?? ""),
-                body: nullableString(changeRequestRow.body),
-                sourceBranch: nullableString(changeRequestRow.source_branch),
-              }),
-            },
-          });
-        }
-        this.ctx.db.run(
-          "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
-          [nowIso(), effectId],
-        );
-        if (closed) {
-          this.ctx.emitWorkspaceEvent({
-            type: "issue:updated",
-            workspaceId: closed.workspaceId,
-            actorType: "system",
-            actorId: null,
-            payload: { issue: closed },
-          });
+              },
+            }, collector, deferredEvents)
+            : null;
+          // A held write returns the untouched Issue, so gate the completion
+          // records on the status actually having moved.
+          const closed = result?.issue.status === "done" ? result.issue : null;
+          if (closed) {
+            // The grant-used row is written by `updateIssueWithinTransaction`
+            // itself (source: scm_merge below), so there is no second insert
+            // here. One transition, one audit row.
+            this.ctx.appendIssueActivity(issueId, {
+              actorType: "system",
+              actorId: null,
+              type: "scm_merge_completed",
+              data: {
+                change_request_id: String(changeRequestRow.change_request_id),
+                number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                url: nullableString(changeRequestRow.url),
+                source_branch: nullableString(changeRequestRow.source_branch),
+                event_id: event.id,
+                attribution: scmIssueOwnershipAttribution({
+                  issueKey: closed.key,
+                  linkSource: String(changeRequestRow.link_source ?? ""),
+                  title: String(changeRequestRow.title ?? ""),
+                  body: nullableString(changeRequestRow.body),
+                  sourceBranch: nullableString(changeRequestRow.source_branch),
+                }),
+              },
+            }, deferredEvents);
+          }
+          const marked = this.ctx.db.run(
+            "UPDATE multiremi_scm_effects SET status = 'applied', applied_at = ?, last_error = NULL WHERE id = ? AND status = 'pending'",
+            [nowIso(), effectId],
+          );
+          if (marked.changes === 0) throw new Error(`SCM effect ${effectId} was already settled`);
+          if (closed) {
+            deferredEvents.workspace.push({
+              type: "issue:updated",
+              workspaceId: closed.workspaceId,
+              actorType: "system",
+              actorId: null,
+              payload: { issue: closed },
+            } satisfies WorkspaceEvent);
+          }
+          return { result, closed };
+        })();
+        // The write is durable; only now does the hook run. It owns the single
+        // flush of `deferredEvents`, so nothing is published twice.
+        if (applied.result) {
+          this.ctx.issues().runIssueUpdatePostCommit(
+            applied.result,
+            { status: "done" },
+            collector,
+            deferredEvents,
+          );
+        } else {
+          this.ctx.emitCommitEvents(deferredEvents);
         }
       } catch (error) {
         this.ctx.db.run(
