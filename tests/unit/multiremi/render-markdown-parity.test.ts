@@ -143,21 +143,47 @@ describe("renderMarkdown parity with frontend Markdown.tsx (MUL-439)", () => {
     }
   });
 
-  test("RENDER_PIPELINE_INPUTS matches the installed versions that shape output", async () => {
-    // A dependency bump that changes highlighting or math output has to move
-    // RENDER_VERSION, or the backfill task would leave stale body_html rows in
-    // place. Reading the installed manifests turns that into a test failure
-    // instead of a silently stale cache.
-    for (const pkg of ["shiki", "katex", "rehype-katex", "remark-parse", "rehype-sanitize"]) {
+  test("every RENDER_PIPELINE_INPUTS entry matches the installed version", async () => {
+    // `RENDER_VERSION` is what tells the backfill task which `body_html` rows
+    // are stale, and it is computed from this list. The list is hand-written,
+    // so any entry that drifts from what is actually installed would let a
+    // rendering change ship without invalidating anything.
+    //
+    // This checks **every** entry, not a subset: an earlier version of this
+    // test only covered five of the eleven, which left a dependency bump in
+    // `remark-rehype` or `rehype-stringify` able to change output silently
+    // (review note in MUL-439 `cmt_w08j1ocyurc6`).
+    const entries = Object.entries(RENDER_PIPELINE_INPUTS);
+    expect(entries.length, "the pipeline list should not be empty").toBeGreaterThan(0);
+
+    for (const [pkg, expected] of entries) {
       const manifestPath = import.meta.resolve(`${pkg}/package.json`);
       const manifest = JSON.parse(
         await Bun.file(new URL(manifestPath)).text(),
       ) as { version: string };
       expect(
         manifest.version,
-        `${pkg} differs from RENDER_PIPELINE_INPUTS; update the version list and RENDER_PIPELINE_REVISION`,
-      ).toBe((RENDER_PIPELINE_INPUTS as Record<string, string>)[pkg]);
+        `${pkg}: installed ${manifest.version}, but RENDER_PIPELINE_INPUTS says ${expected} — update the list and RENDER_PIPELINE_REVISION so stale body_html rows are re-rendered`,
+      ).toBe(expected);
     }
+  });
+
+  test("RENDER_VERSION is derived from the pipeline list and revision", async () => {
+    // A second, independent check: the hash has to move when an input moves.
+    // Without this, a list that is correct but not wired into the hash would
+    // still leave stale rows. The computation is repeated here from the same
+    // inputs rather than importing the internal helper, so the two would have
+    // to diverge in the same way to pass.
+    const { createHash } = await import("node:crypto");
+    const { RENDER_PIPELINE_REVISION } = await import("@multiremi/render/render-version.js");
+    const input = [
+      `pipeline:${RENDER_PIPELINE_REVISION}`,
+      ...Object.entries(RENDER_PIPELINE_INPUTS)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([name, version]) => `${name}@${version}`),
+    ].join("\n");
+    const expected = `md-${createHash("sha256").update(input).digest("hex").slice(0, 16)}`;
+    expect(RENDER_VERSION).toBe(expected);
   });
 
   test("a fenced block is byte-identical to what the browser's CodeBlock would inject", async () => {

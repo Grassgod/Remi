@@ -26,8 +26,12 @@ export const RENDER_PIPELINE_REVISION = 1;
  * read from the packages at runtime so the hash does not depend on resolution
  * order, but a mismatch is not silent: `render-markdown-backfill` renders with
  * whatever is installed, so an upgrade that is not reflected here would leave
- * stale `body_html` behind. The parity test pins this list against
- * `node_modules` for the four that decide highlighting output.
+ * stale `body_html` behind.
+ *
+ * Every entry is checked against the installed manifest by
+ * `render-markdown-parity.test.ts`, and that test also recomputes the hash from
+ * this list — so adding a dependency means updating both this list and
+ * {@link RENDER_PIPELINE_REVISION}, and neither can drift unnoticed.
  */
 export const RENDER_PIPELINE_INPUTS = {
   shiki: "3.23.0",

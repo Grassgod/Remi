@@ -21,12 +21,14 @@ import {
   ReadPoolSaturatedError,
   ReadPoolSideEffectError,
   ReadPoolTimeoutError,
-  findForbiddenFunction,
+  findDisallowedFunction,
+  READ_FUNCTION_WHITELIST,
   READ_POOL_QUEUE_LIMIT,
   SqliteReadPool,
   type ReadPool,
 } from "@multiremi/store/db/read-pool.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-calls.js";
 
 // The fallback is a local, throwaway placeholder — never a real credential. It
 // only decides whether the Postgres block is skipped when the environment does
@@ -34,6 +36,18 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 const PG_ADMIN_URL =
   process.env.MULTIREMI_TEST_POSTGRES_URL ?? "postgres://multiremi:local-only@localhost:5432/postgres";
 const TEST_DB = `multiremi_mul439_read_pool_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+
+/**
+ * A read that takes longer than the pool's deadlines, built only from
+ * whitelisted functions.
+ *
+ * The timing cases used `pg_sleep`, which the whitelist now (correctly) refuses
+ * before the statement is sent — so it would have tested the gate instead of
+ * the deadline. Counting a large series is ordinary read work: the planner
+ * cannot shortcut it, it touches no table, and it is exactly the shape of query
+ * the pool's timeout exists for.
+ */
+const SLOW_READ = "SELECT count(*) FROM generate_series(1, 100000000) AS g";
 
 /**
  * Where the test database is, in a form that is safe to log.
@@ -133,6 +147,226 @@ describe("read pool: the SELECT gate", () => {
     await expect(sqlite.query("DELETE FROM multiremi_tasks")).rejects.toBeInstanceOf(
       ReadPoolNotSelectError,
     );
+  });
+});
+
+describe("read pool: the function gate is a whitelist, not a denylist", () => {
+  /**
+   * QA's second-round counterexamples (`cmt_w08j1ocyurc6`). The previous gate
+   * matched a regex over raw text, so PostgreSQL's quoted spelling of a
+   * function name went straight through. Each case here is the exact statement
+   * that was reproduced against the pooled connection.
+   */
+  it("refuses every quoted spelling of a side-effecting function", () => {
+    for (const sql of [
+      `SELECT "set_config"('default_transaction_read_only','off',false)`,
+      `SELECT pg_catalog."set_config"('statement_timeout','0',false)`,
+      `SELECT "pg_advisory_lock"(439)`,
+      `SELECT "pg_notify"('channel','payload')`,
+      `SELECT "pg_terminate_backend"(1)`,
+      `SELECT "lo_export"(0,'/tmp/x')`,
+      `SELECT "pg_read_file"('/etc/hostname')`,
+      `SELECT "dblink_exec"('conn','SELECT 1')`,
+    ]) {
+      expect(findDisallowedFunction(sql), sql).not.toBeNull();
+    }
+  });
+
+  it("refuses a quoted identifier even when the name is whitelisted", () => {
+    // `"COUNT"(*)` is a *user* function, not the aggregate: PostgreSQL treats a
+    // quoted name as distinct from the unquoted one. Accepting quoted spellings
+    // at all is what made the previous gates bypassable, so none are accepted.
+    expect(findDisallowedFunction(`SELECT "COUNT"(*) FROM t`)).toContain("quoted identifier");
+    expect(findDisallowedFunction(`SELECT "set_config"('a','b',false)`)).toContain(
+      "quoted identifier",
+    );
+    // The unquoted form of a whitelisted name is fine.
+    expect(findDisallowedFunction(`SELECT count(*) FROM t`)).toBeNull();
+  });
+
+  it("refuses U& escaped identifiers without trying to decode them", () => {
+    // `U&"\0070g_notify"` is `pg_notify`; the scanner does not decode escapes,
+    // so it refuses the spelling outright.
+    expect(findDisallowedFunction(`SELECT U&"\\0070g_notify"('c','p')`)).toContain("U& escaped");
+  });
+
+  it("refuses a schema qualifier other than pg_catalog", () => {
+    expect(findDisallowedFunction(`SELECT public.now()`)).toContain("non-pg_catalog schema");
+    expect(findDisallowedFunction(`SELECT "PG_CATALOG".set_config('a','b',false)`)).toContain(
+      "non-pg_catalog schema",
+    );
+    // The real `pg_catalog` qualifier is accepted for a whitelisted name.
+    expect(findDisallowedFunction(`SELECT pg_catalog.current_setting('x')`)).toBeNull();
+  });
+
+  it("refuses a user-defined function", () => {
+    // The whitelist is a closed list, so anything a migration creates is
+    // refused by default rather than by being enumerated as forbidden.
+    expect(findDisallowedFunction(`SELECT qa_write_row()`)).toBe("qa_write_row");
+    expect(findDisallowedFunction(`SELECT "qa_write_row"()`)).toContain("quoted identifier");
+  });
+
+  it("refuses a statement it cannot tokenise, rather than passing it through", () => {
+    // Misreading must fail closed: the pool treats an unparsable statement the
+    // same as a disallowed call.
+    expect(findDisallowedFunction(`SELECT 'unterminated`)).toContain("unscannable statement");
+    expect(findDisallowedFunction(`SELECT /* unterminated`)).toContain("unscannable statement");
+    expect(findDisallowedFunction(`SELECT $tag$ unterminated`)).toContain("unscannable statement");
+  });
+
+  it("allows the call shapes the store actually issues", () => {
+    // Taken from the real statements in packages/server/src (see the corpus
+    // sweep in the PR description): these must not be refused, or the pool
+    // would break the queries it exists to serve.
+    for (const sql of [
+      `SELECT count(*) FROM t`,
+      `SELECT COALESCE(MAX(seq), 0) AS seq FROM t`,
+      `SELECT (json_agg(usage) FILTER (WHERE status NOT IN ('a')))::text AS x FROM t`,
+      `SELECT md5(string_agg(id || ':' || xmin::text, ',' ORDER BY id COLLATE "C")) FROM t`,
+      `SELECT id, ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY created_at DESC) FROM t`,
+      `SELECT lower(email) FROM multiremi_users WHERE lower(email) = $1`,
+      `SELECT SUBSTR(body, 1, 240) FROM t`,
+      `SELECT * FROM t WHERE status IN ('queued','running')`,
+      `SELECT 1 WHERE EXISTS (SELECT 1 FROM t)`,
+      `SELECT CAST(x AS int) FROM t`,
+      `SELECT x::numeric(10,2) FROM t`,
+      `WITH recent AS (SELECT 1 AS a) SELECT a FROM recent ORDER BY a LIMIT 10`,
+      `SELECT * FROM t ORDER BY name COLLATE "C"`,
+      `SELECT now() AS ts`,
+      `SELECT unnest(ARRAY[1,2])`,
+      `SELECT generate_series FROM generate_series(1,10)`,
+      `SELECT * FROM t WHERE a = (SELECT 1)`,
+    ]) {
+      expect(findDisallowedFunction(sql), sql).toBeNull();
+    }
+  });
+
+  it("does not mistake text or comments for a call", () => {
+    for (const sql of [
+      `SELECT 'pg_notify(' AS s`,
+      `SELECT 'it''s pg_notify(' AS s`,
+      `SELECT E'\\'pg_notify(' AS s`,
+      `SELECT $x$ pg_notify( $x$ AS s`,
+      `SELECT $$ pg_notify( $$ AS s`,
+      `SELECT /* pg_notify( */ 1`,
+      `SELECT 1 -- pg_notify(`,
+      `SELECT * FROM t WHERE note LIKE '%set_config(%'`,
+    ]) {
+      expect(findDisallowedFunction(sql), sql).toBeNull();
+    }
+  });
+
+  it("finds a call however it is written, including behind comments", () => {
+    for (const sql of [
+      `SELECT pg_notify('c','p')`,
+      `SELECT Pg_Notify('c','p')`,
+      `SELECT pg_catalog.pg_notify('c','p')`,
+      `SELECT /*x*/ pg_notify('c','p')`,
+      `SELECT (pg_notify('c','p'))`,
+      `WITH x AS (SELECT pg_notify('c','p')) SELECT * FROM x`,
+      `SELECT * FROM t WHERE a = (SELECT pg_advisory_lock(1))`,
+    ]) {
+      expect(findDisallowedFunction(sql), sql).not.toBeNull();
+    }
+  });
+
+  it("scans the quote, comment and escape branches of the lexer", () => {
+    // Direct coverage of `scanSqlFunctionCalls`, which is what makes the gate
+    // resistant to spellings a regex cannot distinguish. The PG-backed suite
+    // below proves the same statements are refused at the pool; these assertions
+    // are the ones that run without a database.
+    const names = (sql: string): string[] =>
+      scanSqlFunctionCalls(sql).map((call) => (call.schema ? `${call.schema}.` : "") + call.name);
+
+    // Single quotes, including the doubled escape, hide a call.
+    expect(names(`SELECT 'a''b pg_notify(' AS s`)).toEqual([]);
+    // `E'…'` honours backslash escapes, so `'` does not close the string.
+    expect(names(`SELECT E'a\\'pg_notify(' AS s`)).toEqual([]);
+    // Dollar quotes, with a tag and with an empty tag.
+    expect(names(`SELECT $tag$ pg_notify( $tag$ AS s`)).toEqual([]);
+    expect(names(`SELECT $$ pg_notify( $$ AS s`)).toEqual([]);
+    // Nested block comments are consumed to their matching close.
+    expect(names(`SELECT /* a /* pg_notify( */ b */ 1`)).toEqual([]);
+    // A quoted identifier is reported with its case preserved.
+    expect(names(`SELECT "pg_Notify"('c','p')`)).toEqual(["pg_Notify"]);
+    // A doubled quote inside a quoted identifier is an escape, not a close.
+    expect(names(`SELECT "a""b"()`)).toEqual(["a\"b"]);
+    // `::type(...)` is a cast's precision, not a call.
+    expect(names(`SELECT x::numeric(10,2) FROM t`)).toEqual([]);
+    // Keywords that take parentheses are not calls.
+    for (const kw of ["IN", "EXISTS", "CAST", "OVER", "FILTER", "WITHIN", "ANY", "ALL"]) {
+      expect(names(`SELECT 1 WHERE x ${kw} (1)`), kw).toEqual([]);
+    }
+    // An operator between an identifier and `(` means the two are unrelated.
+    expect(names(`SELECT a = (SELECT 1)`)).toEqual([]);
+    // A dollar placeholder is not a quote and does not swallow the statement.
+    expect(names(`SELECT $1::text, lower($2) AS x`)).toEqual(["lower"]);
+  });
+
+  it("classifier and gate share one view of literals and comments", () => {
+    // The two deciders must not disagree about what a string or a comment is,
+    // or a statement could be a read to one and a write to the other. A keyword
+    // hidden inside a literal is the case that separates a shared lexer from
+    // two independent regexes.
+    expect(maskSqlLiterals("SELECT 'DELETE FROM t' AS s")).not.toContain("DELETE");
+    expect(maskSqlLiterals("SELECT /* DELETE */ 1")).not.toContain("DELETE");
+    expect(maskSqlLiterals("SELECT 1 -- DELETE")).not.toContain("DELETE");
+    expect(maskSqlLiterals("SELECT $q$ DELETE $q$ AS s")).not.toContain("DELETE");
+    // The code itself is untouched, so the classifier can still find `SELECT`.
+    expect(maskSqlLiterals("SELECT 1 AS a")).toBe("SELECT 1 AS a");
+    expect(maskSqlLiterals("SELECT/*x*/1")).toMatch(/^SELECT\s+1$/u);
+
+    for (const [sql, isRead] of [
+      ["SELECT 'DELETE FROM t' AS s", true],
+      ["SELECT /* DELETE */ 1", true],
+      ["SELECT 1 -- DELETE", true],
+      ["SELECT $q$ DELETE $q$ AS s", true],
+      ["DELETE FROM t", false],
+      ["SELECT 1; DELETE FROM t", false],
+      ["WITH x AS (DELETE FROM t RETURNING 1) SELECT * FROM x", false],
+      ["SELECT 1 INTO new_t", false],
+    ] as Array<[string, boolean]>) {
+      expect(isReadOnlySelect(sql), `${JSON.stringify(sql)} classified wrong`).toBe(isRead);
+      // And the gate must also not be fooled into refusing a read because of a
+      // literal's contents.
+      if (isRead) expect(findDisallowedFunction(sql), `${sql} refused by the gate`).toBeNull();
+    }
+  });
+
+  it("keeps the whitelist free of the functions the previous gates missed", () => {
+    // A guard on the list itself: if any of these were ever added, the pool
+    // would be back to allowing a known side effect.
+    for (const name of [
+      "set_config",
+      "pg_notify",
+      "pg_advisory_lock",
+      "pg_advisory_xact_lock",
+      "pg_advisory_unlock",
+      "pg_advisory_unlock_all",
+      "pg_try_advisory_lock",
+      "pg_terminate_backend",
+      "pg_cancel_backend",
+      "nextval",
+      "setval",
+      "lo_create",
+      "lo_export",
+      "lo_import",
+      "lo_unlink",
+      "lo_open",
+      "lowrite",
+      "pg_read_file",
+      "pg_read_binary_file",
+      "pg_ls_dir",
+      "pg_stat_file",
+      "dblink",
+      "dblink_exec",
+      "dblink_connect",
+    ]) {
+      expect(READ_FUNCTION_WHITELIST.has(name), `${name} must not be whitelisted`).toBe(false);
+    }
+    // And it is not empty in a way that would pass the check above vacuously.
+    expect(READ_FUNCTION_WHITELIST.has("count")).toBe(true);
+    expect(READ_FUNCTION_WHITELIST.size).toBeGreaterThan(100);
   });
 });
 
@@ -309,10 +543,13 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
     pool = makePool();
     const started = performance.now();
     await expect(
-      pool.query("SELECT pg_sleep(5)", [], { timeoutMs: 300 }),
+      pool.query(SLOW_READ, [], { timeoutMs: 300 }),
     ).rejects.toBeInstanceOf(ReadPoolTimeoutError);
     const elapsed = performance.now() - started;
-    // The abort has to fire near its own deadline, not after pg_sleep returns.
+    // The abort has to fire near its own deadline, not after the query would
+    // have finished. The slow read is `generate_series`, which is whitelisted
+    // and purely computational — using `pg_sleep` here would now be refused by
+    // the gate before it ever reached the server, testing the wrong layer.
     expect(elapsed).toBeLessThan(3_000);
     await pool.close();
   });
@@ -322,7 +559,7 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
     // server-side error is the one that surfaces for a real slow query.
     pool = makePool();
     const started = performance.now();
-    await expect(pool.query("SELECT pg_sleep(10)")).rejects.toThrow(/statement timeout|timed out/u);
+    await expect(pool.query(SLOW_READ)).rejects.toThrow(/statement timeout|timed out/u);
     expect(performance.now() - started).toBeLessThan(6_000);
     await pool.close();
   });
@@ -332,7 +569,7 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
     // Occupy all four connections with statements that outlive the test's
     // setup, then fill the queue to its limit.
     const occupiers = Array.from({ length: 4 }, () =>
-      pool.query("SELECT pg_sleep(3)", [], { timeoutMs: 10_000 }).catch(() => null),
+      pool.query(SLOW_READ, [], { timeoutMs: 10_000 }).catch(() => null),
     );
     // Let the four acquire their slots before the queue is measured.
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -364,7 +601,9 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
     // Below `statement_timeout` on purpose: this checks the pool releases its
     // slot, not that the timeout fires (the case above covers that).
     pool = makePool();
-    await expect(pool.query("SELECT pg_sleep(0.4)", [], { timeoutMs: 10_000 })).resolves.toBeDefined();
+    await expect(
+      pool.query("SELECT count(*)::int AS n FROM generate_series(1, 200000)")
+    ).resolves.toBeDefined();
     await expect(pool.query("SELECT 1 AS ok")).resolves.toEqual([{ ok: 1 }]);
     expect(pool.active).toBe(0);
     expect(pool.queued).toBe(0);
@@ -373,7 +612,7 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
 
   it("keeps running the queue after a queued caller times out", async () => {
     pool = makePool();
-    const blocker = pool.query("SELECT pg_sleep(1)", [], { timeoutMs: 10_000 }).catch(() => null);
+    const blocker = pool.query(SLOW_READ, [], { timeoutMs: 10_000 }).catch(() => null);
     await waitFor(() => pool.active === 1, 2_000);
     // Queue behind the blocker with a deadline that expires while waiting.
     const impatient = pool.query("SELECT 1", [], { timeoutMs: 100 }).catch((error) => error);
@@ -472,23 +711,38 @@ describe.skipIf(!pgAvailable)("read pool: session state cannot be disarmed", () 
     const driver = rawDriver(pool);
     await driver.unsafe("SELECT set_config('statement_timeout','0',false)");
     const started = performance.now();
-    await expect(pool.query("SELECT pg_sleep(5)")).rejects.toThrow(/statement timeout/u);
+    await expect(pool.query(SLOW_READ)).rejects.toThrow(/statement timeout/u);
     const elapsed = performance.now() - started;
-    expect(elapsed, `pg_sleep ran for ${Math.round(elapsed)}ms`).toBeLessThan(4_000);
+    expect(elapsed, `the slow read ran for ${Math.round(elapsed)}ms`).toBeLessThan(4_000);
     // The transaction scoping means the pool's next read is bounded again.
-    await expect(pool.query("SELECT pg_sleep(5)")).rejects.toThrow(/statement timeout/u);
+    await expect(pool.query(SLOW_READ)).rejects.toThrow(/statement timeout/u);
     await pool.close();
   }, 30_000);
 
   it("keeps a write out even when the session default is disarmed underneath it", async () => {
-    // The exact escalation QA demonstrated: disarm the session, then call a
-    // write function through `SELECT`. The transaction's own mode is what
-    // blocks it, so the disarmed session value makes no difference.
+    // QA's escalation: disarm the session, then call a write function through
+    // `SELECT`. Two layers have to hold, and this test exercises both.
     pool = makePool(url);
     const before = await writeProbeRows();
-    await rawDriver(pool).unsafe("SELECT set_config('default_transaction_read_only','off',false)");
+    const driver = rawDriver(pool);
+    await driver.unsafe("SELECT set_config('default_transaction_read_only','off',false)");
 
-    await expect(pool.query("SELECT mul439_write_row()")).rejects.toThrow(/read-only transaction/u);
+    // Layer 2: the whitelist refuses the name before the statement is sent.
+    await expect(pool.query("SELECT mul439_write_row()")).rejects.toBeInstanceOf(
+      ReadPoolSideEffectError,
+    );
+
+    // Layer 1: with the gate bypassed, the read-only transaction is what stops
+    // it — which is the part this test is really about. The call is issued the
+    // same way `execute()` issues one, so this proves the transaction alone is
+    // sufficient for a write.
+    await expect(
+      driver.begin("read only", async (tx: Bun.SQL) => {
+        await tx.unsafe("SET LOCAL statement_timeout = 2000");
+        return tx.unsafe("SELECT mul439_write_row()");
+      }),
+    ).rejects.toThrow(/read-only transaction/u);
+
     // Fail-closed: no row, and nothing left over for a retry to double up.
     expect(await writeProbeRows()).toBe(before);
 
@@ -608,6 +862,249 @@ describe.skipIf(!pgAvailable)("read pool: session state cannot be disarmed", () 
     const shown = await pool.query("SELECT current_setting('statement_timeout') AS v");
     // Postgres normalises 2000 to `2s`.
     expect(["2000", "2000ms", "2s"]).toContain(shown[0].v as string);
+    await pool.close();
+  });
+});
+
+/**
+ * The quoted-identifier bypasses from the second review (`cmt_w08j1ocyurc6`).
+ *
+ * Each one was reproduced against the pooled connection with a real server, so
+ * each one is reproduced here. The previous gate matched a regex over the raw
+ * statement text and could not tell `"set_config"(` from `set_config(`; the
+ * white list resolves both to the same name and refuses it.
+ *
+ * Every case also asserts there is no residue afterwards. Refusing the call is
+ * necessary but not sufficient: the pool must not have let a lock be taken, a
+ * notification be delivered, another backend be killed, or the session's own
+ * GUCs be changed on the way in.
+ */
+describe.skipIf(!pgAvailable)("read pool: quoted and escaped calls cannot bypass the gate", () => {
+  let pool: PostgresReadPool;
+  let url = "";
+  let inspect: Bun.SQL;
+  const WRITE_TABLE = "round3_write_probe";
+
+  /** The raw driver behind the pool, for out-of-band inspection. */
+  function rawDriver(target: PostgresReadPool): Bun.SQL {
+    return (target as unknown as { sql: Bun.SQL }).sql;
+  }
+
+  function makePool(target: string = url): PostgresReadPool {
+    return new PostgresReadPool(target);
+  }
+
+  beforeAll(async () => {
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_q WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${TEST_DB}_q`);
+    await admin.end();
+    const parsed = new URL(PG_ADMIN_URL);
+    parsed.pathname = `/${TEST_DB}_q`;
+    url = parsed.toString();
+
+    inspect = new Bun.SQL(url, { max: 1 });
+    await inspect.unsafe(`CREATE TABLE ${WRITE_TABLE} (id int)`);
+    // The user-defined write function QA wrote: only reachable through a
+    // `SELECT`, so nothing but the whitelist can tell it from a pure call.
+    await inspect.unsafe(`
+      CREATE OR REPLACE FUNCTION qa_write_row() RETURNS int LANGUAGE sql AS $$
+        INSERT INTO ${WRITE_TABLE} VALUES (1); SELECT 1;
+      $$`);
+    await inspect.unsafe("CREATE SEQUENCE IF NOT EXISTS qa_round3_seq");
+  });
+
+  afterAll(async () => {
+    await inspect?.end();
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_q WITH (FORCE)`);
+    await admin.end();
+  });
+
+  async function writeRows(): Promise<number> {
+    return (await inspect.unsafe(`SELECT count(*)::int AS n FROM ${WRITE_TABLE}`))[0].n as number;
+  }
+
+  /** Advisory locks held in this test database. */
+  async function advisoryLocks(): Promise<number> {
+    return (
+      await inspect.unsafe(
+        "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+      )
+    )[0].n as number;
+  }
+
+  /**
+   * The session's own settings, read on the pool's first connection.
+   *
+   * QA's escalation changed these through `"set_config"` and left the pooled
+   * session read-write. Reading them back is what makes "no residue" concrete.
+   */
+  async function sessionSettings(): Promise<{ readOnly: string; timeout: string }> {
+    const driver = rawDriver(pool);
+    await driver.unsafe("SELECT 1");
+    const row = (
+      await driver.unsafe(
+        "SELECT current_setting('default_transaction_read_only') AS dro, current_setting('statement_timeout') AS st",
+      )
+    )[0] as { dro: string; st: string };
+    return { readOnly: row.dro, timeout: row.st };
+  }
+
+  /** Assert the statement is refused and that nothing observable changed. */
+  async function expectRefusedWithNoResidue(sql: string, label: string): Promise<void> {
+    const rowsBefore = await writeRows();
+    const locksBefore = await advisoryLocks();
+
+    const error = await pool.query(sql).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error, `${label}: ${sql}`).toBeInstanceOf(ReadPoolSideEffectError);
+    expect((error as ReadPoolSideEffectError).code).toBe("read_pool_side_effect");
+
+    expect(await writeRows(), `${label}: a row was written`).toBe(rowsBefore);
+    expect(await advisoryLocks(), `${label}: an advisory lock was left behind`).toBe(locksBefore);
+
+    const settings = await sessionSettings();
+    expect(settings.readOnly, `${label}: session default was disarmed`).toBe("on");
+    expect(["2000", "2000ms", "2s"], `${label}: session timeout changed`).toContain(
+      settings.timeout,
+    );
+  }
+
+  it("refuses the quoted spellings QA used, with no residue", async () => {
+    pool = makePool(url);
+    const cases: Array<[string, string]> = [
+      ["quoted set_config", `SELECT "set_config"('default_transaction_read_only','off',false)`],
+      ["pg_catalog quoted set_config", `SELECT pg_catalog."set_config"('statement_timeout','0',false)`],
+      ["quoted advisory lock", `SELECT "pg_advisory_lock"(439101)`],
+      ["plain advisory unlock", `SELECT pg_advisory_unlock(439102)`],
+      ["quoted pg_notify", `SELECT "pg_notify"('round3_channel','payload')`],
+      ["quoted terminate_backend", `SELECT "pg_terminate_backend"(1)`],
+      ["quoted lo_export", `SELECT "lo_export"(0,'/tmp/round3_lo_export')`],
+      ["quoted pg_read_file", `SELECT "pg_read_file"('/etc/hostname')`],
+      ["user function", `SELECT qa_write_row()`],
+      ["quoted user function", `SELECT "qa_write_row"()`],
+      ["quoted dblink_exec", `SELECT "dblink_exec"('dbname=postgres','SELECT 1')`],
+    ];
+    for (const [label, sql] of cases) await expectRefusedWithNoResidue(sql, label);
+    await pool.close();
+  });
+
+  it("refuses the U& escaped spelling of pg_notify, with no residue", async () => {
+    pool = makePool(url);
+    // `00 70` is `p`, so the decoded name is `pg_notify`. The scanner does not
+    // decode escapes and refuses the spelling outright.
+    const escaped = `U&"` + "\\0070" + `g_notify"`;
+    await expectRefusedWithNoResidue(`SELECT ${escaped}('c','p')`, "U& escaped");
+    await pool.close();
+  });
+
+  it("leaves the session read-only even when the disarming statement is refused", async () => {
+    // The escalation QA demonstrated was not the write itself but the polluted
+    // session: after `"set_config"(…,'off',…)` the connection stayed read-write
+    // for every later statement on it. Read the settings back after each of the
+    // four connections has been used, not just the first.
+    pool = makePool(url);
+    for (let i = 0; i < 8; i++) {
+      await pool.query(`SELECT "set_config"('default_transaction_read_only','off',false)`).catch(
+        () => null,
+      );
+      await pool.query(`SELECT pg_catalog."set_config"('statement_timeout','0',false)`).catch(
+        () => null,
+      );
+    }
+    // Every pooled connection must still be read-only and still bounded.
+    const seen = new Set<string>();
+    for (let i = 0; i < 8; i++) {
+      const row = (
+        await rawDriver(pool).unsafe(
+          "SELECT pg_backend_pid() AS pid, current_setting('default_transaction_read_only') AS dro, current_setting('statement_timeout') AS st",
+        )
+      )[0] as { pid: number; dro: string; st: string };
+      seen.add(String(row.pid));
+      expect(row.dro, `pid ${row.pid} was left read-write`).toBe("on");
+      expect(["2000", "2000ms", "2s"], `pid ${row.pid} lost its timeout`).toContain(row.st);
+    }
+    // And a write function is still blocked on those connections.
+    await expect(pool.query(`SELECT qa_write_row()`)).rejects.toBeInstanceOf(ReadPoolSideEffectError);
+    expect(await writeRows()).toBe(0);
+    await pool.close();
+  });
+
+  it("still serves the ordinary reads the pool exists for", async () => {
+    pool = makePool(url);
+    await expect(pool.query("SELECT 42 AS answer")).resolves.toEqual([{ answer: 42 }]);
+    await expect(
+      pool.query(`SELECT count(*)::int AS n FROM ${WRITE_TABLE}`),
+    ).resolves.toEqual([{ n: 0 }]);
+    await expect(
+      pool.query(`SELECT COALESCE(MAX(id), 0)::int AS m FROM ${WRITE_TABLE}`),
+    ).resolves.toEqual([{ m: 0 }]);
+    await expect(
+      pool.query(`SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM ${WRITE_TABLE}`),
+    ).resolves.toEqual([]);
+    await expect(pool.query("SELECT x::numeric(10,2) AS v FROM (SELECT 1.5 AS x) AS t")).resolves.toEqual([
+      { v: "1.50" },
+    ]);
+    await expect(pool.query("SELECT 'pg_notify(' AS s")).resolves.toEqual([{ s: "pg_notify(" }]);
+    await pool.close();
+  });
+
+  it("refuses dblink by name even when the extension is not installed", async () => {
+    // The call never reaches the server, so the extension's presence is
+    // irrelevant to the gate. The conditional install below is what proves the
+    // cross-connection write itself is blocked when it *is* present.
+    pool = makePool(url);
+    await expect(pool.query(`SELECT "dblink_exec"('x','y')`)).rejects.toBeInstanceOf(
+      ReadPoolSideEffectError,
+    );
+    await pool.close();
+  });
+
+  it("blocks the dblink cross-connection write when the extension is installed", async () => {
+    // QA's last case: `"dblink_exec"` ran an INSERT on a *different* connection,
+    // where this transaction's read-only mode does not apply. Skipped with a
+    // note when the server has no dblink available.
+    const available = await inspect.unsafe(
+      "SELECT count(*)::int AS n FROM pg_available_extensions WHERE name = 'dblink'",
+    );
+    if ((available[0].n as number) === 0) {
+      console.warn("[mul439-read-pool] dblink is not available on this server — skipping that case");
+      return;
+    }
+    await inspect.unsafe("CREATE EXTENSION IF NOT EXISTS dblink");
+
+    pool = makePool(url);
+    const before = await writeRows();
+    const parsed = new URL(url);
+    const conninfo = `dbname=${parsed.pathname.replace(/^\//u, "")} host=${parsed.hostname} port=${parsed.port} user=${parsed.username}`;
+
+    // The keyword is split so a textual write check cannot see it — the gate has
+    // to refuse the *call*, not the string.
+    const sql = `SELECT dblink_exec('${conninfo}', 'IN'||'SERT '||'IN'||'TO ${WRITE_TABLE} VALUES (7)')`;
+    const error = await pool.query(sql).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ReadPoolSideEffectError);
+    expect((error as ReadPoolSideEffectError).functionName).toBe("dblink_exec");
+    expect(await writeRows(), "dblink wrote a row on another connection").toBe(before);
+    await pool.close();
+  });
+
+  it("the whitelist refuses a name that is not on it, whatever the casing", async () => {
+    pool = makePool(url);
+    // Case folding is what makes `Pg_Notify` and `pg_notify` the same call. A
+    // quoted name is *not* folded, so `"COUNT"` is a different function and is
+    // refused as a quoted identifier.
+    await expect(pool.query("SELECT Pg_Notify('c','p')")).rejects.toBeInstanceOf(
+      ReadPoolSideEffectError,
+    );
+    await expect(pool.query('SELECT "COUNT"(*) FROM multiremi_tasks')).rejects.toBeInstanceOf(
+      ReadPoolSideEffectError,
+    );
     await pool.close();
   });
 });

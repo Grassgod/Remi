@@ -8,8 +8,26 @@
  * The bridge is what turns a slow read into a stalled event loop; the pool
  * keeps reads off the main thread and bounds what they can cost.
  *
- * Shape (MUL-403 plan 2/6 `cmt_2capihmkhktv` §4, acceptance criteria in the
- * MUL-439 description):
+ * ## Threat model, and what this gate is for
+ *
+ * The pool only ever runs SQL that server-side code wrote. It is not an
+ * ad-hoc query console, and no caller may put user data into the statement
+ * text: parameters go through `$n` bindings, which the driver sends out of
+ * band. The gate below is a **default-deny guard against developer mistakes** —
+ * a query that quietly gains a function call with an effect, a copy-pasted
+ * statement that is not a read at all.
+ *
+ * It is explicitly **not** a sandbox for hostile SQL. A determined author with
+ * the ability to write arbitrary statements can reach a function nobody put on
+ * the whitelist only if that name is spelled in the same lower-case form the
+ * whitelist uses, but the honest statement of the boundary is this: the real
+ * protection for hostile SQL is database permissions on the role the pool
+ * connects with — `REVOKE EXECUTE` on the functions it does not need, no
+ * `dblink`/`postgres_fdw`, no `pg_read_server_files`. Those changes belong to
+ * the production role on 209 and are tracked separately by the squad lead; they
+ * are not something this file can do.
+ *
+ * ## Shape
  *
  * - `max: 4` connections;
  * - a client-side abort at 3 s, so a statement the server never times out (a
@@ -22,43 +40,41 @@
  * - on SQLite (the default local backend) this degrades to the synchronous
  *   library, where an async pool would only add latency.
  *
- * ## Why "read only" is layered rather than a session default
+ * ## The two layers, and which one covers what
  *
- * The first cut relied on `default_transaction_read_only=on` plus a textual
- * gate. Independent review (MUL-439 `cmt_u0bywkppcajq`) showed two ways
- * through it, both reproduced here before the fix:
+ * **Layer 1 — every statement runs in its own `BEGIN READ ONLY` transaction**
+ * with `SET LOCAL statement_timeout`. This is the layer that stops *writes*.
+ * The transaction mode is fixed when it opens, so a session default changed by
+ * an earlier statement cannot reopen it; `SET TRANSACTION READ WRITE` would,
+ * and is rejected by the classifier as a `SET`. `SET LOCAL` is
+ * transaction-scoped, so a disarmed session setting cannot lift the timeout and
+ * the timeout cannot outlive the transaction.
  *
- * 1. `SELECT set_config('default_transaction_read_only','off',false)` changes
- *    the *session* default, so the next statement on that pooled connection
- *    runs read-write — a write function then inserted a row. The same trick
- *    with `statement_timeout` disarmed the 2 s ceiling.
- * 2. A `SELECT` that calls a side-effecting function (`pg_notify`,
- *    `pg_advisory_lock*`, `pg_terminate_backend`, …) passed the gate and took
- *    effect, because a read-only transaction does not stop every function.
+ * **Layer 2 — a default-deny function whitelist.** A read-only transaction does
+ * not stop every function. `pg_notify` delivers, `pg_advisory_lock` leaves a
+ * lock behind, `pg_terminate_backend` kills another connection, `nextval`
+ * advances a sequence, `lo_export` and `pg_read_file` touch the filesystem, and
+ * `dblink_exec` runs a statement on a *different* connection where this
+ * transaction's read-only mode does not apply. Those are refused before the
+ * statement is sent: {@link scanSqlFunctionCalls} resolves every call the way
+ * PostgreSQL resolves it, and {@link findDisallowedFunction} rejects anything
+ * that is not on {@link READ_FUNCTION_WHITELIST}.
  *
- * So the pool no longer trusts session state at all:
+ * Why a whitelist and not the earlier denylist: two rounds of review
+ * (`cmt_u0bywkppcajq`, `cmt_w08j1ocyurc6`) broke a denylist twice, once with
+ * `pg_catalog.set_config` and once with `"set_config"` — PostgreSQL accepts a
+ * quoted spelling of every function name, so a list of forbidden names cannot
+ * be completed. Enumerating what is *known safe* fails closed instead.
  *
- * - **Every statement runs inside its own `BEGIN READ ONLY` transaction.** The
- *   mode is fixed when the transaction starts, so a session default changed
- *   earlier cannot reopen it, and `SET TRANSACTION READ WRITE` is refused once
- *   a transaction is active. The timeout is applied with
- *   `SET LOCAL statement_timeout`, which is transaction-scoped: a disarmed
- *   session setting cannot lift it, and it cannot outlive the transaction.
- * - **The gate rejects side-effecting calls by name.** See
- *   {@link FORBIDDEN_FUNCTION_RE}. This is the layer that covers what a
- *   read-only transaction does not: `pg_notify`, advisory locks, backend
- *   termination, large-object and file functions. The denylist is deliberately
- *   conservative — a function it does not know about is allowed, so the
- *   transaction remains the enforcement layer for writes and this list is for
- *   the effects that are *not* writes.
- *
- * The two layers are complementary, and each covers a bypass the other misses:
- * the transaction cannot stop `pg_notify` or an advisory lock, and the denylist
- * cannot tell a write function (`SELECT my_write_fn()`) from a read one.
+ * Neither layer covers the other's gap, which is why both are here: the
+ * transaction cannot stop `pg_notify` or an advisory lock, and the whitelist
+ * cannot tell a write function (`SELECT my_write_fn()`) from a pure one — that
+ * one only fails because the transaction it runs in is read-only.
  */
 import { createLogger } from "@shared/logger.js";
 import { scrubErrorForLog } from "@multiremi/store/db/dsn-redaction.js";
 import { translateSqliteToPg, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-calls.js";
 
 const log = createLogger("read-pool");
 
@@ -167,16 +183,12 @@ export function isReadOnlySelect(sql: string): boolean {
  */
 function assertReadOnlyStatement(sql: string): void {
   if (classifyReadStatement(sql) === null) throw new ReadPoolNotSelectError();
-  const forbidden = findForbiddenFunction(sql);
-  if (forbidden) throw new ReadPoolSideEffectError(forbidden);
+  const disallowed = findDisallowedFunction(sql);
+  if (disallowed) throw new ReadPoolSideEffectError(disallowed);
 }
 
-/**
- * Leading whitespace and any remaining comments, in any mix. Applied
- * repeatedly while it keeps matching, so a statement preceded by a block
- * comment and a line comment still resolves to its keyword.
- */
-const LEADING_NOISE_RE = /^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/;
+/** Leading whitespace, applied repeatedly while it keeps matching. */
+const LEADING_NOISE_RE = /^\s+/;
 
 /**
  * Statements that write, or that change session state the pool depends on.
@@ -192,158 +204,280 @@ const WRITE_KEYWORD_RE =
 const READ_HEADS = new Set(["SELECT", "VALUES", "TABLE", "WITH", "EXPLAIN", "SHOW"]);
 
 /**
- * Functions the pool refuses, because a read-only transaction does not stop
- * them and each one has an effect outside the query.
+ * Functions a read statement is allowed to call.
  *
- * Grouped by what they do, so a new entry has an obvious home:
+ * **Adding an entry requires showing it has no side effect.** "It worked when I
+ * tried it" is not the bar: the function has to be pure with respect to
+ * everything outside the query — no writes to any table or sequence, no locks,
+ * no notifications, no filesystem or large-object access, no other backends, no
+ * remote connections. When in doubt, leave it out; a query that needs a missing
+ * function fails closed with `read_pool_side_effect`, which is a bug report
+ * against this list rather than a silent hole.
  *
- * - **session/config mutation** — `set_config` is how a caller disarms the
- *   read-only default or the statement timeout. The pool sets both itself, per
- *   transaction, and does not let a statement change them.
- * - **notifications** — `pg_notify` delivers to listeners; it is a write to the
- *   outside world even though it touches no table.
- * - **locks** — the advisory lock family takes a lock that outlives the
- *   statement, which is how a read is turned into a denial of service. The
- *   `_xact_` variants hold until the transaction ends, so they are refused too:
- *   nothing in this pool needs a lock.
- * - **other backends** — `pg_terminate_backend` / `pg_cancel_backend` kill
- *   someone else's work.
- * - **sequences** — `nextval` / `setval` mutate a sequence even where tables
- *   are read-only.
- * - **large objects and server files** — `lo_*` mutate the large-object store;
- *   `pg_read_file`, `pg_read_binary_file` and `pg_ls_dir` read the server's
- *   filesystem, which is not this pool's data.
- * - **remote execution** — `dblink*` and `postgres_fdw`'s remote work run
- *   statements on another database.
- *
- * Matching is on the call form `name(`, not a bare name, so a column or alias
- * that merely contains one of these words is not caught. The list is matched
- * against the stripped statement (comments removed by
- * {@link stripComments}), which is what stops
- * a comment wedged between a function name and its parenthesis from slipping
- * through (for example `pg_notify` split by a block comment).
+ * The list is grouped by purpose and is intentionally small: the pool serves
+ * the conversation-log window, the SSR first paint and the Live Hub warm-up,
+ * not arbitrary analytics.
  */
-const FORBIDDEN_FUNCTIONS = [
-  "set_config",
-  "pg_notify",
-  "pg_advisory_lock",
-  "pg_advisory_lock_shared",
-  "pg_advisory_xact_lock",
-  "pg_advisory_xact_lock_shared",
-  "pg_try_advisory_lock",
-  "pg_try_advisory_lock_shared",
-  "pg_try_advisory_xact_lock",
-  "pg_try_advisory_xact_lock_shared",
-  "pg_terminate_backend",
-  "pg_cancel_backend",
-  "nextval",
-  "setval",
-  "lo_create",
-  "lo_import",
-  "lo_export",
-  "lo_unlink",
-  "lo_put",
-  "lowrite",
-  "lo_open",
-  "lo_close",
-  "pg_read_file",
-  "pg_read_binary_file",
-  "pg_stat_file",
-  "pg_ls_dir",
-  "pg_ls_logdir",
-  "pg_ls_waldir",
-  "pg_ls_archive_statusdir",
-  "pg_ls_tmpdir",
-  "dblink",
-  "dblink_connect",
-  "dblink_exec",
-  "dblink_send_query",
-  "dblink_open",
-  "dblink_fetch",
-  "dblink_close",
-  "dblink_disconnect",
-  "dblink_cancel_query",
-  "pg_reload_conf",
-  "pg_rotate_logfile",
-  "pg_log_backend_memory_contexts",
-  "pg_switch_wal",
-  "pg_create_restore_point",
-  "pg_promote",
-  "pg_backup_start",
-  "pg_backup_stop",
-  "pg_start_backup",
-  "pg_stop_backup",
-  "pg_wal_replay_pause",
-  "pg_wal_replay_resume",
-  "pg_import_system_collations",
-  "pg_export_snapshot",
-  "pg_replication_origin_advance",
-  "pg_replication_origin_create",
-  "pg_replication_origin_drop",
-  "pg_replication_origin_session_setup",
-  "pg_create_logical_replication_slot",
-  "pg_create_physical_replication_slot",
-  "pg_drop_replication_slot",
-  "pg_stat_reset",
-  "pg_stat_reset_shared",
-  "pg_stat_reset_single_table_counters",
-  "pg_stat_reset_single_function_counters",
-  "pg_stat_reset_slru",
-  "pg_stat_reset_replication_slot",
-] as const;
+export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
+  // ── aggregates ──
+  "count",
+  "sum",
+  "min",
+  "max",
+  "avg",
+  "array_agg",
+  "string_agg",
+  "json_agg",
+  "jsonb_agg",
+  "bool_and",
+  "bool_or",
+  "every",
+  "stddev",
+  "variance",
+  "percentile_cont",
+  "percentile_disc",
+  "mode",
+  // ── window functions ──
+  "row_number",
+  "rank",
+  "dense_rank",
+  "percent_rank",
+  "cume_dist",
+  "ntile",
+  "lag",
+  "lead",
+  "first_value",
+  "last_value",
+  "nth_value",
+  // ── JSON construction and access ──
+  "json_build_object",
+  "jsonb_build_object",
+  "json_build_array",
+  "jsonb_build_array",
+  "json_object",
+  "jsonb_object",
+  "json_array",
+  "jsonb_array",
+  "to_json",
+  "to_jsonb",
+  "row_to_json",
+  "jsonb_array_length",
+  "json_array_length",
+  "jsonb_extract_path",
+  "jsonb_extract_path_text",
+  "json_extract_path",
+  "json_extract_path_text",
+  "jsonb_typeof",
+  "json_typeof",
+  "jsonb_object_keys",
+  "json_object_keys",
+  "jsonb_pretty",
+  "jsonb_build_object",
+  // ── strings ──
+  "lower",
+  "upper",
+  "length",
+  "char_length",
+  "character_length",
+  "octet_length",
+  "bit_length",
+  "substr",
+  "substring",
+  "replace",
+  "concat",
+  "concat_ws",
+  "trim",
+  "ltrim",
+  "rtrim",
+  "btrim",
+  "lpad",
+  "rpad",
+  "repeat",
+  "reverse",
+  "split_part",
+  "strpos",
+  "position",
+  "starts_with",
+  "left",
+  "right",
+  "initcap",
+  "md5",
+  "encode",
+  "decode",
+  "quote_ident",
+  "quote_literal",
+  "quote_nullable",
+  "regexp_replace",
+  "regexp_match",
+  "regexp_matches",
+  "regexp_split_to_array",
+  "regexp_split_to_table",
+  "to_hex",
+  "translate",
+  "ascii",
+  "chr",
+  // ── numbers ──
+  "abs",
+  "round",
+  "floor",
+  "ceil",
+  "ceiling",
+  "trunc",
+  "sign",
+  "mod",
+  "power",
+  "sqrt",
+  "exp",
+  "ln",
+  "log",
+  "greatest",
+  "least",
+  "width_bucket",
+  "random",
+  // ── date and time (all read the clock or convert; none set it) ──
+  "now",
+  "clock_timestamp",
+  "statement_timestamp",
+  "transaction_timestamp",
+  "current_date",
+  "current_time",
+  "current_timestamp",
+  "localtime",
+  "localtimestamp",
+  "age",
+  "date_part",
+  "date_trunc",
+  "date_bin",
+  "extract",
+  "to_char",
+  "to_date",
+  "to_timestamp",
+  "to_number",
+  "make_date",
+  "make_time",
+  "make_timestamp",
+  "make_interval",
+  "justify_days",
+  "justify_hours",
+  "justify_interval",
+  "timezone",
+  // ── casting and inspection ──
+  "cast",
+  "coalesce",
+  "nullif",
+  "pg_typeof",
+  "pg_column_size",
+  "pg_total_relation_size",
+  "pg_relation_size",
+  "pg_indexes_size",
+  "pg_size_pretty",
+  "pg_get_expr",
+  "pg_get_indexdef",
+  "pg_get_viewdef",
+  "pg_get_constraintdef",
+  "format",
+  "format_type",
+  "version",
+  "current_database",
+  "current_schema",
+  "current_schemas",
+  "current_user",
+  "session_user",
+  "current_setting",
+  "current_catalog",
+  "inet_client_addr",
+  "inet_client_port",
+  "inet_server_addr",
+  "inet_server_port",
+  "pg_backend_pid",
+  "pg_postmaster_start_time",
+  "obj_description",
+  "col_description",
+  "shobj_description",
+  "has_table_privilege",
+  "has_column_privilege",
+  "has_schema_privilege",
+  "has_database_privilege",
+  "has_function_privilege",
+  "pg_table_is_visible",
+  "pg_type_is_visible",
+  "pg_function_is_visible",
+  "pg_encoding_to_char",
+  "array_length",
+  "array_lower",
+  "array_upper",
+  "array_position",
+  "array_positions",
+  "array_remove",
+  "array_replace",
+  "array_to_string",
+  "array_to_json",
+  "cardinality",
+  "unnest",
+  "generate_series",
+  "generate_subscripts",
+]);
 
 /**
- * `name(` with an optional schema qualifier, so `pg_catalog.set_config(` is
- * caught as well. Built from the list rather than hand-written so an entry
- * cannot be forgotten here.
- */
-const FORBIDDEN_FUNCTION_RE = new RegExp(
-  String.raw`(?:^|[^\w$])(?:[a-z_][a-z0-9_$]*\.)?(` +
-    FORBIDDEN_FUNCTIONS.join("|") +
-    String.raw`)\s*\(`,
-  "i",
-);
-
-/**
- * The side-effecting function a statement calls, or null.
+ * The next statement in `sql` that the pool refuses, or null when the whole
+ * statement is allowed.
  *
- * Exported so a caller can explain a refusal, and so the test can assert the
- * list directly rather than only through the pool.
- */
-export function findForbiddenFunction(sql: string): string | null {
-  // The name is captured by the group, so the boundary character the pattern
-  // needs (start of string, or a non-identifier separator) is not part of it.
-  const match = FORBIDDEN_FUNCTION_RE.exec(stripComments(sql));
-  return match?.[1]?.toLowerCase() ?? null;
-}
-
-/**
- * Remove line comments and block comments.
+ * A call is refused when any of these holds:
  *
- * The classifier and the function gate both run on the result, which is what
- * makes a comment-split `SELECT 1` and a comment-split `set_config` behave like their
- * uncommented forms. `$$`-quoted bodies are left alone: a function *body*
- * mentioning `pg_notify` is not a call to it, and {@link FORBIDDEN_FUNCTION_RE}
- * needs the `(` immediately after the name to match.
+ * - the name is not on {@link READ_FUNCTION_WHITELIST};
+ * - it is schema-qualified with something other than `pg_catalog`;
+ * - it was written with a `U&"…"` Unicode escape, whose decoded name this
+ *   scanner deliberately does not attempt to resolve;
+ * - it was written as a quoted identifier at all, because PostgreSQL treats a
+ *   quoted name as *distinct* from the unquoted one — `"COUNT"(*)` is a user
+ *   function, not the aggregate, and accepting quoted spellings is how the
+ *   previous two gates were defeated.
+ *
+ * The returned string is what the error reports, so a caller sees the name as
+ * PostgreSQL would resolve it.
  */
-function stripComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n]*/g, " ");
+export function findDisallowedFunction(sql: string): string | null {
+  let calls;
+  try {
+    calls = scanSqlFunctionCalls(sql);
+  } catch (error) {
+    // An untokenisable statement is refused rather than passed through. The
+    // name is the scanner's complaint, so the caller can tell this apart from a
+    // plain whitelist miss.
+    return `unscannable statement: ${(error as Error).message}`;
+  }
+  for (const call of calls) {
+    if (call.unicodeEscaped) return `${call.name} (U& escaped)`;
+    if (call.quoted) return `${call.name} (quoted identifier)`;
+    if (call.schema !== null && call.schema !== "pg_catalog") {
+      return `${call.schema}.${call.name} (non-pg_catalog schema)`;
+    }
+    if (!READ_FUNCTION_WHITELIST.has(call.name)) return call.name;
+  }
+  return null;
 }
 
 /**
  * The leading keyword of a statement, or null when it is not a read.
+ *
+ * Runs on {@link maskSqlLiterals}, the same view of the statement the function
+ * gate uses. That is the point: both deciders have to agree on what a string or
+ * a comment is, or a statement could be a read to one and a write to the other.
+ * With the mask applied, a keyword inside a literal is blanked out and a
+ * commented-out keyword cannot hide one.
  *
  * `EXPLAIN` is allowed because a planner check is a read; `EXPLAIN ANALYZE`
  * executes the statement, and the `ANALYZE` deny below turns that away.
  * `WITH … SELECT` is the store's pagination shape, so it has to pass.
  */
 function classifyReadStatement(sql: string): string | null {
-  // Comments are removed first, so `SELECT/*x*/1` and a keyword split by a
-  // comment cannot hide behind one. `$1`-style placeholders and quoted strings
-  // survive, which is all the classifier looks at.
-  let stripped = stripComments(sql).trim();
+  let stripped: string;
+  try {
+    stripped = maskSqlLiterals(sql).trim();
+  } catch {
+    // A statement the scanner cannot tokenise is not a read.
+    return null;
+  }
   for (;;) {
     const next = stripped.replace(LEADING_NOISE_RE, "");
     if (next === stripped) break;
@@ -473,7 +607,7 @@ export class PostgresReadPool implements ReadPool {
    *
    * Note what this does *not* cover: a read-only transaction still permits
    * `pg_notify`, advisory locks and a few other effects. Those are refused by
-   * {@link findForbiddenFunction} before the statement is sent.
+   * {@link findDisallowedFunction} before the statement is sent.
    */
   private execute(sql: string, params: unknown[]): Promise<unknown[]> {
     // Translation happens here, after the gate, so a rejected statement never
