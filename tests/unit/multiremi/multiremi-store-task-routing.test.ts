@@ -760,6 +760,345 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(sibling.id)?.id).toBe(task.id);
   });
 
+  // ───────────────────────────────────────────────────────────────────────
+  // MUL-449 ruling 2 § 4: one programmatically generated invariant case.
+  //
+  // The observer must agree with the claim's own placement predicate for every
+  // combination of task shape, pin and device binding. Cells are generated, so
+  // a new hard constraint that is wired into only one of the two paths shows up
+  // as a red cell instead of a silent queue.
+  // ───────────────────────────────────────────────────────────────────────
+  describe("placement invariant matrix", () => {
+    const M = "dev-inv-m";
+    const M_LEGACY = "dev-inv-m-legacy";
+    const U = "dev-inv-u";           // named only in data; no Runtime row
+
+    type Shape =
+      | "chat" | "issue-no-workspace" | "issue-workspace-on-M" | "issue-holds-zero"
+      | "with-code-on-M" | "frozen-retry-on-M" | "runtime-workspace-on-M" | "workspace-runtime-gone";
+    type Pin = "none" | "agent-bound-M-legacy" | "task-pinned-M-legacy";
+    type Devices = "unbound" | "bound-M" | "bound-M-legacy" | "bound-M-and-M-legacy";
+
+    const SHAPES: Shape[] = [
+      "chat", "issue-no-workspace", "issue-workspace-on-M", "issue-holds-zero",
+      "with-code-on-M", "frozen-retry-on-M", "runtime-workspace-on-M", "workspace-runtime-gone",
+    ];
+    const PINS: Pin[] = ["none", "agent-bound-M-legacy", "task-pinned-M-legacy"];
+    const DEVICES: Devices[] = ["unbound", "bound-M", "bound-M-legacy", "bound-M-and-M-legacy"];
+
+    interface Fixture {
+      store: ReturnType<typeof createLocalStore>;
+      codexId: string; claudeId: string; legacyId: string;
+      taskId: string; issueId: string | null; projectId: string | null;
+      shape: Shape; pin: Pin; devices: Devices; dedicated: boolean;
+      label: string;
+    }
+
+    /**
+     * Build one cell. Every cell gets its own store, so a claim cannot leak into
+     * another cell and the assertions do not depend on test order.
+     */
+    function cell(shape: Shape, pin: Pin, devices: Devices, dedicated: boolean): Fixture {
+      const label = `${shape} / ${pin} / ${devices} / ${dedicated ? "dedicated" : "shared"}`;
+      const store = createLocalStore();
+      const codex = store.registerRuntime({
+        id: "rt_inv_m_codex", name: "M codex", provider: "codex", workspaceId: "local", daemonId: M,
+      });
+      const claude = store.registerRuntime({
+        id: "rt_inv_m_claude", name: "M claude", provider: "claude", workspaceId: "local", daemonId: M,
+      });
+      // M and M' are the two registrations of ONE machine: M is current and
+      // keeps M' daemon's name as its legacy alias, while M' still registers
+      // under that older daemon id. This is the shape that makes the
+      // `legacy_daemon_id` joins load-bearing — a workspace recorded on M must
+      // still admit M' even though M' s daemon id differs from M's.
+      db!.run("UPDATE multiremi_runtimes SET legacy_daemon_id = ? WHERE id = ?", [M_LEGACY, codex.id]);
+      const legacy = store.registerRuntime({
+        id: "rt_inv_m_legacy", name: "M prime", provider: "codex", workspaceId: "local", daemonId: M_LEGACY,
+      });
+      // Same workspace — the claim-time refresh only scans the claimant's
+      // workspace — but a provider no cell's Agent uses, so it runs the refresh
+      // and then cannot take the task. That leaves the row queued in exactly the
+      // state a real claimant would find it.
+      store.registerRuntime({
+        id: "rt_inv_settler", name: "settler", provider: "claude", workspaceId: "local",
+        daemonId: "dev-inv-settler",
+      });
+      if (dedicated) store.updateDaemonDedicated("local", M, true, "local");
+
+      const provider = pin === "agent-bound-M-legacy" || shape === "with-code-on-M" ? "codex" : "codex";
+      const agent = store.createAgent({
+        name: `matrix ${shape}`, provider, workspaceId: "local",
+        ...(pin === "agent-bound-M-legacy" ? { runtimeId: legacy.id } : {}),
+      });
+
+      const hasProject = shape !== "chat";
+      const project = hasProject ? store.createProject({ title: `matrix ${label}`, workspaceId: "local" }) : null;
+      if (project) {
+        if (devices === "bound-M" || devices === "bound-M-and-M-legacy") {
+          store.createProjectDevice(project.id, { daemonId: M });
+        }
+        if (devices === "bound-M-legacy" || devices === "bound-M-and-M-legacy") {
+          store.createProjectDevice(project.id, { daemonId: M_LEGACY });
+        }
+      }
+
+      let taskId: string;
+      let issueId: string | null = null;
+      if (shape === "chat") {
+        const chat = store.createChatSession({ agentId: agent.id, projectId: null, workspaceId: "local" });
+        taskId = store.sendChatMessage(chat.id, { body: "matrix" }).task.id;
+      } else {
+        const issue = store.createIssue({
+          title: `matrix ${label}`, projectId: project!.id, workspaceId: "local",
+        });
+        issueId = issue.id;
+        let sessionId: string | undefined;
+        if (shape === "issue-holds-zero") {
+          sessionId = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false }).id;
+        } else if (shape === "with-code-on-M") {
+          // The snapshot needs a parent lane that recorded a Runtime. Seed it by
+          // driving the lane directly, so the cell does not depend on whether
+          // this cell's device routing happens to admit the seeding Runtime.
+          const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
+          store.getOrCreateSessionAgentLane(parent.id, agent.id);
+          db!.run(
+            `UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider = 'codex',
+               provider_session_id = 'sess_matrix_code', updated_at = ?
+             WHERE session_id = ? AND agent_id = ?`,
+            [codex.id, "2026-01-01T00:00:00.000Z", parent.id, agent.id],
+          );
+          sessionId = store.createIssueSession(issue.id, {
+            title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+          }).id;
+        }
+        taskId = store.createTask({
+          agentId: agent.id, issueId: issue.id, ...(sessionId ? { issueSessionId: sessionId } : {}),
+          prompt: "matrix",
+        }).id;
+      }
+
+      // Shape-specific state, applied after creation so the real creation path
+      // stays the one under test.
+      if (shape === "issue-workspace-on-M") {
+        store.reportIssueWorkspace({
+          issueId: issueId!, runtimeId: codex.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1",
+          status: "ready", repos: [],
+        });
+      } else if (shape === "workspace-runtime-gone") {
+        store.reportIssueWorkspace({
+          issueId: issueId!, runtimeId: codex.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1",
+          status: "ready", repos: [],
+        });
+        // ON DELETE SET NULL, the state `deleteRuntimeWithinTransaction` leaves.
+        db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issueId]);
+      } else if (shape === "runtime-workspace-on-M") {
+        const workspace = (store as unknown as {
+          runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
+        }).runtimeWorkspaces.create(codex.id, { name: `matrix ${label}`, root_path: "/tmp/matrix-rw" });
+        db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
+      } else if (shape === "frozen-retry-on-M") {
+        db!.run(
+          `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'matrix-fp' WHERE id = ?`,
+          [codex.id, taskId],
+        );
+      }
+      if (pin === "task-pinned-M-legacy") {
+        db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
+      }
+      return {
+        store, codexId: codex.id, claudeId: claude.id, legacyId: legacy.id,
+        taskId, issueId, projectId: project?.id ?? null, shape, pin, devices, dedicated, label,
+      };
+    }
+
+    /** The Runtimes this matrix compares verdicts for. */
+    function runtimeIds(fixture: Fixture): string[] {
+      return [fixture.codexId, fixture.claudeId, fixture.legacyId];
+    }
+
+    /**
+     * Run the claim-time refresh the way production does — a claim attempt by a
+     * Runtime that cannot take the task — and leave the row queued.
+     */
+    function settle(fixture: Fixture): void {
+      fixture.store.claimTask("rt_inv_settler");
+    }
+
+    /**
+     * Claim the task for real and require the winner to be one the probe
+     * predicted. Returns the winning Runtime, or null when nobody can take it.
+     */
+    function probeWinner(fixture: Fixture, probed: string[]): string | null {
+      for (const runtimeId of runtimeIds(fixture)) {
+        const claimed = fixture.store.claimTask(runtimeId);
+        if (claimed?.id === fixture.taskId) {
+          if (!probed.includes(runtimeId)) {
+            throw new Error(`[${fixture.label}] claim won on ${runtimeId} outside probe ${JSON.stringify(probed)}`);
+          }
+          return runtimeId;
+        }
+      }
+      return null;
+    }
+
+    /** Does the claim actually accept this Runtime, without leaking state? */
+    function claimAccepts(fixture: Fixture, runtimeId: string): boolean {
+      let accepted = false;
+      try {
+        db!.transaction(() => {
+          accepted = fixture.store.claimTask(runtimeId)?.id === fixture.taskId;
+          throw new Error("__rollback__");
+        })();
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== "__rollback__") throw error;
+      }
+      return accepted;
+    }
+
+    it("keeps the probe verdict, the claim result and the wait text consistent in every cell", () => {
+      const failures: string[] = [];
+      let cells = 0;
+      for (const shape of SHAPES) {
+        for (const pin of PINS) {
+          for (const devices of DEVICES) {
+            // A Chat task has no Project, so the device columns collapse to the
+            // "unbound" case and run once per dedicated flag.
+            if (shape === "chat" && devices !== "unbound") continue;
+            for (const dedicated of [false, true]) {
+              cells++;
+              const fixture = cell(shape, pin, devices, dedicated);
+              const fail = (detail: string) => failures.push(`[${fixture.label}] ${detail}`);
+
+              // 1. Let the claim-time refresh settle the row first. The claim
+              // predicate is evaluated AFTER that refresh has had its chance to
+              // re-pool a stale pin, so a verdict taken beforehand describes a
+              // state no claimant ever sees.
+              settle(fixture);
+              // 2. Per-Runtime verdict vs the real claim, on the settled row and
+              // with each claim rolled back, so verdicts do not depend on order.
+              const verdicts = fixture.store.describeTaskPlacement(fixture.taskId);
+              for (const verdict of verdicts) {
+                const accepts = claimAccepts(fixture, verdict.runtimeId);
+                const says = verdict.placementOk && verdict.routingOk;
+                if (says !== accepts) {
+                  fail(`per-Runtime mismatch on ${verdict.runtimeId}: probe says ${says}, claim says ${accepts}`);
+                }
+              }
+              const probed = verdicts
+                .filter((verdict) => verdict.placementOk && verdict.routingOk)
+                .map((verdict) => verdict.runtimeId)
+                .sort();
+
+              // Absolute expectations for the cells where a shared fragment is
+              // load-bearing. Consistency alone cannot catch a mutation that
+              // changes BOTH paths the same way, so these pin the semantics: the
+              // legacy-daemon columns are exactly what the `legacy_daemon_id`
+              // joins exist for.
+              const expectations: Array<[boolean, string]> = [];
+              if (shape === "issue-workspace-on-M" && devices === "bound-M-legacy") {
+                expectations.push([probed.includes(fixture.legacyId),
+                  `workspace on M + binding on M's legacy alias must admit M' (probed ${JSON.stringify(probed)})`]);
+              }
+              if (shape === "issue-workspace-on-M" && devices === "bound-M" && pin === "none") {
+                // A pin that conflicts with the workspace legitimately removes
+                // every candidate, so this holds only without one.
+                expectations.push([probed.includes(fixture.codexId),
+                  `workspace on M + binding on M must admit M (probed ${JSON.stringify(probed)})`]);
+              }
+              if (shape === "issue-no-workspace" && pin === "none" && devices === "bound-M" && !dedicated) {
+                expectations.push([probed.includes(fixture.codexId),
+                  `unbound Issue + binding on M must admit M (probed ${JSON.stringify(probed)})`]);
+              }
+              if (shape === "issue-no-workspace" && pin === "none" && devices === "bound-M-legacy") {
+                expectations.push([probed.includes(fixture.legacyId),
+                  `unbound Issue + binding on M's legacy alias must admit M' (probed ${JSON.stringify(probed)})`]);
+              }
+              // Dedicated admission lives in the routing fragment's second
+              // clause: a dedicated machine must refuse work with no Project
+              // binding, which only holds while its parameter is passed through.
+              if (shape === "issue-no-workspace" && pin === "none" && devices === "unbound" && dedicated) {
+                expectations.push([!probed.includes(fixture.codexId),
+                  `dedicated M with no Project binding must not admit M (probed ${JSON.stringify(probed)})`]);
+              }
+              for (const [ok, detail] of expectations) if (!ok) fail(detail);
+
+              // 3. The real claim outcome must be one the probe predicted.
+              const claimedBy = probeWinner(fixture, probed);
+              const claimable = claimedBy !== null;
+              if (!claimable && probed.length > 0) {
+                fail(`probe listed ${JSON.stringify(probed)} but no claim won`);
+              }
+
+              // 2. Wait text must land in the (a)(b)(c) category the verdicts describe.
+              const now = Date.now();
+              db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
+                new Date(now - 200_000).toISOString(), fixture.taskId,
+              ]);
+              fixture.store.refreshQueuedCapabilityWaitReasons(now);
+              const task = fixture.store.getTask(fixture.taskId)!;
+              const reason = task.waitReason ?? null;
+
+              if (claimable) {
+                // (a) a machine can take it: never a placement or device reason.
+                if (reason?.startsWith("等待任务落点：") || reason?.startsWith("等待项目设备：")) {
+                  fail(`(a) claimable but labelled: ${reason}`);
+                }
+                continue;
+              }
+              // The task is settled and queued: what does the observer owe?
+              const placementCandidates = verdicts.filter((verdict) => verdict.placementOk);
+              if (placementCandidates.length > 0) {
+                // (b) placement holds somewhere, every such machine is refused
+                // by device routing. The text must name exactly those machines.
+                if (!reason?.startsWith("等待项目设备：")) {
+                  fail(`(b) expected a device wait, got: ${reason}`);
+                  continue;
+                }
+                // One name per MACHINE (the observer dedups by daemon); any
+                // registered Runtime on that daemon is a valid way to name it.
+                const daemonIds = [...new Set(placementCandidates
+                  .map((verdict) => verdict.daemonId)
+                  .filter((value): value is string => value != null))];
+                for (const daemonId of daemonIds) {
+                  // The observer dedups by DAEMON, so any Runtime registered on
+                  // that machine is a valid way to name it.
+                  const names = new Set<string>([daemonId]);
+                  for (const runtimeId of [...runtimeIds(fixture), "rt_inv_settler"]) {
+                    const runtime = fixture.store.getRuntime(runtimeId);
+                    if (!runtime) continue;
+                    if (runtime.daemonId === daemonId || runtime.legacyDaemonId === daemonId
+                      || runtime.id === daemonId) {
+                      if (runtime.daemonDisplayName) names.add(runtime.daemonDisplayName);
+                      if (runtime.name) names.add(runtime.name);
+                    }
+                  }
+                  if (![...names].some((name) => reason.includes(name))) {
+                    fail(`(b) no name for machine ${daemonId} (${[...names].join("/")}) in: ${reason}`);
+                  }
+                }
+                continue;
+              }
+              // (c) nothing satisfies placement. Either the conflict text, or the
+              // daemon fallback when every constraint names one unregistered machine.
+              if (reason !== null
+                && !reason.startsWith("等待任务落点：")
+                && !reason.startsWith("等待项目设备：")) {
+                fail(`(c) unexpected reason: ${reason}`);
+              }
+            }
+          }
+        }
+      }
+      // 8 shapes x 3 pins x 4 device columns x 2 dedicated flags, minus the
+      // Chat rows that have no Project (3 pins x 3 extra device columns x 2).
+      expect(cells).toBe(8 * 3 * 4 * 2 - 3 * 3 * 2);
+      expect(failures).toEqual([]);
+    },
+    { timeout: 120_000 });
+
+  });
+
   it("resets an Issue lane whose device the Project no longer allows", () => {
     const store = createLocalStore();
     const a = store.registerRuntime({
