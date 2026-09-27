@@ -429,14 +429,19 @@ being served by the wrong process.
 
 ### Rollback
 
-> **Precondition for rolling back MUL-405 while the split is live:** return to a
-> single process first (stage B rollback, then stage A rollback, below), and only
-> then roll back the MUL-405 image. MUL-405 adds defensive unique indexes plus a
-> migration/id lock, and its unique indexes stay in the database when the code is
-> rolled back. That is safe only while a single writer exists. With two API
-> processes still running, an older image without the guard could race the
-> indexes. Reverting the code and the topology in the other order is not
-> supported.
+> **Precondition: rolling back MUL-405 while the split is live requires
+> returning to a single process first.** Run the stage B rollback, then the
+> stage A rollback (both below), and only then roll back the MUL-405 image.
+>
+> MUL-405 adds defensive unique indexes plus advisory locks for migrations and
+> issue numbering. Reverting its code does **not** drop the indexes, and MUL-405's
+> own rollback note is "revert this PR: the advisory lock and the defensive index
+> have no side effects under a single process". The single-process premise is
+> what makes that true. The older image computes issue numbers with `MAX+1` and no
+> advisory lock, so two processes can allocate the same number, and there the
+> retained unique index turns a race into a failed write instead of a guard.
+> Reverting the image before the topology is therefore not supported: topology
+> first, image second.
 
 The stage boundary is what makes the first rollback cheap, and the order inside
 stage B is not interchangeable: rolling the routing back before the role would
