@@ -226,6 +226,17 @@ export function seedRepositoryWikisBridgeFixture(
     }, control);
     pageIds.push(doc.id);
   }
+  // `createRepositoryWikiDoc` stamps wall-clock time, which reaches the summary
+  // response as `updated_at` / `last_published_at`. Pinning it keeps two runs of
+  // this fixture byte-comparable, so the before/after response diff is a real
+  // contract comparison instead of a normalizing argument.
+  for (const [index, id] of pageIds.entries()) {
+    const updatedAt = new Date(Date.UTC(2026, 8, 25, 12, 0, 0) - index * 60_000).toISOString();
+    run(
+      "UPDATE multiremi_repository_wiki_docs SET created_at = ?, updated_at = ? WHERE id = ?",
+      [updatedAt, updatedAt, id],
+    );
+  }
 
   const autopilot = store.createAutopilot({
     id: "ap_mul398",

@@ -2,8 +2,8 @@
 
 | | |
 | --- | --- |
-| 阶段 | **before**（本轮只做准备，不做产品代码改动） |
-| 分支 / 提交 | `agent/MUL-398` @ `43d75571e736293b1300fabf1c54c2d03302de57`（= `origin/main`，与 main 无差异） |
+| 阶段 | **before**（准备轮采集；实现后在同一份 fixture 与脚本上重采，确保与 after 同口径） |
+| 分支 / 提交 | `agent/MUL-398`，before 侧源码为投影前状态（准备轮基线提交 `5bedd613`） |
 | 数据库 | 真实 PostgreSQL 18.4，`PostgresSyncDatabase`（Worker + SharedArrayBuffer + `Atomics.wait`），每次运行新建一次性库 |
 | fixture | `tests/fixtures/multiremi/repository-wikis-bridge-fixture.ts`，146 页 / 178 个 run / 133 条编译记录 |
 | 采集脚本 | `tests/manual/bench-repository-wikis-db-bytes.ts` |
@@ -39,9 +39,9 @@ fixture 复刻的是**行形状**，不是 209 的具体数据（209 保持只�
 | --- | --- |
 | `db_bytes` | **23,471,509 B（22.38 MiB）** |
 | `db_queries` | 11 |
-| p50 | 147.4 ms |
-| max | 163.7 ms |
-| HTTP 响应体 | 1,065 B（响应体小，字节全在过桥） |
+| p50 | 147.8 ms |
+| max | 160.1 ms |
+| HTTP 响应体 | 1,067 B（响应体小，字节全在过桥） |
 | 采样一致性 | 5/5 采样 `db_bytes` 与 `db_queries` 完全相同；二次独立运行逐字节相同 |
 
 超过 1 MB 的部分几乎全部来自两条 `SELECT r.* FROM multiremi_autopilot_runs`：
@@ -57,9 +57,24 @@ fixture 复刻的是**行形状**，不是 209 的具体数据（209 保持只�
 
 两条 run 语句的字节量与 209 的 12.2 MB / 10.8 MB 相差 1% 以内。
 
+## 前后对比（after 见 `MUL-398-repository-wikis-db-bytes-after.md`）
+
+| 指标 | before | after | 变化 |
+| --- | --- | --- | --- |
+| `db_bytes` | 23,471,509 B（22.38 MiB） | **392,775 B（0.375 MiB）** | −98.3% |
+| `db_queries` | 11 | 11 | 不变 |
+| p50 | 147.8 ms | 19.5 ms | −87% |
+| max | 160.1 ms | 21.9 ms | −86% |
+| HTTP 响应体 | 1,067 B | 1,067 B | 不变 |
+| 响应体逐字节 | — | — | **完全相同**（40 个叶子值 / 20 个字段路径） |
+
+本地 fixture 达标；**209 真实规模下的估算与结论见 after 报告 §3**（按 Explorer 的 1,842 / 1,443 行与每仓库固定开销推算，仅投影这两条语句不足以保证 `< 1MB`）。
+
 ## 与验收标准的关系
 
-验收要求「repository-wikis 路由单次 `db_bytes` < 1 MB」。基线是 23.47 MB，是门槛的 22 倍；两条 run 语句单独就占了 22.1 MB。剩下的所有语句合计只有 0.29 MB，因此**只投影这两条语句即可达标，不需要动其它读路径**。
+验收要求「repository-wikis 路由单次 `db_bytes` < 1 MB」。基线是 23.47 MB，是门槛的 22 倍；两条 run 语句单独就占了 22.1 MB，因此投影这两条语句是达标的前提。
+
+**修正（实现后重测得出）**：准备轮基于本地 fixture 的 0.29 MB 残余推出「只投影这两条即可达标」，该推断对 209 不成立。原因有两条：本地 fixture 的编译记录与仓库页数远小于 209，且 209 那条 32.3MB 路由里约 7.4MB 不属于这两条语句（见 after 报告 §3）。本文件保留原始判断，结论以 after 报告 §3 为准。
 
 ## 复跑方式
 
@@ -71,9 +86,6 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://… \
 
 after 用同一份 fixture、同一份脚本，只把输出路径换成 after 文件、环境变量 `MUL398_STAGE=after`。
 
-## 下一步（等 MUL-386 / PR #255 合入 main 之后再动）
+## 状态
 
-1. `git merge origin/main`。
-2. 按调用方核查结论投影 `SELECT r.*`，用同一脚本、同一 fixture 测 after。
-3. 单测覆盖投影；全套 PG 单测在 8MB 上限下全绿。
-4. 前后对比报告放 `reports/performance/`。
+MUL-386（PR #255）已合入 main（`fd52ff9e`），投影已实现，after 与前后对比见 `MUL-398-repository-wikis-db-bytes-after.md`。本文件作为 before 侧证据保留。
