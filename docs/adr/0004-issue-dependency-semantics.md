@@ -132,10 +132,13 @@ squad rule about ordering was prose. The observable failures were:
    `backlog` whose own prerequisites are all satisfied is dispatched by the
    server (`dependency_auto_started`) if its owner is an agent or a squad.
    Because two prerequisites can finish concurrently on separate connections
-   (and a member can force the issue at the same moment), reading the dependent is
-   not enough: the start is claimed with a conditional
-   `UPDATE ... WHERE status = 'backlog'`, and only the transaction whose update
-   reports one changed row dispatches. The losers do nothing — no task, no second
+   (and a member can force the issue at the same moment), the server locks the
+   issue row after the workspace lock, then rechecks `backlog`, no unmet
+   prerequisites and no active task. PostgreSQL uses `SELECT ... FOR UPDATE`;
+   SQLite's workspace-row write holds its single-writer lock. The start is
+   claimed with a conditional `UPDATE ... WHERE status = 'backlog'`, and only
+   the transaction whose update reports one changed row dispatches. The losers
+   do nothing — no task, no second
    `dependency_auto_started`. A member's forced start moves the row off `backlog`
    first, so it wins the same race for the same reason.
 
@@ -158,8 +161,9 @@ squad rule about ordering was prose. The observable failures were:
    transaction, so it survives) tells a human what to do: fix the owner and
    assign the issue again; a forced start is not needed. The prerequisite's own
    `done` is not part of the attempt and stays committed. A `backlog` issue that
-   somehow already owns an active round is not given a second one: the status
-   moves and the activity records `autoStarted: false` with `existingTaskId`.
+   already owns an active round is not claimed: its status stays `backlog`, no
+   task or auto-start activity is added, and the existing round moves it to
+   `in_progress` when execution starts.
 
    Sequencing after the COMMIT: the task wakeup and the `issue:updated` event
    (with `status_changed: true`, `prev_status: "backlog"`) are emitted only once
@@ -187,8 +191,15 @@ squad rule about ordering was prose. The observable failures were:
    and no automatic retry for it; the ways out are the public
    `POST /api/multiremi/issues/:id/assign` (or the assignee picker) — which starts
    it without `force`, because the gate is satisfied — or a member
-   `PATCH {status: todo}`. Adding a recovery sweep for this window is a separate
-   decision.
+   `PATCH {status: todo}`. Systematic recovery is tracked by MUL-452: replay
+   post-commit hooks from `multiremi_system_events`, keyed idempotently by the
+   event id. This change adds no scanner or replay mechanism.
+
+   Structurally exempt tasks (retry, continuation, redispatch, delegation return
+   and E2 parent wake-up) can still be created while the issue waits. Each such
+   creation records `dependency_gate_exempted`; starting the task moves the
+   issue to `in_progress` under the existing rules. This does not override the
+   dependency: the only override remains a member's status PATCH with `force`.
 6. **A failing prerequisite is a report, not an automatic cancel.** When B
    enters `cancelled` or `blocked`, each **waiting** dependent (the same
    `backlog` + unmet definition the gate uses) records
