@@ -3,9 +3,18 @@
 ## Status
 
 Accepted (MUL-455 S10, child issues MUL-461/462/464). Deployments are opt-in: the
-role env defaults to `all`, the peer channel is off until
-`MULTIREMI_PEER_URL` is set, and the second container sits behind the Compose
-`split` profile. Nothing changes on an installation that does not set them.
+role resolves to `all` when `MULTIREMI_API_ROLE` is unset or empty, the peer
+channel is off until `MULTIREMI_PEER_URL` is set, and the second container sits
+behind the Compose `split` profile. Nothing changes on an installation that does
+not set them.
+
+The Compose templates interpolate the role with an **empty** default
+(`${REMI_API_ROLE:-}`), not a literal `all`. That distinction is load-bearing:
+MUL-461 reports a `role` field in `/health`, `/readyz` and `/health/realtime`
+only when the variable is explicitly set (`isApiRoleConfigured()`), so shipping
+`all` as the default would add a field to those payloads on every existing
+installation. Empty means "unset" to the server, which still resolves to `all`
+internally: same behaviour, same bytes on the wire.
 
 ## Context
 
@@ -124,10 +133,12 @@ browser-facing container has to keep that name.
   `publish`/`subscribe` shape is reusable as a Hub transport adapter, so the
   fallback cost of route (a) or (b) is bounded.
 - **Positive:** an unconfigured installation is untouched. `MULTIREMI_API_ROLE`
-  defaults to `all`, `MULTIREMI_PEER_URL` unset disables the channel, the second
-  container only exists under the Compose `split` profile, and the updater's
-  default service list is byte-identical to the previous constant. The host
-  hands the deployment its topology; the updater binary does not bake one in.
+  is passed through as an empty string and resolves to `all` inside the process,
+  so existing `/health` payloads keep their shape; `MULTIREMI_PEER_URL` unset
+  disables the channel; the second container only exists under the Compose
+  `split` profile; and the updater's default service list is byte-identical to
+  the previous constant. The host hands the deployment its topology; the updater
+  binary does not bake one in.
 - **Negative:** two processes now hold the same database and the same mounts.
   Local delivery rules must be role-aware, and the peer channel is a new failure
   surface: it can drop events (counted as `peer.dropped`) when a peer is
