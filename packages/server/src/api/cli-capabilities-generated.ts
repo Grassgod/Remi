@@ -2968,6 +2968,20 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "share.trace.read": {
+      "command": "remi share trace read",
+      "auth": [
+        "human",
+        "share",
+        "task"
+      ],
+      "capability": "share.trace.read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "label.list": {
       "command": "remi label list",
       "auth": [
@@ -3381,13 +3395,13 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "task.message.list": {
-      "command": "remi task message list",
+    "task.trace.read": {
+      "command": "remi task trace read",
       "auth": [
         "human",
         "task"
       ],
-      "capability": "task.message.list",
+      "capability": "task.trace.read",
       "output": [
         "table",
         "json",

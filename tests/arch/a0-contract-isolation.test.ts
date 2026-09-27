@@ -5,11 +5,10 @@ import { join } from "node:path";
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 /**
- * A-0 ships types, interfaces and in-memory implementations only - no runtime
- * behaviour. The acceptance criterion is that no production code path imports
- * any of it yet, so this file is that criterion's mechanical form: the moment
- * A-1/A-2/A-5/A-6 wire these modules up, these tests fail and the PR that wires
- * them must delete the corresponding entry.
+ * A-0 ships types, interfaces and in-memory implementations only. Each module
+ * remains guarded here until a follow-up imports it from runtime code; that PR
+ * removes the corresponding entry. B5 now consumes the trace contract and
+ * DaemonTraceReader interface.
  *
  * A failing test here is not a bug to work around; it means the module left the
  * "types only" phase, which is exactly what the follow-up sub-issues do.
@@ -17,12 +16,10 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 
 /** Every module A-0 adds, and whether it may be imported by runtime code yet. */
 const A0_MODULES = [
-  // Imported by nothing outside tests until A-1/A-2/A-5/A-6 wire them up.
+  // Imported by nothing outside tests until their follow-ups wire them up.
   { specifier: "@multiremi/contracts/daemon-protocol", wired: false },
-  { specifier: "@multiremi/contracts/trace", wired: false },
   { specifier: "@multiremi/worker/trace-store", wired: false },
   { specifier: "@multiremi/api/trace/trace-sink", wired: false },
-  { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: false },
   // A-0b additions: the shared sanitize point and the derived read-side values.
   // Both are called only by tests and by other A-0 modules so far. A-6 wires
   // `trace-sanitize` into the daemon's write path and A-5/A-8 wire

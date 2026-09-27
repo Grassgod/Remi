@@ -30,6 +30,7 @@ import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
+import { parseTraceWindow } from "../trace/request.js";
 
 /**
  * MUL-357: the global task list defaults to a bounded page. An unbounded call
@@ -335,13 +336,16 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/tasks/:id/steer", steerTaskRoute);
   app.get("/api/multiremi/tasks/:id/steer", listTaskSteerRoute);
   app.get("/api/tasks/:id/steer", listTaskSteerRoute);
-  const inspectTaskRoute = (c: any) => {
+  const inspectTaskRoute = async (c: any) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
     const taskDenied = denyCurrentUserWorkspaceAccess(c, store, task.workspaceId);
     if (taskDenied) return taskDenied;
     if (!canCurrentUserAccessChatTask(c, store, task)) return c.json({ error: "forbidden" }, 403);
-    return c.json({ inspection: organizerTaskInspection(store, task) });
+    return c.json({ inspection: await organizerTaskInspection(store, task, {
+      readTrace: deps.traceReader,
+      getTurnStats: deps.getOrganizerTurnStats,
+    }) });
   };
   app.get("/api/multiremi/tasks/:id/inspection", inspectTaskRoute);
   app.get("/api/tasks/:id/inspection", inspectTaskRoute);
@@ -382,6 +386,17 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
   };
   app.post("/api/multiremi/tasks/:id/redispatch", redispatchTaskRoute);
   app.post("/api/tasks/:id/redispatch", redispatchTaskRoute);
+  app.get("/api/tasks/:id/trace", async (c) => {
+    const task = taskFromParam(store, c, "id");
+    if (!task || denyCurrentUserWorkspaceAccess(c, store, task.workspaceId)
+      || !canCurrentUserAccessChatTask(c, store, task)
+      || !canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "task not found" }, 404);
+    }
+    const window = parseTraceWindow(c);
+    if (!window) return c.json({ error: "invalid trace window" }, 400);
+    return c.json(await deps.traceReader.readTrace(task.id, window.afterSeq, window.limit));
+  });
   app.get("/api/multiremi/tasks/:id/messages", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);

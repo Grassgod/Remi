@@ -44,8 +44,15 @@ export class TraceReader {
     const pointer = this.pointer(taskId);
     if (!pointer) {
       const task = this.options.store.getTask(taskId);
-      return empty(afterSeq, task && ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status)
-        ? "unreachable" : "not_found", null, "pointer_missing");
+      const active = task && ["dispatched", "running", "waiting_local_directory", "awaiting_human"].includes(task.status);
+      const runtime = task?.runtimeId ? this.options.store.getRuntime(task.runtimeId) : null;
+      return {
+        ...empty(afterSeq, active ? "unreachable" : "not_found", active ? "daemon" : null, "pointer_missing"),
+        ...(active && task?.runtimeId ? {
+          runtime_id: task.runtimeId,
+          runtime_name: runtime?.name ?? task.runtimeId,
+        } : {}),
+      };
     }
     if (pointer.location === "lost" || pointer.location === "backfilling") {
       return empty(afterSeq, pointer.location, null);
@@ -84,7 +91,7 @@ export class TraceReader {
   private async readArchive(pointer: MultiremiTaskTrace, afterSeq: number, limit: number, maxBytes: number): Promise<TraceReadResult> {
     try {
       const window = await this.options.archive.readTraceLines(pointer, afterSeq, limit);
-      return this.bounded(window.events as TraceEvent[], afterSeq, window.head, window.complete, window.closed, "archive", maxBytes);
+      return this.bounded(window.events as unknown as TraceEvent[], afterSeq, window.head, window.complete, window.closed, "archive", maxBytes);
     } catch {
       return { ...empty(afterSeq, "unreachable", "archive", "archive_read_failed"), retryable: true };
     }

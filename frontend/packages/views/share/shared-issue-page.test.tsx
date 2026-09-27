@@ -1,0 +1,109 @@
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { I18nProvider } from "@multiremi/core/i18n/react";
+import type { AgentTask, SharedTaskTracePage } from "@multiremi/core/types";
+import common from "../locales/zh-Hans/common.json";
+import issues from "../locales/zh-Hans/issues.json";
+
+const getSharedTaskTrace = vi.hoisted(() => vi.fn());
+vi.mock("@multiremi/core/api", () => ({ api: { getSharedTaskTrace } }));
+
+import { SharedTask, messageText, traceEventToMessage } from "./shared-issue-page";
+
+const task = { id: "tsk_share", agent_id: "agt_share", status: "completed" } as unknown as AgentTask;
+const resources = { "zh-Hans": { common, issues } };
+
+function renderTask() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <I18nProvider locale="zh-Hans" resources={resources}>
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      </I18nProvider>
+    );
+  }
+  return render(<SharedTask task={task} actors={[]} token="shr_test" />, { wrapper: Wrapper });
+}
+
+function page(overrides: Partial<SharedTaskTracePage> = {}): SharedTaskTracePage {
+  return {
+    events: [], next_after_seq: 0, head: 0, eof: true, closed: true,
+    source: "archive", state: "ok", ...overrides,
+  };
+}
+
+beforeEach(() => getSharedTaskTrace.mockReset());
+afterEach(() => vi.clearAllMocks());
+
+describe("SharedTask trace expansion", () => {
+  it("does not request the trace while collapsed", () => {
+    renderTask();
+    expect(getSharedTaskTrace).not.toHaveBeenCalled();
+  });
+
+  it("loads all pages in seq order after expansion without a load-more control", async () => {
+    const user = userEvent.setup();
+    getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) =>
+      afterSeq === 0
+        ? page({ events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "first" }], next_after_seq: 1, head: 3, eof: false })
+        : page({ events: [{ seq: 3, ts: "2026-09-28T00:00:01Z", type: "text", content: "third" }], next_after_seq: 3, head: 3 }));
+    renderTask();
+    await user.click(screen.getByText("agt_share"));
+    await waitFor(() => expect(screen.getByText("third")).toBeInTheDocument());
+    expect(screen.getByText("first")).toBeInTheDocument();
+    expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1]);
+    expect(screen.queryByText(/加载更多/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["unreachable", "daemon〈Desk〉当前离线", "Desk"],
+    ["lost", "已随 daemon 退役丢失", undefined],
+    ["backfilling", "归档回填中", undefined],
+    ["not_found", null, undefined],
+  ] as const)("renders %s without trace events", async (state, expected, runtimeName) => {
+    const user = userEvent.setup();
+    getSharedTaskTrace.mockResolvedValue(page({ state, source: null, runtime_name: runtimeName }));
+    renderTask();
+    await user.click(screen.getByText("agt_share"));
+    await waitFor(() => expect(getSharedTaskTrace).toHaveBeenCalledTimes(1));
+    if (expected) expect(await screen.findByText(expected)).toBeInTheDocument();
+    else await waitFor(() => expect(screen.queryByText("正在加载过程记录…")).not.toBeInTheDocument());
+    expect(screen.queryByText("text")).not.toBeInTheDocument();
+  });
+
+  it("retries a network failure when closed and reopened", async () => {
+    const user = userEvent.setup();
+    getSharedTaskTrace.mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce(page({ events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "recovered" }], next_after_seq: 1, head: 1 }));
+    renderTask();
+    await user.click(screen.getByText("agt_share"));
+    expect(await screen.findByText("过程记录加载失败，请收起后重试")).toBeInTheDocument();
+    await user.click(screen.getByText("agt_share"));
+    await user.click(screen.getByText("agt_share"));
+    expect(await screen.findByText("recovered")).toBeInTheDocument();
+    expect(getSharedTaskTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders the same content from legacy inline messages and trace events", async () => {
+    const fixtures = [
+      { seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "same text" },
+      { seq: 2, ts: "2026-09-28T00:00:01Z", type: "tool_result", output: "same output" },
+      { seq: 3, ts: "2026-09-28T00:00:02Z", type: "tool_use", input: { command: "ls" } },
+    ];
+    const legacy = fixtures.map((event) => ({ ...event, id: `msg_${event.seq}` }));
+    const user = userEvent.setup();
+    getSharedTaskTrace.mockResolvedValue(page({ events: fixtures, next_after_seq: 3, head: 3 }));
+    renderTask();
+    await user.click(screen.getByText("agt_share"));
+    await waitFor(() => expect(screen.getByText("same output")).toBeInTheDocument());
+    for (const [index, event] of fixtures.entries()) {
+      const oldText = messageText(legacy[index]!);
+      const newText = messageText(traceEventToMessage(event));
+      expect(newText).toBe(oldText);
+      expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === newText)).toBeInTheDocument();
+    }
+  });
+});

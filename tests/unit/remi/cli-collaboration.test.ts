@@ -575,8 +575,9 @@ describe("native collaboration CLI contracts", () => {
     }
 
     const taskMessages = registry.resolve(["task", "messages", "tsk_1", "--since", "4"]);
-    expect(taskMessages?.spec.id).toBe("task.message.list");
+    expect(taskMessages?.spec.id).toBe("task.trace.read");
     expect(taskMessages?.options.since).toBe(4);
+    expect(registry.resolve(["task", "message", "list", "tsk_1"])?.spec.id).toBe("task.trace.read");
   });
 
   it("keeps issue list output byte-compatible with the legacy handler", async () => {
