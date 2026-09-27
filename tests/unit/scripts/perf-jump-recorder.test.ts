@@ -73,6 +73,7 @@ function view(top: number, options: { scrollTop?: number; skeleton?: boolean; ke
       },
     ],
     state: null,
+    fresh: null,
   };
 }
 
@@ -353,13 +354,15 @@ describe("computeAppReadyMs", () => {
       { t: 130.5, value: "pending" },
       { t: 480.2, value: "ready" },
     ];
-    expect(computeAppReadyMs(transitions)).toEqual({ appReadyMs: 480.2, forced: false });
+    expect(computeAppReadyMs(transitions)).toEqual({ appReadyMs: 480.2, forced: false, readyForced: false });
   });
 
   it("flags the S2 fallback path and stays null when the app never reports", () => {
-    expect(computeAppReadyMs([{ t: 900, value: "ready-forced" }])).toEqual({ appReadyMs: 900, forced: true });
-    expect(computeAppReadyMs([{ t: 40, value: "pending" }])).toEqual({ appReadyMs: null, forced: false });
-    expect(computeAppReadyMs([])).toEqual({ appReadyMs: null, forced: false });
+    expect(computeAppReadyMs([{ t: 900, value: "ready-forced" }]))
+      .toEqual({ appReadyMs: 900, forced: true, readyForced: true });
+    expect(computeAppReadyMs([{ t: 40, value: "pending" }]))
+      .toEqual({ appReadyMs: null, forced: false, readyForced: false });
+    expect(computeAppReadyMs([])).toEqual({ appReadyMs: null, forced: false, readyForced: false });
   });
 
   it("prefers ready over an earlier forced value and sorts out-of-order entries", () => {
@@ -369,6 +372,51 @@ describe("computeAppReadyMs", () => {
     ]);
     expect(result.appReadyMs).toBe(900);
     expect(result.forced).toBe(false);
+  });
+
+  // MUL-443's `data-perf-fresh` contract: once the app publishes the freshness
+  // attribute, a bare `ready` is not enough — it has to say `fresh=1` too.
+  it("ignores a ready the app published before its data was fresh", () => {
+    const result = computeAppReadyMs([
+      { t: 200, value: "ready", fresh: "0" },
+      { t: 640, value: "ready", fresh: "1" },
+    ]);
+    expect(result.appReadyMs).toBe(640);
+    expect(result.forced).toBe(false);
+  });
+
+  it("keeps the pre-fresh reading while the attribute is absent", () => {
+    const result = computeAppReadyMs([
+      { t: 200, value: "ready", fresh: null },
+      { t: 640, value: "ready", fresh: "1" },
+    ]);
+    expect(result.appReadyMs).toBe(200);
+  });
+
+  it("never treats a fresh ready-forced as a loaded page, but still reports it", () => {
+    const onlyForced = computeAppReadyMs([{ t: 900, value: "ready-forced", fresh: "1" }]);
+    expect(onlyForced.appReadyMs).toBe(900);
+    expect(onlyForced.forced).toBe(true);
+    expect(onlyForced.readyForced).toBe(true);
+
+    // A round that forced first and then settled properly reports the settled
+    // time and still flags that the fallback fired.
+    const recovered = computeAppReadyMs([
+      { t: 900, value: "ready-forced", fresh: "1" },
+      { t: 1500, value: "ready", fresh: "1" },
+    ]);
+    expect(recovered.appReadyMs).toBe(1500);
+    expect(recovered.forced).toBe(false);
+    expect(recovered.readyForced).toBe(true);
+  });
+
+  it("falls back to ready-forced when fresh never becomes 1", () => {
+    const result = computeAppReadyMs([
+      { t: 300, value: "ready", fresh: "0" },
+      { t: 900, value: "ready-forced", fresh: "0" },
+    ]);
+    expect(result.appReadyMs).toBe(900);
+    expect(result.forced).toBe(true);
   });
 });
 
@@ -735,7 +783,7 @@ describe("injectInboxTarget", () => {
     // Without this the measured round would page the UI to reach a target the
     // probe found on page 2+, which would fold the target's age into readyMs.
     const body = { items: [other], limit: 50, has_more: true };
-    const injected = injectInboxTarget(body, target, { hasCursor: false }) as { items: unknown[] };
+    const injected = injectInboxTarget(body, target, { hasCursor: false }) as { items: unknown[]; has_more?: boolean };
     expect(injected.items).toHaveLength(2);
     expect(injected.items).toContainEqual(target);
     expect(injected.has_more).toBe(true);

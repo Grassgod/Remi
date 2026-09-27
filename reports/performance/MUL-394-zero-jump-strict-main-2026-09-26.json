@@ -1,0 +1,1210 @@
+{
+  "kind": "mul394-zero-jump",
+  "strict": true,
+  "startedAt": "2026-09-26T23:03:52.668Z",
+  "finishedAt": "2026-09-26T23:06:13.216Z",
+  "commit": "4248ef0767c687116beac08e1fae55033f580ac1",
+  "fixture": {
+    "longComments": 250,
+    "longCodeBlocks": 20,
+    "longImages": 5,
+    "sessions": 3,
+    "runningMessages": 6
+  },
+  "rounds": [
+    {
+      "key": "detail-short",
+      "mode": "cold",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1653.0999994277954,
+      "readyTimeout": false,
+      "firstRealMs": 1653.0999994277954,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-short",
+      "mode": "cold",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1341,
+      "readyTimeout": false,
+      "firstRealMs": 1341,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-short",
+      "mode": "cold",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1372.4000005722046,
+      "readyTimeout": false,
+      "firstRealMs": 1372.4000005722046,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-short",
+      "mode": "warm",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1954.6000003814697,
+      "readyTimeout": false,
+      "firstRealMs": 1954.6000003814697,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-short",
+      "mode": "warm",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1976.0999994277954,
+      "readyTimeout": false,
+      "firstRealMs": 1976.0999994277954,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-short",
+      "mode": "warm",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_short",
+      "readyMs": 1954.3000001907349,
+      "readyTimeout": false,
+      "firstRealMs": 1954.3000001907349,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 450.3,
+        "bottom": 527,
+        "height": 76.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "cold",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1478.7000007629395,
+      "readyTimeout": false,
+      "firstRealMs": 1478.7000007629395,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "cold",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1451.6999998092651,
+      "readyTimeout": false,
+      "firstRealMs": 1451.6999998092651,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "cold",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1413.3000001907349,
+      "readyTimeout": false,
+      "firstRealMs": 1413.3000001907349,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "warm",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 2034.1000003814697,
+      "readyTimeout": false,
+      "firstRealMs": 2034.1000003814697,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "warm",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 2093.800000190735,
+      "readyTimeout": false,
+      "firstRealMs": 2093.800000190735,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long",
+      "mode": "warm",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 2073.5,
+      "readyTimeout": false,
+      "firstRealMs": 2073.5,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 564.3,
+        "bottom": 832.5,
+        "height": 268.2,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "cold",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1219.1999998092651,
+      "readyTimeout": false,
+      "firstRealMs": 1383,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 431.8,
+        "bottom": 475.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "cold",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1200.5,
+      "readyTimeout": false,
+      "firstRealMs": 1371.3000001907349,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 431.8,
+        "bottom": 475.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "cold",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1199.5,
+      "readyTimeout": false,
+      "firstRealMs": 1368.2999992370605,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 431.8,
+        "bottom": 475.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "warm",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1736.6000003814697,
+      "readyTimeout": false,
+      "firstRealMs": 1975.9000005722046,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 296.8,
+        "bottom": 340.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "warm",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1821.0999994277954,
+      "readyTimeout": false,
+      "firstRealMs": 2053.699999809265,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 296.8,
+        "bottom": 340.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-running",
+      "mode": "warm",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_running",
+      "readyMs": 1736.7000007629395,
+      "readyTimeout": false,
+      "firstRealMs": 1969.4000005722046,
+      "anchorName": "agent-stream",
+      "anchorRectAtReady": {
+        "top": 296.8,
+        "bottom": 340.8,
+        "height": 44,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "cold",
+      "round": 1,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 1764.8999996185303,
+      "readyTimeout": false,
+      "firstRealMs": 1494.3000001907349,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [
+        {
+          "startMs": 1764.8999996185303,
+          "endMs": 1764.8999996185303,
+          "px": 8359.8,
+          "scrollPx": 2450,
+          "kind": "content",
+          "frames": 1
+        }
+      ],
+      "jumpCount": 1,
+      "jumpPx": 8359.8,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "cold",
+      "round": 2,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 1629.5999994277954,
+      "readyTimeout": false,
+      "firstRealMs": 1381,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [
+        {
+          "startMs": 1629.5999994277954,
+          "endMs": 1629.5999994277954,
+          "px": 8359.8,
+          "scrollPx": 2450,
+          "kind": "content",
+          "frames": 1
+        }
+      ],
+      "jumpCount": 1,
+      "jumpPx": 8359.8,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "cold",
+      "round": 3,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 1648.3000001907349,
+      "readyTimeout": false,
+      "firstRealMs": 1393.6999998092651,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [
+        {
+          "startMs": 1648.3000001907349,
+          "endMs": 1648.3000001907349,
+          "px": 8359.8,
+          "scrollPx": 2450,
+          "kind": "content",
+          "frames": 1
+        }
+      ],
+      "jumpCount": 1,
+      "jumpPx": 8359.8,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "warm",
+      "round": 1,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 2206.9000005722046,
+      "readyTimeout": false,
+      "firstRealMs": 2206.9000005722046,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "warm",
+      "round": 2,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 2206.300000190735,
+      "readyTimeout": false,
+      "firstRealMs": 2206.300000190735,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "warm",
+      "round": 3,
+      "url": "http://localhost:17500/local/inbox?issue=iss_zerojump_long&session=ises_w4egpkyw74y7",
+      "readyMs": 2156.699999809265,
+      "readyTimeout": false,
+      "firstRealMs": 2156.699999809265,
+      "anchorName": "target-comment",
+      "anchorRectAtReady": {
+        "top": 312.5,
+        "bottom": 523,
+        "height": 210.5,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long-sidebar",
+      "mode": "cold",
+      "round": 1,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1506.2000007629395,
+      "readyTimeout": false,
+      "firstRealMs": 1506.2000007629395,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 521.8,
+        "bottom": 835.5,
+        "height": 313.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long-sidebar",
+      "mode": "cold",
+      "round": 2,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1497.0999994277954,
+      "readyTimeout": false,
+      "firstRealMs": 1497.0999994277954,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 521.8,
+        "bottom": 835.5,
+        "height": 313.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    },
+    {
+      "key": "detail-long-sidebar",
+      "mode": "cold",
+      "round": 3,
+      "url": "http://localhost:17500/local/issues/iss_zerojump_long",
+      "readyMs": 1499,
+      "readyTimeout": false,
+      "firstRealMs": 1499,
+      "anchorName": "latest-comment",
+      "anchorRectAtReady": {
+        "top": 521.8,
+        "bottom": 835.5,
+        "height": 313.7,
+        "rootHeight": 836
+      },
+      "jumps": [],
+      "jumpCount": 0,
+      "jumpPx": 0,
+      "skeletons": 0,
+      "appReadyMs": null,
+      "appReadyForced": false,
+      "appReadyForcedSeen": false,
+      "perfState": null,
+      "perfFresh": null,
+      "blockedWrites": 0,
+      "stubbedWrites": 0,
+      "foreignRequests": [],
+      "inboxInjected": false,
+      "error": null
+    }
+  ],
+  "rows": [
+    {
+      "key": "detail-short",
+      "mode": "cold",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-short::cold",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-short",
+      "mode": "warm",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-short::warm",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-long",
+      "mode": "cold",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-long::cold",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-long",
+      "mode": "warm",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-long::warm",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-running",
+      "mode": "cold",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-running::cold",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-running",
+      "mode": "warm",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-running::warm",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "cold",
+      "repetitions": 3,
+      "observed": [
+        [
+          "jumps",
+          "perf-state"
+        ],
+        [
+          "jumps",
+          "perf-state"
+        ],
+        [
+          "jumps",
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-deeplink::cold",
+      "violations": [
+        [
+          "jumps",
+          "perf-state"
+        ],
+        [
+          "jumps",
+          "perf-state"
+        ],
+        [
+          "jumps",
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-deeplink",
+      "mode": "warm",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-deeplink::warm",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    },
+    {
+      "key": "detail-long-sidebar",
+      "mode": "cold",
+      "repetitions": 3,
+      "observed": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ],
+      "pair": "detail-long-sidebar::cold",
+      "violations": [
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ],
+        [
+          "perf-state"
+        ]
+      ]
+    }
+  ],
+  "verdict": {
+    "ok": false,
+    "checkedPairs": [],
+    "failures": [
+      {
+        "key": "detail-short",
+        "mode": "cold",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-short::cold violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-short",
+        "mode": "warm",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-short::warm violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-long",
+        "mode": "cold",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-long::cold violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-long",
+        "mode": "warm",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-long::warm violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-running",
+        "mode": "cold",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-running::cold violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-running",
+        "mode": "warm",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-running::warm violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-deeplink",
+        "mode": "cold",
+        "rule": "unlisted-violation",
+        "violations": [
+          "jumps",
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-deeplink::cold violated jumps, perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-deeplink",
+        "mode": "warm",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-deeplink::warm violated perf-state — strict mode ignores the allowlist"
+      },
+      {
+        "key": "detail-long-sidebar",
+        "mode": "cold",
+        "rule": "unlisted-violation",
+        "violations": [
+          "perf-state"
+        ],
+        "staleViolations": [],
+        "message": "detail-long-sidebar::cold violated perf-state — strict mode ignores the allowlist"
+      }
+    ]
+  }
+}
