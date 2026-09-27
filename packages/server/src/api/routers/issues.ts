@@ -38,6 +38,7 @@ import {
   attachmentCompatibilityResponse,
   cleanString,
   commentCompatibilityResponse,
+  currentRequestUserId,
   currentTaskAccessToken,
   currentAccessToken,
   hasRequestField,
@@ -64,6 +65,8 @@ import {
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
   stripServerOwnedAssignFields,
+  stripServerOwnedIssueCreateFields,
+  stripServerOwnedQuickCreateFields,
   stripServerOwnedIssueUpdateFields,
   stripServerOwnedSessionTaskFields,
   issueUsageResponse,
@@ -683,9 +686,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
+    // MUL-448: the creator is the credentialed caller, as on the compat route.
     const issue = store.createIssue({
-      ...body,
+      ...stripServerOwnedIssueCreateFields(body),
       workspaceId,
+      created_by: currentRequestUserId(c),
       assigneeType: null,
       assignee_type: null,
       assigneeId: null,
@@ -806,7 +811,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    const result = safeQuickCreateIssue(store, { ...body, workspaceId });
+    // MUL-448: same rule for the requester stamped onto the new issue.
+    const result = safeQuickCreateIssue(store, {
+      ...stripServerOwnedQuickCreateFields(body),
+      workspaceId,
+      requesterId: currentRequestUserId(c),
+    });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
       taskId: result.task.id,
@@ -823,7 +833,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<QuickCreateIssueInput>(c);
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
-    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
+    const input = {
+      ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
+      workspaceId,
+      requester_id: currentRequestUserId(c),
+    };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");

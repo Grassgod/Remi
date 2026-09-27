@@ -380,6 +380,28 @@ export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput)
   return stripRequestFields(input, SERVER_OWNED_SESSION_TASK_FIELDS);
 }
 
+/**
+ * MUL-448: the issue creator is the credentialed caller on both create routes.
+ *
+ * `/api/issues` (compat) already rewrites it through
+ * `withIssueCreateRequestContext`; the native route and the native quick-create
+ * passed the body straight to the store, so a member could file an issue (and
+ * become its subscriber / the default session's creator) under someone else's
+ * id. Strip both spellings and let the route stamp the authenticated user.
+ */
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+
+export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
+}
+
+/** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+
+export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);
+}
+
 function stripRequestFields<T extends object>(input: T, fields: readonly string[]): T {
   const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
   for (const field of fields) delete out[field];

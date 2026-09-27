@@ -289,6 +289,35 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
     expect(store.getTask(body.task.id)!.parentTaskId).toBeNull();
   });
 
+  it("stamps the credentialed creator on both issue-create and quick-create routes", async () => {
+    const { store, app, agentId, headers, owner } = await fixture();
+    const decoy = store.getOrCreateUser({ email: "mul448-decoy@example.test", name: "MUL448 Decoy" });
+
+    for (const [label, prefix] of [["compat", "/api"], ["native", "/api/multiremi"]] as const) {
+      const created = await app.request(`${prefix}/issues`, {
+        method: "POST", headers,
+        body: JSON.stringify({ title: `Creator probe (${label})`, created_by: decoy.id, createdBy: decoy.id }),
+      });
+      expect(created.status).toBe(201);
+      const createdBody = (await created.json()) as any;
+      const issueId = createdBody.id ?? createdBody.issue?.id;
+      expect(store.getIssue(issueId)!.createdBy).toBe(owner.id);
+
+      const quick = await app.request(`${prefix}/issues/quick-create`, {
+        method: "POST", headers,
+        body: JSON.stringify({
+          prompt: `Quick creator probe (${label})`,
+          agent_id: agentId,
+          requester_id: decoy.id,
+          requesterId: decoy.id,
+        }),
+      });
+      expect(quick.status).toBe(202);
+      const quickBody = (await quick.json()) as any;
+      expect(store.getIssue(quickBody.issue.id)!.createdBy).toBe(owner.id);
+    }
+  });
+
   it("strips the session task route's snake_case lineage and source event", async () => {
     const { store, app, agentId, headers } = await fixture();
     const issue = store.createIssue({ title: "Session task lineage" });
