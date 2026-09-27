@@ -90,6 +90,7 @@ function harness(options: {
   authorize?: (daemonId: string, runtimeId: string) => DaemonSessionRuntimeAuthorization;
   traceHeads?: () => Record<string, number>;
   rpc?: (type: string) => unknown | null;
+  heartbeat?: () => unknown;
 } = {}): Harness {
   const socket = new FakeDaemonSocket();
   const registry = new DaemonSessionRegistry();
@@ -106,6 +107,7 @@ function harness(options: {
       options.authorize?.(daemonId, runtimeId) ?? { runtimeId, ok: true, scope: "daemon" },
     traceHeads: options.traceHeads,
     onFrame: (sample) => frames.push(sample),
+    onHeartbeat: options.heartbeat,
     onRpc: (frame) => {
       rpcCalls.push(frame.type);
       return options.rpc ? options.rpc(frame.type) : null;
@@ -792,7 +794,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
   it("answers server_error when an rpc handler throws, and keeps the connection", async () => {
     const h = harness({
       rpc: (type) => {
-        if (type === "trace.head") throw new Error("handler exploded");
+        if (type === "trace.head") throw new Error("handler exploded with sensitive payload");
         return { ok: true };
       },
     });
@@ -815,14 +817,37 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       event: "daemon_protocol_frame_failed",
       session_id: "dws_test",
       frame_type: "trace.head",
-      error: "handler exploded",
+      direction: "rpc",
     });
+    expect(lines[0]).not.toContain("sensitive payload");
 
     // And processing continues: the next frame is served normally.
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "trace.fetch", id: "b", ts: 2, p: {} }));
     expect(h.rpcCalls).toEqual(["trace.head", "trace.fetch"]);
     expect(h.session.isClosed).toBe(false);
     expect(h.socket.lastOfType("res")).toMatchObject({ re: "b", p: { ok: true } });
+  });
+
+  it("answers a failed reliable frame using its seq and logs no exception content", async () => {
+    const h = harness({
+      heartbeat: () => { throw new Error("sensitive payload"); },
+    });
+    await handshake(h);
+    const lines = await captureWarnings(() =>
+      h.session.handleMessage(JSON.stringify({ v: 2, t: "hb", seq: 17, ts: 2, p: {} })),
+    );
+
+    expect(h.socket.lastOfType("res")).toMatchObject({
+      re: "17",
+      p: { ok: false, code: "server_error", retryable: true },
+    });
+    expect(h.frames.at(-1)).toMatchObject({ type: "hb", errorCode: "server_error" });
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      session_id: "dws_test",
+      frame_type: "hb",
+      direction: "uplink",
+    });
+    expect(lines[0]).not.toContain("sensitive payload");
   });
 
   it("closes 4001 when the handshake itself throws, since there is no id to answer through", async () => {

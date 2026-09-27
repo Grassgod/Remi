@@ -582,18 +582,16 @@ export class DaemonProtocolSession {
     dbBefore: { dbMs: number; dbQueries: number },
     error: unknown,
   ): void {
-    const message = error instanceof Error ? error.message : String(error);
-    const replyTo = frame.re ?? frame.id ?? null;
+    const replyTo = frame.seq !== null ? String(frame.seq) : frame.id;
+    const direction = daemonFrameCategory(frame.type) === "rpc" ? "rpc" : "uplink";
     try {
       console.warn(JSON.stringify({
         event: "daemon_protocol_frame_failed",
         session_id: this.sessionId,
         daemon_id: this.daemonId || null,
         frame_type: frame.type,
+        direction,
         handshake_complete: this.handshakeComplete,
-        // The message only. A payload can carry task content and credentials, and
-        // this line goes to stdout where it would be persisted.
-        error: message,
       }));
     } catch {
       // A hostile console is not worth failing the connection over.
