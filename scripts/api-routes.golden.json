@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 759,
+    "routeCount": 760,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 535,
+      "compat": 536,
       "root": 14
     },
-    "getRoutes": 324,
-    "getRoutesWithBody": 321,
+    "getRoutes": 325,
+    "getRoutesWithBody": 322,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -183,6 +183,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -927,6 +928,7 @@
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
@@ -4964,7 +4966,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -4985,7 +4988,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5006,7 +5010,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5027,7 +5032,8 @@
           "response": {},
           "respondedBy": "local",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5048,7 +5054,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -5069,7 +5076,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -13908,6 +13916,16 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/decision-cards",
+      "status": 403,
+      "body": {
+        "error": "daemon token required",
+        "code": "daemon_token_required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
       "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot/outbound/whd_8rcx9z88woyu/attachments/att_snapshot",
@@ -14079,7 +14097,8 @@
           "response": null,
           "respondedBy": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "expiresAt": "<timestamp>"
         }
       }
     },
@@ -22178,7 +22197,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }
@@ -23438,7 +23458,8 @@
             "response": null,
             "respondedBy": null,
             "createdAt": "<timestamp>",
-            "respondedAt": null
+            "respondedAt": null,
+            "expiresAt": "<timestamp>"
           }
         ]
       }

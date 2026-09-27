@@ -1889,6 +1889,17 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessTask(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueTaskHumanRequest(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
+  }
+
+  listFeishuBotLiveDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): ReturnType<FeishuBotRepo["listLiveDecisionCards"]> {
+    return this.feishuBot.listLiveDecisionCards(workspaceId, runtimeId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -3074,6 +3085,7 @@ runMigrations(this.db);
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
+    supportsDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -4653,11 +4665,15 @@ runMigrations(this.db);
     requestId: string,
     input: { response: Record<string, unknown>; respondedBy?: string | null },
   ): MultiremiTaskHumanRequest | null {
-    return this.tasks.respondTaskHumanRequest(requestId, input);
+    const request = this.tasks.respondTaskHumanRequest(requestId, input);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
-    return this.tasks.expireTaskHumanRequest(requestId, status);
+    const request = this.tasks.expireTaskHumanRequest(requestId, status);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {

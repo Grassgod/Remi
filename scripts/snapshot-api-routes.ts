@@ -1118,7 +1118,10 @@ class Recorder {
 }
 
 async function buildApp(
-  db: Database = new Database(":memory:"),
+  // Declare the backend: the store runs migrations immediately, and an
+  // inherited MULTIREMI_DATABASE_URL must not turn this SQLite fixture into a
+  // Postgres migration (MUL-407).
+  db: Database = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }),
 ): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);

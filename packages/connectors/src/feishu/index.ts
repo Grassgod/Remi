@@ -24,7 +24,7 @@ import {
 } from "./sdk.js";
 import { createFeishuClient } from "./sdk.js";
 import { createAdapter } from "./sdk.js";
-import { sendMessageFeishu } from "./send.js";
+import { sendMessageFeishu, updateCardFeishu } from "./send.js";
 import type { HandleTaskStreamOpts } from "./channel.js";
 import { sendAttachmentFeishu, uploadImageFeishu, type FeishuAttachmentSendInput } from "./media.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
@@ -155,6 +155,40 @@ export class FeishuConnector implements Connector {
 
   async sendProactiveAttachment(input: FeishuAttachmentSendInput): Promise<{ messageId: string }> {
     return sendAttachmentFeishu(createFeishuClient(this._config), input);
+  }
+
+  /** Post a server-built card into a topic (MUL-407 decision cards). */
+  async sendProactiveCard(input: {
+    chatId: string;
+    replyToMessageId?: string;
+    card: Record<string, unknown>;
+    idempotencyKey: string;
+  }): Promise<{ messageId: string }> {
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+    const result = await sendCardFeishu(client, input.chatId, input.card, {
+      replyToMessageId: input.replyToMessageId,
+      idempotencyKey: input.idempotencyKey,
+    });
+    return { messageId: result.messageId };
+  }
+
+  /** Rewrite a card already posted into a topic, in place. */
+  async updateProactiveCard(messageId: string, card: Record<string, unknown>): Promise<void> {
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+    await updateCardFeishu(client, messageId, card);
+  }
+
+  /** Resolve the group owner for a decision card's @ before it is sent. */
+  resolveDecisionRecipient(chatId: string, signal?: AbortSignal): Promise<string | null> {
+    return this.resolveProactiveMention(chatId, { mode: "group_owner" }, signal);
   }
 
   streamProactiveTask(chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>,
