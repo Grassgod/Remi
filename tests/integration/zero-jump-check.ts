@@ -231,6 +231,16 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     // first frame is a different mechanism from the detail page's own reveal, so
     // conflating it with `detail-long` would make the allowlist unable to say
     // "long is fixed, the sidebar round is not".
+    //
+    // Cold only. The width is restored from localStorage while the page loads, so
+    // the round has to *be* that whole-page load; a warm round enters through the
+    // issues list, where the sidebar is already restored at the non-default width,
+    // and then navigates in-app with no width change left to make. Its warm shape
+    // is therefore just `detail-long::warm` and measures nothing extra.
+    // Measured anyway by QA with a separate probe on the same recorder contract:
+    // 3/3 warm rounds, jumps = 0, skeletons 0, width held at 360
+    // (MUL-394 `cmt_48kfa37phg9x`). Kept out of the matrix rather than adding a
+    // row that only re-measures `detail-long`.
     ...detail("detail-long-sidebar", fixture.longIssueId, { sidebarWidth: NON_DEFAULT_SIDEBAR_WIDTH }).filter(
       (scenario) => scenario.mode === "cold",
     ),

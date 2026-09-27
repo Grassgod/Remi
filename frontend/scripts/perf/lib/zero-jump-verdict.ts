@@ -166,6 +166,45 @@ export function judgeZeroJumpRun(input: {
 }
 
 /**
+ * The one-way ratchet over the frozen strict baseline.
+ *
+ * `judgeZeroJumpRun` answers "does *this run* violate its allowlisted kinds?"
+ * on every CI run, which is what actually enforces rules a-c. It cannot
+ * enforce "the debt record may only shrink", because it only ever sees the
+ * current run.
+ *
+ * This is the other half, and it is deliberately **one-way**: the allowlist may
+ * cover fewer rows and fewer kinds than the baseline, and must never cover more.
+ * Equality is what a two-way comparison would demand, and equality is wrong —
+ * it would fail the moment anyone did the documented thing (fix a kind, delete
+ * it from the row), which is the mechanism the whole allowlist exists for. The
+ * baseline is a frozen record of what main looked like when it was captured;
+ * the allowlist is today's debt.
+ *
+ * Returns the problems found, empty when the ratchet holds.
+ */
+export function allowlistWithinBaseline(
+  allowlist: ZeroJumpAllowlist,
+  baselineRows: ReadonlyArray<{ pair: string; violations: readonly ZeroJumpViolation[] }>,
+): string[] {
+  const baseline = new Map(baselineRows.map((row) => [row.pair, new Set<ZeroJumpViolation>(row.violations)]));
+  const problems: string[] = [];
+  for (const row of allowlist.rows) {
+    const pair = zeroJumpPairKey(row);
+    const allowed = baseline.get(pair);
+    if (!allowed) {
+      problems.push(`${pair}: not in the strict baseline — a new row needs a fresh baseline report attached to the same change`);
+      continue;
+    }
+    const extra = row.violations.filter((kind) => !allowed.has(kind));
+    if (extra.length > 0) {
+      problems.push(`${pair}: ${extra.join(", ")} is not in the strict baseline for this row — a new kind needs a fresh baseline report`);
+    }
+  }
+  return problems;
+}
+
+/**
  * Fail loudly on an allowlist that cannot be judged: a row without a reason or
  * owner, a duplicate pair, or an unknown violation kind. A broken debt record
  * must not read as "nothing to check".

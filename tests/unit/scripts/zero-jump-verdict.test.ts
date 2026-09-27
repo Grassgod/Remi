@@ -7,11 +7,13 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+  allowlistWithinBaseline,
   judgeZeroJumpRun,
   validateZeroJumpAllowlist,
   zeroJumpPairKey,
   type ZeroJumpAllowlist,
   type ZeroJumpRowResult,
+  type ZeroJumpViolation,
 } from "../../../frontend/scripts/perf/lib/zero-jump-verdict";
 
 /** One row of a run: the kinds each repetition showed. */
@@ -187,7 +189,12 @@ describe("zero jump verdict — the shipped allowlist", () => {
     }
   });
 
-  it("matches the strict run on main one-to-one", async () => {
+  // "Does this run match its allowlist?" is enforced by the check itself on every
+  // CI run (rules a-c, judgeZeroJumpRun). What no run can enforce is the ratchet:
+  // the debt record must never *grow* past the frozen baseline. Kept one-way on
+  // purpose — equality would fail the moment anyone fixes a kind and deletes it,
+  // which is exactly the flow the allowlist exists to carry.
+  it("only narrows the strict baseline", async () => {
     const allowlist = JSON.parse(await Bun.file(allowlistPath).text()) as ZeroJumpAllowlist;
     const report = JSON.parse(await Bun.file(strictReportPath).text()) as {
       strict: boolean;
@@ -195,29 +202,131 @@ describe("zero jump verdict — the shipped allowlist", () => {
     };
     expect(report.strict).toBe(true);
 
-    const strictPairs = new Map<string, Set<string>>();
-    for (const row of report.rows) {
-      const kinds = new Set(row.observed.flat());
-      strictPairs.set(row.pair, kinds);
-    }
-    const allowlistPairs = new Map(
-      allowlist.rows.map((row) => [zeroJumpPairKey(row), new Set<string>(row.violations)]),
-    );
+    const baselineRows = report.rows.map((row) => ({
+      pair: row.pair,
+      violations: [...new Set(row.observed.flat())] as ZeroJumpViolation[],
+    }));
+    expect(baselineRows.length).toBeGreaterThan(0);
+    expect(allowlistWithinBaseline(allowlist, baselineRows)).toEqual([]);
 
-    expect([...strictPairs.keys()].sort()).toEqual([...allowlistPairs.keys()].sort());
-    for (const [pair, kinds] of strictPairs) {
-      expect([...kinds].sort()).toEqual([...(allowlistPairs.get(pair) ?? new Set<string>())].sort());
-    }
+    // The shipped allowlist covers every baseline row today, so a stricter
+    // reading is still meaningful: nothing was silently dropped. A future
+    // shrink (MUL-443 / MUL-444 / MUL-393) is expected to relax this and is not
+    // an error — the ratchet above is the invariant.
+    const baselinePairs = new Set(baselineRows.map((row) => row.pair));
+    const allowlistPairs = new Set(allowlist.rows.map((row) => zeroJumpPairKey(row)));
+    expect(allowlistPairs.size).toBeGreaterThan(0);
+    for (const pair of allowlistPairs) expect(baselinePairs.has(pair)).toBe(true);
   });
 
-  it("keys the deep link and the sidebar round as their own rows", async () => {
+  it("allows the documented shrink of a kind and of a whole row", async () => {
     const allowlist = JSON.parse(await Bun.file(allowlistPath).text()) as ZeroJumpAllowlist;
-    const pairs = allowlist.rows.map((row) => zeroJumpPairKey(row));
-    // The sidebar round shares an issue with `detail-long` but must not share
-    // its row, or the allowlist could not say which mechanism is fixed.
-    expect(pairs).toContain("detail-long-sidebar::cold");
-    expect(pairs).toContain("detail-long::cold");
-    expect(pairs).not.toContain("detail-long-sidebar::warm");
+    const report = JSON.parse(await Bun.file(strictReportPath).text()) as {
+      rows: Array<{ pair: string; observed: string[][] }>;
+    };
+    const baselineRows = report.rows.map((row) => ({
+      pair: row.pair,
+      violations: [...new Set(row.observed.flat())] as ZeroJumpViolation[],
+    }));
+
+    // Drop the deep link's `jumps` and one whole row: both are legitimate.
+    const narrowed: ZeroJumpAllowlist = {
+      rows: allowlist.rows
+        .filter((row) => !(row.key === "detail-long" && row.mode === "cold"))
+        .map((row) => row.key === "detail-deeplink" && row.mode === "cold"
+          ? { ...row, violations: row.violations.filter((kind) => kind !== "jumps") }
+          : row),
+    };
+    expect(allowlistWithinBaseline(narrowed, baselineRows)).toEqual([]);
+  });
+
+  // The sidebar round shares an issue with `detail-long` but is a different
+  // mechanism, so the harness has to key it separately or the debt record could
+  // not say which of the two is fixed. Asserted against the frozen baseline,
+  // which is where "the harness produced these keys" is a stable fact; asserting
+  // it against the allowlist would forbid dropping a row once it is fixed.
+  it("keys the deep link and the sidebar round as their own rows", async () => {
+    const report = JSON.parse(await Bun.file(strictReportPath).text()) as {
+      rows: Array<{ pair: string }>;
+    };
+    const baselinePairs = report.rows.map((row) => row.pair);
+    expect(baselinePairs).toContain("detail-long-sidebar::cold");
+    expect(baselinePairs).toContain("detail-long::cold");
+    expect(baselinePairs).toContain("detail-deeplink::cold");
+    // The sidebar round is cold-only, so its warm shape must never appear.
+    expect(baselinePairs).not.toContain("detail-long-sidebar::warm");
+
+    // Whatever the allowlist still carries must keep those keys distinct: a row
+    // keyed `detail-long-sidebar` may only be the cold round.
+    const allowlist = JSON.parse(await Bun.file(allowlistPath).text()) as ZeroJumpAllowlist;
+    for (const row of allowlist.rows) {
+      if (row.key !== "detail-long-sidebar") continue;
+      expect(row.mode).toBe("cold");
+      expect(zeroJumpPairKey(row)).toBe("detail-long-sidebar::cold");
+    }
+  });
+});
+
+describe("zero jump verdict — the baseline ratchet", () => {
+  // Synthetic data, so the three directions are pinned without depending on what
+  // main happens to look like today.
+  const baseline = [
+    { pair: "detail-deeplink::cold", violations: ["jumps", "perf-state"] as ZeroJumpViolation[] },
+    { pair: "detail-long::cold", violations: ["perf-state"] as ZeroJumpViolation[] },
+  ];
+
+  it("passes when a row drops a kind the baseline had", () => {
+    const narrowed = allowlist({
+      key: "detail-deeplink",
+      mode: "cold",
+      violations: ["perf-state"],
+      reason: "r",
+      owner: "MUL-393",
+    });
+    expect(allowlistWithinBaseline(narrowed, baseline)).toEqual([]);
+  });
+
+  it("passes when a whole row is dropped", () => {
+    const narrowed = allowlist({
+      key: "detail-long",
+      mode: "cold",
+      violations: ["perf-state"],
+      reason: "r",
+      owner: "MUL-443",
+    });
+    expect(allowlistWithinBaseline(narrowed, baseline)).toEqual([]);
+  });
+
+  it("passes for an empty allowlist", () => {
+    expect(allowlistWithinBaseline(allowlist(), baseline)).toEqual([]);
+  });
+
+  it("fails when the allowlist adds a row the baseline never had", () => {
+    const grown = allowlist({
+      key: "detail-short",
+      mode: "cold",
+      violations: ["perf-state"],
+      reason: "r",
+      owner: "MUL-443",
+    });
+    const problems = allowlistWithinBaseline(grown, baseline);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("detail-short::cold");
+    expect(problems[0]).toContain("not in the strict baseline");
+  });
+
+  it("fails when a row adds a kind the baseline never had for it", () => {
+    const grown = allowlist({
+      key: "detail-long",
+      mode: "cold",
+      violations: ["perf-state", "skeleton"],
+      reason: "r",
+      owner: "MUL-443",
+    });
+    const problems = allowlistWithinBaseline(grown, baseline);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("detail-long::cold");
+    expect(problems[0]).toContain("skeleton");
   });
 });
 

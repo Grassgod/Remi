@@ -278,9 +278,16 @@ main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failur
 3. 行在清单，某个列出的类型 3 次都没出现 → 失败，提示从该行删掉这个类型、类型删空就删整行。只出现 2/3 次不触发。
 4. `--strict` 忽略清单，所有行都按规则 1 判。
 
-**清单必须与 strict 输出一一对应**：strict 里出现的每一行/类型都要在清单里，反之亦然；这条一致性由 `tests/unit/scripts/zero-jump-verdict.test.ts` 直接读那两个文件断言。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+**清单对冻结基线的方向是单向的：只能收紧，不能放宽。** `allowlistWithinBaseline()`（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)）逐行检查：清单里的 `key::mode` 必须出现在 strict 基线报告里，且该行的 `violations` 必须是基线中该行类型的**子集**；少行、少类型都允许。反向（新增一行、给已有行加一个基线里没有的类型）会失败。
+
+- 收紧（修好一个类型就删掉它、类型删空就删整行）**不需要**改基线报告，单测保持绿——这正是规则 3 要推动的动作，由「清理者」在修复合入的 PR 里顺手做掉。
+- 要**新增**行或类型，必须在同批提交里附上新的 strict 报告（`reports/performance/MUL-394-zero-jump-strict-main-<日期>.json`），并更新 `tests/unit/scripts/zero-jump-verdict.test.ts` 里引用的基线路径。否则棘轮会拦住它。
+
+「与当轮运行是否一致」由检查本体在每次 CI 运行时判定（规则 a–c，`judgeZeroJumpRun`）；单测只防清单超出基线，不重复前者。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
 
 「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
+
+**这一轮只跑 cold，不跑 warm。** 侧栏宽度是在整页加载时从 `localStorage` 恢复的；warm 轮先进的是列表页，那时侧栏已经按非默认宽度恢复好了，进入详情页不再发生宽度变化，因此 warm 轮等价于 `detail-long::warm`，测不到这个机制。QA 另起探针按同一记录器口径实测 3 次 warm（`sidebar_width=360`，真实点击进入长 issue）：`jumps = 0/0/0`、骨架 0、宽度三轮都保持 360（MUL-394 `cmt_48kfa37phg9x`）。结论一致，故不把 warm 加进矩阵。
 
 ### 运行方式
 
