@@ -642,7 +642,7 @@ export class TasksRepo {
   createTaskWithinTransaction(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): MultiremiTask {
     const initialAgent = this.ctx.agents().getAgent(input.agentId);
     if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -665,7 +665,7 @@ export class TasksRepo {
   private createTaskWithinWorkspaceLock(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -879,7 +879,8 @@ export class TasksRepo {
             runtimeConflict,
             resetRequested: Boolean(input.resetProviderSession),
           }),
-        });
+          taskId: input.triggerCommentId ?? null,
+        }, deferredEvents);
         issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
       }
     }
@@ -1063,6 +1064,12 @@ export class TasksRepo {
     agentId: string,
     executionScope = "",
     audit?: { reason: string; taskId?: string | null },
+    /**
+     * Optional on purpose: this writer has no `...WithinTransaction` variant and
+     * main-existing callers (dispatch/claim) run it without an owner queue. The
+     * task-terminal path — which does own a queue — passes it, and then the
+     * audit activity is published after COMMIT (MUL-400 S1 QA round 4).
+     */
     deferredEvents?: CommitEventQueue,
   ): MultiremiSessionAgentLane | null {
     const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
@@ -2674,7 +2681,7 @@ export class TasksRepo {
   private resumeTaskFromAwaitingHumanWithinTransaction(
     taskId: string,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): MultiremiTask | null {
     const pending = this.ctx.db.query(
       "SELECT COUNT(*) AS n FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
@@ -3117,7 +3124,7 @@ export class TasksRepo {
   cancelTaskWithinTransaction(
     taskId: string,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): CancelTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -3132,7 +3139,7 @@ export class TasksRepo {
   redispatchTaskWithinTransaction(
     taskId: string,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): RedispatchTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -3168,7 +3175,7 @@ export class TasksRepo {
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
       assignmentSourceEventId: current.assignmentSourceEventId,
-    }, childStatusChanges);
+    }, childStatusChanges, deferredEvents);
     if (replacement.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -3300,9 +3307,9 @@ export class TasksRepo {
 
   private maybeRetryFailedTask(
     parent: MultiremiTask,
-    workspaceLockHeld = false,
-    childStatusChanges: ChildStatusChangeCollector = [],
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    workspaceLockHeld: boolean,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
   ): MultiremiTask | null {
     if (parent.status !== "failed") return null;
     if (!parent.failureReason) return null;
@@ -3518,7 +3525,7 @@ export class TasksRepo {
     source: MultiremiTask,
     input: DelegationWakeupInput,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): DelegationWakeupResult {
     const rawRequiredEventSeq = Number(input.requiredEventSeq);
     const requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
@@ -3560,14 +3567,14 @@ export class TasksRepo {
       !hasDelegationId ||
       !hasDelegator
     ) {
-      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "no_lineage");
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "no_lineage", {}, deferredEvents);
       return terminalStatus ? drainTerminalReturns() : { task: null, created: false, covered: false };
     }
     if (terminalStatus && source.delegationReturnTaskId) {
       const returnTask = this.getTask(source.delegationReturnTaskId);
       this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
         returnTaskId: source.delegationReturnTaskId,
-      });
+      }, deferredEvents);
       return { task: returnTask, created: false, covered: true };
     }
 
@@ -3575,7 +3582,7 @@ export class TasksRepo {
     if (!delegator || delegator.archivedAt || delegator.workspaceId !== source.workspaceId) {
       log.warn(`delegation ${source.delegationId} cannot return to unavailable agent ${source.delegatedByAgentId}`);
       if (terminalStatus) return drainTerminalReturns();
-      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "delegator_unavailable");
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "delegator_unavailable", {}, deferredEvents);
       return { task: null, created: false, covered: false };
     }
 
@@ -3592,7 +3599,7 @@ export class TasksRepo {
     if (lane.cursorSeq >= requiredEventSeq) {
       this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
         laneCursorSeq: lane.cursorSeq,
-      });
+      }, deferredEvents);
       return { task: null, created: false, covered: true };
     }
 
@@ -3607,7 +3614,7 @@ export class TasksRepo {
       if (isActiveTaskStatus(candidate.status) && projectedThrough == null) {
         this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
           returnTaskId: candidate.id,
-        });
+        }, deferredEvents);
         return { task: candidate, created: false, covered: true };
       }
       if (
@@ -3617,7 +3624,7 @@ export class TasksRepo {
         this.recordDelegationReturnSkipped(source, input, requiredEventSeq, "already_covered", {
           returnTaskId: candidate.id,
           projectionToSeq: projectedThrough,
-        });
+        }, deferredEvents);
         return { task: candidate, created: false, covered: true };
       }
     }
@@ -3641,7 +3648,7 @@ export class TasksRepo {
       parentTaskId: source.id,
       assignmentAuthorType: "system",
       assignmentAuthorId: null,
-    }, childStatusChanges);
+    }, childStatusChanges, deferredEvents);
     this.ctx.appendIssueActivity(source.issueId, {
       actorType: "system",
       actorId: null,
@@ -3658,7 +3665,7 @@ export class TasksRepo {
         coveredSourceTaskIds: [],
         drained: false,
       },
-    });
+    }, deferredEvents);
     return { task, created: true, covered: false };
   }
 
@@ -3672,7 +3679,7 @@ export class TasksRepo {
       requiredEventSeq: number;
     } | null,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): DelegationReturnDrainResult {
     this.ctx.db.run(
       "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
@@ -3750,6 +3757,8 @@ export class TasksRepo {
             delegationWakeupInputForReport(triggerReport),
             triggerReport.requiredEventSeq,
             "delegator_unavailable",
+            {},
+            deferredEvents,
           );
         }
         continue;
@@ -3792,6 +3801,7 @@ export class TasksRepo {
           report.requiredEventSeq,
           "already_covered",
           { returnTaskId: coveredBy.id, projectionToSeq: coveredBy.projectionToSeq },
+          deferredEvents,
         );
       }
       if (!unresolved.length) continue;
@@ -3834,6 +3844,7 @@ export class TasksRepo {
                 coveredSourceTaskIds,
                 ...(returnTask ? { terminalReportMerged: true } : {}),
               },
+              deferredEvents,
             );
           }
           continue;
@@ -3874,7 +3885,7 @@ export class TasksRepo {
           coveredSourceTaskIds,
           drained: triggerReport == null || group.length > 1,
         },
-      });
+      }, deferredEvents);
     }
     return { createdTasks, taskBySourceId };
   }
@@ -3917,7 +3928,8 @@ export class TasksRepo {
       | "coalesced_into_pending_return"
       | "covered_by_queued_task"
       | "deferred_lane_busy",
-    details: Record<string, unknown> = {},
+    details: Record<string, unknown>,
+    deferredEvents: CommitEventQueue,
   ): void {
     if (!source.issueId) return;
     this.ctx.appendIssueActivity(source.issueId, {
@@ -3936,7 +3948,7 @@ export class TasksRepo {
         terminalStatus: input.terminalStatus ?? null,
         ...details,
       },
-    });
+    }, deferredEvents);
   }
 
   private afterTaskTerminal(
@@ -3946,7 +3958,7 @@ export class TasksRepo {
     workspaceLockHeld: boolean,
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): TaskTerminalFollowUps {
     const now = nowIso();
     // Runtime recovery also invokes this hook directly. Reject stale transport
@@ -3982,8 +3994,12 @@ export class TasksRepo {
       );
     }
     const retry = status === "failed"
-      ? this.maybeRetryFailedTask(task, workspaceLockHeld, childStatusChanges ?? [], deferredEvents)
+      ? this.maybeRetryFailedTask(task, workspaceLockHeld, childStatusChanges, deferredEvents)
       : null;
+    // The retry/wakeup tasks below are returned to the transaction owner, which
+    // publishes the enqueue notifications after COMMIT (completeTask, failTask,
+    // cancelTask, recoverOrphans, the organizer facade). Nothing here pushes to
+    // the wire itself.
     if (retry && task.chatSessionId) {
       this.ctx.feishuBot().retargetFeishuRoundPushTaskWithinTransaction(task.id, retry.id);
     }
@@ -4068,7 +4084,7 @@ export class TasksRepo {
       if (status === "completed") {
         this.ctx.feishuBot().completeFeishuRoundPushTaskWithinTransaction(task, messageBody);
         const session = this.ctx.chat().getChatSession(task.chatSessionId);
-        this.ctx.emitWorkspaceEvent({
+        deferredEvents.workspace.push({
           type: "chat:done",
           workspaceId: session?.workspaceId ?? task.workspaceId,
           chatSessionId: task.chatSessionId,
@@ -4094,7 +4110,7 @@ export class TasksRepo {
         type: `task_${status}`,
         body,
         data: { taskId: task.id, runtimeId: task.runtimeId },
-      });
+      }, deferredEvents);
       if (status === "completed" && !workspaceLockHeld) this.postAgentReplyComment(task, body);
       if (task.issueSessionId) {
         const event = {
@@ -4140,7 +4156,7 @@ export class TasksRepo {
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
-              }, childStatusChanges ?? [], deferredEvents)
+              }, childStatusChanges, deferredEvents)
             : this.ensureDelegationWakeup({
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
@@ -4196,7 +4212,7 @@ export class TasksRepo {
         roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
           issue,
           leaderTask: task,
-          childStatusChanges: childStatusChanges ?? [],
+          childStatusChanges,
           deferredEvents,
         });
       }
@@ -4339,7 +4355,7 @@ export class TasksRepo {
     current: MultiremiTask,
     replacementPlanned: boolean,
     childStatusChanges: ChildStatusChangeCollector,
-    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+    deferredEvents: CommitEventQueue,
   ): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
@@ -4617,11 +4633,16 @@ export class TasksRepo {
         if (seen.has(key)) continue;
         seen.add(key);
         try {
-          const nested = this.ctx.issues().notifyChildStatusChange(change.previous, change.issue, change.taskId, {
-            taskTerminalStatus: change.taskTerminalStatus,
-            seen,
-          });
-          if (nested && nested.length > 0) next.push(...nested);
+          this.ctx.issues().notifyChildStatusChange(
+            change.previous,
+            change.issue,
+            change.taskId,
+            next,
+            {
+              taskTerminalStatus: change.taskTerminalStatus,
+              seen,
+            },
+          );
         } catch (err) {
           log.warn(
             `child status hook skipped for ${change.issue.id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -4649,12 +4670,14 @@ export class TasksRepo {
       /** Skip guard B for a transition the guard deliberately exempts. */
       exemptFromParentStatusGuard?: boolean;
       /**
-       * Caller-owned queue for the S1-introduced activity this write emits
-       * (`parent_status_held`'s `activity:created`). The owner flushes it after
-       * COMMIT. The trailing `issue:updated` below is main-existing and
-       * deliberately not deferred.
+       * Caller-owned queue for every outbound event this write emits: the
+       * S1-introduced `parent_status_held` activity, the status `issue:updated`
+       * patch, and any activity the guard adds. Required — a caller-owned
+       * transaction must publish nothing before it commits (MUL-400 QA round 4:
+       * "every function that receives a queue sends all outward events through
+       * it").
        */
-      deferredEvents?: CommitEventQueue;
+      deferredEvents: CommitEventQueue;
     },
   ): void {
     if (!task.issueId || task.chatSessionId) return;
@@ -4732,10 +4755,11 @@ export class TasksRepo {
         prev_status: issue.status,
       },
     };
-    // Main-existing emission, unchanged by MUL-400: QA round 3 lists this one as
-    // out of scope (the task-status write already commits in the same
-    // transaction, and the patch describes a row both writers agree on).
-    this.ctx.emitWorkspaceEvent(issueUpdatedEvent);
+    // MUL-400 S1 (QA round 4): this function already receives the owner's queue,
+    // so the patch goes on that queue and waits for COMMIT. (It started as a
+    // main-existing inline emission and is now fixed on this path by the
+    // "queue in, all events out through the queue" rule.)
+    options.deferredEvents.workspace.push(issueUpdatedEvent);
   }
 
   private hasInFlightTaskForIssue(issueId: string): boolean {

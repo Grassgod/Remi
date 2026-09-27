@@ -185,6 +185,15 @@ export function createCommitEventQueue(): CommitEventQueue {
   return { workspace: [], enqueuedTasks: [] };
 }
 
+/**
+ * MUL-400 S1: a comment written inside a caller-owned transaction must hand its
+ * realtime push to the owner's queue. The union makes the queue mandatory (and
+ * the compiler enforced) exactly when `withinTransaction` is set.
+ */
+export type CreateIssueCommentOptions =
+  | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
+  | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }) => void;
@@ -209,7 +218,7 @@ export interface IssuesSurface {
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
-    options?: { deferAgentMentionDispatch?: boolean; withinTransaction?: boolean; deferredEvents?: CommitEventQueue },
+    options?: CreateIssueCommentOptions,
   ): MultiremiIssueComment;
   createTaskFailureSystemComment(
     issueId: string,
@@ -238,24 +247,27 @@ export interface IssuesSurface {
   holdParentStatusForOpenChildren(
     issueId: string,
     requested: string,
-    options?: { exempt?: boolean; deferredEvents?: CommitEventQueue },
+    options: { exempt?: boolean; deferredEvents: CommitEventQueue },
   ): string;
   /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
   /**
-   * Post-commit E1/E2 hook. Returns the further Issue transitions the hook's own
-   * writes produced (the parent round can move that parent's status, which is a
-   * child event for ITS parent); the caller replays them after the next commit.
+   * Post-commit E1/E2 hook. Every Issue transition the hook's own writes produce
+   * (the parent round can move that parent's status, which is a child event for
+   * ITS parent) is pushed into `collector`; the owner replays it after the next
+   * commit. Collector and queue are required so no call site can drop a
+   * transition by ignoring a return value, and no event escapes mid-transaction.
    */
   notifyChildStatusChange(
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
     },
-  ): import("./repos/tasks-repo.js").ChildStatusChange[];
+  ): void;
   restoreIssue(id: string): MultiremiIssue;
   archiveEligibleIssues(now?: Date): MultiremiIssue[];
   issueArchiveSweepIntervalMs(): number;
@@ -419,7 +431,7 @@ export interface TasksSurface {
   createTaskWithinTransaction(
     input: CreateTaskInput,
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    deferredEvents?: CommitEventQueue,
+    deferredEvents: CommitEventQueue,
   ): MultiremiTask;
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
   ensureDelegationWakeup(input: {
@@ -447,6 +459,7 @@ export interface TasksSurface {
   cancelTaskWithinTransaction(
     taskId: string,
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
   ): import("./repos/tasks-repo.js").CancelTaskResult;
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void;
   /**
@@ -563,8 +576,8 @@ export interface FeishuBotSurface {
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
-    childStatusChanges?: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
-    deferredEvents?: CommitEventQueue;
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: CommitEventQueue;
   }): MultiremiTask[];
   retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;

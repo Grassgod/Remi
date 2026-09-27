@@ -1257,17 +1257,39 @@ export class FeishuBotRepo {
     return wakeTask;
   }
 
-  /** Caller owns the terminal-task transaction. */
+  /**
+   * Non-transactional entry point for callers that own no transaction (tests,
+   * standalone tooling): it opens the only transaction itself and publishes
+   * everything after COMMIT. Production terminal paths call the `Within...`
+   * variant with the queue they already own.
+   */
+  prepareIssueRoundPushes(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const tasks = this.ctx.db.transaction(() =>
+      this.prepareIssueRoundPushesWithinTransaction({ ...input, childStatusChanges, deferredEvents }))();
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
+    for (const task of tasks) this.ctx.notifyTaskEnqueued(task);
+    return tasks;
+  }
+
+  /** Caller owns the terminal-task transaction. Both the collector and the
+   * queue are required: this writer produces Issue transitions and realtime
+   * pushes, and neither may be dropped or sent before COMMIT (MUL-400 S1). */
   prepareIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
     /** Caller-owned collector for Issue transitions these fresh rounds produce. */
-    childStatusChanges?: import("./tasks-repo.js").ChildStatusChangeCollector;
+    childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector;
     /** Caller-owned queue for the realtime pushes these rounds would emit. */
-    deferredEvents?: import("@multiremi/store/context.js").CommitEventQueue;
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue;
   }): MultiremiTask[] {
-    const childStatusChanges = input.childStatusChanges ?? [];
-    const deferredEvents = input.deferredEvents ?? createCommitEventQueue();
+    const childStatusChanges = input.childStatusChanges;
+    const deferredEvents = input.deferredEvents;
     const config = this.getConfig(input.issue.workspaceId);
     if (!config?.enabled) return [];
     const rows = this.ctx.db.query(

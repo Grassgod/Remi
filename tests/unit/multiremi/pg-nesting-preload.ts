@@ -1,15 +1,25 @@
 /**
- * MUL-400 S1 QA round 3: report every nested `transaction()` opened while a
- * Postgres transaction is already open, across a whole test run.
+ * MUL-400 S1 diagnostic tool (QA rounds 3 and 4): report, across a whole test
+ * run, (a) every nested `transaction()` opened while a Postgres transaction is
+ * already open and (b) every outward event published while `inTransaction` is
+ * still true on the real `PostgresSyncDatabase` handle.
  *
- * Run it as a preload so it is installed before any store exists:
+ * Usage — install it as a preload before any store exists:
  *
  *   MULTIREMI_TEST_POSTGRES_URL=… MUL406_NESTING_REPORT=/tmp/nesting.json \
  *     bun test --preload ./tests/unit/multiremi/pg-nesting-preload.ts tests/unit/multiremi/
  *
- * Only `PostgresSyncDatabase` is wrapped; the SQLite handle has savepoint-like
+ * Read the report with `jq` on the JSON written to `MUL406_NESTING_REPORT`
+ * (one line per hit plus the summary object) or via the global
+ * `__mul406NestingReport()` the preload registers.
+ *
+ * Coverage boundary: this tool only sees paths a test actually executes. A
+ * clean run proves nothing about a branch no case reaches — which is exactly
+ * how QA round 3's closed-parent and re-derivation emissions stayed hidden, so
+ * scan again after adding the negative cases that reach a new branch. Only
+ * `PostgresSyncDatabase` is wrapped; the SQLite handle has savepoint-like
  * nested semantics and is not the risk this scan exists for. Nothing in
- * `packages/` imports this file.
+ * `packages/` imports this file, and `bunfig.toml` does not preload it.
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -24,9 +34,18 @@ const stacks: string[] = [];
 const emissions: string[] = [];
 let installed = false;
 let depth = 0;
-/** True while a Postgres transaction is open, for the event-emission scan. */
+/**
+ * Every `PostgresSyncDatabase` a transaction has been opened on, so the emission
+ * scan can ask the real handle instead of inferring from the counter.
+ */
+const handles = new Set<PostgresSyncDatabase>();
+/** True while any real Postgres transaction is open, for the emission scan. */
 function inTransaction(): boolean {
-  return depth > 0;
+  if (depth > 0) return true;
+  for (const handle of handles) {
+    if (handle.inTransaction) return true;
+  }
+  return false;
 }
 
 /** Emit a machine-readable `kind` + first meaningful frame. */
@@ -57,6 +76,7 @@ if (!installed) {
   };
   const original = proto.transaction;
   proto.transaction = function transaction(this: PostgresSyncDatabase, fn: (...args: never[]) => unknown) {
+    handles.add(this);
     const run = original.call(this, fn);
     return (...args: unknown[]) => {
       depth += 1;
