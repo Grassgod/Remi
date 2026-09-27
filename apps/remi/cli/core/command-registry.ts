@@ -355,7 +355,16 @@ function uniqueDirectChildren(
   const unique = new Map<string, CommandInventoryEntry>();
   for (const entry of children) {
     const childPath = entry.path.slice(0, parentLength + 1);
-    if (!unique.has(pathKey(childPath))) unique.set(pathKey(childPath), entry);
+    const key = pathKey(childPath);
+    const current = unique.get(key);
+    // MUL-468: a path that is itself a command owns its own help line. Without
+    // this, `autopilot run` borrowed the description of the first grandchild
+    // (`run list`), so a write command read as a query in the parent help.
+    if (current) {
+      if (entry.path.length < current.path.length) unique.set(key, entry);
+      continue;
+    }
+    unique.set(key, entry);
   }
   return [...unique.values()];
 }

@@ -1146,14 +1146,8 @@ export class TasksRepo {
     sessionId: string,
     agentId: string,
     executionScope = "",
-    audit?: { reason: string; taskId?: string | null },
-    /**
-     * Optional on purpose: this writer has no `...WithinTransaction` variant and
-     * main-existing callers (dispatch/claim) run it without an owner queue. The
-     * task-terminal path — which does own a queue — passes it, and then the
-     * audit activity is published after COMMIT (MUL-400 S1 QA round 4).
-     */
-    deferredEvents?: CommitEventQueue,
+    audit: { reason: string; taskId?: string | null } | undefined,
+    deferredEvents: CommitEventQueue,
   ): MultiremiSessionAgentLane | null {
     const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
     // A legacy task can predate lane creation, and an agent may already have
@@ -1849,7 +1843,7 @@ export class TasksRepo {
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
     const excludedAgentIds = new Set<string>();
     const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();
-    const tx = this.ctx.db.transaction(() => {
+    const claimWithinTransaction = (deferredEvents: CommitEventQueue) => this.ctx.db.transaction(() => {
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
       // Serialize concurrent claims per workspace. Postgres evaluates each
@@ -1946,7 +1940,7 @@ export class TasksRepo {
       // expensive parts — Skills, Skill files, Project context and the Wiki indexes — are read
       // once here and carried through the snapshot into the response.
       const hydrated = this.withHydratedAgent(candidate);
-      const task = this.snapshotTaskExecution(hydrated, lockedRuntime);
+      const task = this.snapshotTaskExecution(hydrated, lockedRuntime, deferredEvents);
       // Check the actual hydrated payload, including both linked and legacy
       // inline skills. Older daemons ignore encoding and would write base64
       // as text. Unknown encodings also require the newer daemon's validator.
@@ -1959,9 +1953,10 @@ export class TasksRepo {
     });
     let unsupported: BinarySkillFilesUnsupportedError | null = null;
     for (;;) {
-      let result: ReturnType<typeof tx>;
+      const deferredEvents = createCommitEventQueue();
+      let result: ReturnType<ReturnType<typeof claimWithinTransaction>>;
       try {
-        result = tx();
+        result = claimWithinTransaction(deferredEvents)();
       } catch (error) {
         // Roll back the candidate's dispatch and snapshot, then try another
         // Agent so a binary Skill does not block later text-only tasks.
@@ -1985,6 +1980,7 @@ export class TasksRepo {
         if (error instanceof AgentPluginReadinessChangedError) return null;
         throw error;
       }
+      this.ctx.emitCommitEvents(deferredEvents);
       if (!result && unsupported) throw unsupported;
       // Only publish a dispatch once the compatible claim has committed.
       if (result?.dispatched) this.ctx.notifyTaskEvent("task:dispatch", result.task);
@@ -1998,7 +1994,11 @@ export class TasksRepo {
    * provider is right now. The promoted session's engine (session_provider)
    * comes from this snapshot, not the agent's later-mutable provider.
    */
-  private snapshotTaskExecution(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
+  private snapshotTaskExecution(
+    task: MultiremiTaskWithAgent,
+    runtime: MultiremiRuntime,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiTaskWithAgent {
     // Serialize the final snapshot with provider/archival mutations. If an
     // Agent update committed first we observe it below; if it starts later it
     // waits until this claim commits, then its rescheduler can cancel/re-home
@@ -2119,7 +2119,7 @@ export class TasksRepo {
               resetRequested: false,
             }),
             taskId: task.id,
-          }) ?? lane;
+          }, deferredEvents) ?? lane;
         }
         issueProviderSessionId = null;
         issueWorkDir = null;

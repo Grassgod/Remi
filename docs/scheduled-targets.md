@@ -29,7 +29,7 @@ CLI: `remi autopilot trigger create <autopilot> --file schedule.json`:
 
 Use `remi autopilot trigger update <autopilot> <trigger> --file schedule.json` to replace selections (omit `kind` on update). An empty selection is rejected; `schedule_targets: null` restores an untargeted schedule when compatible with the automation's execution mode. A targeted schedule cannot create Issues. It can coexist with `trigger_issue` system-event automations: the event still reuses its Issue, while the schedule creates standalone tasks.
 
-`remi autopilot run <autopilot> --data '{"trigger_id":"<schedule-trigger>"}'` starts the configured schedule manually. When no trigger is supplied, the first enabled targeted schedule is selected; pass an explicit trigger ID when a rule has multiple schedules. The same unfinished schedule batch is reused rather than expanded again.
+`remi autopilot run-now <autopilot> --data '{"trigger_id":"<schedule-trigger>"}'` starts the configured schedule manually. When no trigger is supplied, the first enabled targeted schedule is selected; pass an explicit trigger ID when a rule has multiple schedules. The same unfinished schedule batch is reused rather than expanded again.
 
 ## Execution and Scope
 
