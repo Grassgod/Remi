@@ -344,25 +344,45 @@ async function scanArchiveEntries(sources: ArchiveSource[], maxBytes: number): P
   };
 }
 
-/** Scan a directory of `<task_id>.jsonl` files as hoisted trace members. */
+/**
+ * Scan a directory of `<task_id>.jsonl` files as hoisted trace members.
+ *
+ * `traces/` gets the same treatment as provider history, not a looser one: the
+ * directory is identified by dev/ino before and after the scan, every entry is
+ * checked with `lstat`, and a symlink or a non-regular file is refused rather
+ * than skipped. Silently skipping would drop a task's trace from the archive
+ * while the subject still went `ready`.
+ */
 async function scanTraceDirectory(
   directory: string,
   files: ScannedFile[],
   maxBytes: number,
   totalBytes: number,
+  directories: DirectoryIdentity[],
 ): Promise<number> {
   let total = totalBytes;
+  const before = await lstat(directory);
+  if (!before.isDirectory() || before.isSymbolicLink()) {
+    throw new Error(`Archive trace root is not a real directory: ${directory}`);
+  }
   const children = (await readdir(directory, { withFileTypes: true }))
     .sort((left, right) => stableTextCompare(left.name, right.name));
   for (const child of children) {
-    if (!child.isFile() || child.isSymbolicLink()) continue;
-    if (!child.name.endsWith(SESSION_ARCHIVE_TRACE_SUFFIX)) continue;
-    const taskId = child.name.slice(0, -SESSION_ARCHIVE_TRACE_SUFFIX.length);
-    if (!isSafeSegment(taskId)) continue;
+    if (child.name === "." || child.name === "..") throw new Error("Invalid archive entry name");
     const sourcePath = join(directory, child.name);
     const info = await lstat(sourcePath);
-    if (!info.isFile() || info.isSymbolicLink()) {
+    if (info.isSymbolicLink()) {
+      throw new Error(`Refusing to archive symlink: ${sourcePath}`);
+    }
+    if (!info.isFile()) {
       throw new Error(`Refusing to archive non-regular file: ${sourcePath}`);
+    }
+    if (!child.name.endsWith(SESSION_ARCHIVE_TRACE_SUFFIX)) {
+      throw new Error(`Unexpected file in the trace directory: ${sourcePath}`);
+    }
+    const taskId = child.name.slice(0, -SESSION_ARCHIVE_TRACE_SUFFIX.length);
+    if (!isSafeSegment(taskId)) {
+      throw new Error(`Invalid trace member name: ${child.name}`);
     }
     const inspected = await inspectOpenRegularFile(sourcePath, info);
     total += inspected.stats.size;
@@ -382,6 +402,17 @@ async function scanTraceDirectory(
       traceClosed: inspected.facts.closed,
     });
   }
+  const after = await lstat(directory);
+  if (!sameDirectorySnapshot(before, after)) {
+    throw new Error(`Archive directory changed while scanning: ${directory}`);
+  }
+  directories.push({
+    path: directory,
+    dev: before.dev,
+    ino: before.ino,
+    mtimeMs: before.mtimeMs,
+    ctimeMs: before.ctimeMs,
+  });
   return total;
 }
 
@@ -416,7 +447,7 @@ async function walkArchiveDirectory(
       // `<session_root>/traces/` members are hoisted to the archive-level
       // `traces/` prefix so one task maps to one member path.
       if (source.hoistTraces && !archiveDirectory && child.name === "traces") {
-        total = await scanTraceDirectory(childPath, files, maxBytes, total);
+        total = await scanTraceDirectory(childPath, files, maxBytes, total, directories);
         continue;
       }
       total = await walkArchiveDirectory(

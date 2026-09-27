@@ -66,10 +66,21 @@ export class TaskTracesRepo {
   /**
    * Upsert archive pointers for one ingest, under the ruling's swap rule.
    *
-   * A pointer is replaced only when it is not already backed by an archive, or
-   * when the incoming member is at least as complete as the one it replaces
-   * (`head >= old head_seq`). A stale or partial archive therefore never
-   * downgrades a pointer, even though its own row still goes `ready`.
+   * The rule is applied inside the statement, in the `DO UPDATE ... WHERE`
+   * clause, so two concurrent completions cannot interleave a read and a write:
+   * whichever transaction commits second re-evaluates the condition against the
+   * row the first one left behind. The allowed transitions are exactly the
+   * ruling's:
+   *
+   * - the pointer is `daemon`, `backfilling` or `none` (it holds no archive
+   *   bytes, so any archive is strictly better);
+   * - the pointer is `archive` and the incoming member reaches at least as far
+   *   (`head >= head_seq`), so a partial or stale archive never moves a reader
+   *   backwards.
+   *
+   * `lost` is deliberately absent: a retired daemon's trace is unrecoverable by
+   * definition and an arriving archive must not resurrect a pointer to it.
+   * A rejected update still leaves the archive `ready`; only the pointer stays.
    *
    * Must be called inside the caller's transaction: the archive goes `ready`
    * only together with its pointers.
@@ -78,13 +89,7 @@ export class TaskTracesRepo {
     const now = nowIso();
     let written = 0;
     for (const pointer of pointers) {
-      const current = this.ctx.db.query(
-        "SELECT location, head_seq FROM multiremi_task_traces WHERE task_id = ?",
-      ).get(pointer.taskId) as { location?: unknown; head_seq?: unknown } | null;
-      if (current && !this.shouldReplacePointer(String(current.location ?? ""), current.head_seq, pointer)) {
-        continue;
-      }
-      this.ctx.db.run(
+      const result = this.ctx.db.run(
         `INSERT INTO multiremi_task_traces (
            task_id, location, runtime_id, archive_id, member_path,
            data_offset, compressed_size, uncompressed_size, sha256,
@@ -102,7 +107,12 @@ export class TaskTracesRepo {
            event_count = excluded.event_count,
            head_seq = excluded.head_seq,
            closed = excluded.closed,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         WHERE multiremi_task_traces.location IN ('daemon', 'backfilling', 'none')
+            OR (
+              multiremi_task_traces.location = 'archive'
+              AND (multiremi_task_traces.head_seq IS NULL OR ? >= multiremi_task_traces.head_seq)
+            )`,
         [
           pointer.taskId,
           pointer.runtimeId,
@@ -116,31 +126,12 @@ export class TaskTracesRepo {
           pointer.headSeq,
           pointer.closed ? 1 : 0,
           now,
+          pointer.headSeq,
         ],
       );
-      written++;
+      written += result.changes;
     }
     return written;
-  }
-
-  /**
-   * Whether an incoming archive member may take over an existing pointer.
-   *
-   * A hot or backfilling trace has no archive bytes yet, so any archive wins. An
-   * existing archive pointer is only replaced by a member that reaches at least
-   * as far: archives can be partial (a daemon that hot-started mid-life, or a
-   * backfill that had not caught up), and a read that silently jumped backwards
-   * would lose events.
-   */
-  private shouldReplacePointer(
-    location: string,
-    currentHeadSeq: unknown,
-    incoming: TaskTraceArchivePointer,
-  ): boolean {
-    if (location !== "archive") return true;
-    const currentHead = currentHeadSeq == null ? null : Number(currentHeadSeq);
-    if (currentHead == null || !Number.isSafeInteger(currentHead)) return true;
-    return incoming.headSeq >= currentHead;
   }
 
   /** Drop pointers bound to an archive that is no longer readable. */

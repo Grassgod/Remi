@@ -40,6 +40,7 @@ export interface ArchiveIngestVerification {
   /** Trace members in the order the index lists them. */
   traces: SessionArchiveMemberIndexEntry[];
   /** Members whose sha256 was recomputed during validation. */
+  /** Members whose digest was recomputed; every listed member. */
   verifiedMembers: number;
   /** Digest of the content manifest, which must equal the row's source_revision. */
   sourceRevision: string;
@@ -49,8 +50,6 @@ export interface ArchiveIngestVerification {
 export interface VerifyArchiveIngestOptions {
   /** Total member budget; prevents a hostile index from forcing unbounded reads. */
   maxMembers?: number;
-  /** Verify every member's digest, not only traces and meta members. */
-  verifyAllMembers?: boolean;
 }
 
 const DEFAULT_MAX_MEMBERS = 200_000;
@@ -58,9 +57,11 @@ const DEFAULT_MAX_MEMBERS = 200_000;
 /**
  * Validate a finished v2 archive against its own index.
  *
- * The caller has already checked the blob hash; this function reads only the
- * members the contract requires (manifest, index, and every trace member, plus
- * every member when `verifyAllMembers` is set).
+ * The caller has already checked the blob hash; this function then reads every
+ * member the index lists and verifies its recorded digest, and cross-checks the
+ * manifest's file list against both the index and the container. A blob digest
+ * only proves the bytes are the ones the uploader declared; it says nothing
+ * about whether the index, the manifest and the members agree with each other.
  */
 export async function verifyArchiveIngest(
   handle: FileHandle,
@@ -145,9 +146,9 @@ export async function verifyArchiveIngest(
       );
     }
     if (member.kind === "trace") traces.push(member);
-    const verifyDigest = options.verifyAllMembers !== false
-      && (member.kind === "trace" || options.verifyAllMembers === true);
-    if (!verifyDigest) continue;
+    // Every listed member is verified, not only the traces: the blob digest a
+    // daemon declares proves nothing about whether the index and the members
+    // agree, and a provider member is just as load-bearing as a trace one.
     const read = await readZipMember(handle, {
       localHeaderOffset: member.local_header_offset,
       compressedSize: member.compressed_size,
@@ -171,6 +172,49 @@ export async function verifyArchiveIngest(
   if (byPath.size !== expectedMembers) {
     throw new SessionArchiveIngestError(
       `archive contains ${byPath.size} members but the index plus index.json implies ${expectedMembers}`,
+    );
+  }
+
+  // The manifest is the content manifest whose digest becomes source_revision,
+  // so it has to describe exactly the members that exist. A manifest that omits
+  // a member, or lists one the container does not hold, would make the revision
+  // describe something other than the archive it labels.
+  const manifestFiles = new Map(manifest.files.map((file) => [file.path, file]));
+  if (manifestFiles.size !== manifest.files.length) {
+    throw new SessionArchiveIngestError("archive manifest lists the same file twice");
+  }
+  for (const member of parsedIndex.members) {
+    // `manifest.json` describes the content files, not itself: its own record
+    // cannot carry the digest of the bytes that contain it.
+    if (member.path === SESSION_ARCHIVE_MANIFEST_MEMBER) continue;
+    const listed = manifestFiles.get(member.path);
+    if (!listed) {
+      throw new SessionArchiveIngestError(
+        `archive manifest does not list member ${member.path}`,
+      );
+    }
+    if (listed.size !== member.uncompressed_size || listed.sha256 !== member.sha256) {
+      throw new SessionArchiveIngestError(
+        `member ${member.path} disagrees with the manifest: `
+        + `manifest ${listed.size}/${listed.sha256}, index ${member.uncompressed_size}/${member.sha256}`,
+      );
+    }
+    manifestFiles.delete(member.path);
+  }
+  // The manifest lists every content member and nothing else: not itself and not
+  // the index, because neither can carry its own digest.
+  for (const selfDescribing of [SESSION_ARCHIVE_MANIFEST_MEMBER, SESSION_ARCHIVE_INDEX_MEMBER]) {
+    if (manifestFiles.has(selfDescribing)) {
+      throw new SessionArchiveIngestError(`archive manifest lists ${selfDescribing} itself`);
+    }
+  }
+  const listedContent = parsedIndex.members.filter(
+    (member) => member.path !== SESSION_ARCHIVE_MANIFEST_MEMBER,
+  ).length;
+  if (manifest.files.length !== listedContent) {
+    throw new SessionArchiveIngestError(
+      `archive manifest lists ${manifest.files.length} files but the index lists `
+      + `${listedContent} content members`,
     );
   }
   return {

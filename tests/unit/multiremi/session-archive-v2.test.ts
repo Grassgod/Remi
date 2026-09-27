@@ -799,3 +799,363 @@ describe("Session archive subject write permissions", () => {
     expect(store.touchWritableSessionArchive(initialized.id, runtime.id)).not.toBeNull();
   });
 });
+
+describe("Session archive QA round 1", () => {
+  it("pages a sparse seq axis without losing events (afterSeq cursor)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-sparse-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_sparse",
+      name: "sparse runtime",
+      provider: "codex",
+      daemonId: "dmn_sparse",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Sparse seq", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    // A historical trace with holes: seq 1, 10, 20. An index cursor would read
+    // this as [0,1,2] and answer afterSeq=10 with an empty page.
+    const body = [
+      JSON.stringify({
+        format: TRACE_FILE_FORMAT,
+        task_id: "tsk_sparse",
+        session_id: "ises_1",
+        agent_id: "agt_1",
+        provider: "codex",
+        started_at: "2026-09-27T00:00:00.000Z",
+      }),
+      JSON.stringify({ seq: 1, type: "execution", content: "one" }),
+      JSON.stringify({ seq: 10, type: "execution", content: "ten" }),
+      JSON.stringify({ seq: 20, type: "execution", content: "twenty" }),
+      JSON.stringify({
+        end: { status: "completed", head: 20, event_count: 3, ended_at: "2026-09-27T01:00:00.000Z" },
+      }),
+    ].join("\n") + "\n";
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_sparse: body },
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_sparse",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+    await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
+
+    const pointer = store.getTaskTrace("tsk_sparse")!;
+    expect(pointer).toMatchObject({ headSeq: 20, eventCount: 3, closed: true });
+    const reader = new SessionArchiveReader({ store, root });
+
+    const first = await reader.readTraceLines(pointer, 0, 2);
+    expect(first.events.map((event) => event.seq)).toEqual([1, 10]);
+    expect(first.nextCursor).toBe(10);
+    expect(first.complete).toBe(false);
+
+    // The QA case: afterSeq 10 must return seq 20, not an empty page.
+    const second = await reader.readTraceLines(pointer, 10, 2);
+    expect(second.events.map((event) => event.seq)).toEqual([20]);
+    expect(second.nextCursor).toBe(20);
+    expect(second.complete).toBe(true);
+
+    const exhausted = await reader.readTraceLines(pointer, 20, 2);
+    expect(exhausted.events).toEqual([]);
+    expect(exhausted.complete).toBe(true);
+  });
+
+  it("fails the archive when a provider member does not match its index digest", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-provider-tamper-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_ptamper",
+      name: "provider tamper runtime",
+      provider: "codex",
+      daemonId: "dmn_ptamper",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Provider tamper", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    // The provider member's bytes are swapped after the manifest digest was
+    // taken, so only the per-member check can catch it.
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      members: [{ path: "sessions/ises_1/history.jsonl", body: Buffer.from("provider history\n") }],
+      traces: { tsk_ptamper: traceFileBody({ events: 1, taskId: "tsk_ptamper" }) },
+      tamperMemberBody: (path, body) => path.startsWith("sessions/")
+        ? Buffer.from("tampered provider history\n")
+        : body,
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_ptamper",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+
+    await expect(service.complete(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+    )).rejects.toThrow(/sha256|disagrees with the manifest/);
+    const failed = store.getSessionArchive(initialized.id)!;
+    expect(failed.status).toBe("failed");
+    // A failed archive is not a GC barrier and leaves no trace pointer.
+    expect(store.getSessionArchiveStatus(issue.id).gcReady).toBe(false);
+    expect(store.getTaskTrace("tsk_ptamper")).toBeNull();
+  });
+
+  it("fails the archive when a meta member does not match its index digest", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-meta-tamper-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_mtamper",
+      name: "meta tamper runtime",
+      provider: "codex",
+      daemonId: "dmn_mtamper",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Meta tamper", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    // The published index points at a size the container does not have, which
+    // is what a hand-edited index looks like.
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_mtamper: traceFileBody({ events: 1, taskId: "tsk_mtamper" }) },
+      tamperIndex(index) {
+        const provider = index.members.find((member) => member.kind === "provider");
+        if (provider) provider.compressed_size += 1;
+        else index.members[0]!.uncompressed_size += 1;
+      },
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_mtamper",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+
+    await expect(service.complete(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+    )).rejects.toThrow(/size mismatch|sha256|disagrees with the manifest/);
+    expect(store.getSessionArchive(initialized.id)).toMatchObject({ status: "failed" });
+    expect(store.getTaskTrace("tsk_mtamper")).toBeNull();
+  });
+
+  it("does not re-point a lost trace when an archive arrives", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-lost-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_lost",
+      name: "lost runtime",
+      provider: "codex",
+      daemonId: "dmn_lost",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Lost trace", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    // A retired daemon's trace is unrecoverable; the ruling keeps `lost` out of
+    // the allowed transitions.
+    db!.run(
+      `INSERT INTO multiremi_task_traces (
+         task_id, location, head_seq, event_count, closed, updated_at
+       ) VALUES ('tsk_lost', 'lost', 99, 99, 1, '2026-09-27T00:00:00.000Z')`,
+    );
+    const fixture = await buildArchiveFixture({
+      subject: { kind: "issue", id: issue.id },
+      traces: { tsk_lost: traceFileBody({ events: 3, taskId: "tsk_lost" }) },
+    });
+    const initialized = service.initialize({
+      workspaceId: "local",
+      subjectKind: "issue",
+      subjectId: issue.id,
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      daemonId: "dmn_lost",
+      sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256,
+      sizeBytes: fixture.sizeBytes,
+    }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, initialized.id);
+    await service.upload(
+      runtime.id,
+      issue.id,
+      initialized.id,
+      claim.uploadAttempt!,
+      new Response(fixture.bytes).body,
+    );
+    const ready = await service.complete(runtime.id, issue.id, initialized.id, claim.uploadAttempt!);
+
+    // The archive is ready, but the lost pointer is untouched.
+    expect(ready.status).toBe("ready");
+    expect(store.getTaskTrace("tsk_lost")).toMatchObject({
+      location: "lost",
+      archiveId: null,
+      headSeq: 99,
+    });
+  });
+
+  it("keeps the longer pointer when a lower-head archive completes second", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-concurrent-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({
+      id: "rt_concurrent",
+      name: "concurrent runtime",
+      provider: "codex",
+      daemonId: "dmn_concurrent",
+      workspaceId: "local",
+    });
+    const issue = store.createIssue({ title: "Concurrent pointers", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`,
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+
+    const complete = async (events: number) => {
+      const fixture = await buildArchiveFixture({
+        subject: { kind: "issue", id: issue.id },
+        traces: { tsk_concurrent: traceFileBody({ events, taskId: "tsk_concurrent" }) },
+      });
+      const archive = service.initialize({
+        workspaceId: "local",
+        subjectKind: "issue",
+        subjectId: issue.id,
+        issueId: issue.id,
+        runtimeId: runtime.id,
+        daemonId: "dmn_concurrent",
+        sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256,
+        sizeBytes: fixture.sizeBytes,
+      }).archive;
+      const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+      await service.upload(
+        runtime.id,
+        issue.id,
+        archive.id,
+        claim.uploadAttempt!,
+        new Response(fixture.bytes).body,
+      );
+      return await service.complete(runtime.id, issue.id, archive.id, claim.uploadAttempt!);
+    };
+
+    const long = await complete(7);
+    expect(store.getTaskTrace("tsk_concurrent")).toMatchObject({ archiveId: long.id, headSeq: 7 });
+
+    // A later snapshot happens to be shorter — a daemon that hot-started mid
+    // life, or a backfill that had not caught up. It becomes ready like any
+    // other archive, but the pointer must not move backwards.
+    const short = await complete(2);
+    expect(short.status).toBe("ready");
+    expect(short.id).not.toBe(long.id);
+    expect(store.getTaskTrace("tsk_concurrent")).toMatchObject({
+      archiveId: long.id,
+      headSeq: 7,
+    });
+    expect(store.listSessionArchives(issue.id)).toHaveLength(2);
+
+    // The guard is the statement's own WHERE clause, so a stale writer that
+    // races a newer one cannot clobber it: the upsert reports no change.
+    const refused = store.writeTaskTraceArchivePointers([{
+      taskId: "tsk_concurrent",
+      archiveId: short.id,
+      memberPath: "traces/tsk_concurrent.jsonl",
+      dataOffset: 1,
+      compressedSize: 1,
+      uncompressedSize: 1,
+      sha256: "0".repeat(64),
+      eventCount: 2,
+      headSeq: 2,
+      closed: true,
+      runtimeId: runtime.id,
+    }]);
+    expect(refused).toBe(0);
+    expect(store.getTaskTrace("tsk_concurrent")).toMatchObject({
+      archiveId: long.id,
+      headSeq: 7,
+    });
+  });
+});
