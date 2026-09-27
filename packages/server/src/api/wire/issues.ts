@@ -9,6 +9,7 @@ import type {
   MultiremiIssue,
   MultiremiIssueComment,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
   MultiremiIssueSession,
@@ -21,7 +22,11 @@ import type {
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
-import { BatchParentStatusGuardError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
+import {
+  BatchParentStatusGuardError,
+  IssueDependencyError,
+  ParentStatusGuardError,
+} from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
@@ -219,13 +224,14 @@ export function issueSubscriberTargetErrorResponse(c: Context, error: unknown): 
   return c.json({ error: message }, 400);
 }
 
-export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependency): Record<string, unknown> {
+export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependencyView): Record<string, unknown> {
   return {
     id: dependency.id,
     workspace_id: dependency.workspaceId,
     issue_id: dependency.issueId,
     depends_on_issue_id: dependency.dependsOnIssueId,
     type: dependency.type,
+    direction: dependency.direction,
     issue: dependency.issue ? issueCompatibilityResponse(dependency.issue) : null,
     depends_on_issue: dependency.dependsOnIssue ? issueCompatibilityResponse(dependency.dependsOnIssue) : null,
     created_at: dependency.createdAt,
@@ -267,6 +273,15 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       ...rejectedIssueIds(err),
     }, 409);
   }
+  // MUL-400 E3 gate 2: leaving backlog with unmet prerequisites is a conflict,
+  // and the body names the prerequisites so the client can explain the hold.
+  if (err instanceof IssueDependencyError) {
+    return c.json({
+      error: err.message,
+      code: err.code,
+      unmet: err.details.unmet ?? [],
+    }, 409);
+  }
   if (err.message === "auto_title is reserved for system metadata") {
     return c.json({ error: err.message }, 400);
   }
@@ -300,6 +315,14 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
 
 export function issueDependencyErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // MUL-400 E3: cycles and ancestor dependencies are 409 with the offending key
+  // path; the console turns `path` into the readable chain.
+  if (err instanceof IssueDependencyError) {
+    if (err.code === "dependency_cycle" || err.code === "dependency_on_ancestor") {
+      return c.json({ error: err.message, code: err.code, path: err.details.path ?? [] }, 409);
+    }
+    return c.json({ error: err.message, code: err.code, unmet: err.details.unmet ?? [] }, 409);
+  }
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Dependent issue not found:")) return c.json({ error: "dependent issue not found" }, 400);
   if (err.message === "An issue cannot depend on itself") return c.json({ error: "an issue cannot depend on itself" }, 400);
@@ -365,8 +388,10 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
-  // MUL-400 E1: `force` survives the compatibility projection. The routes strip
-  // it for task identities, so reaching the store with it means a member asked.
+  // MUL-400 E1/E3: `force` survives the compatibility projection because the
+  // batch route needs it to select the parent-status override (the store moves
+  // it into a server-internal option that the dependency gate ignores). The
+  // routes strip it for task identities, so reaching the store means a member.
   if (hasRequestField(input, "force")) out.force = input.force === true;
   return out;
 }

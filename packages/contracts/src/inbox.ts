@@ -18,6 +18,12 @@ export const INBOX_ROUTE_BY_TYPE = {
   // is owned by a human, so the parent owner hears about it directly instead
   // of only through the parent's activity feed.
   child_issue_terminal: "inbox_action",
+  // MUL-400 E3: a prerequisite of this issue failed or was cancelled, or all of
+  // its prerequisites finished while the owner is a human. Either way the human
+  // owns the next decision, so it belongs in the actionable inbox rather than
+  // only in the issue activity feed.
+  dependency_prerequisite_failed: "inbox_action",
+  dependency_satisfied: "inbox_action",
 } as const satisfies Record<string, RegisteredInboxRoute>;
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;

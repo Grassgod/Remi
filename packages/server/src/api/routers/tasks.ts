@@ -28,6 +28,7 @@ import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multi
 import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -179,6 +180,23 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
       assignment_source_event_id: _assignmentSourceEventIdSnake,
+      // MUL-400 E3 (QA round 2, blocker 1): the dependency gate treats these as
+      // structural exemptions, so they must never come from a request body — a
+      // caller that sets `attempt: 2` or `preserveIssueStatus: true` would
+      // otherwise start a waiting issue without the audited force. Both are set
+      // only by server paths (retry/redispatch and the E2 parent wake-up), and no
+      // HTTP caller sends them.
+      attempt: _attempt,
+      maxAttempts: _maxAttempts,
+      // MUL-409 fix round 4 (QA round 3, suggestion 1): the ADR claims both
+      // spellings of every exemption field are stripped, and the gate reads the
+      // camelCase form. `max_attempts` is not an exemption the gate consults
+      // today, but leaving it in the body hands a public caller a field the
+      // server owns — the next gate that reads it would inherit a hole. Strip it
+      // with its camelCase twin.
+      max_attempts: _maxAttemptsSnake,
+      preserveIssueStatus: _preserveIssueStatus,
+      preserve_issue_status: _preserveIssueStatusSnake,
       ...publicInput
     } = body;
     const issueId = cleanString(publicInput.issueId);
@@ -252,6 +270,11 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ task: taskPublicResponse(task) }, 201);
     } catch (error) {
       if (error instanceof ChatIssueTaskConflictError) return c.json({ error: error.message }, 400);
+      // MUL-400 E3 gate 3: this funnel refuses the first task of a waiting
+      // issue; the caller has to force-start it explicitly first.
+      if (error instanceof IssueDependencyError) {
+        return c.json({ error: error.message, code: error.code, unmet: error.details.unmet ?? [] }, 409);
+      }
       throw error;
     }
   });
