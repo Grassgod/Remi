@@ -62,6 +62,12 @@ interface IssueArchivePurgeReceipt {
   created_at: string;
 }
 
+interface FileIdentity { dev: number; ino: number }
+
+function sameFileIdentity(a: FileIdentity, b: FileIdentity): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
 export interface SessionArchiveStorageConfig {
   root: string;
   maxBytes: number;
@@ -603,6 +609,7 @@ export class SessionArchiveService {
     if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     const finalPath = await this.resolveArchivePath(archive.relativePath, false);
     const partialPath = this.partialPath(finalPath, attemptCount);
+    let promotedFile: FileIdentity | null = null;
     try {
       // Validate the attempt-owned partial before publishing it at the shared
       // final path. A rejected member must never leave a final archive behind.
@@ -622,8 +629,13 @@ export class SessionArchiveService {
             ? task?.chatSessionId === archive.subjectId
             : taskId === archive.subjectId
               && task?.issueId == null && task?.chatSessionId == null;
+        const taskRuntime = task?.runtimeId ? this.store.getRuntime(task.runtimeId) : null;
+        const archiveRuntime = this.store.getRuntime(archive.runtimeId);
+        const sameDaemon = Boolean(nonEmptyString(taskRuntime?.daemonId) && nonEmptyString(archiveRuntime?.daemonId)
+          && taskRuntime.daemonId === archiveRuntime.daemonId);
         if (!task || !belongs || task.workspaceId !== archive.workspaceId
-          || task.runtimeId !== archive.runtimeId) {
+          || !taskRuntime || !archiveRuntime
+          || (task.runtimeId !== archive.runtimeId && !sameDaemon)) {
           throw new SessionArchiveTraceOwnershipError(taskId);
         }
       }
@@ -635,10 +647,11 @@ export class SessionArchiveService {
         );
       }
       // Publish only after the blob, every member and every trace owner pass.
-      const actual = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
+      const promoted = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
+      promotedFile = promoted.promotedFile;
       // 2. Derive pointers from the verified members.
       const pointers = buildTracePointers(archive, ingest.traces);
-      await this.writeManifest(finalPath, archive, actual.sizeBytes);
+      await this.writeManifest(finalPath, archive, promoted.sizeBytes);
       await this.syncDirectory(dirname(finalPath));
       // 3. `ready` and the pointers land together; a reader can never see one
       //    without the other.
@@ -646,7 +659,7 @@ export class SessionArchiveService {
         archive.id,
         runtimeId,
         attemptCount,
-        actual.sizeBytes,
+        promoted.sizeBytes,
         pointers,
       );
       if (!completed) {
@@ -681,6 +694,7 @@ export class SessionArchiveService {
         attemptCount,
         message,
       );
+      await this.cleanupFailedPromotion(finalPath, archive, attemptCount, promotedFile);
       if (failed) await unlink(partialPath).catch((cleanupError) => {
         if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
       });
@@ -744,20 +758,22 @@ export class SessionArchiveService {
     partialPath: string,
     finalPath: string,
     archive: MultiremiSessionArchive,
-  ): Promise<{ sha256: string; sizeBytes: number }> {
+  ): Promise<{ sha256: string; sizeBytes: number; promotedFile: FileIdentity | null }> {
     let partialHash: { sha256: string; sizeBytes: number } | null = null;
+    let partialIdentity: FileIdentity | null = null;
     try {
       const partialStat = await lstat(partialPath);
       if (!partialStat.isFile() || partialStat.isSymbolicLink()) {
         throw new SessionArchiveError("partial archive is not a regular file", 409, "unsafe_archive_path");
       }
+      partialIdentity = { dev: partialStat.dev, ino: partialStat.ino };
       partialHash = await hashFile(partialPath, archive.sizeBytes);
       this.assertArchiveHash(partialHash, archive);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const finalHash = await this.verifiedFinalHash(finalPath, archive);
       if (!finalHash) throw new Error("verified archive unexpectedly missing");
-      return finalHash;
+      return { ...finalHash, promotedFile: null };
     }
 
     let finalHash: { sha256: string; sizeBytes: number } | null = null;
@@ -770,21 +786,57 @@ export class SessionArchiveService {
       await unlink(partialPath).catch((error) => {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       });
-      return finalHash;
+      return { ...finalHash, promotedFile: null };
     }
 
     try {
       // The control-plane attempt fence makes replacement safe. This also
       // repairs a corrupt object after verify -> retry.
       await rename(partialPath, finalPath);
-      return partialHash;
+      return { ...partialHash, promotedFile: partialIdentity };
     } catch (error) {
       // Another Server process may have promoted this exact attempt between
       // our hash and rename. Treat its matching immutable object as success.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const concurrentHash = await this.verifiedFinalHash(finalPath, archive);
       if (!concurrentHash) throw new Error("verified archive unexpectedly missing");
-      return concurrentHash;
+      return { ...concurrentHash, promotedFile: null };
+    }
+  }
+
+  private async cleanupFailedPromotion(
+    finalPath: string,
+    archive: MultiremiSessionArchive,
+    attemptCount: number,
+    promotedFile: FileIdentity | null,
+  ): Promise<void> {
+    const stillOwned = () => {
+      const current = this.store.getSessionArchive(archive.id);
+      return current?.attemptCount === attemptCount && current.status !== "ready";
+    };
+    if (!stillOwned()) return;
+    const manifestPath = join(dirname(finalPath), "manifest.json");
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+      if (manifest.archive_id === archive.id && manifest.attempt_count === attemptCount && stillOwned()) {
+        const identity = await lstat(manifestPath);
+        if (identity.isFile() && !identity.isSymbolicLink() && stillOwned()) {
+          const current = await lstat(manifestPath);
+          if (sameFileIdentity(identity, current)) await unlink(manifestPath);
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) {
+        log.warn(`Failed to clean Session archive manifest for ${archive.id}: ${String(error)}`);
+      }
+    }
+    if (!promotedFile || !stillOwned()) return;
+    try {
+      const current = await lstat(finalPath);
+      if (current.isFile() && !current.isSymbolicLink()
+        && sameFileIdentity(current, promotedFile) && stillOwned()) await unlink(finalPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
 
@@ -1336,6 +1388,7 @@ export class SessionArchiveService {
     const payload = `${JSON.stringify({
       schema_version: 1,
       archive_id: archive.id,
+      attempt_count: archive.attemptCount,
       workspace_id: archive.workspaceId,
       subject_kind: archive.subjectKind,
       subject_id: archive.subjectId,

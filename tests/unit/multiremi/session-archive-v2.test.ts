@@ -1163,6 +1163,162 @@ describe("Session archive QA round 1", () => {
 });
 
 describe("Session archive trace member authorization", () => {
+  it("accepts one Issue package with multiple sessions, retry, delegation, and another provider Runtime on the same daemon", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-issue-members-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const leader = store.createAgent({ name: "Issue leader", provider: "codex", workspaceId: "local" });
+    const delegate = store.createAgent({ name: "Issue delegate", provider: "claude", workspaceId: "local" });
+    const owner = store.registerRuntime({ id: "rt_issue_owner", name: "owner", provider: "codex",
+      daemonId: "dmn_issue_shared", workspaceId: "local" });
+    const otherProvider = store.registerRuntime({ id: "rt_issue_claude", name: "claude", provider: "claude",
+      daemonId: "dmn_issue_shared", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Issue package", workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
+    const original = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "original" });
+    const retry = store.createTask({ agentId: leader.id, issueId: issue.id,
+      parentTaskId: original.id, prompt: "retry" });
+    const sibling = store.createTask({ agentId: leader.id, issueId: issue.id,
+      issueSessionId: secondSession.id, prompt: "second session" });
+    const delegated = store.createTask({ agentId: delegate.id, issueId: issue.id,
+      parentTaskId: original.id, delegationId: "dlg_issue_package",
+      delegatedByAgentId: leader.id, prompt: "delegated" });
+    for (const task of [original, retry, sibling]) {
+      db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+    }
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
+    const tasks = [original, retry, sibling, delegated];
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+      members: [original.issueSessionId!, secondSession.id].map((sessionId) => ({
+        path: `sessions/${sessionId}/history.jsonl`, body: Buffer.from("session history\n"),
+      })),
+      traces: Object.fromEntries(tasks.map((task) => [task.id, traceFileBody({ events: 1, taskId: task.id })])) });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+    await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+    expect((await service.complete(owner.id, issue.id, archive.id, claim.uploadAttempt!)).status).toBe("ready");
+    expect(fixture.contents.has(`sessions/${original.issueSessionId}/history.jsonl`)).toBe(true);
+    expect(fixture.contents.has(`sessions/${secondSession.id}/history.jsonl`)).toBe(true);
+    for (const task of tasks) expect(store.getTaskTrace(task.id)).toMatchObject({ archiveId: archive.id, headSeq: 1 });
+  });
+
+  it("cleans its promoted ZIP and manifest when the ready transaction rejects changed membership", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-late-reject-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Late reject", provider: "codex", workspaceId: "local" });
+    const owner = store.registerRuntime({ id: "rt_late_owner", name: "owner", provider: "codex",
+      daemonId: "dmn_late_owner", workspaceId: "local" });
+    const foreign = store.registerRuntime({ id: "rt_late_foreign", name: "foreign", provider: "claude",
+      daemonId: "dmn_late_foreign", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Late reject", workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+      traces: { [task.id]: traceFileBody({ events: 1, taskId: task.id }) } });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+    await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+    const complete = store.completeSessionArchiveWithTracePointers.bind(store);
+    store.completeSessionArchiveWithTracePointers = (...args) => {
+      db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
+      return complete(...args);
+    };
+    await expect(service.complete(owner.id, issue.id, archive.id, claim.uploadAttempt!))
+      .rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
+    expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+    expect(store.getTaskTrace(task.id)).toBeNull();
+    expect(existsSync(join(root, archive.relativePath))).toBe(false);
+    expect(existsSync(join(root, archive.relativePath, "..", "manifest.json"))).toBe(false);
+  });
+
+  it("cleans its promoted ZIP when writing the manifest fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-manifest-fail-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_manifest_fail", name: "owner", provider: "codex",
+      daemonId: "dmn_manifest_fail", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Manifest failure", workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+    const internal = service as unknown as { writeManifest: (...args: unknown[]) => Promise<void> };
+    const original = internal.writeManifest.bind(service);
+    internal.writeManifest = async (...args) => { await original(...args); throw new Error("manifest sync failed"); };
+    await expect(service.complete(runtime.id, issue.id, archive.id, claim.uploadAttempt!))
+      .rejects.toThrow("manifest sync failed");
+    expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+    expect(existsSync(join(root, archive.relativePath))).toBe(false);
+    expect(existsSync(join(root, archive.relativePath, "..", "manifest.json"))).toBe(false);
+  });
+
+  it("preserves a newer promoted ZIP and manifest when the old ready transaction loses", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-archive-late-fence-"));
+    dirs.push(root);
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_late_fence", name: "owner", provider: "codex",
+      daemonId: "dmn_late_fence", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Late fence", workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const old = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, old.uploadAttempt!, new Response(fixture.bytes).body);
+    let entered!: () => void;
+    let release!: () => void;
+    const reachedSync = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const internal = service as unknown as { syncDirectory: (path: string) => Promise<void> };
+    const sync = internal.syncDirectory.bind(service);
+    let first = true;
+    internal.syncDirectory = async (path) => {
+      if (first) { first = false; entered(); await gate; }
+      return sync(path);
+    };
+    const stale = service.complete(runtime.id, issue.id, archive.id, old.uploadAttempt!);
+    await reachedSync;
+    const finalPath = join(root, archive.relativePath);
+    expect(existsSync(finalPath)).toBe(true);
+    expect(store.markSessionArchiveFailedAttempt(archive.id, runtime.id, old.uploadAttempt!, "retry")?.status)
+      .toBe("failed");
+    db!.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+      ["2000-01-01T00:00:00.000Z", archive.id]);
+    const newer = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, newer.uploadAttempt!, new Response(fixture.bytes).body);
+    writeFileSync(finalPath, Buffer.alloc(fixture.bytes.length));
+    expect((await service.complete(runtime.id, issue.id, archive.id, newer.uploadAttempt!)).status).toBe("ready");
+    release();
+    await expect(stale).rejects.toMatchObject({ status: 409, code: "session_archive_attempt_conflict" });
+    expect(store.getSessionArchive(archive.id)).toMatchObject({ status: "ready", attemptCount: newer.uploadAttempt });
+    expect(readFileSync(finalPath)).toEqual(Buffer.from(fixture.bytes));
+    expect(JSON.parse(readFileSync(join(root, archive.relativePath, "..", "manifest.json"), "utf8")))
+      .toMatchObject({ archive_id: archive.id, attempt_count: newer.uploadAttempt });
+  });
+
   it("leaves a newer attempt's final file intact when an older completion fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-archive-attempt-fence-"));
     dirs.push(root);
@@ -1223,6 +1379,8 @@ describe("Session archive trace member authorization", () => {
     ["another Runtime", "runtime"],
     ["another Chat on the same Runtime", "subject"],
     ["a missing task", "missing"],
+    ["another workspace", "workspace"],
+    ["a Runtime without a daemon", "nullDaemon"],
   ] as const) {
     it(`rejects the whole Chat archive when a trace names ${reason}`, async () => {
       const root = mkdtempSync(join(tmpdir(), "multiremi-archive-member-auth-"));
@@ -1236,6 +1394,9 @@ describe("Session archive trace member authorization", () => {
       const other = store.registerRuntime({
         id: "rt_member_other", name: "other", provider: "codex", daemonId: "dmn_member_other", workspaceId: "local",
       });
+      const noDaemon = store.registerRuntime({
+        id: "rt_member_unbound", name: "unbound", provider: "claude", workspaceId: "local",
+      });
       const chat = store.createChatSession({ agentId: agent.id, title: "Owner", workspaceId: "local" });
       const otherChat = store.createChatSession({ agentId: agent.id, title: "Other", workspaceId: "local" });
       db!.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
@@ -1248,9 +1409,14 @@ describe("Session archive trace member authorization", () => {
       db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, good.id]);
       if (victim) {
         db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?",
-          [mismatch === "runtime" ? other.id : owner.id, victim.id]);
+          [mismatch === "runtime" ? other.id : mismatch === "nullDaemon" ? noDaemon.id : owner.id, victim.id]);
+        if (mismatch === "workspace") {
+          const foreignWorkspace = store.createWorkspace({ name: "Foreign archive workspace", slug: "foreign-archive" });
+          db!.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [foreignWorkspace.id, victim.id]);
+        }
         db!.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
-          [victim.id, mismatch === "runtime" ? other.id : owner.id, "2026-09-27T00:00:00.000Z"]);
+          [victim.id, mismatch === "runtime" ? other.id : mismatch === "nullDaemon" ? noDaemon.id : owner.id,
+            "2026-09-27T00:00:00.000Z"]);
       }
       const badId = victim?.id ?? "tsk_missing_member";
       const before = victim ? store.getTaskTrace(victim.id) : null;

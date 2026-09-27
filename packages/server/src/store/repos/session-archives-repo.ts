@@ -525,17 +525,28 @@ export class SessionArchivesRepo {
       ) return null;
       for (const pointer of pointers) {
         const task = this.ctx.db.query(
-          `SELECT workspace_id, runtime_id, issue_id, chat_session_id
-           FROM multiremi_tasks WHERE id = ?`,
-        ).get(pointer.taskId) as Row | null;
+          `SELECT task.workspace_id, task.runtime_id, task.issue_id, task.chat_session_id,
+                  task_runtime.daemon_id AS task_daemon_id,
+                  archive_runtime.daemon_id AS archive_daemon_id,
+                  task_runtime.id AS task_runtime_exists,
+                  archive_runtime.id AS archive_runtime_exists
+           FROM multiremi_tasks task
+           LEFT JOIN multiremi_runtimes task_runtime ON task_runtime.id = task.runtime_id
+           LEFT JOIN multiremi_runtimes archive_runtime ON archive_runtime.id = ?
+           WHERE task.id = ?`,
+        ).get(archive.runtimeId, pointer.taskId) as Row | null;
         const belongs = archive.subjectKind === "issue"
           ? task?.issue_id === archive.subjectId
           : archive.subjectKind === "chat"
             ? task?.chat_session_id === archive.subjectId
             : pointer.taskId === archive.subjectId
               && task?.issue_id == null && task?.chat_session_id == null;
+        const sameDaemon = Boolean(String(task?.task_daemon_id ?? "").trim()
+          && String(task?.archive_daemon_id ?? "").trim()
+          && task?.task_daemon_id === task?.archive_daemon_id);
         if (!task || !belongs || task.workspace_id !== archive.workspaceId
-          || task.runtime_id !== archive.runtimeId) {
+          || !task.task_runtime_exists || !task.archive_runtime_exists
+          || (task.runtime_id !== archive.runtimeId && !sameDaemon)) {
           throw new SessionArchiveTraceOwnershipError(pointer.taskId);
         }
       }

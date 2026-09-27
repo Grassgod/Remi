@@ -20,7 +20,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
@@ -343,6 +343,52 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
   }, 30_000);
 
+  it("accepts a multi-session Issue package with retry, delegation and a same-daemon provider Runtime on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-issue-members-"));
+    try {
+      const leader = store.createAgent({ name: "PG Issue leader", provider: "codex", workspaceId: "local" });
+      const delegate = store.createAgent({ name: "PG Issue delegate", provider: "claude", workspaceId: "local" });
+      const owner = store.registerRuntime({ id: "rt_pg_issue_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
+      const otherProvider = store.registerRuntime({ id: "rt_pg_issue_claude", name: "claude", provider: "claude",
+        daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
+      const issue = store.createIssue({ title: "PG Issue package", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
+      const original = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "original" });
+      const retry = store.createTask({ agentId: leader.id, issueId: issue.id,
+        parentTaskId: original.id, prompt: "retry" });
+      const sibling = store.createTask({ agentId: leader.id, issueId: issue.id,
+        issueSessionId: secondSession.id, prompt: "second session" });
+      const delegated = store.createTask({ agentId: delegate.id, issueId: issue.id,
+        parentTaskId: original.id, delegationId: "dlg_pg_issue_package",
+        delegatedByAgentId: leader.id, prompt: "delegated" });
+      for (const task of [original, retry, sibling]) {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      }
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
+      const tasks = [original, retry, sibling, delegated];
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+        members: [original.issueSessionId!, secondSession.id].map((sessionId) => ({
+          path: `sessions/${sessionId}/history.jsonl`, body: Buffer.from("session history\n"),
+        })),
+        traces: Object.fromEntries(tasks.map((task) => [task.id, traceFileBody({ events: 1, taskId: task.id })])) });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+        issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+      const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+      await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+      expect((await service.complete(owner.id, issue.id, archive.id, claim.uploadAttempt!)).status).toBe("ready");
+      expect(fixture.contents.has(`sessions/${original.issueSessionId}/history.jsonl`)).toBe(true);
+      expect(fixture.contents.has(`sessions/${secondSession.id}/history.jsonl`)).toBe(true);
+      for (const task of tasks) expect(store.getTaskTrace(task.id)).toMatchObject({ archiveId: archive.id, headSeq: 1 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects foreign and missing trace tasks atomically and cleans rejected archive bytes on Postgres", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-pg-archive-auth-"));
     try {
@@ -355,6 +401,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         id: "rt_pg_archive_other", name: "other", provider: "codex",
         daemonId: "dmn_pg_archive_other", workspaceId: "local",
       });
+      const noDaemon = store.registerRuntime({
+        id: "rt_pg_archive_unbound", name: "unbound", provider: "claude", workspaceId: "local",
+      });
       const chat = store.createChatSession({ agentId: agent.id, title: "Owner", workspaceId: "local" });
       const sibling = store.createChatSession({ agentId: agent.id, title: "Sibling", workspaceId: "local" });
       db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
@@ -362,15 +411,22 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const good = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
       const foreignRuntime = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "runtime" });
       const foreignSubject = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: sibling.id, prompt: "subject" });
-      for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id], [foreignSubject.id, owner.id]]) {
+      const foreignWorkspace = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "workspace" });
+      const unbound = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "unbound" });
+      for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id],
+        [foreignSubject.id, owner.id], [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
         db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
       }
-      for (const [taskId, runtimeId] of [[foreignRuntime.id, other.id], [foreignSubject.id, owner.id]]) {
+      const outside = store.createWorkspace({ name: "PG archive outside", slug: "pg-archive-outside" });
+      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [outside.id, foreignWorkspace.id]);
+      for (const [taskId, runtimeId] of [[foreignRuntime.id, other.id], [foreignSubject.id, owner.id],
+        [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
         db.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
           [taskId, runtimeId, "2026-09-27T00:00:00.000Z"]);
       }
       const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
-      for (const badId of [foreignRuntime.id, foreignSubject.id, "tsk_pg_archive_missing"]) {
+      for (const badId of [foreignRuntime.id, foreignSubject.id, foreignWorkspace.id,
+        unbound.id, "tsk_pg_archive_missing"]) {
         const previous = store.getTaskTrace(badId);
         const fixture = await buildArchiveFixture({
           subject: { kind: "chat", id: chat.id },
@@ -444,33 +500,87 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       await service.upload(runtime.id, scope, archive.id, old.uploadAttempt!, new Response(fixture.bytes).body);
       let entered!: () => void;
       let release!: () => void;
-      const reachedVerify = new Promise<void>((resolve) => { entered = resolve; });
+      const reachedSync = new Promise<void>((resolve) => { entered = resolve; });
       const gate = new Promise<void>((resolve) => { release = resolve; });
-      const internal = service as unknown as { validateArchiveIngest: (...args: unknown[]) => Promise<unknown> };
-      const verify = internal.validateArchiveIngest.bind(service);
+      const internal = service as unknown as { syncDirectory: (path: string) => Promise<void> };
+      const sync = internal.syncDirectory.bind(service);
       let first = true;
-      internal.validateArchiveIngest = async (...args) => {
-        if (first) {
-          first = false;
-          entered();
-          await gate;
-          throw new Error("old PG attempt rejected after replacement");
-        }
-        return verify(...args);
+      internal.syncDirectory = async (path) => {
+        if (first) { first = false; entered(); await gate; }
+        return sync(path);
       };
       const stale = service.complete(runtime.id, scope, archive.id, old.uploadAttempt!);
-      await reachedVerify;
+      await reachedSync;
+      const finalPath = join(root, archive.relativePath);
+      expect(existsSync(finalPath)).toBe(true);
       expect(store.markSessionArchiveFailedAttempt(archive.id, runtime.id, old.uploadAttempt!, "retry"))
         .toMatchObject({ status: "failed" });
       db.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
         ["2000-01-01T00:00:00.000Z", archive.id]);
       const newer = await service.claimUploadAttempt(runtime.id, scope, archive.id);
       await service.upload(runtime.id, scope, archive.id, newer.uploadAttempt!, new Response(fixture.bytes).body);
+      writeFileSync(finalPath, Buffer.alloc(fixture.bytes.length));
       expect((await service.complete(runtime.id, scope, archive.id, newer.uploadAttempt!)).status).toBe("ready");
       release();
-      await expect(stale).rejects.toThrow("old PG attempt rejected after replacement");
+      await expect(stale).rejects.toMatchObject({ status: 409, code: "session_archive_attempt_conflict" });
       expect(store.getSessionArchive(archive.id)).toMatchObject({ status: "ready", attemptCount: newer.uploadAttempt });
-      expect(readFileSync(join(root, archive.relativePath))).toEqual(Buffer.from(fixture.bytes));
+      expect(readFileSync(finalPath)).toEqual(Buffer.from(fixture.bytes));
+      expect(JSON.parse(readFileSync(join(root, archive.relativePath, "..", "manifest.json"), "utf8")))
+        .toMatchObject({ archive_id: archive.id, attempt_count: newer.uploadAttempt });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans the promoted ZIP and manifest after a late membership or manifest failure on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-late-archive-fail-"));
+    try {
+      const agent = store.createAgent({ name: "PG late archive", provider: "codex", workspaceId: "local" });
+      const owner = store.registerRuntime({ id: "rt_pg_late_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_late_owner", workspaceId: "local" });
+      const foreign = store.registerRuntime({ id: "rt_pg_late_foreign", name: "foreign", provider: "claude",
+        daemonId: "dmn_pg_late_foreign", workspaceId: "local" });
+      const issue = store.createIssue({ title: "PG late archive", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const upload = async (events: number) => {
+        const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+          traces: { [task.id]: traceFileBody({ events, taskId: task.id }) } });
+        const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+          issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+          sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+        const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+        await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+        return { archive, attempt: claim.uploadAttempt! };
+      };
+      const late = await upload(1);
+      const complete = store.completeSessionArchiveWithTracePointers.bind(store);
+      store.completeSessionArchiveWithTracePointers = (...args) => {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
+        return complete(...args);
+      };
+      await expect(service.complete(owner.id, issue.id, late.archive.id, late.attempt))
+        .rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
+      store.completeSessionArchiveWithTracePointers = complete;
+      expect(store.getSessionArchive(late.archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(task.id)).toBeNull();
+      expect(existsSync(join(root, late.archive.relativePath))).toBe(false);
+      expect(existsSync(join(root, late.archive.relativePath, "..", "manifest.json"))).toBe(false);
+
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      const manifestFail = await upload(2);
+      const internal = service as unknown as { writeManifest: (...args: unknown[]) => Promise<void> };
+      const write = internal.writeManifest.bind(service);
+      internal.writeManifest = async (...args) => { await write(...args); throw new Error("PG manifest sync failed"); };
+      await expect(service.complete(owner.id, issue.id, manifestFail.archive.id, manifestFail.attempt))
+        .rejects.toThrow("PG manifest sync failed");
+      expect(store.getSessionArchive(manifestFail.archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(task.id)).toBeNull();
+      expect(existsSync(join(root, manifestFail.archive.relativePath))).toBe(false);
+      expect(existsSync(join(root, manifestFail.archive.relativePath, "..", "manifest.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
