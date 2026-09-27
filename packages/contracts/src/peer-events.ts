@@ -193,12 +193,24 @@ export interface PeerHealth {
   degraded?: number;
   sent?: number;
   batches?: number;
+  /**
+   * Events that never left this process: backlog evicted to stay inside the queue
+   * caps, plus whatever is still queued or frozen in the retry slot at close.
+   * Disjoint from `oversize_dropped`.
+   */
   dropped?: number;
-  /** Events discarded because one event alone exceeded the 1 MiB budget. */
+  /**
+   * Events discarded because one event alone exceeded the 1 MiB budget. Disjoint
+   * from `dropped`, which counts backlog evictions instead.
+   */
   oversize_dropped?: number;
   failed?: number;
-  /** Bytes currently held by the send queue. */
+  /** Bytes currently held by the send queue. Excludes `inflight_bytes`. */
   queued_bytes?: number;
+  /** Events in the frozen retry slot (0, or the size of one batch). */
+  inflight?: number;
+  /** Bytes held by the frozen retry slot. */
+  inflight_bytes?: number;
   rtt_p95_ms?: number;
 }
 

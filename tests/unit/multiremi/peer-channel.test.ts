@@ -258,8 +258,10 @@ describe("peer channel — sending", () => {
     await waitFor(() => channel!.stats().oversize_dropped === 1, "the oversize drop");
 
     expect(peer.posts).toHaveLength(0);
-    expect(channel.stats()).toMatchObject({ sent: 0, dropped: 1, oversize_dropped: 1, queued: 0 });
-    expect(peerMetricsSnapshot()).toMatchObject({ dropped: 1, oversize_dropped: 1 });
+    // Oversize is its own counter: this event was never in the queue, so it is
+    // not a backlog eviction and must not be counted as one.
+    expect(channel.stats()).toMatchObject({ sent: 0, dropped: 0, oversize_dropped: 1, queued: 0 });
+    expect(peerMetricsSnapshot()).toMatchObject({ dropped: 0, oversize_dropped: 1 });
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatchObject({ topic: "hub", kind: null });
     expect(warnings[0]!.bytes).toBeGreaterThan(2_000);
@@ -391,7 +393,9 @@ describe("peer channel — sending", () => {
 
     await waitFor(() => channel!.stats().failed >= 1, "the first failed attempt");
     expect(channel.healthy()).toBe(false);
-    expect(channel.stats().queued).toBe(1);
+    // The attempted batch moved into the frozen retry slot; it is no longer part
+    // of the queue, which is what protects it from the cap.
+    expect(channel.stats()).toMatchObject({ queued: 0, inflight: 1 });
 
     peer.goOnline();
     await waitForBatches(1);
@@ -712,7 +716,7 @@ describe("peer channel — size limits (QA item 7)", () => {
     await waitFor(() => channel!.stats().oversize_dropped === 1, "the oversize drop");
 
     expect(peer.posts).toHaveLength(0);
-    expect(channel.stats()).toMatchObject({ sent: 0, degraded: 0, dropped: 1, oversize_dropped: 1 });
+    expect(channel.stats()).toMatchObject({ sent: 0, degraded: 0, dropped: 0, oversize_dropped: 1 });
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.kind).toBe("task_messages");
     expect(warnings[0]!.bytes).toBeGreaterThan(200 * 1024);
@@ -924,5 +928,200 @@ describe("peer channel — receiving", () => {
       }]);
     }
     expect(seqs).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+  });
+});
+
+describe("peer channel — frozen retry slot (QA round 2)", () => {
+  /**
+   * A peer that answers the first attempt of every batch with nothing at all —
+   * the ACK is lost — and then behaves once the sender retries. `seen` is the
+   * concatenation of the events each *delivered* batch carried, so it is exactly
+   * what the receiver would have processed.
+   */
+  function loseFirstAckPeer(options: { loseAckFor?: number[] } = {}) {
+    const posts: Array<{ body: string; batchSeq: number; events: unknown[] }> = [];
+    const seen: Array<{ seq: number }> = [];
+    const attemptsPerSeq = new Map<number, number>();
+    // Only the listed batches lose their first response; later batches deliver
+    // normally, which is what makes "the retry happened, the rest followed"
+    // distinguishable from "every first attempt fails".
+    const loseAckFor = new Set(options.loseAckFor ?? [1]);
+    const fetchImpl: PeerFetch = async (_url, init) => {
+      const body = String(init.body);
+      const parsed = JSON.parse(body) as { batch_seq: number; events: Array<{ payload: { messages?: Array<{ seq: number }> } }> };
+      posts.push({ body, batchSeq: parsed.batch_seq, events: parsed.events });
+      const attempt = (attemptsPerSeq.get(parsed.batch_seq) ?? 0) + 1;
+      attemptsPerSeq.set(parsed.batch_seq, attempt);
+      if (attempt === 1 && loseAckFor.has(parsed.batch_seq)) throw new Error("response lost");
+      // Delivered: record one logical event per message seq, like the receiver.
+      for (const event of parsed.events) {
+        for (const message of event.payload.messages ?? []) seen.push({ seq: message.seq });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    return {
+      fetchImpl,
+      posts,
+      seen,
+      seqs: () => seen.map((entry) => entry.seq),
+      /** Every attempt made for one batch_seq, in order. */
+      bodiesFor: (batchSeq: number) => posts.filter((post) => post.batchSeq === batchSeq).map((post) => post.body),
+    };
+  }
+
+  /** One task_messages event carrying a single message with the given seq. */
+  function messagesEvent(seq: number) {
+    return (payload: Record<string, unknown>) => payload;
+  }
+
+  it("delivers every event when an ACK is lost and the queue evicts while retrying (QA repro)", async () => {
+    const peer = loseFirstAckPeer();
+    channel = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      fetchImpl: peer.fetchImpl,
+      queueLimit: 1,
+      minBackoffMs: 15,
+      maxBackoffMs: 30,
+    });
+
+    channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(1, 100)] });
+    await waitFor(() => channel!.stats().failed >= 1, "the first attempt to fail");
+
+    // Events 2 and 3 arrive while the retry is waiting. `queueLimit = 1` means
+    // event 2 is the backlog that gets evicted — never the batch being retried.
+    channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(2, 100)] });
+    channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(3, 100)] });
+
+    await waitFor(() => channel!.stats().queued === 0 && channel!.stats().inflight === 0, "everything to drain", 8_000);
+    // The requirement: everything that was not evicted arrives, in order. The
+    // retry must not share its number with event 3 — the receiver would call that
+    // a duplicate and event 2 would vanish.
+    expect(peer.seqs()).toEqual([1, 2, 3]);
+    expect(channel.stats()).toMatchObject({ inflight: 0, queued: 0 });
+  });
+
+  it("re-sends a retried batch byte-for-byte, and a new same-topic event waits its turn", async () => {
+    const peer = loseFirstAckPeer();
+    channel = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      fetchImpl: peer.fetchImpl,
+      minBackoffMs: 15,
+      maxBackoffMs: 30,
+    });
+
+    channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(1, 100)] });
+    await waitFor(() => channel!.stats().failed >= 1, "the first attempt to fail");
+
+    // A new same-topic event arrives before the retry fires.
+    channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(2, 100)] });
+
+    await waitFor(() => channel!.stats().queued === 0 && channel!.stats().inflight === 0, "the retry and the follow-up", 8_000);
+    // Both events arrive. If the retry absorbed event 2 the receiver would answer
+    // `duplicate` for batch 1 and event 2 would be lost, so this is the assertion
+    // that matters; the byte-identity below is what makes it hold.
+    expect(peer.seqs()).toEqual([1, 2]);
+    const attemptsForSeqOne = peer.bodiesFor(1);
+    expect(attemptsForSeqOne).toHaveLength(2);
+    expect(attemptsForSeqOne[1]).toBe(attemptsForSeqOne[0]);
+  });
+
+  it("keeps a multi-event batch whole across a retry while the queue evicts older events", async () => {
+    const peer = loseFirstAckPeer();
+    channel = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      fetchImpl: peer.fetchImpl,
+      queueLimit: 2,
+      minBackoffMs: 15,
+      maxBackoffMs: 30,
+    });
+
+    // One batch of three messages, so the retry has to re-send all three.
+    channel.forwardRealtime("task_messages", {
+      task: TASK,
+      task_id: TASK.id,
+      messages: [message(1, 50), message(2, 50), message(3, 50)],
+    });
+    await waitFor(() => channel!.stats().failed >= 1, "the first attempt to fail");
+
+    // Push more than the queue can hold so eviction happens for real.
+    for (let seq = 10; seq <= 13; seq += 1) {
+      channel.forwardRealtime("task_messages", { task: TASK, task_id: TASK.id, messages: [message(seq, 50)] });
+    }
+    const droppedBeforeDrain = channel.stats().dropped;
+
+    await waitFor(() => channel!.stats().queued === 0 && channel!.stats().inflight === 0, "everything to settle", 8_000);
+
+    // The retried batch is delivered complete and once, in order: eviction only
+    // ever took queue backlog, never part of the batch already on the wire.
+    expect(peer.seqs().slice(0, 3)).toEqual([1, 2, 3]);
+    // And `dropped` names exactly what was evicted — no more, no less.
+    const delivered = new Set(peer.seqs());
+    const offered = [1, 2, 3, 10, 11, 12, 13];
+    const missing = offered.filter((seq) => !delivered.has(seq));
+    expect(channel.stats().dropped).toBe(missing.length);
+    expect(droppedBeforeDrain).toBeGreaterThan(0);
+  });
+
+  it("keeps oversize and backlog-eviction counters disjoint", async () => {
+    const peer = fakePeer();
+    channel = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      fetchImpl: peer.fetchImpl,
+      // Small enough that one legal event fits and two do not.
+      maxBatchBytes: 1024,
+      maxEventBytes: 1024,
+      maxQueueBytes: 1024,
+      queueLimit: 1,
+    });
+
+    // (1) An oversize event: counted as oversize, never as a backlog eviction.
+    channel.publish("hub", { blob: "x".repeat(4_000) });
+    await waitFor(() => channel!.stats().oversize_dropped === 1, "the oversize drop");
+    // Independently, so a regression that inflates both fails on the first line.
+    expect(channel.stats().oversize_dropped).toBe(1);
+    expect(channel.stats().dropped).toBe(0);
+    expect(peerMetricsSnapshot().oversize_dropped).toBe(1);
+    expect(peerMetricsSnapshot().dropped).toBe(0);
+
+    // (2) A queue overflow, with nothing oversize: counted as dropped only.
+    peer.goOffline();
+    for (let seq = 1; seq <= 4; seq += 1) {
+      channel.forwardRealtime("task_event", { type: `seq:${seq}`, task: TASK, task_id: TASK.id });
+    }
+    await waitFor(() => channel!.stats().dropped > 0, "the backlog eviction");
+    // (2) independently: the eviction counter moved, the oversize counter did not.
+    expect(channel.stats().dropped).toBeGreaterThan(0);
+    expect(channel.stats().oversize_dropped).toBe(1);
+    expect(channel.stats().dropped).toBe(4 - channel.stats().queued - channel.stats().inflight);
+    expect(peerMetricsSnapshot().dropped).toBe(channel.stats().dropped);
+    expect(peerMetricsSnapshot().oversize_dropped).toBe(1);
+  });
+
+  it("counts the frozen slot as dropped when the channel closes before its retry", async () => {
+    const peer = fakePeer();
+    channel = createPeerChannel({
+      url: "http://peer:6120",
+      secret: "s",
+      fetchImpl: peer.fetchImpl,
+      minBackoffMs: 30,
+    });
+    peer.goOffline();
+    channel.forwardRealtime("task_messages", {
+      task: TASK,
+      task_id: TASK.id,
+      messages: [message(1, 10), message(2, 10)],
+    });
+    await waitFor(() => channel!.stats().failed >= 1, "the first attempt to fail");
+
+    channel.close();
+    // Both events never left this process, so both count as dropped — the frozen
+    // slot is stranded exactly like queue backlog is.
+    expect(peerMetricsSnapshot().dropped).toBe(2);
+    expect(channel.stats()).toMatchObject({ inflight: 0, inflight_bytes: 0, queued: 0, dropped: 2 });
+    channel = null;
   });
 });

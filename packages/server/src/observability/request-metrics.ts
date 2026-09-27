@@ -76,9 +76,13 @@ export interface RouteSummary {
 /**
  * Peer-channel counters for one window (MUL-462).
  *
- * `sent`/`batches`/`rtt_p95_ms` are what the local process POSTed to its peer;
- * `dropped` is queue overflow here; `failed` counts failed POST attempts. All
- * zero when `MULTIREMI_PEER_URL` is unset — the summary shape does not change.
+ * `sent`/`batches`/`rtt_p95_ms` are what the local process POSTed to its peer.
+ * `dropped` counts backlog evictions — the queue caps being enforced, plus
+ * whatever is still queued or frozen in the retry slot when the channel closes.
+ * `oversize_dropped` counts events the channel cannot carry at all. The two are
+ * disjoint: an oversize event is never also counted as `dropped`. `failed`
+ * counts failed POST attempts. All zero when `MULTIREMI_PEER_URL` is unset —
+ * the summary shape does not change.
  */
 export interface PeerSummary {
   sent: number;
@@ -86,7 +90,11 @@ export interface PeerSummary {
   dropped: number;
   failed: number;
   rtt_p95_ms: number;
-  /** Events dropped because one event alone exceeded the per-event budget. */
+  /**
+   * Events dropped because one event alone exceeded the per-event budget.
+   * Disjoint from `dropped` (backlog eviction): the same event is only ever in
+   * one of the two.
+   */
   oversize_dropped: number;
   /** Outbound events the sender slimmed down to a task reference. */
   degraded: number;
@@ -168,7 +176,17 @@ const windowPeerCounters = {
 let windowPeerRttSamples: number[] = [];
 const PEER_RTT_SAMPLE_CAPACITY = 1024;
 
-/** One event could not be queued (overflow, or a payload that would not encode). */
+/**
+ * Events that never left this process while waiting for delivery.
+ *
+ * Exactly one meaning: a backlog eviction. The send queue is capped by count and
+ * by bytes; whatever is evicted to stay inside those caps — plus whatever is
+ * still queued or frozen in the retry slot when the channel closes — lands here.
+ * A slow or absent peer is what makes this grow.
+ *
+ * Deliberately NOT incremented by an oversize event: that is a different failure
+ * with a different response, and it has its own counter below.
+ */
 export function recordPeerDropped(count = 1): void {
   if (!requestMetricsEnabled) return;
   const value = Math.max(0, Math.trunc(count));
@@ -181,9 +199,11 @@ export function recordPeerDropped(count = 1): void {
  * One event was discarded because it alone exceeded the per-event byte budget
  * and its kind could not be degraded to a task reference.
  *
- * Counted separately from plain `dropped` (queue overflow) because the two need
- * different responses: overflow is a slow peer, oversize is an event the
- * contract says cannot happen.
+ * The two counters are disjoint and must stay that way. `dropped` is "the
+ * backlog was evicted to stay inside its caps", which is backpressure from a peer
+ * that is slow or down; this one is "the producer handed the channel an event it
+ * cannot carry", which is an upstream contract problem and needs a fix, not a
+ * bigger queue. An event counted here is never also counted as `dropped`.
  */
 export function recordPeerOversizeDropped(): void {
   if (!requestMetricsEnabled) return;

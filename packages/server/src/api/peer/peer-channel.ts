@@ -24,10 +24,20 @@
  *     the batching loop measures the real serialized bytes rather than
  *     estimating from event sizes.
  *
- * Delivery is at-least-once with retry: a failed flush puts its batch back at the
- * head of the queue and backs off 1s → 10s, and the batch keeps its number. The
- * receiver remembers the highest `batch_seq` it has handled per `epoch`, so a
- * retry that the sender never saw the response for is answered `duplicate` and
+ * Delivery is at-least-once with retry. A failed POST moves its batch into a
+ * single frozen *inflight slot* — the exact bytes that were sent, under the same
+ * `batch_seq` — and backs off 1s → 10s. The retry re-sends that same body rather
+ * than re-taking a batch from the queue, because the receiver's dedupe is
+ * "same epoch, same number, handled once": it is only sound if a retry carries
+ * the same events as the first attempt. Re-taking from the queue could grow the
+ * batch (a new same-topic event arrives) or shrink it (the backlog is trimmed),
+ * and either way the receiver would answer `duplicate` for a batch that never
+ * delivered the extra events. The inflight slot is therefore outside the queue
+ * and outside every queue cap: it holds one batch (≤ one POST body) until it is
+ * acknowledged. `close()` counts whatever is still there as `dropped`.
+ *
+ * The receiver remembers the highest `batch_seq` it has handled per `epoch`, so
+ * a retry that the sender never saw the response for is answered `duplicate` and
  * not delivered twice. A receiver restart clears that memory (the old browser
  * sockets are gone with it and reconnecting clients refetch), which is the one
  * window where a batch can be delivered twice.
@@ -95,6 +105,11 @@ export const PEER_QUEUE_LIMIT = 10_000;
  *     evicts the backlog down to the caps;
  *   - the queue never exceeds `cap + one produce burst`, rather than growing with
  *     however many writes happen to land in the same tick.
+ *
+ * The frozen retry slot is outside all of this: it holds at most one batch and is
+ * never evicted, because evicting it would either lose delivered events or let a
+ * reused batch number hide new ones. Peak memory is therefore
+ * `queue cap + one produce burst + one inflight batch`.
  */
 export const PEER_MAX_QUEUE_BYTES = 32 * 1_048_576;
 
@@ -116,8 +131,12 @@ export interface PeerChannelStats {
   origin: string;
   /** Events still waiting to be sent. */
   queued: number;
-  /** Serialized bytes still waiting to be sent. */
+  /** Serialized bytes still waiting to be sent. Excludes `inflight_bytes`. */
   queued_bytes: number;
+  /** Events in the frozen retry slot (0 or the size of one batch). */
+  inflight: number;
+  /** Serialized bytes held by the frozen retry slot. */
+  inflight_bytes: number;
   /** Events successfully POSTed to the peer. */
   sent: number;
   /** Successful POSTs. */
@@ -287,8 +306,14 @@ class HttpPeerChannel implements PeerChannel {
   private droppableCount = 0;
   private scheduled = false;
   private flushing = false;
-  /** Number handed to the batch currently in flight; retries reuse it. */
-  private inflightBatchSeq: number | null = null;
+  /**
+   * The batch that failed to POST, frozen exactly as it was sent: same events,
+   * same serialized body, same `batch_seq`. A retry re-sends this and nothing
+   * else, which is what keeps the receiver's "same epoch + same number = already
+   * handled" dedupe sound. At most one batch exists here at a time, and no queue
+   * cap can evict it.
+   */
+  private inflight: { seq: number; batch: QueuedPeerEvent[]; body: string } | null = null;
   private nextBatchSeq = 1;
   private consecutiveFailures = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -508,6 +533,8 @@ class HttpPeerChannel implements PeerChannel {
       origin: this.origin,
       queued: this.queue.length,
       queued_bytes: this.queuedBytes,
+      inflight: this.inflight?.batch.length ?? 0,
+      inflight_bytes: this.inflight ? Buffer.byteLength(this.inflight.body, "utf8") : 0,
       sent: this.sent,
       batches: this.batches,
       dropped: this.dropped,
@@ -534,11 +561,15 @@ class HttpPeerChannel implements PeerChannel {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
-    if (this.queue.length > 0) {
-      this.dropEvent(this.queue.length);
-      this.queue = [];
-      this.queuedBytes = 0;
-    }
+    // Events that never left this process count as dropped, whichever side of
+    // the retry they were waiting on: the queue, and the frozen slot whose batch
+    // was attempted but never acknowledged.
+    const stranded = this.queue.length + (this.inflight?.batch.length ?? 0);
+    if (stranded > 0) this.dropEvent(stranded);
+    this.queue = [];
+    this.queuedBytes = 0;
+    this.droppableCount = 0;
+    this.inflight = null;
     this.subscribers.clear();
     this.handledBatches.clear();
   }
@@ -616,33 +647,53 @@ class HttpPeerChannel implements PeerChannel {
     if (this.flushing || this.closed) return;
     this.flushing = true;
     try {
-      while (!this.closed && this.queue.length > 0) {
-        // Retries keep the number the first attempt used; only a batch taken for
-        // the first time advances the counter.
-        const batchSeq = this.inflightBatchSeq ?? this.nextBatchSeq;
-        const taken = this.takeBatch(batchSeq);
-        if (!taken) continue;
-        const { batch, body } = taken;
+      // Strictly one batch in flight: as long as the frozen slot holds an
+      // unacknowledged batch, nothing else is taken from the queue. That keeps
+      // both the wire order and the `batch_seq` sequence the receiver's dedupe
+      // depends on.
+      while (!this.closed && (this.inflight || this.queue.length > 0)) {
+        let batch: QueuedPeerEvent[];
+        let body: string;
+        let batchSeq: number;
+        let frozen: boolean;
+
+        if (this.inflight) {
+          // Retry path: the same events, the same number, byte-for-byte the same
+          // body. Nothing is re-taken from the queue, so a new same-topic event
+          // cannot join an already-attempted batch and a trimmed backlog cannot
+          // shrink one — either would make the receiver answer `duplicate` for
+          // events it never delivered.
+          ({ seq: batchSeq, batch, body } = this.inflight);
+          frozen = true;
+        } else {
+          batchSeq = this.nextBatchSeq;
+          const taken = this.takeBatch(batchSeq);
+          if (!taken) continue;
+          ({ batch, body } = taken);
+          frozen = false;
+        }
+
         const startedAt = performance.now();
         try {
           await this.post(body);
         } catch {
-          // Put the batch back at the head so ordering survives the retry. It is
-          // already backlog — the caps were applied when it was enqueued — so no
-          // re-trim here; that would let a failing peer eat the very events it is
-          // retrying.
-          this.inflightBatchSeq = batchSeq;
-          this.queue.unshift(...batch);
-          this.queuedBytes += batch.reduce((total, event) => total + event.bytes, 0);
-          this.droppableCount += batch.length;
+          // Freeze this batch — or keep the already frozen one — and back off.
+          // It stays outside the queue, so no cap can evict it while the peer is
+          // unreachable.
+          if (!frozen) {
+            this.inflight = { seq: batchSeq, batch, body };
+          }
           this.failed += 1;
           this.consecutiveFailures += 1;
           recordPeerFailure();
           this.scheduleRetry();
           return;
         }
-        this.inflightBatchSeq = null;
-        this.nextBatchSeq += 1;
+
+        // Acknowledged: retire the slot (if any) and advance the number only
+        // now, so a retry can never be followed by a reuse of its number.
+        this.inflight = null;
+        this.nextBatchSeq = batchSeq + 1;
         this.consecutiveFailures = 0;
         this.sent += batch.length;
         this.batches += 1;
@@ -681,9 +732,17 @@ class HttpPeerChannel implements PeerChannel {
     recordPeerDropped(count);
   }
 
+  /**
+   * One event could not be sent at all because it alone exceeds the per-event
+   * budget and its kind has no degradation path.
+   *
+   * Deliberately NOT counted as `dropped`: `dropped` means "the backlog was evicted
+   * to stay inside its caps", which is a slow-or-absent peer; this means "the
+   * contract produced an event the channel cannot carry". They need different
+   * responses (backpressure vs. a bug), so they are different counters.
+   */
   private dropOversize(topic: string, kind: string | null, bytes: number): void {
     this.oversizeDropped += 1;
-    this.dropEvent(1);
     recordPeerOversizeDropped();
     try {
       this.onOversizeDrop({ topic, kind, bytes });
