@@ -214,3 +214,91 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     expect(store.listSessionParticipantsForSessions([]).size).toBe(0);
   });
 });
+
+/**
+ * MUL-386: the golden scrubber rewrites the wall clock inside a timeline page
+ * cursor (`base64url([createdAt, id])`), but only for that exact shape. The id
+ * has to stay in the comparison, and a payload of any other shape has to survive
+ * untouched — otherwise the guard would silently accept a real shape change.
+ */
+describe("MUL-386 cursor normalization", () => {
+  const encodeCursor = (payload: unknown): string =>
+    Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const decodeCursor = (cursor: string): unknown =>
+    JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  const normalizeCursorField = (cursor: string): string => {
+    const out = normalizeIssueDetailResponse({ next_cursor: cursor }) as { next_cursor: string };
+    return out.next_cursor;
+  };
+
+  it("scrubs the timestamp and keeps the id verbatim", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_8yh955wqxxjs"]);
+    expect(decodeCursor(normalizeCursorField(cursor))).toEqual(["<timestamp>", "cmt_8yh955wqxxjs"]);
+  });
+
+  it("scrubs prev_cursor the same way", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.187Z", "cmt_8yh955wqxxjs"]);
+    const out = normalizeIssueDetailResponse({ prev_cursor: cursor }) as { prev_cursor: string };
+    expect(decodeCursor(out.prev_cursor)).toEqual(["<timestamp>", "cmt_8yh955wqxxjs"]);
+  });
+
+  it("keeps the id participating in the comparison", () => {
+    const first = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_first"]));
+    const second = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_second"]));
+    expect(first).not.toBe(second);
+  });
+
+  it("absorbs a millisecond shift and is idempotent", () => {
+    const earlier = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.187Z", "cmt_x"]));
+    const later = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_x"]));
+    expect(later).toBe(earlier);
+    expect(normalizeCursorField(later)).toBe(later);
+  });
+
+  it("leaves a single-element payload untouched", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z"]);
+    expect(normalizeCursorField(cursor)).toBe(cursor);
+  });
+
+  it("leaves a payload whose id is not a string untouched", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", 123]);
+    expect(normalizeCursorField(cursor)).toBe(cursor);
+  });
+
+  it("keeps an id that merely looks like a timestamp", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_2026-09-20T12:00:00.188Z"]);
+    expect(decodeCursor(normalizeCursorField(cursor))).toEqual([
+      "<timestamp>",
+      "cmt_2026-09-20T12:00:00.188Z",
+    ]);
+  });
+
+  it("leaves payloads of other arities or shapes untouched", () => {
+    for (const payload of [
+      ["2026-09-20T12:00:00.188Z", "cmt_x", "extra"],
+      [123, "2026-09-20T12:00:00.188Z"],
+      ["see 2026-09-20T12:00:00.188Z", "cmt_x"],
+      { createdAt: "2026-09-20T12:00:00.188Z", id: "cmt_x" },
+      "2026-09-20T12:00:00.188Z",
+      null,
+    ]) {
+      const cursor = encodeCursor(payload);
+      expect(normalizeCursorField(cursor)).toBe(cursor);
+    }
+  });
+
+  it("leaves an undecodable cursor untouched", () => {
+    for (const cursor of ["not-json", "!!!", "YWJj"]) {
+      expect(normalizeCursorField(cursor)).toBe(cursor);
+    }
+  });
+
+  it("still replaces plain timestamps outside cursors", () => {
+    const out = normalizeIssueDetailResponse({
+      created_at: "2026-09-20T12:00:00.188Z",
+      id: "cmt_8yh955wqxxjs",
+      next_cursor: null,
+    }) as Record<string, unknown>;
+    expect(out).toEqual({ created_at: "<timestamp>", id: "cmt_8yh955wqxxjs", next_cursor: null });
+  });
+});
