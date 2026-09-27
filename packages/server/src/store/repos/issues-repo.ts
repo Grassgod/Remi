@@ -1590,6 +1590,18 @@ export class IssuesRepo {
   ): {
     issue: MultiremiIssue;
     cancelledTasks: number;
+    /**
+     * MUL-409 (QA round 4, blocker 1): this request was a `force` that tried to
+     * leave `backlog`, and the store already made the dispatch decision inside
+     * the write transaction. That is true whether or not the gate was still
+     * closed when the row lock was taken, so the route's assign-on-update step
+     * must skip it either way — dispatching there would cancel the round the
+     * store just queued and queue a second one.
+     *
+     * (Before the round-4 ruling the flag meant "a
+     * `dependency_force_started` was recorded", which left the already-open case
+     * dispatching twice.)
+     */
     handledForcedStart: boolean;
     /**
      * The Issue as it was observed INSIDE the write transaction, after the row
@@ -1624,7 +1636,15 @@ export class IssuesRepo {
     // parent status, the dependency gate and the unassign path all push here.
     // It is drained after the COMMIT below and dropped on rollback.
     const updated = this.ctx.db.transaction(() => {
-      if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
+      // MUL-409 (QA round 4, blocker 1): a forced start dispatches INSIDE this
+      // transaction and `createTaskWithinTransaction` takes the workspace row
+      // lock. That lock has to be taken before the Issue row, exactly as the
+      // automatic start and every other task-creation path do; taking it after
+      // the Issue lock deadlocks two connections that hold one each. So the
+      // workspace lock is acquired up front whenever this write may dispatch,
+      // not only when it moves the Issue between workspaces.
+      const mayDispatch = input.force === true || hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id");
+      if (mayDispatch) {
         const initial = this.getIssue(id);
         if (initial) {
           // Match Task creation's workspace-before-Issue lock order so a
@@ -1908,7 +1928,7 @@ export class IssuesRepo {
     }
     this.ctx.tasks().runCollectedChildStatusChanges(collector);
     this.ctx.emitCommitEvents(deferredEvents);
-    return { issue: updated, cancelledTasks, handledForcedStart: forcedStart, previous: previous! };
+    return { issue: updated, cancelledTasks, handledForcedStart: forceStartAttempt, previous: previous! };
   }
 
   /**
@@ -1951,8 +1971,9 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): ForcedStartOutcome {
     const { current, ownerType, ownerId, actorType, actorId, parentTaskId } = context;
-    // Workspace row first, then the Issue row (already locked by the caller).
-    this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+    // The caller took the workspace row lock before the Issue row (see
+    // `updateIssueWithOutcome`), so `createTaskWithinTransaction` can take it
+    // again inside this transaction without inverting the order.
 
     // A member owner, or none at all, has no agent to run: the status change is
     // the whole outcome, exactly as before.

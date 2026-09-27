@@ -3306,14 +3306,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
   }
 
-  it("keeps one round when a forced and an automatic start race on two connections (PG)", async () => {
+  it("keeps exactly one start record when a forced and an automatic start race (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_two_conn", name: "Two connection worker", provider: "claude", maxConcurrency: 8 });
     const owner = store.createAgent({ name: "Two connection owner", provider: "claude", runtimeId: runtime.id });
     const ROUNDS = Number(process.env.MUL409_TWO_CONN_ROUNDS ?? 30);
     const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
-    let doubleDispatched = 0;
-    let doubleStarted = 0;
-    const winners: string[] = [];
+    // Per-attempt invariant, from the QA round 4 ruling: exactly one task row
+    // (every status, cancelled included) and exactly one of the three start
+    // records. Zero and two are both failures.
+    const distribution = { auto: 0, force: 0, member: 0, none: 0, both: 0 };
     const mismatches: Array<Record<string, unknown>> = [];
     for (let round = 0; round < ROUNDS; round++) {
       const prereq = store.createIssue({ title: `Two conn prereq ${round}`, status: "in_progress" });
@@ -3341,38 +3342,54 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workers.forEach((entry) => entry.worker.terminate());
       rmSync(barrierDir, { recursive: true, force: true });
 
-      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
-      const activities = db.query(
-        "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'dependency_auto_started') ORDER BY created_at ASC",
-      ).all(dependent.id) as Array<{ type: string }>;
-      // The durable invariant: one round, and never both start records. The sum
-      // can legitimately be 0: when the forced PATCH reads the dependent after
-      // the prerequisite's `done` already committed, it is an ordinary status
-      // write rather than an override, so no `dependency_force_started` exists —
-      // and the automatic start lost the claim, so no auto record either.
-      if (rows.length !== 1) doubleDispatched++;
-      if (activities.length > 1) doubleStarted++;
-      if (rows.length !== 1 || activities.length > 1) {
+      // All task rows, cancelled included: a round that was queued and then
+      // cancelled is still evidence that the start ran once.
+      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC")
+        .all(dependent.id) as Array<{ status: string }>;
+      const activityTypes = db.query(
+        "SELECT type, data FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+      ).all(dependent.id) as Array<{ type: string; data: string | null }>;
+      const auto = activityTypes.filter((row) => row.type === "dependency_auto_started").length;
+      const force = activityTypes.filter((row) => row.type === "dependency_force_started").length;
+      // The third kind: the member's own backlog -> todo write, with no
+      // dependency start activity beside it. That is the ruling's "the gate was
+      // already open when the lock was taken" outcome.
+      const member = activityTypes.some((row) => {
+        if (row.type !== "issue_updated") return false;
+        try {
+          const data = JSON.parse(row.data ?? "{}") as Record<string, unknown>;
+          return data.status === "todo";
+        } catch { return false; }
+      });
+      const kind = auto && force ? "both"
+        : auto ? "auto"
+        : force ? "force"
+        : member ? "member"
+        : "none";
+      distribution[kind as keyof typeof distribution] += 1;
+      const rowStatuses = rows.map((row) => row.status);
+      if (rows.length !== 1 || (kind !== "auto" && kind !== "force" && kind !== "member")) {
         mismatches.push({
           round,
+          kind,
           status: store.getIssue(dependent.id)?.status,
-          rows: rows.map((row) => row.status),
-          activities: activities.map((row) => row.type),
+          rows: rowStatuses,
+          auto,
+          force,
+          member,
         });
       }
-      winners.push(activities.map((row) => row.type).join("+") || "none");
     }
-    // The distribution is printed, not asserted: which contender wins is a
-    // genuine race and neither is required. A round with NO start record is a
-    // legitimate outcome — the force PATCH's transaction can read the dependent
-    // after the prerequisite's `done` committed, at which point the gate is
-    // already satisfied, so its write is an ordinary start (no
-    // `dependency_force_started`) and the automatic start then loses the claim
-    // (no `dependency_auto_started`). One round either way.
-    console.log(`[mul409-two-conn] winners=${JSON.stringify(winners)} mismatches=${JSON.stringify(mismatches)}`);
-    // A failure here has to name the shape it saw, not just the count: the two
-    // distinct bugs (a second round, both start records) need different fixes.
-    expect({ doubleDispatched, doubleStarted, mismatches }).toEqual({ doubleDispatched: 0, doubleStarted: 0, mismatches: [] });
+    // The per-kind split is a genuine race and is reported, not asserted. The
+    // counts themselves are the deliverable: the QA round printed 4 rounds with
+    // no start record at all, which this loop now fails on.
+    console.log(`[mul409-two-conn] distribution=${JSON.stringify(distribution)} mismatches=${JSON.stringify(mismatches)}`);
+    expect({ distribution: { ...distribution, none: 0, both: 0 }, mismatches }).toEqual({
+      distribution: { auto: expect.any(Number), force: expect.any(Number), member: expect.any(Number), none: 0, both: 0 },
+      mismatches: [],
+    });
+    // Every round produced a record: the three kinds must account for the run.
+    expect(distribution.auto + distribution.force + distribution.member).toBe(ROUNDS);
   }, 180_000);
 
 });
