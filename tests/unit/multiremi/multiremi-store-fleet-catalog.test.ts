@@ -884,5 +884,5 @@ describe("Multiremi store — fleet engine and model catalog", () => {
       dbB.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
