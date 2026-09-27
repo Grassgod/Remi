@@ -37,19 +37,29 @@ import type { WsFrameSample } from "../../../packages/server/src/api/daemon-prot
 /** A socket that records what it was asked to do and answers with a scripted status. */
 class FakeDaemonSocket implements DaemonProtocolSocket {
   readonly sent: Array<Record<string, unknown>> = [];
+  readonly delivered: Array<Record<string, unknown>> = [];
   readonly closed: Array<{ code: number; reason: string }> = [];
   bufferedAmount = 0;
   /** Status the next `send` answers with; `null` means "sent as many bytes as were written". */
   nextStatus: number | null = null;
   /** Status every `send` answers with, until reset. */
   fixedStatus: number | null = null;
+  /** Failure injected before the frame reaches the peer. */
+  nextError: Error | null = null;
 
   send(text: string): number {
-    this.sent.push(JSON.parse(text) as Record<string, unknown>);
-    if (this.fixedStatus !== null) return this.fixedStatus;
+    if (this.nextError) {
+      const error = this.nextError;
+      this.nextError = null;
+      throw error;
+    }
     const status = this.nextStatus;
     this.nextStatus = null;
-    return status ?? Buffer.byteLength(text, "utf8");
+    const result = this.fixedStatus ?? status ?? Buffer.byteLength(text, "utf8");
+    const frame = JSON.parse(text) as Record<string, unknown>;
+    this.sent.push(frame);
+    if (result !== 0) this.delivered.push(frame);
+    return result;
   }
 
   close(code?: number, reason?: string): void {
@@ -60,6 +70,13 @@ class FakeDaemonSocket implements DaemonProtocolSocket {
   lastOfType(type: string): Record<string, unknown> | null {
     for (let index = this.sent.length - 1; index >= 0; index -= 1) {
       if (this.sent[index]!.t === type) return this.sent[index]!;
+    }
+    return null;
+  }
+
+  lastDeliveredOfType(type: string): Record<string, unknown> | null {
+    for (let index = this.delivered.length - 1; index >= 0; index -= 1) {
+      if (this.delivered[index]!.t === type) return this.delivered[index]!;
     }
     return null;
   }
@@ -426,6 +443,47 @@ describe("MUL-417 daemon protocol session — backpressure", () => {
     expect(h.session.isClosed).toBe(true);
     expect(h.registry.size).toBe(0);
     expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+  });
+
+  for (const failure of ["throws", "returns 0"] as const) {
+    it(`rolls back welcome when socket.send ${failure} and allows the daemon to reconnect`, async () => {
+      const h = harness();
+      if (failure === "throws") h.socket.nextError = new Error("send failed");
+      else h.socket.nextStatus = 0;
+
+      await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload() }));
+      expect(h.socket.closed.map(({ code }) => code)).toEqual([4001]);
+      expect(h.socket.lastDeliveredOfType("welcome")).toBeNull();
+      expect(h.session.isHandshakeComplete).toBe(false);
+      expect(h.registry.size).toBe(0);
+      expect(h.registry.daemonIdForRuntime("rt_one")).toBeNull();
+
+      const retrySocket = new FakeDaemonSocket();
+      const retry = new DaemonProtocolSession({
+        sessionId: "dws_retry",
+        socket: retrySocket,
+        registry: h.registry,
+        serverVersion: "0.2.83",
+        clock: new ManualDaemonProtocolClock(),
+        authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+      });
+      await retry.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 2, p: helloPayload() }));
+      expect(retrySocket.lastOfType("welcome")).not.toBeNull();
+      expect(retry.isHandshakeComplete).toBe(true);
+      expect(h.registry.get("dmn_test")).toBe(retry);
+    });
+  }
+
+  it("closes and unregisters an established session when a later send throws", async () => {
+    const h = harness();
+    await handshake(h);
+    h.socket.nextError = new Error("send failed");
+
+    expect(h.session.sendEvent({ t: "task.offer", p: {} })).toEqual({ ok: false, reason: "closed" });
+    expect(h.socket.closed.map(({ code }) => code)).toEqual([4001]);
+    expect(h.session.isClosed).toBe(true);
+    expect(h.registry.size).toBe(0);
+    expect(h.registry.daemonIdForRuntime("rt_one")).toBeNull();
   });
 
   it("ignores a drain callback after the socket dropped a frame", async () => {
@@ -922,9 +980,10 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
 
   it("rolls the registration back when onHello throws, so the daemon can just reconnect", async () => {
     const registry = new DaemonSessionRegistry();
+    const socket = new FakeDaemonSocket();
     const session = new DaemonProtocolSession({
       sessionId: "dws_onhello",
-      socket: new FakeDaemonSocket(),
+      socket,
       registry,
       serverVersion: "0.2.83",
       clock: new ManualDaemonProtocolClock(),
@@ -942,6 +1001,8 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
     // a session the daemon was never told about.
     expect(session.isClosed).toBe(true);
     expect(session.isHandshakeComplete).toBe(false);
+    expect(socket.closed.map(({ code }) => code)).toEqual([4001]);
+    expect(socket.lastOfType("welcome")).toBeNull();
     expect(registry.size).toBe(0);
     expect(registry.daemonIdForRuntime("rt_one")).toBeNull();
 
@@ -1002,7 +1063,35 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       v: 2, t: "hello", ts: 1, p: helloPayload(),
     })));
 
-    expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.server_closing);
+    expect(socket.closed.map(({ code }) => code)).toEqual([4001]);
+    expect(socket.lastOfType("welcome")).toBeNull();
+    expect(session.isHandshakeComplete).toBe(false);
+    expect(registry.size).toBe(0);
+    expect(registry.daemonIdForRuntime("rt_one")).toBeNull();
+  });
+
+  it("rolls back and closes 4001 when registry.register throws after indexing", async () => {
+    const registry = new DaemonSessionRegistry();
+    const register = registry.register.bind(registry);
+    registry.register = (session) => {
+      register(session);
+      throw new Error("registry failed after indexing");
+    };
+    const socket = new FakeDaemonSocket();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_register_failure",
+      socket,
+      registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+    });
+
+    await captureWarnings(() => session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1, p: helloPayload(),
+    })));
+
+    expect(socket.closed.map(({ code }) => code)).toEqual([4001]);
     expect(socket.lastOfType("welcome")).toBeNull();
     expect(session.isHandshakeComplete).toBe(false);
     expect(registry.size).toBe(0);

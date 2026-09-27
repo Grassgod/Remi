@@ -8,8 +8,9 @@
  * accepted limits are the A-0 constants, and that v1 keeps working unchanged
  * (A-1's explicit coexistence rule).
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api.js";
+import { handleDaemonProtocolMessage } from "../../../packages/server/src/api/server.js";
 import {
   DAEMON_PROTOCOL_VERSION,
   DAEMON_WS_MAX_PAYLOAD_BYTES,
@@ -62,6 +63,25 @@ function helloFrame(patch: Record<string, unknown> = {}): string {
 }
 
 describe("MUL-417 daemon protocol v2 — server wiring", () => {
+  it("logs only fixed metadata when the daemon message handler throws sensitive content", async () => {
+    const sentinel = "token_like_secret_123?key=value";
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await handleDaemonProtocolMessage({
+        sessionId: "dws_sentinel",
+        handleMessage: async () => { throw new Error(sentinel); },
+      }, "frame");
+      const output = JSON.stringify(warn.mock.calls);
+      expect(output).toContain("daemon_protocol_frame_failed");
+      expect(output).toContain('"session_id":"dws_sentinel"');
+      expect(output).toContain('"error_class":"Error"');
+      expect(output).not.toContain(sentinel);
+      expect(output).not.toContain("stack");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("completes a handshake over a real socket and stamps the runtime heartbeat", async () => {
     const { store, token } = await daemonFixture();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });

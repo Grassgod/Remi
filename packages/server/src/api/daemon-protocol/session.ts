@@ -441,7 +441,7 @@ export class DaemonProtocolSession {
     try {
       status = this.socket.send(encoded);
     } catch {
-      this.markClosed();
+      this.close(DAEMON_PROTOCOL_CLOSE_CODES.server_closing, "socket send failed");
       return { status: "closed" };
     }
     if (status === 0) {

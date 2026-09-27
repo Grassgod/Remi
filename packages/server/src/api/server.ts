@@ -674,6 +674,20 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   return app;
 }
 
+export async function handleDaemonProtocolMessage(
+  session: Pick<DaemonProtocolSession, "sessionId" | "handleMessage"> | null | undefined,
+  message: string | Uint8Array,
+): Promise<void> {
+  try {
+    await session?.handleMessage(message);
+  } catch (error) {
+    log.warn("daemon_protocol_frame_failed", {
+      session_id: session?.sessionId ?? null,
+      error_class: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
 export function startMultiremiServer(options: MultiremiApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
   const startupEnv = {
     ...process.env,
@@ -763,7 +777,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const daemonProtocol = new DaemonProtocolLayer({
     store,
     serverVersion: multiremiVersion,
-    // Same resolved window as `api_minute_summary`, so the two lines add up.
+    // Same resolved window as `api_minute_summary`; WS frame attribution overlaps
+    // the process DB totals there, so the two lines must not be added together.
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
   });
@@ -910,18 +925,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       },
       async message(ws, message) {
         if (ws.data.kind === "daemon-protocol") {
-          // Errors never escape into Bun's handler: a throwing handler would be
-          // logged per frame and leave the session in an unknown state, while
-          // the session itself already answers a malformed frame with a close
-          // code the peer can act on.
-          try {
-            await ws.data.session?.handleMessage(message as string | Uint8Array);
-          } catch (error) {
-            log.warn("daemon protocol frame failed", {
-              session_id: ws.data.session?.sessionId ?? null,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+          await handleDaemonProtocolMessage(ws.data.session, message as string | Uint8Array);
           return;
         }
         if (ws.data.kind === "browser") {
