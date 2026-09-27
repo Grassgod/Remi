@@ -17,6 +17,14 @@ const apiEnvExample = readFileSync(resolve(repoRoot, "deploy/docker/api.env.exam
 const apiDockerfile = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.api"), "utf8");
 const splitUpstream = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-upstream.conf"), "utf8");
 const splitLocations = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-locations.conf"), "utf8");
+const deployReadme = readFileSync(resolve(repoRoot, "deploy/README.md"), "utf8");
+
+/** The "Split API roles" section only, so assertions cannot match other sections. */
+function splitSection(readme: string): string {
+  const start = readme.indexOf("## Split API roles");
+  const end = readme.indexOf("## Drain-protected updates", start);
+  return readme.slice(start, end);
+}
 
 describe("application compose stack", () => {
   test("ships no ingestion service, profile, or endpoint registry", () => {
@@ -108,6 +116,45 @@ describe("application compose stack", () => {
     // catch-all; this location makes the boundary explicit so a future routing
     // change cannot quietly publish them.
     expect(splitLocations).toMatch(/^location \/internal\/ \{ return 404; \}$/mu);
+  });
+
+  test("the split runbook restores every file stage A changes", () => {
+    // MUL-464 QA: stage A changes three Nginx files (the site, the archive
+    // include, and possibly nginx.conf for the http-level upstream) plus the
+    // host Compose file and env. The first runbook restored only the site file,
+    // so a rollback left large archive uploads pointed at a container that Full
+    // return was about to stop. Each changed file must be named in the backup
+    // block, covered by the per-file table, and restored by a rollback.
+    for (const file of [
+      "nginx-site.conf.orig",
+      "nginx-session-archive-direct.conf.orig",
+      "nginx.conf.orig",
+      "compose.application.yml.orig",
+      "application.env.orig",
+    ]) {
+      expect(deployReadme, `backup for ${file}`).toContain(file);
+    }
+    // The archive include must be restored by the stage A rollback, not only
+    // backed up: name it in the rollback block as well.
+    const rollback = splitSection(deployReadme).slice(splitSection(deployReadme).indexOf("### Rollback"));
+    expect(rollback).toContain("nginx-session-archive-direct.conf.orig");
+    // And the rollback must verify both routes came back, which is the check
+    // that catches a half-restored host.
+    expect(rollback).toMatch(/archive path/);
+  });
+
+  test("the split runbook deletes the stage A Compose lines instead of restoring the env backup", () => {
+    // MUL-464 QA: the Compose env file is rewritten by the updater on every
+    // release (`writeImageEnv`), so restoring a whole backup would roll the
+    // image digests back with it. The runbook must say to delete the two lines
+    // and must not instruct a full restore of the env file.
+    expect(deployReadme).toMatch(/Never restore a whole backup of `\$COMPOSE_ENV`/u);
+    expect(deployReadme).toMatch(/do NOT restore the whole backup/u);
+    // The peer URL must be cleared before the MUL-405 image is rolled back: the
+    // precondition chains Full return, and Full return clears the peer config.
+    const rollback = splitSection(deployReadme).slice(splitSection(deployReadme).indexOf("### Rollback"));
+    expect(rollback).toMatch(/rolling back the MUL-405 image requires a completed Full[\s>]*return/u);
+    expect(rollback).toContain("REMI_API_PEER_URL=http://api-runtime:6120");
   });
 
   test("grants no container the Docker socket or host control", () => {
