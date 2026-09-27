@@ -168,21 +168,24 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 668,
+      mapped: 673,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
-      //
-      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
-      // channel), exempt under `daemon_internal_protocol`: machine-to-server
-      // traffic between two API processes with no user-facing command.
-      exempt: 94,
+      exempt: 92,
       missing: 0,
-      total: 762,
+      total: 765,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
+    for (const [route, command] of [
+      ["GET /api/issues/:id/decisions", "issue.decision.list"],
+      ["POST /api/issues/:id/decisions", "issue.decision.request"],
+      ["POST /api/issues/:id/decisions/:decisionId/answer", "issue.decision.answer"],
+      ["POST /api/issues/:id/decisions/:decisionId/escalate", "issue.decision.escalate"],
+      ["POST /api/issues/:id/decisions/:decisionId/withdraw", "issue.decision.withdraw"],
+    ]) expect(manifest.routes[route!]).toEqual({ command });
     expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
       .toEqual({ command: "workspace.relay.probe" });
     expect(manifest.commands["workspace.relay.probe"]).toMatchObject({
