@@ -14,6 +14,7 @@
  */
 
 import type { SessionArchiveSubjectKind } from "./trace-file.js";
+import { TRACE_END_STATUSES } from "./trace-file.js";
 
 export const SESSION_ARCHIVE_FORMAT_V2 = "multiremi.session-archive.v2" as const;
 /** v1 tar.gz container; accepted rows stay readable, new uploads are rejected. */
@@ -272,7 +273,7 @@ export function splitTraceMemberLines(bytes: Uint8Array): string[] {
  * - `head` is the largest seq in the member, not the event count, because
  *   historical traces may have gaps;
  * - `closed` is true only when the last line is a valid {@link TraceFileTrailer}
- *   (an object with an `end` field). A file with only a header, or with a
+ *   (a complete terminal `end` record). A file with only a header, or with a
  *   trailing line that is not a trailer, stays open.
  */
 export function readTraceMemberWindow(
@@ -318,7 +319,7 @@ export function readTraceMemberWindow(
  * True when `line` is a valid trace trailer.
  *
  * `TraceFileTrailer` is `{ end: { status, head, event_count, ended_at } }`, so a
- * line only closes a trace when it carries an `end` object. Everything else —
+ * line only closes a trace when it carries a valid `end` record. Everything else —
  * including a trailing event with a malformed seq, or a header-only file — is
  * not a trailer.
  */
@@ -330,7 +331,16 @@ export function isTraceFileTrailer(line: string): boolean {
     return false;
   }
   if (!isRecord(value)) return false;
-  return isRecord(value.end);
+  if (!isRecord(value.end)) return false;
+  const end = value.end;
+  return TRACE_END_STATUSES.some((status) => status === end.status)
+    && Number.isSafeInteger(end.head) && Number(end.head) >= 0
+    && Number.isSafeInteger(end.event_count) && Number(end.event_count) >= 0
+    && Number(end.event_count) <= Number(end.head)
+    && (Number(end.head) === 0) === (Number(end.event_count) === 0)
+    && typeof end.ended_at === "string"
+    && !Number.isNaN(Date.parse(end.ended_at))
+    && new Date(end.ended_at).toISOString() === end.ended_at;
 }
 
 function parseTraceLine(line: string): TraceLine | null {

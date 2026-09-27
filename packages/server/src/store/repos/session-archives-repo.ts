@@ -22,6 +22,13 @@ type Row = Record<string, unknown>;
 
 const PREPARATION_FAILURE_SHA256 = "0".repeat(64);
 
+export class SessionArchiveTraceOwnershipError extends Error {
+  constructor(taskId: string) {
+    super(`trace task ${taskId} does not belong to this archive subject and Runtime`);
+    this.name = "SessionArchiveTraceOwnershipError";
+  }
+}
+
 function parseMetadata(value: unknown): Record<string, unknown> {
   try {
     const parsed = JSON.parse(String(value ?? "{}"));
@@ -516,6 +523,22 @@ export class SessionArchivesRepo {
         || archive.attemptCount !== attemptCount
         || archive.status !== "ready"
       ) return null;
+      for (const pointer of pointers) {
+        const task = this.ctx.db.query(
+          `SELECT workspace_id, runtime_id, issue_id, chat_session_id
+           FROM multiremi_tasks WHERE id = ?`,
+        ).get(pointer.taskId) as Row | null;
+        const belongs = archive.subjectKind === "issue"
+          ? task?.issue_id === archive.subjectId
+          : archive.subjectKind === "chat"
+            ? task?.chat_session_id === archive.subjectId
+            : pointer.taskId === archive.subjectId
+              && task?.issue_id == null && task?.chat_session_id == null;
+        if (!task || !belongs || task.workspace_id !== archive.workspaceId
+          || task.runtime_id !== archive.runtimeId) {
+          throw new SessionArchiveTraceOwnershipError(pointer.taskId);
+        }
+      }
       const pointerCount = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers);
       return { archive, pointerCount };
     });

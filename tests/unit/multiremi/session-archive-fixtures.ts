@@ -22,6 +22,7 @@ import { readTraceMemberWindow } from "@multiremi/contracts/session-archive.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 import { ZipStreamWriter } from "@shared/zip/writer.js";
+import { db } from "./helpers.js";
 
 export interface ArchiveFixtureMember {
   path: string;
@@ -134,6 +135,24 @@ export function fixtureSha256(bytes: Uint8Array): string {
 /** Build a v2 archive in memory. */
 export async function buildArchiveFixture(options: ArchiveFixtureOptions): Promise<ArchiveFixture> {
   const members: ArchiveFixtureMember[] = [...(options.members ?? [])];
+  // Issue archive fixtures used to have trace members without corresponding
+  // tasks. Ingest now checks the real task row before publishing a pointer.
+  if (db && options.subject.kind === "issue") {
+    const owner = db.query(
+      "SELECT runtime_id, workspace_id FROM multiremi_issue_workspaces WHERE issue_id = ?",
+    ).get(options.subject.id) as { runtime_id: string; workspace_id: string } | null;
+    if (owner?.runtime_id) {
+      for (const taskId of Object.keys(options.traces ?? {})) {
+        db.run(
+          `INSERT OR IGNORE INTO multiremi_tasks
+           (id, agent_id, runtime_id, issue_id, workspace_id, status, prompt, created_at, updated_at)
+           VALUES (?, 'agt_archive_fixture', ?, ?, ?, 'completed', 'fixture', ?, ?)`,
+          [taskId, owner.runtime_id, options.subject.id, owner.workspace_id,
+            "2026-09-27T00:00:00.000Z", "2026-09-27T00:00:00.000Z"],
+        );
+      }
+    }
+  }
   for (const [taskId, body] of Object.entries(options.traces ?? {})) {
     members.push({
       path: `${SESSION_ARCHIVE_TRACES_PREFIX}${taskId}${SESSION_ARCHIVE_TRACE_SUFFIX}`,

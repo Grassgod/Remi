@@ -1314,7 +1314,7 @@ describe("Multiremi session archives", () => {
       second.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: traceFileBody({ events: 1 }) });
+      { tsk_physical_second: traceFileBody({ events: 1, taskId: "tsk_physical_second" }) });
     store.markIssueWorkspaceCleaned({ issueId: issue.id, runtimeId: runtime.id, ...firstBinding });
     store.markIssueWorkspaceCleaned({ issueId: second.id, runtimeId: runtime.id, ...secondBinding });
     const firstPath = join(archiveRoot!, store.getSessionArchive(firstBinding.archiveId)!.relativePath);
@@ -1423,7 +1423,7 @@ describe("Multiremi session archives", () => {
       second.id,
       runtime.id,
       runtime.daemonId!,
-      { tsk_physical: traceFileBody({ events: 1 }) });
+      { tsk_physical_second: traceFileBody({ events: 1, taskId: "tsk_physical_second" }) });
     const firstArchive = store.getSessionArchive(firstBinding.archiveId)!;
     const secondArchive = store.getSessionArchive(secondBinding.archiveId)!;
     const firstPath = join(archiveRoot!, firstArchive.relativePath);
@@ -2242,6 +2242,10 @@ describe("Multiremi session archives", () => {
     );
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "one shot" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const chatTask = store.createTask({
+      agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "chat trace",
+    });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, chatTask.id]);
 
     const chatBase = `/api/daemon/runtimes/${runtime.id}/chats/${chat.id}/session-archives`;
     const taskBase = `/api/daemon/runtimes/${runtime.id}/tasks/${task.id}/session-archives`;
@@ -2252,7 +2256,9 @@ describe("Multiremi session archives", () => {
     ] as const) {
       const fixtureData = await buildArchiveFixture({
         subject,
-        traces: { tsk_subject: traceFileBody({ events: 1, taskId: "tsk_subject" }) },
+        traces: { [subject.kind === "chat" ? chatTask.id : task.id]: traceFileBody({
+          events: 1, taskId: subject.kind === "chat" ? chatTask.id : task.id,
+        }) },
       });
       const initialized = await app.request(`${routeBase}/init`, {
         method: "POST",

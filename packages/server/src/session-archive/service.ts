@@ -44,6 +44,7 @@ import {
   type ArchiveIngestVerification,
 } from "@multiremi/session-archive/ingest.js";
 import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import { SessionArchiveTraceOwnershipError } from "@multiremi/store/repos/session-archives-repo.js";
 import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -603,12 +604,39 @@ export class SessionArchiveService {
     const finalPath = await this.resolveArchivePath(archive.relativePath, false);
     const partialPath = this.partialPath(finalPath, attemptCount);
     try {
-      // 1. Blob digest first: the declared sha256 must match the bytes on disk.
+      // Validate the attempt-owned partial before publishing it at the shared
+      // final path. A rejected member must never leave a final archive behind.
+      const ingestPath = await lstat(partialPath).then(() => partialPath, (error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return finalPath;
+        throw error;
+      });
+      this.assertArchiveHash(await hashFile(ingestPath, archive.sizeBytes), archive);
+      const ingest = await this.validateArchiveIngest(ingestPath, archive);
+      for (const trace of ingest.traces) {
+        const taskId = trace.task_id;
+        if (!taskId) throw new SessionArchiveTraceOwnershipError(trace.path);
+        const task = this.store.getTask(taskId);
+        const belongs = archive.subjectKind === "issue"
+          ? task?.issueId === archive.subjectId
+          : archive.subjectKind === "chat"
+            ? task?.chatSessionId === archive.subjectId
+            : taskId === archive.subjectId
+              && task?.issueId == null && task?.chatSessionId == null;
+        if (!task || !belongs || task.workspaceId !== archive.workspaceId
+          || task.runtimeId !== archive.runtimeId) {
+          throw new SessionArchiveTraceOwnershipError(taskId);
+        }
+      }
+      const stillOwned = this.store.getSessionArchive(archive.id);
+      if (stillOwned?.attemptCount !== attemptCount || stillOwned.status !== "uploading"
+        || stillOwned.runtimeId !== runtimeId) {
+        throw new SessionArchiveError(
+          "session archive completion attempt was superseded", 409, "session_archive_attempt_conflict",
+        );
+      }
+      // Publish only after the blob, every member and every trace owner pass.
       const actual = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
-      // 2. Cross-check the container against its own index, then derive the
-      //    per-task pointers from the verified members. A tampered index fails
-      //    here and never reaches `ready`.
-      const ingest = await this.validateArchiveIngest(finalPath, archive);
+      // 2. Derive pointers from the verified members.
       const pointers = buildTracePointers(archive, ingest.traces);
       await this.writeManifest(finalPath, archive, actual.sizeBytes);
       await this.syncDirectory(dirname(finalPath));
@@ -653,7 +681,13 @@ export class SessionArchiveService {
         attemptCount,
         message,
       );
+      if (failed) await unlink(partialPath).catch((cleanupError) => {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
+      });
       await this.cleanupExhaustedPartials(failed);
+      if (error instanceof SessionArchiveTraceOwnershipError) {
+        throw new SessionArchiveError(error.message, 422, "session_archive_trace_ownership_mismatch");
+      }
       throw error;
     }
   }

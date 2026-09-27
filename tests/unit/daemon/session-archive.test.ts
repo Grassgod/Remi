@@ -25,6 +25,8 @@ import { traceFileBody } from "../../unit/multiremi/session-archive-fixtures.js"
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
   SESSION_ARCHIVE_FORMAT_V2,
+  isTraceFileTrailer,
+  readTraceMemberWindow,
   type SessionArchiveIndex,
 } from "@multiremi/contracts/session-archive.js";
 
@@ -221,9 +223,11 @@ describe("Session archive v2 writer", () => {
     mkdirSync(join(chatRoot, "traces"), { recursive: true });
     mkdirSync(join(chatRoot, "agt_1", "1", "home"), { recursive: true });
     mkdirSync(join(taskRoot, "traces"), { recursive: true });
-    writeFileSync(join(chatRoot, "traces", "tsk_chat.jsonl"), "{\"seq\":0}\n");
+    const chatTrace = traceFileBody({ events: 1, taskId: "tsk_chat" });
+    writeFileSync(join(chatRoot, "traces", "tsk_chat.jsonl"), chatTrace);
     writeFileSync(join(chatRoot, "agt_1", "1", "home", "history.jsonl"), "chat history\n");
-    writeFileSync(join(taskRoot, "traces", "tsk_1.jsonl"), "{\"seq\":0}\n");
+    const taskTrace = traceFileBody({ events: 1, taskId: "tsk_1" });
+    writeFileSync(join(taskRoot, "traces", "tsk_1.jsonl"), taskTrace);
 
     const chat = await prepareSessionArchive(workspaceRoot, {
       subject: { kind: "chat", id: "chat_1" },
@@ -242,7 +246,11 @@ describe("Session archive v2 writer", () => {
     expect(chatArchive.index.members.find((entry) => entry.kind === "trace")?.task_id).toBe("tsk_chat");
     expect(taskArchive.index.subject).toEqual({ kind: "task", id: "tsk_1" });
     expect(taskArchive.index.members.find((entry) => entry.kind === "trace")?.task_id).toBe("tsk_1");
-    expect(taskArchive.members.get("traces/tsk_1.jsonl")?.toString()).toBe("{\"seq\":0}\n");
+    expect(taskArchive.members.get("traces/tsk_1.jsonl")?.toString()).toBe(taskTrace);
+    expect(chatArchive.index.members.find((entry) => entry.task_id === "tsk_chat"))
+      .toMatchObject({ head: 1, event_count: 1, closed: true });
+    expect(taskArchive.index.members.find((entry) => entry.task_id === "tsk_1"))
+      .toMatchObject({ head: 1, event_count: 1, closed: true });
   });
 
   it("refuses unexpected symlinks in provider history", async () => {
@@ -429,6 +437,24 @@ describe("Session archive v2 writer", () => {
     expect(byTask.get("tsk_header")).toMatchObject({ head: 0, event_count: 0, closed: false });
     expect(byTask.get("tsk_bogus")).toMatchObject({ head: 1, event_count: 1, closed: false });
     expect(byTask.get("tsk_closed")).toMatchObject({ head: 2, event_count: 2, closed: true });
+  });
+
+  it("rejects incomplete and inconsistent trace end records", () => {
+    const base = traceFileBody({ events: 1, closed: false });
+    const invalid = [
+      {},
+      { status: "completed" },
+      { status: "running", head: 1, event_count: 1, ended_at: "2026-09-27T01:00:00.000Z" },
+      { status: "completed", head: -1, event_count: 1, ended_at: "2026-09-27T01:00:00.000Z" },
+      { status: "completed", head: 1.5, event_count: 1, ended_at: "2026-09-27T01:00:00.000Z" },
+      { status: "completed", head: 1, event_count: 2, ended_at: "2026-09-27T01:00:00.000Z" },
+      { status: "completed", head: 1, event_count: 1, ended_at: "invalid" },
+    ];
+    for (const end of invalid) {
+      const trailer = JSON.stringify({ end });
+      expect(isTraceFileTrailer(trailer)).toBe(false);
+      expect(readTraceMemberWindow(Buffer.from(`${base}${trailer}\n`), 0, 10).closed).toBe(false);
+    }
   });
 
   it("refuses a symlink inside traces/ instead of skipping it", async () => {

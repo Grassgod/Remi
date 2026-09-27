@@ -20,6 +20,11 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
@@ -337,6 +342,76 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
   }, 30_000);
+
+  it("rejects foreign and missing trace tasks atomically and cleans rejected archive bytes on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-archive-auth-"));
+    try {
+      const agent = store.createAgent({ name: "PG archive member", provider: "codex", workspaceId: "local" });
+      const owner = store.registerRuntime({
+        id: "rt_pg_archive_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_archive_owner", workspaceId: "local",
+      });
+      const other = store.registerRuntime({
+        id: "rt_pg_archive_other", name: "other", provider: "codex",
+        daemonId: "dmn_pg_archive_other", workspaceId: "local",
+      });
+      const chat = store.createChatSession({ agentId: agent.id, title: "Owner", workspaceId: "local" });
+      const sibling = store.createChatSession({ agentId: agent.id, title: "Sibling", workspaceId: "local" });
+      db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
+        [owner.id, chat.id, sibling.id]);
+      const good = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
+      const foreignRuntime = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "runtime" });
+      const foreignSubject = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: sibling.id, prompt: "subject" });
+      for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id], [foreignSubject.id, owner.id]]) {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
+      }
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      for (const badId of [foreignRuntime.id, foreignSubject.id, "tsk_pg_archive_missing"]) {
+        const fixture = await buildArchiveFixture({
+          subject: { kind: "chat", id: chat.id },
+          traces: {
+            [good.id]: traceFileBody({ events: 1, taskId: good.id }),
+            [badId]: traceFileBody({ events: 1, taskId: badId }),
+          },
+        });
+        const archive = service.initialize({
+          workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+          runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+          sha256: fixture.sha256, sizeBytes: fixture.sizeBytes,
+        }).archive;
+        const claim = await service.claimUploadAttempt(owner.id, { kind: "chat", id: chat.id }, archive.id);
+        await service.upload(owner.id, { kind: "chat", id: chat.id }, archive.id,
+          claim.uploadAttempt!, new Response(fixture.bytes).body);
+        await expect(service.complete(owner.id, { kind: "chat", id: chat.id }, archive.id,
+          claim.uploadAttempt!)).rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
+        expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+        expect(store.getTaskTrace(good.id)).toBeNull();
+        expect(store.getTaskTrace(badId)).toBeNull();
+        expect(existsSync(join(root, archive.relativePath))).toBe(false);
+      }
+      const tampered = await buildArchiveFixture({
+        subject: { kind: "chat", id: chat.id },
+        members: [{ path: "sessions/chat_1/history.jsonl", body: Buffer.from("history") }],
+        traces: { [good.id]: traceFileBody({ events: 1, taskId: good.id }) },
+        tamperMemberBody: (path, body) => path.startsWith("sessions/") ? Buffer.from("changed") : body,
+      });
+      const archive = service.initialize({
+        workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+        runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: tampered.sourceRevision,
+        sha256: tampered.sha256, sizeBytes: tampered.sizeBytes,
+      }).archive;
+      const claim = await service.claimUploadAttempt(owner.id, { kind: "chat", id: chat.id }, archive.id);
+      await service.upload(owner.id, { kind: "chat", id: chat.id }, archive.id,
+        claim.uploadAttempt!, new Response(tampered.bytes).body);
+      await expect(service.complete(owner.id, { kind: "chat", id: chat.id }, archive.id,
+        claim.uploadAttempt!)).rejects.toThrow();
+      expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(good.id)).toBeNull();
+      expect(existsSync(join(root, archive.relativePath))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
