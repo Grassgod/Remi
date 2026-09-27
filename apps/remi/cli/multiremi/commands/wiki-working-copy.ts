@@ -20,6 +20,7 @@ import type { CliOptions } from "../options.js";
 import { rawStringOption } from "../options.js";
 import { isRecord, multiremiApiRequest } from "../http.js";
 import { printJson } from "../output.js";
+import { fetchRepositoryWikiBodies, fetchRepositoryWikiMetadata } from "./repository-wiki-docs.js";
 
 interface WikiDoc {
   id: string;
@@ -156,7 +157,7 @@ export async function wikiStatus(options: CliOptions, projectId: string | null):
     const manifest = projectId ? requireManifest(paths, projectId) : null;
     const remote = projectId ? await fetchWikiDocs(projectId, options) : [];
     const changes = manifest ? workingCopyStatus(paths, manifest, remote) : [];
-    const repositoryState = await repositoryWorkingCopyState(paths, options);
+  const repositoryState = await repositoryWorkingCopyState(paths, options);
     if (!manifest && !repositoryState.manifest) {
       throw new Error("Wiki working copy is not initialized; specify --project or run inside an Issue workspace with Repository Wiki context");
     }
@@ -391,7 +392,7 @@ export async function wikiPush(options: CliOptions, projectId: string | null): P
       reconcileAfterPush(paths, projectId, refreshed, plan);
     }
     if (repositoryState.manifest) {
-      const refreshedRepositories = await fetchRepositoryWikiDocs(repositoryState.manifest, options);
+      const refreshedRepositories = await fetchRepositoryWikiDocs(paths, repositoryState.manifest, options);
       reconcileRepositoryAfterPush(paths, repositoryState.manifest, refreshedRepositories, repositoryPlan);
     }
     printJson({
@@ -507,7 +508,7 @@ async function repositoryWorkingCopyState(
 }> {
   const manifest = readRepositoryWikiManifest(paths);
   if (!manifest) return { manifest: null, remoteByRepository: new Map(), changes: [] };
-  const remoteByRepository = await fetchRepositoryWikiDocs(manifest, options);
+  const remoteByRepository = await fetchRepositoryWikiDocs(paths, manifest, options);
   const plan = buildRepositoryPushPlan(paths, manifest, remoteByRepository);
   const changes: Array<{ repository_id: string; path: string; state: WikiChange["state"] }> = plan.actions.map((action) => ({
     repository_id: action.repositoryId,
@@ -585,39 +586,64 @@ function buildRepositoryPushPlan(
   return { actions, conflicts };
 }
 
+/**
+ * Reads the remote Repository Wiki for every repository in the manifest.
+ *
+ * The list is metadata only, so bodies come from two places: pages whose
+ * `version` still matches the manifest reuse the checksum-verified baseline in
+ * `.multiremi/wiki-base` (equal version implies equal body; see ADR 0002), and
+ * changed, new, or baseline-less pages are requested explicitly in `ids=`
+ * batches. An older server answers the list with bodies included; that superset
+ * is used directly.
+ */
 async function fetchRepositoryWikiDocs(
+  paths: WikiPaths,
   manifest: RepositoryWikiManifest,
   options: CliOptions,
 ): Promise<Map<string, RepositoryWikiDoc[]>> {
+  const previousById = new Map(manifest.docs.map((entry) => [entry.id, entry]));
   const entries = await Promise.all(manifest.repositories.map(async (repository) => {
-    const value = await multiremiApiRequest(
-      "GET",
-      `/api/workspaces/${encodeURIComponent(manifest.workspaceId)}/repos/${encodeURIComponent(repository.id)}/wiki`,
-      undefined,
-      options,
-    );
-    if (!isRecord(value) || !Array.isArray(value.docs)) throw new Error(`Repository Wiki response is invalid for ${repository.name}`);
-    return [repository.id, value.docs.map((doc) => parseRepositoryWikiDoc(doc, repository.id))] as const;
+    const remote = await fetchRepositoryWikiMetadata(options, manifest.workspaceId, repository.id);
+    const bodies = new Map<string, string>();
+    const pending: string[] = [];
+    for (const doc of remote) {
+      if (!validRepositoryRelativePath(doc.path)) throw new Error(`Repository Wiki document has an invalid path: ${doc.path}`);
+      if (typeof doc.body === "string") {
+        bodies.set(doc.id, doc.body);
+        continue;
+      }
+      const prior = previousById.get(doc.id);
+      if (prior && prior.version === doc.version) {
+        try {
+          bodies.set(doc.id, apiBody(readRepositoryBase(paths, prior)));
+          continue;
+        } catch {
+          // A missing or unverifiable baseline is not a reason to guess at the
+          // remote text; fall through and read it from the server.
+        }
+      }
+      pending.push(doc.id);
+    }
+    if (pending.length) {
+      const fetched = await fetchRepositoryWikiBodies(options, manifest.workspaceId, repository.id, pending);
+      for (const [id, body] of fetched) bodies.set(id, body);
+    }
+    return [repository.id, remote.map((doc): RepositoryWikiDoc => {
+      const body = bodies.get(doc.id);
+      if (body === undefined) throw new Error(`Repository Wiki body is missing for ${doc.id}`);
+      return {
+        id: doc.id,
+        repositoryId: repository.id,
+        path: doc.path,
+        title: doc.title,
+        body,
+        version: doc.version,
+        sourceRevision: doc.sourceRevision,
+        updatedAt: doc.updatedAt,
+      };
+    })] as const;
   }));
   return new Map(entries);
-}
-
-function parseRepositoryWikiDoc(value: unknown, repositoryId: string): RepositoryWikiDoc {
-  if (!isRecord(value)) throw new Error("Repository Wiki list contains an invalid document");
-  const id = field(value, "id");
-  const path = field(value, "path");
-  const title = field(value, "title");
-  if (!id || !path || !title || !validRepositoryRelativePath(path)) throw new Error("Repository Wiki document is missing id, path, or title");
-  return {
-    id,
-    repositoryId,
-    path,
-    title,
-    body: typeof value.body === "string" ? value.body : "",
-    version: Math.max(1, Math.floor(Number(value.version) || 1)),
-    sourceRevision: nullableField(value, "source_revision", "sourceRevision"),
-    updatedAt: field(value, "updated_at", "updatedAt"),
-  };
 }
 
 function reconcileRepositoryAfterPush(

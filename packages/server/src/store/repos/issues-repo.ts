@@ -272,6 +272,15 @@ export class IssuesRepo {
     return row ? this.hydrateIssue(toIssue(row)) : null;
   }
 
+  /**
+   * Existence probe for callers that only need to know the row is there.
+   * `getIssue` also hydrates labels (an extra join) which such callers never
+   * read, and several of them are about to load the issue themselves anyway.
+   */
+  hasIssue(id: string): boolean {
+    return this.ctx.db.query("SELECT id FROM multiremi_issues WHERE id = ?").get(id) != null;
+  }
+
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[] {
     const source = this.getIssue(sourceIssueId);
     if (!source) throw new Error(`Issue not found: ${sourceIssueId}`);
@@ -770,8 +779,7 @@ export class IssuesRepo {
   }
 
   listChildIssues(parentIssueId: string): MultiremiIssue[] {
-    const parent = this.getIssue(parentIssueId);
-    if (!parent) throw new Error(`Issue not found: ${parentIssueId}`);
+    if (!this.hasIssue(parentIssueId)) throw new Error(`Issue not found: ${parentIssueId}`);
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_issues WHERE parent_issue_id = ? ORDER BY position ASC, created_at DESC",
     ).all(parentIssueId) as Row[];
@@ -802,7 +810,7 @@ export class IssuesRepo {
   }
 
   listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
-    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
     const rows = this.ctx.db.query(
       `SELECT * FROM multiremi_issue_dependencies
        WHERE issue_id = ? OR depends_on_issue_id = ?
@@ -2034,16 +2042,25 @@ export class IssuesRepo {
     issueSessionId?: string | null;
     before?: IssueTimelineCursor | null;
     limit: number;
+    /**
+     * The caller already proved the issue exists and that `issueSessionId`
+     * belongs to it, so skip the repeat reads. Validation semantics are
+     * unchanged by default; pass this only from a caller that ran the same
+     * checks on the same ids in the same request.
+     */
+    skipExistenceChecks?: boolean;
   }): IssueTimelinePageResult {
-    const issueExists = this.ctx.db.query(
-      "SELECT id FROM multiremi_issues WHERE id = ?",
-    ).get(issueId) as Row | null;
-    if (!issueExists) throw new Error(`Issue not found: ${issueId}`);
-    const sessionId = cleanOptionalString(options.issueSessionId);
-    if (sessionId) {
-      const session = this.ctx.issueSessions().getIssueSession(sessionId);
-      if (!session || session.issueId !== issueId) throw new Error(`Issue session not found for issue: ${sessionId}`);
+    if (!options.skipExistenceChecks) {
+      if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+      const requestedSessionId = cleanOptionalString(options.issueSessionId);
+      if (requestedSessionId) {
+        const session = this.ctx.issueSessions().getIssueSession(requestedSessionId);
+        if (!session || session.issueId !== issueId) {
+          throw new Error(`Issue session not found for issue: ${requestedSessionId}`);
+        }
+      }
     }
+    const sessionId = cleanOptionalString(options.issueSessionId);
 
     const rowLimit = options.limit + 1;
     const commentWhere = ["issue_id = ?"];
@@ -2227,8 +2244,12 @@ export class IssuesRepo {
   }
 
   listLabelsForIssue(issueId: string): MultiremiLabel[] {
-    const issue = this.ctx.db.query("SELECT id FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
-    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    return this.listLabelsForExistingIssue(issueId);
+  }
+
+  /** `listLabelsForIssue` for a caller that already proved the issue exists. */
+  listLabelsForExistingIssue(issueId: string): MultiremiLabel[] {
     const rows = this.ctx.db.query(
       `SELECT l.*
        FROM multiremi_issue_labels l
@@ -2495,7 +2516,12 @@ export class IssuesRepo {
   }
 
   listIssueReactions(issueId: string): MultiremiIssueReaction[] {
-    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    return this.listReactions(ISSUE_REACTIONS, issueId);
+  }
+
+  /** `listIssueReactions` for a caller that already proved the issue exists. */
+  listIssueReactionsForExistingIssue(issueId: string): MultiremiIssueReaction[] {
     return this.listReactions(ISSUE_REACTIONS, issueId);
   }
 
@@ -2649,7 +2675,12 @@ export class IssuesRepo {
   }
 
   listAttachmentsForIssue(issueId: string): MultiremiAttachment[] {
-    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    return this.listAttachmentsForExistingIssue(issueId);
+  }
+
+  /** `listAttachmentsForIssue` for a caller that already proved the issue exists. */
+  listAttachmentsForExistingIssue(issueId: string): MultiremiAttachment[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC",
     ).all(issueId) as Row[];
@@ -2932,7 +2963,7 @@ export class IssuesRepo {
   private hydrateIssue(issue: MultiremiIssue): MultiremiIssue {
     return {
       ...issue,
-      labels: this.listLabelsForIssue(issue.id),
+      labels: this.listLabelsForExistingIssue(issue.id),
     };
   }
 

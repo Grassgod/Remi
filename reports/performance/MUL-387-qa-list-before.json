@@ -1,0 +1,133 @@
+{
+  "generatedAt": "2026-09-26T10:12:42.311Z",
+  "label": "before-main-146",
+  "commit": "a1e6162312b34d272e22b633d185f014f535f23e",
+  "ref": "HEAD",
+  "sourceDigest": {
+    "files": {
+      "packages/server/src/repository-wiki/service.ts": "6f17af8816f3f1f3ddaff9373d52188cf5175742b9c77dd7c919a28f713fd4aa",
+      "packages/server/src/api/routers/workspaces.ts": "5a470b2a2e54470c5c603734550bf64e51abc27833356c7bfa31757b9888be0d",
+      "packages/server/src/api/server.ts": "0676223f7b28a53246beb39afbf184fd0dd9f9da41de41ed6195617578576ab3"
+    },
+    "combined": "07b23f8ca5c4fa0b080454b390fccfea30635c569e953460dc906e763ba5eb83"
+  },
+  "runtime": {
+    "bun": "1.3.14",
+    "database": "sqlite(:memory:)",
+    "transport": "in-process app.request()"
+  },
+  "route": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+  "queryString": "(none)",
+  "mode": "openviking (RepositoryWikiService injected explicitly)",
+  "fixture": {
+    "docsReady": 146,
+    "bodyBytesPerDoc": 1500,
+    "fakeReadDelayMs": 700,
+    "warmups": 3,
+    "samples": 100,
+    "sequential": true
+  },
+  "responseShape": {
+    "status": 200,
+    "docs": 146,
+    "bodyKeyPresentOnEveryDoc": true,
+    "bodyKeyPresentOnSomeDoc": true,
+    "readCallsForThisResponse": 146
+  },
+  "bodyBatch": {
+    "requestedIds": 20,
+    "status": 200,
+    "elapsedMs": 704.54,
+    "readCalls": 146,
+    "maxInFlightReads": 146,
+    "docsWithBody": 146
+  },
+  "contractProbes": [
+    {
+      "name": "no-params",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    },
+    {
+      "name": "include_body+ids(20)",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki?include_body=true&ids=rwdoc_v5q57jabw75q,rwdoc_mjg6lat3468o,rwdoc_hi1dkbcgzb6z,rwdoc_8q4kuzq36wul,rwdoc_y5te0fmp5uvb,rwdoc_2y1kp4tdetvm,rwdoc_tk0i0y1t3wcs,rwdoc_nrrxhp4fk4a2,rwdoc_sd386xnfmerd,rwdoc_97gfa6xz3yr5,rwdoc_4jyb4q8yvlhb,rwdoc_7pfaaltuak07,rwdoc_1w59pt9s418w,rwdoc_gfrm0n37ll77,rwdoc_7sm4evrwbp3t,rwdoc_z6gt5t1t7tcs,rwdoc_8o8yyddkzct1,rwdoc_mnjrthaihnnh,rwdoc_6htnu3ja5ha4,rwdoc_uacqaaa3rypa",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    },
+    {
+      "name": "include_body without ids",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki?include_body=true",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    },
+    {
+      "name": "ua Bun/1.3.14",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    },
+    {
+      "name": "ua remi-cli/0.2.83",
+      "path": "/api/workspaces/local/repos/repo_qa_bench/wiki",
+      "status": 200,
+      "docs": 146,
+      "bodyKeyPresentOnEveryDoc": true,
+      "bodyKeyPresentOnSomeDoc": true,
+      "errorField": null,
+      "readCalls": 146,
+      "maxInFlightReads": 146
+    }
+  ],
+  "latency": {
+    "count": 100,
+    "minMs": 704.39,
+    "p50Ms": 705.14,
+    "p90Ms": 706.09,
+    "p95Ms": 706.26,
+    "p99Ms": 708.62,
+    "maxMs": 710.84,
+    "meanMs": 705.33
+  },
+  "readsPerRequest": {
+    "first": 146,
+    "min": 146,
+    "max": 146,
+    "constant": true
+  },
+  "maxInFlightReadsPerRequest": {
+    "min": 146,
+    "max": 146
+  },
+  "responseBytes": {
+    "min": 339468,
+    "max": 339468,
+    "mean": 339468
+  },
+  "verdict": {
+    "expect": "before",
+    "judged": true,
+    "violations": [],
+    "passed": true
+  }
+}

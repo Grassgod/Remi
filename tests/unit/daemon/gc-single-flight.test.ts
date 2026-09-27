@@ -322,6 +322,69 @@ describe("daemon Session archive GC orchestration", () => {
     expect(claims).toBe(1);
   });
 
+  it("runs snapshot GC even when workspace GC fails, then reports the workspace error", async () => {
+    const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
+    const calls: string[] = [];
+    const workspaceError = new Error("quarantine rename denied");
+    Object.assign(daemon, {
+      // The two passes are the daemon's own injection seams, so stubbing them
+      // exercises the real orchestration in executeGcOnce.
+      runWorkspaceGcPass: async () => {
+        calls.push("workspace");
+        throw workspaceError;
+      },
+      runSnapshotGcPass: async () => {
+        calls.push("snapshot");
+        return { removed: 3, retained: 0, skipped: 1 };
+      },
+      workspaceRootFence: null,
+      options: { workspacesRoot: "/tmp/multiremi-gc-order" },
+    });
+
+    await expect((daemon as unknown as {
+      executeGcOnce(): Promise<MultiremiDaemonGcSummary>;
+    }).executeGcOnce()).rejects.toThrow(workspaceError);
+    expect(calls).toEqual(["workspace", "snapshot"]);
+  });
+
+  it("skips snapshot GC and reports the fence when workspace ownership is lost", async () => {
+    const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
+    const pollAbort = new AbortController();
+    const calls: string[] = [];
+    Object.assign(daemon, {
+      workspaceRootFence: () => {
+        throw new Error("workspace root identity changed");
+      },
+      workspaceOwnershipLost: false,
+      activeTaskAborts: new Set<AbortController>(),
+      claimsPaused: false,
+      ready: true,
+      stopped: false,
+      pollAbort,
+      gcTimer: null,
+      terminalAuthorityCleanupRetryWake: null,
+      agentPluginReconcileAbort: null,
+      runtimeModelRefreshAbort: null,
+      runtimeModelProbeAbort: null,
+      runtimeModelRetryWake: null,
+      onReadyChange: () => {},
+      runWorkspaceGcPass: async () => {
+        calls.push("workspace");
+        return { cleaned: 0, orphaned: 0, skipped: 0 };
+      },
+      runSnapshotGcPass: async () => {
+        calls.push("snapshot");
+        return { removed: 0, retained: 0, skipped: 0 };
+      },
+      options: { workspacesRoot: "/tmp/multiremi-gc-order" },
+    });
+
+    await expect((daemon as unknown as {
+      executeGcOnce(): Promise<MultiremiDaemonGcSummary>;
+    }).executeGcOnce()).rejects.toThrow("workspace root identity changed");
+    expect(calls).toEqual([]);
+  });
+
   it("fails closed before GC when workspace ownership is lost", async () => {
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     const taskAbort = new AbortController();

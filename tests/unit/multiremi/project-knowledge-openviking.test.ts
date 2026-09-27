@@ -681,6 +681,184 @@ describe("Repository Wiki availability and migration safeguards", () => {
 
 });
 
+describe("Repository Wiki list is metadata only (MUL-387)", () => {
+  const legacyEnv = "MULTIREMI_REPOSITORY_WIKI_LEGACY_LIST";
+  const previousLegacy = process.env[legacyEnv];
+
+  afterEach(() => {
+    if (previousLegacy === undefined) delete process.env[legacyEnv];
+    else process.env[legacyEnv] = previousLegacy;
+  });
+
+  async function fixture(pageCount: number, options: { readDelayMs?: number } = {}) {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [{
+      id: "repo_list",
+      name: "list",
+      url: "https://github.com/acme/list.git",
+      source: "github",
+      default_branch: "main",
+    }]);
+    const client = new FakeOpenViking();
+    const service = new RepositoryWikiService(store, client, "openviking");
+    const docs = (await service.applyBatch("local", "repo_list", Array.from({ length: pageCount }, (_, index) => ({
+      kind: "create" as const,
+      input: { path: `page-${index}.md`, title: `Page ${index}`, body: `Body ${index}` },
+    })))).map(result => result.doc);
+    await service.runStorageJobs();
+    // The delay models the OpenViking read the list must not perform, so it is
+    // applied after the fixture is published.
+    client.readDelayMs = options.readDelayMs ?? 0;
+    client.readCalls.length = 0;
+    client.maxActiveReads = 0;
+    const app = createMultiremiApp({ store, repositoryWiki: service, authToken: "root-secret" });
+    const authorization = { Authorization: "Bearer root-secret" };
+    return { store, client, service, docs, app, authorization };
+  }
+
+  it("serves the default list without reading a single body", async () => {
+    const f = await fixture(6);
+
+    const response = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", { headers: f.authorization });
+    expect(response.status).toBe(200);
+    const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+
+    expect(docs).toHaveLength(6);
+    expect(f.client.readCalls).toEqual([]);
+    for (const doc of docs) {
+      expect(doc).not.toHaveProperty("body");
+      expect(doc.version).toBe(1);
+      expect(typeof doc.content_sha256).toBe("string");
+      expect(doc.sync_status).toBe("ready");
+    }
+  });
+
+  it("bounds include_body concurrency at 4 and reads exactly the requested ids", async () => {
+    const f = await fixture(20, { readDelayMs: 700 });
+    const ids = f.docs.map(doc => doc.id);
+
+    const start = Date.now();
+    const response = await f.app.request(
+      `/api/workspaces/local/repos/repo_list/wiki?include_body=true&ids=${ids.join(",")}`,
+      { headers: f.authorization },
+    );
+    const elapsed = Date.now() - start;
+
+    expect(response.status).toBe(200);
+    const docs = (await response.json() as any).docs as Array<Record<string, unknown>>;
+    expect(docs).toHaveLength(20);
+    expect(new Set(f.client.readCalls).size).toBe(20);
+    expect(f.client.maxActiveReads).toBeLessThanOrEqual(4);
+    // 20 documents at 4-way concurrency and 700ms each is 5 rounds: ~3.5s.
+    // ~0.7s would mean the cap was ignored; ~14s would mean serialized reads.
+    expect(elapsed).toBeGreaterThanOrEqual(2_800);
+    expect(elapsed).toBeLessThan(8_000);
+  }, 30_000);
+
+  it("filters metadata by ids and omits unknown ids", async () => {
+    const f = await fixture(3);
+    const response = await f.app.request(
+      `/api/workspaces/local/repos/repo_list/wiki?ids=${f.docs[1]!.id},rwdoc_missing`,
+      { headers: f.authorization },
+    );
+    expect(response.status).toBe(200);
+    const docs = (await response.json() as any).docs;
+    expect(docs.map((doc: any) => doc.id)).toEqual([f.docs[1]!.id]);
+    expect(docs[0]).not.toHaveProperty("body");
+  });
+
+  it("rejects invalid bounded requests with 400", async () => {
+    const f = await fixture(21);
+    const root = "/api/workspaces/local/repos/repo_list/wiki";
+    const tooMany = f.docs.map(doc => doc.id).join(",");
+    const cases = [
+      `${root}?include_body=true`,
+      `${root}?include_body=true&ids=${tooMany}`,
+      `${root}?q=page&include_body=true&ids=${f.docs[0]!.id}`,
+      `${root}?q=page&ids=${f.docs[0]!.id}`,
+    ];
+    for (const path of cases) {
+      const response = await f.app.request(path, { headers: f.authorization });
+      expect({ path, status: response.status }).toEqual({ path, status: 400 });
+    }
+    // 20 unique ids is inside the limit even when one id repeats.
+    const twenty = [...f.docs.slice(0, 19).map(doc => doc.id), f.docs[0]!.id];
+    expect((await f.app.request(`${root}?include_body=true&ids=${twenty.join(",")}`, { headers: f.authorization })).status).toBe(200);
+  });
+
+  it("keeps the full-body response for a Bun User-Agent and honours the env switch", async () => {
+    const f = await fixture(2);
+    const root = "/api/workspaces/local/repos/repo_list/wiki";
+
+    const legacy = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" } });
+    expect(legacy.status).toBe(200);
+    expect((await legacy.json() as any).docs[0].body).toBe("Body 0");
+
+    const upgraded = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "remi-cli/0.2.83" } });
+    expect((await upgraded.json() as any).docs[0]).not.toHaveProperty("body");
+
+    const noAgent = await f.app.request(root, { headers: f.authorization });
+    expect((await noAgent.json() as any).docs[0]).not.toHaveProperty("body");
+
+    process.env[legacyEnv] = "always";
+    const forced = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "remi-cli/0.2.83" } });
+    expect((await forced.json() as any).docs[0].body).toBe("Body 0");
+
+    process.env[legacyEnv] = "never";
+    const disabled = await f.app.request(root, { headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" } });
+    expect((await disabled.json() as any).docs[0]).not.toHaveProperty("body");
+  });
+
+  it("fails the whole batch with 503 when one requested body is unreadable", async () => {
+    const f = await fixture(3);
+    f.client.failReadUris.add(f.docs[1]!.contentUri!);
+    const ids = f.docs.map(doc => doc.id).join(",");
+
+    const response = await f.app.request(
+      `/api/workspaces/local/repos/repo_list/wiki?include_body=true&ids=${ids}`,
+      { headers: f.authorization },
+    );
+
+    expect(response.status).toBe(503);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body).not.toHaveProperty("docs");
+    expect(String(body.error)).toContain(f.docs[1]!.id);
+  });
+
+  it("answers the default 146-page list in well under 200ms p95 with 700ms OpenViking reads", async () => {
+    const f = await fixture(146, { readDelayMs: 700 });
+    const root = "/api/workspaces/local/repos/repo_list/wiki";
+    const samples: number[] = [];
+    for (let index = 0; index < 100; index++) {
+      const start = performance.now();
+      const response = await f.app.request(root, { headers: f.authorization });
+      samples.push(performance.now() - start);
+      expect(response.status).toBe(200);
+      expect((await response.json() as any).docs).toHaveLength(146);
+    }
+    samples.sort((left, right) => left - right);
+    const p95 = samples[Math.ceil(samples.length * 0.95) - 1]!;
+    const p50 = samples[Math.floor(samples.length / 2)]!;
+    expect(f.client.readCalls.length).toBe(0);
+    console.log(`repository wiki list p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms over ${samples.length} requests`);
+    expect(p95).toBeLessThan(200);
+  }, 60_000);
+
+  it("keeps the non-Bun legacy path tolerant so an old daemon still lists", async () => {
+    const f = await fixture(2);
+    f.client.failReadUris.add(f.docs[0]!.contentUri!);
+    const response = await f.app.request("/api/workspaces/local/repos/repo_list/wiki", {
+      headers: { ...f.authorization, "User-Agent": "Bun/1.3.14" },
+    });
+    expect(response.status).toBe(200);
+    const docs = (await response.json() as any).docs;
+    expect(docs).toHaveLength(2);
+    expect(docs[0]).toMatchObject({ body: "", sync_status: "failed" });
+    expect(docs[1].body).toBe("Body 1");
+  });
+});
+
 describe("project knowledge URIs", () => {
   it("rejects path traversal and cross-project URI decoding", () => {
     expect(() => projectKnowledgeDocUri({ workspaceId: "../foreign", projectId: "p1", kind: "wiki", slug: "page" }))

@@ -23,7 +23,8 @@ export interface WikiLinkDocument {
   slug: string;
   path: string;
   title: string;
-  body: string;
+  /** Optional: a Repository Wiki list row carries metadata only (MUL-387). */
+  body?: string;
 }
 
 export type WikiDocumentScope =
@@ -62,7 +63,7 @@ export function WikiDocumentContent({
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
   const links = resolveDocumentLinks(doc, pages, scope);
-  const content = replaceDocumentLinks(doc.body, links, (target) => (
+  const content = replaceDocumentLinks(doc.body ?? "", links, (target) => (
     scope.kind === "project"
       ? paths.projectWikiPage(scope.projectId, target.slug || target.id)
       : paths.repositoryWikiPage(scope.repositoryId, target.path)
@@ -216,12 +217,12 @@ function resolveDocumentLinks(
   scope: WikiDocumentScope,
 ): ResolvedWikiLink[] {
   if (scope.kind === "project") {
-    return tokenizeWikiLinks(source.body).map((token) => ({
+    return tokenizeWikiLinks(source.body ?? "").map((token) => ({
       token,
       resolution: resolveProjectWikiRef(token.ref, source.path, pages),
     }));
   }
-  return tokenizeRepositoryWikiLinks(source.body).map((token) => ({
+  return tokenizeRepositoryWikiLinks(source.body ?? "").map((token) => ({
     token,
     resolution: resolveRepositoryWikiToken(token, source.path, pages),
   }));

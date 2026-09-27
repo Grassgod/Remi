@@ -1,6 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
-import { abortable, deadlineClient } from "./deadline.js";
+import { abortable, clientWithDeadline, deadlineClient } from "./deadline.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiRepositoryWikiDoc,
@@ -17,7 +17,13 @@ import {
   type RepositoryWikiStorageJobInput,
   type RepositoryWikiStoreBatchOperation,
 } from "@multiremi/store/repos/repository-wiki-repo.js";
-import { OpenVikingClient } from "@multiremi/project-knowledge/openviking-client.js";
+import {
+  isOpenVikingTimeout,
+  OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS,
+  OPENVIKING_MAX_RETRIES,
+  OpenVikingClient,
+} from "@multiremi/project-knowledge/openviking-client.js";
+import { PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS } from "@multiremi/project-knowledge/service.js";
 import type { OpenVikingClientContract, ProjectKnowledgeMode } from "@multiremi/project-knowledge/types.js";
 import {
   decodeRepositoryWikiBody,
@@ -100,6 +106,8 @@ export class RepositoryWikiLogHistoryError extends Error {}
 export interface RepositoryWikiServiceContract {
   readonly mode: ProjectKnowledgeMode;
   list(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]>;
+  listMetadata(workspaceId: string, repositoryId: string, ids?: readonly string[]): MultiremiRepositoryWikiDoc[];
+  readBodies(workspaceId: string, repositoryId: string, ids: readonly string[]): Promise<MultiremiRepositoryWikiDoc[]>;
   listStrict(workspaceId: string, repositoryId: string): Promise<MultiremiRepositoryWikiDoc[]>;
   listWorkspace(workspaceId: string): Promise<MultiremiRepositoryWikiDoc[]>;
   get(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc | null>;
@@ -117,12 +125,33 @@ export interface RepositoryWikiServiceContract {
   search(workspaceId: string, repositoryId: string, query: string, limit?: number): Promise<MultiremiRepositoryWikiDoc[]>;
   backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]>;
   hydrateTaskWiki(task: MultiremiTaskWithAgent, signal?: AbortSignal): Promise<MultiremiTaskWithAgent>;
+  /** Reads whose OpenViking calls all share one deadline; use one per API request. */
+  withRequestDeadline(budgetMs?: number): RepositoryWikiRequestReader;
   startStorageWorker?(): void;
   stopStorageWorker?(): void;
 }
 
+/** Read-only on purpose: writes must stay on the service that owns the per-repository write lane. */
+export type RepositoryWikiRequestReader =
+  Pick<RepositoryWikiServiceContract, "get" | "readBodies" | "list" | "search" | "backlinks">;
+
 export class RepositoryWikiUnavailableError extends Error {}
 export const REPOSITORY_WIKI_BATCH_LIMIT = 256;
+/** Bodies are an explicit, bounded request: one route call reads at most this
+ *  many documents. See docs/adr/0002-repository-wiki-list-without-bodies.md. */
+export const REPOSITORY_WIKI_BODY_BATCH_LIMIT = 20;
+export const REPOSITORY_WIKI_BODY_READ_CONCURRENCY = 4;
+/**
+ * Backlinks hydrate every page of a repository, so the fan-out needs a ceiling: at the
+ * largest measured repository (146 pages) one read per page inflated each 209 read well
+ * past its 700 ms floor. 16 keeps a full repository inside the 25 s request budget
+ * (`ceil(146 / 16) * 700 ms ~= 7 s`, about 8.3 s at the measured ~830 ms concurrent p95),
+ * whereas 4 would need 25.9 s and answer a healthy read with a 504. MUL-387 recorded the
+ * old unbounded version of this read at 13.87 s p95 / 22.88 s max, so the bound is also
+ * no worse than the pre-change baseline.
+ * See tests/manual/bench-mul399-backlinks.ts.
+ */
+export const REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY = 16;
 const STORAGE_WRITE_CONCURRENCY = 4;
 const PROMOTION_CHECKPOINT_SIZE = 8;
 
@@ -184,18 +213,32 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   private readonly writeTimeoutMs: number;
   private readonly storageJobTimeoutMs: number;
   private readonly operationSignal?: AbortSignal;
+  /** Only readers built by `withRequestDeadline()` answer an OpenViking timeout with an error. */
+  private readonly requestDeadlineEnforced: boolean;
 
   constructor(
     private readonly store: MultiremiStore,
     private readonly client: OpenVikingClientContract | null,
     readonly mode: ProjectKnowledgeMode,
-    options: { cleanupConcurrency?: number; writeTimeoutMs?: number; storageJobTimeoutMs?: number; signal?: AbortSignal } = {},
+    options: {
+      cleanupConcurrency?: number; writeTimeoutMs?: number; storageJobTimeoutMs?: number; signal?: AbortSignal;
+      /** Set only by `withRequestDeadline()`; the write and claim lanes keep the tolerant behaviour. */
+      requestDeadlineEnforced?: boolean;
+    } = {},
   ) {
     const concurrency = options.cleanupConcurrency ?? Number(process.env.MULTIREMI_WIKI_CLEANUP_CONCURRENCY ?? 8);
     this.cleanupConcurrency = Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 32 ? concurrency : 8;
     this.writeTimeoutMs = Math.max(1, options.writeTimeoutMs ?? positiveInt(process.env.MULTIREMI_WIKI_WRITE_TIMEOUT_MS, 120_000));
     this.storageJobTimeoutMs = Math.max(1, options.storageJobTimeoutMs ?? 60_000);
     this.operationSignal = options.signal;
+    this.requestDeadlineEnforced = options.requestDeadlineEnforced ?? false;
+  }
+
+  withRequestDeadline(budgetMs = PROJECT_KNOWLEDGE_REQUEST_BUDGET_MS): RepositoryWikiRequestReader {
+    if (!this.client) return this;
+    return new RepositoryWikiService(this.store, clientWithDeadline(this.client, Date.now() + budgetMs), this.mode, {
+      requestDeadlineEnforced: true,
+    });
   }
 
   startStorageWorker(): void {
@@ -243,11 +286,53 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
     return Promise.all(docs.map((doc) => this.hydrateTolerant(doc)));
   }
 
+  /**
+   * The metadata list path: DB rows only, never an OpenViking read. `ids`
+   * filters to those documents; ids absent from the list are omitted, which is
+   * how callers learn a document was deleted.
+   */
+  listMetadata(workspaceId: string, repositoryId: string, ids?: readonly string[]): MultiremiRepositoryWikiDoc[] {
+    const docs = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
+    if (ids === undefined) return docs;
+    const wanted = new Set(ids);
+    return docs.filter((doc) => wanted.has(doc.id));
+  }
+
+  /**
+   * Reads bodies for the requested documents with a bounded concurrency and
+   * strict failure: a document that cannot be read fails the whole call instead
+   * of degrading to an empty body.
+   */
+  async readBodies(workspaceId: string, repositoryId: string, ids: readonly string[]): Promise<MultiremiRepositoryWikiDoc[]> {
+    const unique = [...new Set(ids)];
+    const byId = new Map(this.listMetadata(workspaceId, repositoryId, unique).map((doc) => [doc.id, doc]));
+    const ordered = unique.flatMap((id) => {
+      const doc = byId.get(id);
+      return doc ? [doc] : [];
+    });
+    if (this.mode === "sql") return ordered;
+    return mapWithConcurrency(ordered, REPOSITORY_WIKI_BODY_READ_CONCURRENCY, async (doc) => {
+      try {
+        return await this.hydrate(doc);
+      } catch (error) {
+        this.operationSignal?.throwIfAborted();
+        // A read that ran out of time answers like the single-doc read, not as unreadable content.
+        if (isOpenVikingTimeout(error)) throw error;
+        throw new RepositoryWikiUnavailableError(repositoryWikiHydrationError(doc, error));
+      }
+    });
+  }
+
   private async hydrateTolerant(doc: MultiremiRepositoryWikiDoc): Promise<MultiremiRepositoryWikiDoc & { bodyUnavailable?: boolean }> {
     try {
       return await this.hydrate(doc);
     } catch (error) {
       this.operationSignal?.throwIfAborted();
+      // A request that owns a deadline answers a timeout with 504; handing back an
+      // empty body would answer 200 with nothing in it. Callers with no request
+      // deadline (write hydration, claim hydration, migration lists) keep the
+      // tolerant behaviour: only this page degrades and the call continues.
+      if (this.requestDeadlineEnforced && isOpenVikingTimeout(error)) throw error;
       const message = repositoryWikiHydrationError(doc, error);
       log.warn(message);
       return {
@@ -595,7 +680,12 @@ export class RepositoryWikiService implements RepositoryWikiServiceContract {
   async backlinks(workspaceId: string, repositoryId: string, ref: string): Promise<MultiremiRepositoryWikiDoc[]> {
     const target = this.store.getRepositoryWikiDocByRef(workspaceId, repositoryId, ref);
     if (!target) throw new Error("repository wiki doc not found");
-    const documents = await this.list(workspaceId, repositoryId);
+    const metadata = this.store.listRepositoryWikiDocs(workspaceId, repositoryId);
+    const documents = this.mode === "sql" ? metadata : await mapWithConcurrency(
+      metadata,
+      REPOSITORY_WIKI_BACKLINK_HYDRATE_CONCURRENCY,
+      (doc) => this.hydrateTolerant(doc),
+    );
     return repositoryWikiBacklinks(target, documents);
   }
 
@@ -1090,6 +1180,28 @@ async function forEachStorageEntry<T>(entries: readonly T[], operation: (entry: 
   for (const result of results) if (result.status === "rejected") throw result.reason;
 }
 
+/** Ordered map with a hard ceiling on in-flight operations; the first failure
+ *  stops scheduling new work and rejects the whole call. */
+async function mapWithConcurrency<T, R>(
+  entries: readonly T[],
+  limit: number,
+  operation: (entry: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(entries.length);
+  let cursor = 0;
+  let failed = false;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), entries.length) }, async () => {
+    while (!failed && cursor < entries.length) {
+      const index = cursor++;
+      try { results[index] = await operation(entries[index]!, index); }
+      catch (error) { failed = true; throw error; }
+    }
+  });
+  const settled = await Promise.allSettled(workers);
+  for (const result of settled) if (result.status === "rejected") throw result.reason;
+  return results;
+}
+
 function resolveBatchDocument(
   ref: string,
   documents: readonly MultiremiRepositoryWikiDoc[],
@@ -1139,8 +1251,8 @@ export function createRepositoryWikiServiceFromEnv(store: MultiremiStore): Repos
   return new RepositoryWikiService(store, new OpenVikingClient({
     baseUrl: process.env.MULTIREMI_OPENVIKING_URL?.trim() || "http://127.0.0.1:1933",
     apiKey,
-    timeoutMs: positiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, 30_000),
-    maxRetries: positiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, 2),
+    timeoutMs: positiveInt(process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS, OPENVIKING_DEFAULT_ATTEMPT_TIMEOUT_MS),
+    maxRetries: positiveInt(process.env.MULTIREMI_OPENVIKING_MAX_RETRIES, OPENVIKING_MAX_RETRIES),
   }), mode);
 }
 

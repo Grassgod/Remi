@@ -76,7 +76,7 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
 
-Windows 和 macOS 下，现有 [GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 缺少通过目录描述符遍历子目录的实现，会拒绝删除，因此 daemon 管理的旧状态清理可能保留目录。Runtime 工作区注册、执行和归档均不依赖删除用户目录。
+[GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
 
 ## 实现和验证
 

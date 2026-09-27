@@ -1,6 +1,7 @@
 import type { CliOptions } from "../options.js";
 import { multiremiApiConnection, multiremiApiRequest } from "../http.js";
 import { printJson } from "../output.js";
+import { fetchRepositoryWikiBodies, fetchRepositoryWikiMetadata } from "./repository-wiki-docs.js";
 
 export type WikiLintFindingType = "duplicate" | "contradiction" | "orphan" | "broken_link";
 
@@ -224,19 +225,33 @@ async function fetchLibrarianDocuments(
   ]);
   const projectDocs = arrayField(projectResponse, "docs").map((value) => parseDocument(value, "project", null));
   const repositoryIds = stringArrayField(context.project, "repository_ids");
-  const repositoryResponses = await Promise.all(repositoryIds.map(async (repositoryId) => ({
-    repositoryId,
-    directory: repositoryDirectory(context.repositories.get(repositoryId), repositoryId),
-    response: await multiremiApiRequest(
-      "GET",
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/repos/${encodeURIComponent(repositoryId)}/wiki`,
-      undefined,
-      options,
-    ),
-  })));
-  const repositoryDocs = repositoryResponses.flatMap(({ repositoryId, directory, response }) =>
-    arrayField(response, "docs").map((value) => parseDocument(value, "repository", repositoryId, directory))
-  );
+  // Lint inspects published state, so it reads every body of every repository
+  // through the same bounded batch primitive as status/pull/push — never the
+  // local working copy, which can carry unpublished edits.
+  const repositoryDocs = (await Promise.all(repositoryIds.map(async (repositoryId) => {
+    const directory = repositoryDirectory(context.repositories.get(repositoryId), repositoryId);
+    const metadata = await fetchRepositoryWikiMetadata(options, workspaceId, repositoryId);
+    const missing = metadata.filter((doc) => typeof doc.body !== "string").map((doc) => doc.id);
+    const bodies = missing.length
+      ? await fetchRepositoryWikiBodies(options, workspaceId, repositoryId, missing)
+      : null;
+    return metadata.map((doc): LibrarianWikiDocument => {
+      const body = typeof doc.body === "string" ? doc.body : bodies?.get(doc.id);
+      if (body === undefined) throw new Error(`Repository Wiki body is missing for ${doc.id}`);
+      return {
+        id: doc.id,
+        scope: "repository",
+        repositoryId,
+        repositoryDirectory: directory,
+        slug: doc.slug,
+        path: doc.path,
+        title: doc.title,
+        body,
+        refs: doc.refs,
+        version: doc.version,
+      };
+    });
+  }))).flat();
   const knownTargets = arrayField(memoryResponse, "docs").flatMap((value) => {
     if (!isRecord(value)) return [];
     return [recordField(value, "id"), recordField(value, "slug")].filter(Boolean);

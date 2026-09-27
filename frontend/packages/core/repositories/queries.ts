@@ -27,6 +27,8 @@ export const repositoryKeys = {
   list: (workspaceId: string) => ["repositories", workspaceId, "list"] as const,
   wikiSummaries: (workspaceId: string) => ["repositories", workspaceId, "wiki-summaries"] as const,
   wiki: (workspaceId: string, repositoryId: string) => ["repositories", workspaceId, repositoryId, "wiki"] as const,
+  wikiDoc: (workspaceId: string, repositoryId: string, ref: string) =>
+    ["repositories", workspaceId, repositoryId, "wiki-doc", ref] as const,
 };
 
 export function repositoryListOptions(workspaceId: string) {
@@ -51,5 +53,17 @@ export function repositoryWikiDocsOptions(workspaceId: string, repositoryId: str
     queryKey: repositoryKeys.wiki(workspaceId, repositoryId),
     queryFn: () => api.listRepositoryWikiDocs(workspaceId, repositoryId),
     enabled: Boolean(workspaceId && repositoryId),
+  });
+}
+
+/**
+ * One document with its body. The list route is metadata only (MUL-387), so the
+ * rendered page is loaded separately and cached per document.
+ */
+export function repositoryWikiDocOptions(workspaceId: string, repositoryId: string, ref: string) {
+  return queryOptions({
+    queryKey: repositoryKeys.wikiDoc(workspaceId, repositoryId, ref),
+    queryFn: () => api.getRepositoryWikiDoc(workspaceId, repositoryId, ref),
+    enabled: Boolean(workspaceId && repositoryId && ref),
   });
 }

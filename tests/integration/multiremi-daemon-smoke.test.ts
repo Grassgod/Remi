@@ -3007,9 +3007,11 @@ describe("Bun Multiremi daemon smoke", () => {
         runtime_name: "lifecycle-runtime",
         provider: "claude",
         workspace_id: "local",
-        workspace_cleanup_capability: process.platform === "linux" ? "available" : "blocked",
+        // Linux anchors through /proc/self/fd and darwin through re-verified
+        // paths; other platforms stay blocked.
+        workspace_cleanup_capability: ["linux", "darwin"].includes(process.platform) ? "available" : "blocked",
       });
-      if (process.platform === "linux") expect(health.workspace_cleanup_error).toBeNull();
+      if (["linux", "darwin"].includes(process.platform)) expect(health.workspace_cleanup_error).toBeNull();
       else expect(health.workspace_cleanup_error).toEqual(expect.any(String));
       expect(typeof health.runtime_id).toBe("string");
       expect(typeof health.cli_version).toBe("string");

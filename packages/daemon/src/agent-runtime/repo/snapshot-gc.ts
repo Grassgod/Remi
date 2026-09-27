@@ -39,7 +39,11 @@ export async function runSnapshotGcOnce(options: RunSnapshotGcOnceOptions): Prom
   const now = options.now ?? Date.now();
   const summary: SnapshotGcSummary = { removed: 0, retained: 0, skipped: 0 };
   const expired = (info: Stats) => now - info.mtimeMs > options.ttlMs;
+  // One unremovable snapshot must not abort the sweep, but ownership loss must:
+  // re-probe the same process-ownership fence workspace GC uses, and only
+  // report the entry when the fence still holds.
   const failed = (path: string, error: unknown) => {
+    options.assertRootOwner?.();
     summary.skipped++;
     options.onError?.(path, error);
   };

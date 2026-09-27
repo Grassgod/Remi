@@ -4,3 +4,4 @@ export * from "./command-registry.js";
 export * from "./errors.js";
 export * from "./renderer.js";
 export * from "./resource-resolver.js";
+export * from "./user-agent.js";

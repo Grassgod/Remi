@@ -1,3 +1,4 @@
+import { openVikingDeadlineSignal } from "@multiremi/project-knowledge/openviking-client.js";
 import type { OpenVikingClientContract } from "@multiremi/project-knowledge/types.js";
 
 /** Bound a wait without leaving an abort listener on a long-lived signal. */
@@ -24,4 +25,10 @@ export function deadlineClient(client: OpenVikingClientContract, signal: AbortSi
       };
     },
   });
+}
+
+/** Bound every call on `client` by one overall deadline that ends in an `OpenVikingDeadlineError`. */
+export function clientWithDeadline(client: OpenVikingClientContract, deadlineAt: number): OpenVikingClientContract {
+  // Clients that cannot clamp their own attempts still get their waits cut at the deadline.
+  return client.withDeadline?.(deadlineAt) ?? deadlineClient(client, openVikingDeadlineSignal(deadlineAt));
 }

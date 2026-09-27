@@ -11,6 +11,7 @@ import {
   isWikiBuildInProgressError,
   repositoryKeys,
   repositoryListOptions,
+  repositoryWikiDocOptions,
   repositoryWikiDocsOptions,
   repositoryWikiSummariesOptions,
   useBuildRepositoryWiki,
@@ -113,6 +114,17 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
   // probe page in practice. The curated reading map is the right landing page.
   const defaultDoc = docs.find((doc) => docWikiPath(doc) === "index.md") ?? docs[0] ?? null;
   const selected = docs.find((doc) => docWikiPath(doc) === wikiPath || doc.slug === wikiPath || doc.id === wikiPath) ?? defaultDoc;
+  // The list row no longer carries a body, so the open page loads it on demand
+  // and renders from that; the tree and link graph still use the metadata list.
+  const bodyDocQuery = useQuery({
+    ...repositoryWikiDocOptions(workspaceId, repositoryId, selected?.id ?? ""),
+    enabled: Boolean(workspaceId && repositoryId && selected?.id),
+  });
+  const bodyDoc = bodyDocQuery.data?.id === selected?.id ? bodyDocQuery.data : null;
+  const bodyPages = useMemo(
+    () => bodyDoc ? docs.map((doc) => doc.id === bodyDoc.id ? { ...doc, ...bodyDoc } : doc) : docs,
+    [bodyDoc, docs],
+  );
   const treePages = useMemo(() => docs.map((doc) => ({
     id: doc.id,
     path: docWikiPath(doc),
@@ -310,11 +322,22 @@ export function RepositoryWikiPage({ repositoryId, wikiPath }: { repositoryId: s
                 <DocRefs refs={selected.refs} className="mt-3" />
                 <KnowledgeProvenance compilationRunId={selected.compilation_run_id} />
                 <div className="mt-5">
-                  <WikiDocumentContent
-                    doc={selected}
-                    pages={docs}
-                    scope={{ kind: "repository", repositoryId }}
-                  />
+                  {bodyDocQuery.isError ? (
+                    <EmptyState variant="status" tone="destructive" icon={AlertCircle} title={String(bodyDocQuery.error)} />
+                  ) : bodyDoc ? (
+                    <WikiDocumentContent
+                      doc={bodyDoc}
+                      pages={bodyPages}
+                      scope={{ kind: "repository", repositoryId }}
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      <Skeleton className="h-5 w-2/3" />
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-4/5" />
+                    </div>
+                  )}
                 </div>
                 <footer className="mt-8 flex flex-wrap gap-2 border-t pt-3 text-xs text-muted-foreground">
                   {selected.source_revision && <span className="font-mono">{t(($) => $.wiki.source_revision, { revision: selected.source_revision.slice(0, 12) })}</span>}

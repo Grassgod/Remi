@@ -103,7 +103,11 @@ import {
   writeProjectResourceContext,
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
-import { runSnapshotGcOnce } from "@daemon/agent-runtime/repo/snapshot-gc.js";
+import {
+  runSnapshotGcOnce,
+  type RunSnapshotGcOnceOptions,
+  type SnapshotGcSummary,
+} from "@daemon/agent-runtime/repo/snapshot-gc.js";
 import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
 import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/readonly-code.js";
 import {
@@ -167,6 +171,7 @@ import {
   discussionSessionLifecycleKey,
   runWorkspaceGcOnce,
   type MultiremiDaemonGcSummary,
+  type RunWorkspaceGcOnceOptions,
 } from "@daemon/agent-runtime/workspace/gc.js";
 import { resolveWorkspaceGcPolicy, type WorkspaceGcPolicy } from "@daemon/agent-runtime/workspace/gc-policy.js";
 import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
@@ -471,6 +476,14 @@ export interface MultiremiDaemonOptions {
   issueWorkspaceLifecycleLocker?: IssueWorkspaceLifecycleLocker;
   /** Verifies that this process still owns the canonical workspaces root. */
   workspaceRootFence?: () => void;
+  /**
+   * Replacement workspace-GC pass. `executeGcOnce` orchestrates the two sweeps
+   * and their independent failure handling, so tests inject one pass to observe
+   * the sequencing without touching the filesystem.
+   */
+  runWorkspaceGcPass?: (options: RunWorkspaceGcOnceOptions) => Promise<MultiremiDaemonGcSummary>;
+  /** Replacement snapshot-GC pass; see {@link runWorkspaceGcPass}. */
+  runSnapshotGcPass?: (options: RunSnapshotGcOnceOptions) => Promise<SnapshotGcSummary>;
   /** Shared readiness of every provider daemon in this supervisor process. */
   supervisorReady?: () => boolean;
   /** Updates the shared provider readiness barrier. */
@@ -632,7 +645,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "taskWakeupConnect" | "authorityProbeDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runWorkspaceGcPass" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "taskWakeupConnect" | "authorityProbeDelaysMs">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -772,6 +785,8 @@ export class MultiremiDaemon {
   private gcInFlight: Promise<MultiremiDaemonGcSummary> | null = null;
   private sessionArchiveRetryLogAt = new Map<string, number>();
   private readonly gitWorktreeInspector: GitWorktreeInspector;
+  private readonly runWorkspaceGcPass: (options: RunWorkspaceGcOnceOptions) => Promise<MultiremiDaemonGcSummary>;
+  private readonly runSnapshotGcPass: (options: RunSnapshotGcOnceOptions) => Promise<SnapshotGcSummary>;
   private localPathLocks = new LocalPathLocker();
   private issueWorkspaceLifecycleLocks: IssueWorkspaceLifecycleLocker;
   private readonly topicWorkspaces: TopicWorkspaceLifecycle;
@@ -859,6 +874,8 @@ export class MultiremiDaemon {
     this.gitWorktreeInspector = options.gitWorktreeInspector
       ?? new IsomorphicGitWorktreeInspector();
     this.workspaceRootFence = options.workspaceRootFence ?? null;
+    this.runWorkspaceGcPass = options.runWorkspaceGcPass ?? runWorkspaceGcOnce;
+    this.runSnapshotGcPass = options.runSnapshotGcPass ?? runSnapshotGcOnce;
     this.supervisorReady = options.supervisorReady ?? (() => this.ready);
     this.onReadyChange = options.onReadyChange ?? (() => {});
     this.cliUpdateCoordinator = options.cliUpdateCoordinator ?? null;
@@ -2726,49 +2743,66 @@ export class MultiremiDaemon {
 
   private async executeGcOnce(): Promise<MultiremiDaemonGcSummary> {
     this.assertWorkspaceRootOwner();
-    const summary = await runWorkspaceGcOnce({
-      root: this.options.workspacesRoot,
-      ttlMs: this.options.gcTtlMs,
-      orphanTtlMs: this.options.gcOrphanTtlMs,
-      client: this.client,
-      runtimeId: this.options.runtimeId,
-      requireIssueSessionArchive: this.options.gcRequireArchive,
-      ensureIssueSessionArchive: (issueId, workspaceDir, forceFreshSnapshot) =>
-        this.ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot),
-      assertRootOwner: () => this.assertWorkspaceRootOwner(),
-      hasDirtyGitWorktree: (workspaceDir) =>
-        this.gitWorktreeInspector.hasDirtyWorktree(workspaceDir),
-      withIssueWorkspaceLock: (issueId, _workspaceDir, action) =>
-        this.issueWorkspaceLifecycleLocks.runExclusive(issueId, async () => {
-          this.assertWorkspaceRootOwner();
-          await action();
-          this.assertWorkspaceRootOwner();
-        }),
-      recoverTopicWorkspace: (topicDir) => this.topicWorkspaces.recoverTopicWorkspace(topicDir),
-      isTopicWorkspaceBound: (topicDir) => this.topicWorkspaces.isTopicWorkspaceBound(topicDir),
-      recoverIssueWorkspace: (issueDir) => this.topicWorkspaces.recoverIssueWorkspace(issueDir),
-      returnTerminalIssueToTopic: (issueDir) => this.topicWorkspaces.returnTerminalIssueToTopic(issueDir),
-      onError: (workspaceDir, error) => {
-        log.warn(`Workspace GC skipped ${workspaceDir}: ${error instanceof Error ? error.message : String(error)}`);
-      },
-    });
+    let summary: MultiremiDaemonGcSummary = { cleaned: 0, orphaned: 0, skipped: 0 };
+    let workspaceFailure: unknown = null;
+    try {
+      summary = await this.runWorkspaceGcPass({
+        root: this.options.workspacesRoot,
+        ttlMs: this.options.gcTtlMs,
+        orphanTtlMs: this.options.gcOrphanTtlMs,
+        client: this.client,
+        runtimeId: this.options.runtimeId,
+        requireIssueSessionArchive: this.options.gcRequireArchive,
+        ensureIssueSessionArchive: (issueId, workspaceDir, forceFreshSnapshot) =>
+          this.ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot),
+        assertRootOwner: () => this.assertWorkspaceRootOwner(),
+        hasDirtyGitWorktree: (workspaceDir) =>
+          this.gitWorktreeInspector.hasDirtyWorktree(workspaceDir),
+        withIssueWorkspaceLock: (issueId, _workspaceDir, action) =>
+          this.issueWorkspaceLifecycleLocks.runExclusive(issueId, async () => {
+            this.assertWorkspaceRootOwner();
+            await action();
+            this.assertWorkspaceRootOwner();
+          }),
+        recoverTopicWorkspace: (topicDir) => this.topicWorkspaces.recoverTopicWorkspace(topicDir),
+        isTopicWorkspaceBound: (topicDir) => this.topicWorkspaces.isTopicWorkspaceBound(topicDir),
+        recoverIssueWorkspace: (issueDir) => this.topicWorkspaces.recoverIssueWorkspace(issueDir),
+        returnTerminalIssueToTopic: (issueDir) => this.topicWorkspaces.returnTerminalIssueToTopic(issueDir),
+        onError: (workspaceDir, error) => {
+          log.warn(`Workspace GC skipped ${workspaceDir}: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      });
+    } catch (error) {
+      // A workspace-level failure must not cost the snapshot sweep, which is
+      // the only path that reclaims `.snapshots` bytes. Ownership loss throws
+      // out of the fence below instead, so snapshot GC never runs without the
+      // root. The error is rethrown after the snapshot sweep, keeping the
+      // "Workspace GC failed" report in startGcLoop and `--once` unchanged.
+      workspaceFailure = error;
+    }
     this.assertWorkspaceRootOwner();
-    const snapshots = await runSnapshotGcOnce({
-      workspacesRoot: this.options.workspacesRoot,
-      snapshotsRoot: this.snapshotsRoot,
-      repoCacheRoot: this.options.repoCacheRoot,
-      ttlMs: this.options.snapshotTtlMs,
-      withRepoLock: (barePath, action) => this.repoCache.runExclusiveForBarePath(barePath, action),
-      assertRootOwner: () => this.assertWorkspaceRootOwner(),
-      onError: (path, error) => {
-        log.warn(`Snapshot GC skipped ${path}: ${error instanceof Error ? error.message : String(error)}`);
-      },
-    });
-    log.info("Snapshot GC finished", snapshots);
+    try {
+      const snapshots = await this.runSnapshotGcPass({
+        workspacesRoot: this.options.workspacesRoot,
+        snapshotsRoot: this.snapshotsRoot,
+        repoCacheRoot: this.options.repoCacheRoot,
+        ttlMs: this.options.snapshotTtlMs,
+        withRepoLock: (barePath, action) => this.repoCache.runExclusiveForBarePath(barePath, action),
+        assertRootOwner: () => this.assertWorkspaceRootOwner(),
+        onError: (path, error) => {
+          log.warn(`Snapshot GC skipped ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      });
+      log.info("Snapshot GC finished", snapshots);
+    } catch (error) {
+      log.warn(`Snapshot GC failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
     this.assertWorkspaceRootOwner();
     // Repo worktree metadata is pruned lazily for the repository that is about
     // to create a worktree. Sweeping every cached repository here creates a
     // large burst of synchronous child processes in the long-lived Bun daemon.
+    if (workspaceFailure) throw workspaceFailure;
     return summary;
   }
 

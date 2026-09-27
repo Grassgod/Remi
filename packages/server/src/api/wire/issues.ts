@@ -4,6 +4,7 @@
 import type {
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
+  MultiremiAttachment,
   MultiremiCommentReaction,
   MultiremiIssue,
   MultiremiIssueComment,
@@ -342,21 +343,94 @@ export function issueCommentListErrorResponse(c: Context, err: unknown): Respons
 }
 
 
+/**
+ * MUL-385: response body of `GET /api/issues/:id`.
+ *
+ * S5's `/open` aggregate calls this directly, so it owns the whole payload:
+ * the issue compatibility shape plus optional labels, reactions and attachments.
+ * It reads only what it returns, so it never triggers the tasks / children /
+ * child-progress / dependency loads that the native route
+ * (`/api/multiremi/issues/:id`) needs.
+ */
+export function issueDetailCompatibilityResponse(
+  store: MultiremiStore,
+  issue: MultiremiIssue,
+  options: { labelsAlreadyHydrated?: boolean } = {},
+): Record<string, unknown> {
+  // `getIssue` / `getIssueByRef` already filled `labels`; reading them again
+  // would add the label join for nothing. A caller holding a bare row leaves
+  // the flag off and gets the same body either way.
+  const labels = options.labelsAlreadyHydrated
+    ? issue.labels
+    : store.listLabelsForExistingIssue(issue.id);
+  const response = issueCompatibilityResponse({ ...issue, labels }, { includeLabels: true });
+  // `getIssueWithTasks` hangs reactions/attachments off the object; a plain
+  // hydrated issue does not, so read them from the store when absent.
+  const withExtras = issue as MultiremiIssue & {
+    reactions?: MultiremiIssueReaction[];
+    attachments?: MultiremiAttachment[];
+  };
+  const reactions = withExtras.reactions ?? store.listIssueReactionsForExistingIssue(issue.id);
+  const attachments = withExtras.attachments ?? store.listAttachmentsForExistingIssue(issue.id);
+  if (reactions.length) response.reactions = reactions.map(issueReactionCompatibilityResponse);
+  if (attachments.length) response.attachments = attachments.map(issueDetailAttachmentCompatibilityResponse);
+  return response;
+}
+
+/**
+ * MUL-385: response body of `GET /api/issues/:id/sessions`.
+ *
+ * One batched participant lookup for the whole list: the previous per-session
+ * `listSessionParticipants` ran 1 + N statements (an existence read plus the
+ * participant scan for every session) and made the route's `dbq` grow linearly
+ * with session count. The sessions are already loaded, so their existence does
+ * not need re-verification.
+ */
+export function issueSessionsCompatibilityResponse(
+  store: MultiremiStore,
+  issueId: string,
+  includeArchived = false,
+  options: { skipIssueExistenceCheck?: boolean } = {},
+): Record<string, unknown>[] {
+  // Unknown issues throw from here, so a direct S5 call fails the same way the
+  // route does. The route already resolved the issue, hence the opt-out.
+  if (!options.skipIssueExistenceCheck && !store.hasIssue(issueId)) {
+    throw new Error(`Issue not found: ${issueId}`);
+  }
+  const sessions = store.listIssueSessions(issueId, includeArchived, { skipExistenceCheck: true });
+  const participantsBySession = store.listSessionParticipantsForSessions(sessions.map((session) => session.id));
+  return sessions.map((session) => issueSessionCompatibilityResponse(
+    session,
+    participantsBySession.get(session.id) ?? [],
+  ));
+}
+
 export function issueTimelineResponse(
   store: MultiremiStore,
   issueId: string,
   c: { req: { query: (name: string) => string | undefined } },
+  options: { skipIssueExistenceCheck?: boolean } = {},
 ): MultiremiTimelineEntry[] | MultiremiTimelinePage | null {
-  if (!store.getIssue(issueId)) return null;
+  // Existence only: the response carries timeline entries, never the Issue's
+  // labels, so the hydrating read would be two wasted statements. Callers that
+  // already resolved the issue (both timeline routes do) skip it.
+  if (!options.skipIssueExistenceCheck && !store.hasIssue(issueId)) return null;
   const rawIssueSessionId = cleanString(c.req.query("issue_session_id")) || null;
   const paged = c.req.query("limit") != null || c.req.query("before") != null;
   let issueSessionId = rawIssueSessionId;
-  if (paged && rawIssueSessionId === "@default") {
-    const sessions = store.listIssueSessions(issueId);
-    issueSessionId = sessions.find((session) => session.isDefault)?.id ?? sessions[0]?.id ?? null;
+  // `@default` needs the session list anyway, so keep it: the resolved id is
+  // then validated against that list instead of re-reading the same row.
+  const sessionsForDefault = paged && rawIssueSessionId === "@default"
+    ? store.listIssueSessions(issueId, false, { skipExistenceCheck: true })
+    : null;
+  if (sessionsForDefault) {
+    issueSessionId = sessionsForDefault.find((session) => session.isDefault)?.id
+      ?? sessionsForDefault[0]?.id
+      ?? null;
   }
   if (issueSessionId) {
-    const session = store.getIssueSession(issueSessionId);
+    const known = sessionsForDefault?.find((session) => session.id === issueSessionId);
+    const session = known ?? store.getIssueSession(issueSessionId);
     if (!session || session.issueId !== issueId) return null;
   }
   const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
@@ -364,7 +438,13 @@ export function issueTimelineResponse(
   if (paged) {
     const limit = parseTimelineLimit(c.req.query("limit"));
     const before = parseTimelineCursor(c.req.query("before"));
-    const page = store.listIssueTimelinePage(issueId, { issueSessionId, before, limit });
+    // The issue and the session-to-issue binding were both checked above.
+    const page = store.listIssueTimelinePage(issueId, {
+      issueSessionId,
+      before,
+      limit,
+      skipExistenceChecks: true,
+    });
     const oldest = page.entries[0];
     const response: MultiremiTimelinePage = {
       entries: page.entries,
@@ -471,6 +551,7 @@ export function issueTimelineCompatibilityResponse(
   store: MultiremiStore,
   issueId: string,
   c: { req: { query: (name: string) => string | undefined } },
+  options: { skipIssueExistenceCheck?: boolean } = {},
 ): Record<string, unknown>[] | {
   entries: Record<string, unknown>[];
   limit: number;
@@ -482,7 +563,7 @@ export function issueTimelineCompatibilityResponse(
   issue_session_id: string | null;
   target_index?: number;
 } | null {
-  const response = issueTimelineResponse(store, issueId, c);
+  const response = issueTimelineResponse(store, issueId, c, options);
   if (!response) return null;
   if (Array.isArray(response)) return response.map(timelineEntryCompatibilityResponse);
   return {

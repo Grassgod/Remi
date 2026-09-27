@@ -48,13 +48,14 @@ import {
   issueCompatibilityResponse,
   issueDependencyCompatibilityResponse,
   issueDependencyErrorResponse,
-  issueDetailAttachmentCompatibilityResponse,
+  issueDetailCompatibilityResponse,
   issueErrorResponse,
   issueQuickCreateCompatibilityInput,
   issueReactionCompatibilityResponse,
   issueSearchCompatibilityResponse,
   issueSearchErrorResponse,
   issueSessionCompatibilityResponse,
+  issueSessionsCompatibilityResponse,
   issueSubscriberCompatibilityResponse,
   issueSubscriberTargetErrorResponse,
   issueTimelineCompatibilityResponse,
@@ -831,15 +832,16 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.get("/api/issues/:id", (c) => {
-    const issueRef = issueFromParam(store, c, "id", "compat");
-    const issue = issueRef ? store.getIssueWithTasks(issueRef.id) : null;
+    // MUL-385: `issueFromParam` already returns the hydrated issue. The compat
+    // body only needs labels, reactions and attachments, so loading tasks,
+    // children, child progress and dependencies here was pure overhead — the
+    // native `/api/multiremi/issues/:id` route keeps using `getIssueWithTasks`.
+    const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const response = issueCompatibilityResponse(issue, { includeLabels: true });
-    if (issue.reactions.length) response.reactions = issue.reactions.map(issueReactionCompatibilityResponse);
-    if (issue.attachments.length) response.attachments = issue.attachments.map(issueDetailAttachmentCompatibilityResponse);
-    return c.json(response);
+    // `issueFromParam` returns a hydrated issue: its labels are already loaded.
+    return c.json(issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }));
   });
   app.get("/api/issues/:id/workspace", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -904,7 +906,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     let response;
     try {
-      response = issueTimelineCompatibilityResponse(store, issue.id, c);
+      response = issueTimelineCompatibilityResponse(store, issue.id, c, { skipIssueExistenceCheck: true });
     } catch (error) {
       if (error instanceof IssueTimelineRequestError) return c.json({ error: error.message }, 400);
       throw error;
@@ -1266,11 +1268,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const sessions = store.listIssueSessions(issue.id, c.req.query("include_archived") === "true");
-    return c.json(sessions.map((session) => issueSessionCompatibilityResponse(
-      session,
-      store.listSessionParticipants(session.id),
-    )));
+    return c.json(issueSessionsCompatibilityResponse(
+      store,
+      issue.id,
+      c.req.query("include_archived") === "true",
+      { skipIssueExistenceCheck: true },
+    ));
   });
   app.post("/api/issues/:id/sessions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");

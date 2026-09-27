@@ -2,6 +2,7 @@ export {
   repositoryKeys,
   repositoryListOptions,
   repositoryWikiDocsOptions,
+  repositoryWikiDocOptions,
   repositoryWikiSummariesOptions,
   isWikiBuildActive,
   wikiSummariesRefetchInterval,

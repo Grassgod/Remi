@@ -1,0 +1,1361 @@
+{
+  "generatedAt": "2026-09-26T10:46:36.214Z",
+  "runtime": "Bun 1.3.14",
+  "engine": "sqlite counting proxy; db_bytes = JSON.stringify({rows,count}) size (PG bridge stand-in)",
+  "samples": 3,
+  "heartbeat": [
+    {
+      "scenario": "heartbeat.idle",
+      "samples": 3,
+      "queries": 93,
+      "bytes": 12437,
+      "wallMs": 30.5,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.idle",
+      "samples": 3,
+      "queries": 57,
+      "bytes": 6198,
+      "wallMs": 1.9,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        },
+        {
+          "sql": "INSERT INTO multiremi_agent_plugin_workspace_locks (workspace_id, updated_at) VALUES (?, ?) ON CONFLICT(workspace_id) DO NOTHING",
+          "count": 1,
+          "bytes": 21
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+          "count": 1,
+          "bytes": 21
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.every_family",
+      "samples": 3,
+      "queries": 87,
+      "bytes": 11080,
+      "wallMs": 3.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'timeout', error = 'bot menu publish did not finish within 5 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'timeout', error = 'bot menu publisher did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'timeout', error = 'daemon did not finish the command within 20 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.update",
+      "samples": 3,
+      "queries": 99,
+      "bytes": 13117,
+      "wallMs": 18.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.update",
+      "samples": 3,
+      "queries": 63,
+      "bytes": 6878,
+      "wallMs": 2,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_update_requests SET status = 'timeout', error = 'daemon did not respond within 120 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND updated_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_update_requests SET status = 'timeout', error = 'update did not complete within 20 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.model_list",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 12965,
+      "wallMs": 10.8,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.model_list",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 6726,
+      "wallMs": 1.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_model_list_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_model_list_requests SET status = 'timeout', error = 'daemon did not respond within 30 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.command",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 13341,
+      "wallMs": 10.4,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.command",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 7102,
+      "wallMs": 1.7,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'timeout', error = 'daemon did not finish the command within 20 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_command_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.bot_menu",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 13229,
+      "wallMs": 11,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.bot_menu",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 6990,
+      "wallMs": 1.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'timeout', error = 'bot menu publish did not finish within 5 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_bot_menu_publish_requests SET status = 'timeout', error = 'bot menu publisher did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.local_skills",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 13021,
+      "wallMs": 10.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.local_skills",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 6782,
+      "wallMs": 1.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_list_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_list_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.directory_scan",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 13101,
+      "wallMs": 10.2,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.directory_scan",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 6862,
+      "wallMs": 1.7,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_directory_scan_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_directory_scan_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes; the runtime daemon may need updating', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.pending.local_skill_import",
+      "samples": 3,
+      "queries": 97,
+      "bytes": 13167,
+      "wallMs": 9.1,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 4523
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ? AND daemon_id = ?",
+          "count": 3,
+          "bytes": 643
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 3,
+          "bytes": 63
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1270
+        },
+        {
+          "sql": "SELECT state.* FROM multiremi_daemon_ssh_mesh_states state WHERE state.workspace_id = ? AND ( COALESCE(state.node_kind, 'runtime') = 'control_plane' OR ( COALESCE(state.node_kind, 'runtime') = 'runtime' AND EXISTS ( SELECT 1 FROM multiremi_runtimes runtime WHERE COALESCE(runtime.workspace_id, 'local') = state.workspace_id AND runtime.daemon_id = state.daemon_id ) AND NOT EXISTS ( SELECT 1 FROM multiremi_daemon_retirements retired WHERE retired.workspace_id = state.workspace_id AND retired.daemon_id = state.daemon_id ) ) ) ORDER BY state.daemon_id ASC",
+          "count": 2,
+          "bytes": 1202
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+          "count": 2,
+          "bytes": 504
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.store_only.pending.local_skill_import",
+      "samples": 3,
+      "queries": 61,
+      "bytes": 6928,
+      "wallMs": 1.6,
+      "top": [
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3125
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE id = ?",
+          "count": 2,
+          "bytes": 1196
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+          "count": 2,
+          "bytes": 42
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+          "count": 1,
+          "bytes": 598
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.worst_case",
+      "samples": 3,
+      "queries": 127,
+      "bytes": 24699,
+      "wallMs": 3.8,
+      "top": [
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
+          "count": 10,
+          "bytes": 3550
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+          "count": 10,
+          "bytes": 210
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3340
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
+          "count": 4,
+          "bytes": 84
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.store_only.worst_case_with_side_channels",
+      "samples": 3,
+      "queries": 127,
+      "bytes": 24699,
+      "wallMs": 3.3,
+      "top": [
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
+          "count": 10,
+          "bytes": 3550
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+          "count": 10,
+          "bytes": 210
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 5,
+          "bytes": 3340
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 5,
+          "bytes": 355
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
+          "count": 4,
+          "bytes": 84
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND desired = 1",
+          "count": 2,
+          "bytes": 3864
+        }
+      ],
+      "detail": {}
+    },
+    {
+      "scenario": "heartbeat.worst_case",
+      "samples": 3,
+      "queries": 163,
+      "bytes": 31692,
+      "wallMs": 13.6,
+      "top": [
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
+          "count": 10,
+          "bytes": 3550
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+          "count": 10,
+          "bytes": 210
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 5324
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
+          "count": 4,
+          "bytes": 84
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "scenario": "heartbeat.worst_case_with_side_channels",
+      "samples": 3,
+      "queries": 168,
+      "bytes": 31806,
+      "wallMs": 14.8,
+      "top": [
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ? WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ? WHERE runtime_id = ? AND status = 'pending' AND created_at < ?",
+          "count": 11,
+          "bytes": 231
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
+          "count": 10,
+          "bytes": 3550
+        },
+        {
+          "sql": "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+          "count": 10,
+          "bytes": 210
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 7,
+          "bytes": 5336
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "count": 7,
+          "bytes": 497
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "count": 7,
+          "bytes": 147
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?",
+          "count": 5,
+          "bytes": 105
+        },
+        {
+          "sql": "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
+          "count": 4,
+          "bytes": 84
+        }
+      ],
+      "detail": {
+        "status": 200
+      }
+    }
+  ],
+  "claim": [
+    {
+      "scenario": "claim.mixed_workspace",
+      "samples": 3,
+      "queries": 398,
+      "bytes": 6650345,
+      "wallMs": 59.5,
+      "top": [
+        {
+          "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count, ( SELECT COUNT(*) FROM multiremi_project_resources pr WHERE pr.project_id = p.id ) AS resource_count FROM multiremi_projects p LEFT JOIN multiremi_issues i ON i.project_id = p.id WHERE p.id = ? GROUP BY p.id",
+          "count": 57,
+          "bytes": 29925
+        },
+        {
+          "sql": "SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ? AND issue_id IS NOT NULL ORDER BY created_at ASC, id ASC LIMIT 1",
+          "count": 28,
+          "bytes": 588
+        },
+        {
+          "sql": "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC, id ASC",
+          "count": 26,
+          "bytes": 7202
+        },
+        {
+          "sql": "SELECT execution_fingerprint, work_dir, runtime_id FROM multiremi_tasks WHERE chat_session_id = ? AND issue_id IS NULL AND execution_fingerprint IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+          "count": 24,
+          "bytes": 504
+        },
+        {
+          "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+          "count": 21,
+          "bytes": 6497820
+        },
+        {
+          "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+          "count": 21,
+          "bytes": 5670
+        },
+        {
+          "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+          "count": 21,
+          "bytes": 966
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agents WHERE id = ? AND archived_at IS NULL",
+          "count": 18,
+          "bytes": 12114
+        },
+        {
+          "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+          "count": 16,
+          "bytes": 10824
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "count": 11,
+          "bytes": 7139
+        }
+      ],
+      "detail": {
+        "status": 200,
+        "claimed_task_id": "tsk_2yxhfgzbriyc",
+        "claimed_agent_id": "agt_bench_0",
+        "response_bytes": 610131,
+        "skill_file_bytes": 309355,
+        "project_wiki_docs": 9,
+        "project_wiki_bytes": 148764,
+        "repository_wiki_docs": 8,
+        "repository_wiki_bytes": 145735,
+        "knowledge_warnings": 0
+      }
+    }
+  ]
+}

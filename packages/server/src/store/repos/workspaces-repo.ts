@@ -12,6 +12,7 @@ import {
   uniqueRefMatch,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import type {
   CreateWorkspaceInput,
   CreateWorkspaceInvitationInput,
@@ -152,10 +153,18 @@ export class WorkspacesRepo {
   }
 
   listWorkspaceMembers(workspaceId?: string | null): MultiremiWorkspaceMember[] {
+    // `findWorkspaceMemberForUser` re-lists this table for every role check, and one heartbeat
+    // makes that check twice. Membership writes invalidate the table's entries.
+    const cache = workspaceId ? activeRequestReadCache() : null;
+    const key = cacheKey("multiremi_workspace_members", "list", workspaceId ?? "");
+    const cached = cache?.get<MultiremiWorkspaceMember[]>(key);
+    if (cached !== undefined) return cached;
     const rows = workspaceId
       ? this.ctx.db.query("SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC").all(workspaceId) as Row[]
       : this.ctx.db.query("SELECT * FROM multiremi_workspace_members WHERE archived_at IS NULL ORDER BY workspace_id ASC, name ASC").all() as Row[];
-    return rows.map(toWorkspaceMember);
+    const members = rows.map(toWorkspaceMember);
+    cache?.set(key, members);
+    return members;
   }
 
   updateWorkspaceMember(id: string, input: UpdateWorkspaceMemberInput): MultiremiWorkspaceMember {
@@ -487,7 +496,17 @@ export class WorkspacesRepo {
   }
 
   getWorkspace(id: string): MultiremiWorkspace | null {
+    // Several places in one request need the workspace (auth guard, response assembly, relays).
+    // Reads are cached per request and any write to the table — including the lifecycle lock's
+    // no-op self-write — invalidates them, so a read after a write still sees the write.
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_workspaces", "row", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached ? toWorkspace(cached) : null;
+    }
     const row = this.ctx.db.query("SELECT * FROM multiremi_workspaces WHERE id = ?").get(id) as Row | null;
+    cache?.set(key, row);
     return row ? toWorkspace(row) : null;
   }
 
@@ -772,15 +791,24 @@ export class WorkspacesRepo {
   // ── Model gateway: relay config ────────────────────────────────
 
   private relayRow(workspaceId: string, engine: RelayEngine): RelayEngineConfig | null {
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_relay_config", workspaceId, engine);
+    const cached = cache?.get<RelayEngineConfig | null>(key);
+    if (cached !== undefined) return cached;
     const row = this.ctx.db
       .query("SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?")
       .get(workspaceId, engine) as Row | null;
-    if (!row) return null;
-    return {
+    if (!row) {
+      cache?.set(key, null);
+      return null;
+    }
+    const value = {
       fragment: String(row.fragment ?? ""),
       authToken: String(row.auth_token ?? ""),
       revision: Number(row.revision ?? 0),
     };
+    cache?.set(key, value);
+    return value;
   }
 
   /** Full config incl. plaintext tokens — daemon-facing only. */

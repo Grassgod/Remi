@@ -26,7 +26,7 @@ import {
   type Stats,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
 import {
@@ -125,6 +125,47 @@ interface MultiremiGcMeta {
   local_directory?: boolean;
 }
 
+/**
+ * Decide whether one GC failure aborts the whole round or only skips a single
+ * directory.
+ *
+ * There is exactly one rule: re-probe the process-ownership fence that the
+ * failure may have tripped. The fence is monotonic (a lost supervisor lease or
+ * a replaced workspace root never comes back), so a second probe settles the
+ * question without error types or sticky flags. A fence that still throws means
+ * the daemon no longer owns this root and every later mutation is unsafe; a
+ * fence that passes means the failure was local to this one directory, and the
+ * sweep continues so a single bad workspace cannot stall all cleanup.
+ */
+function classifyGcFailure(error: unknown, options: RunWorkspaceGcOnceOptions): "abort" | "skip" {
+  try {
+    options.assertRootOwner?.();
+    return "skip";
+  } catch {
+    return "abort";
+  }
+}
+
+/**
+ * Report one directory-level GC failure the way the sweep treats it, then
+ * rethrow ownership loss so the daemon stops instead of skipping past it.
+ *
+ * `countsAsSkipped` is false for the control-plane report steps: the workspace
+ * itself was already reclaimed and counted, so charging the round another skip
+ * for a failed bookkeeping call would double-count one directory.
+ */
+function handleGcFailure(
+  workspaceDir: string,
+  error: unknown,
+  options: RunWorkspaceGcOnceOptions,
+  summary: MultiremiDaemonGcSummary,
+  countsAsSkipped = true,
+): void {
+  if (classifyGcFailure(error, options) === "abort") throw error;
+  if (countsAsSkipped) summary.skipped++;
+  options.onError?.(workspaceDir, error);
+}
+
 export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Promise<MultiremiDaemonGcSummary> {
   const summary: MultiremiDaemonGcSummary = { cleaned: 0, orphaned: 0, skipped: 0 };
   const root = resolve(options.root);
@@ -135,10 +176,37 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   // deletion out of its live path. Finish that deletion before replaying the
   // cleaned-state outbox so the control plane never reports retained bytes as
   // physically removed.
-  recoverOwnedDirectoryQuarantineSync(root, { assertRootOwner: options.assertRootOwner });
+  let retainedQuarantineNames = new Set<string>();
+  let quarantineRecovered = false;
+  try {
+    const quarantine = recoverOwnedDirectoryQuarantineSync(root, {
+      assertRootOwner: options.assertRootOwner,
+      onError: (path, error) => options.onError?.(path, error),
+    });
+    retainedQuarantineNames = new Set(quarantine.retained);
+    quarantineRecovered = true;
+  } catch (error) {
+    // A quarantine that cannot be opened or read is a per-directory style
+    // failure: report it and keep sweeping the workspaces. Ownership loss is
+    // the exception and still ends the round.
+    if (classifyGcFailure(error, options) === "abort") throw error;
+    summary.skipped++;
+    options.onError?.(join(root, OWNED_DIRECTORY_QUARANTINE), error);
+  }
   log.debug(`Workspace GC quarantine recovery finished: ${root}`);
-  await flushIssueWorkspaceCleanedOutbox(root, options);
-  log.debug(`Workspace GC outbox flush finished: ${root}`);
+  if (quarantineRecovered) {
+    // Retained quarantine bytes were never proven identical to a verified
+    // deletion target, so the outbox must not report their workspace as
+    // physically removed yet.
+    await flushIssueWorkspaceCleanedOutbox(root, options, summary, retainedQuarantineNames);
+    log.debug(`Workspace GC outbox flush finished: ${root}`);
+  } else {
+    // Recovery did not finish, so which bytes are still in the quarantine is
+    // unknown. Flushing now could report a workspace as cleaned while its bytes
+    // are retained, so the outbox waits for a round that can read the
+    // quarantine.
+    log.warn(`Workspace GC deferred the cleaned-state outbox after quarantine recovery failed: ${root}`);
+  }
 
   const workspaces = safeReadDir(root) ?? [];
   // Scan the topic snapshot before Issue workspaces. A terminal Issue can move
@@ -220,6 +288,12 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   }
 
   log.debug(`Workspace GC finished: ${root}`, summary);
+  // A per-directory skip keeps the sweep alive, so surface a single summary
+  // line once the round is over: systematic faults would otherwise scroll away
+  // as unrelated warns.
+  if (summary.skipped > 0) {
+    log.warn(`Workspace GC skipped ${summary.skipped} workspace(s) this round: ${root}`);
+  }
   return summary;
 }
 
@@ -259,8 +333,7 @@ async function collectTopicWorkspace(
       await action();
     }
   } catch (error) {
-    summary.skipped++;
-    options.onError?.(topicDir, error);
+    handleGcFailure(topicDir, error, options, summary);
   }
 }
 
@@ -276,23 +349,31 @@ async function collectWorkspaceGcDecision(
   const lifecycleKey = meta?.kind === "discussion_issue" && issueSessionId
     ? discussionSessionLifecycleKey(issueSessionId)
     : issueId;
-  if (lifecycleKey && options.withIssueWorkspaceLock) {
-    await options.withIssueWorkspaceLock(lifecycleKey, workspaceDir, async () => {
-      const lockedMeta = readGcMeta(workspaceDir);
-      const lockedLifecycleKey = lockedMeta?.kind === "discussion_issue"
-        ? stringField(lockedMeta.issue_session_id)
-        : stringField(lockedMeta?.issue_id);
-      const expectedLockedKey = lockedMeta?.kind === "discussion_issue" && lockedLifecycleKey
-        ? discussionSessionLifecycleKey(lockedLifecycleKey)
-        : lockedLifecycleKey;
-      if (expectedLockedKey !== lifecycleKey) {
-        throw new Error(`Issue workspace ownership changed while waiting for lifecycle lock: ${workspaceDir}`);
-      }
-      await collectWorkspaceGcDecisionUnlocked(root, workspaceDir, options, summary);
-    });
-    return;
+  try {
+    if (lifecycleKey && options.withIssueWorkspaceLock) {
+      await options.withIssueWorkspaceLock(lifecycleKey, workspaceDir, async () => {
+        const lockedMeta = readGcMeta(workspaceDir);
+        const lockedLifecycleKey = lockedMeta?.kind === "discussion_issue"
+          ? stringField(lockedMeta.issue_session_id)
+          : stringField(lockedMeta?.issue_id);
+        const expectedLockedKey = lockedMeta?.kind === "discussion_issue" && lockedLifecycleKey
+          ? discussionSessionLifecycleKey(lockedLifecycleKey)
+          : lockedLifecycleKey;
+        if (expectedLockedKey !== lifecycleKey) {
+          // Another actor rebound this path while we waited for the lock. The
+          // directory is not ours to collect, but the round continues.
+          throw new Error(`Issue workspace ownership changed while waiting for lifecycle lock: ${workspaceDir}`);
+        }
+        await collectWorkspaceGcDecisionUnlocked(root, workspaceDir, options, summary);
+      });
+      return;
+    }
+    await collectWorkspaceGcDecisionUnlocked(root, workspaceDir, options, summary);
+  } catch (error) {
+    // Covers the lock wrapper (including the daemon's own root fence inside it)
+    // and the decision + removal phases below.
+    handleGcFailure(workspaceDir, error, options, summary);
   }
-  await collectWorkspaceGcDecisionUnlocked(root, workspaceDir, options, summary);
 }
 
 async function collectWorkspaceGcDecisionUnlocked(
@@ -308,9 +389,9 @@ async function collectWorkspaceGcDecisionUnlocked(
   } catch (error) {
     // One unavailable entity or archive upload must not prevent later
     // workspaces from being evaluated. Failure remains fail-closed for this
-    // workspace and is surfaced through the daemon logger.
-    summary.skipped++;
-    options.onError?.(workspaceDir, error);
+    // workspace and is surfaced through the daemon logger — unless the failure
+    // is ownership loss, which must abort the round.
+    handleGcFailure(workspaceDir, error, options, summary);
     return;
   }
   const { decision } = resolution;
@@ -348,6 +429,8 @@ async function collectWorkspaceGcDecisionUnlocked(
     }
     removeGcWorkDir(root, workspaceDir, options.assertRootOwner);
   } catch (error) {
+    // Drop this round's receipt for the workspace that survived, then decide
+    // whether the failure ends the round.
     if (reportReceipt) {
       try {
         options.assertRootOwner?.();
@@ -369,7 +452,9 @@ async function collectWorkspaceGcDecisionUnlocked(
       options.assertRootOwner?.();
       rmSync(reportReceipt, { force: true });
     } catch (error) {
-      options.onError?.(reportReceipt, error);
+      // Same rule as the outbox replay: keep the receipt for a later round, but
+      // never swallow ownership loss.
+      handleGcFailure(reportReceipt, error, options, summary, false);
     }
   }
   if (decision === "orphan") summary.orphaned++;
@@ -429,6 +514,8 @@ function persistIssueWorkspaceCleanedReceipt(
 async function flushIssueWorkspaceCleanedOutbox(
   root: string,
   options: RunWorkspaceGcOnceOptions,
+  summary: MultiremiDaemonGcSummary,
+  retainedQuarantineNames: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (!options.client.reportIssueWorkspaceCleaned) return;
   const outbox = join(root, ISSUE_CLEANED_OUTBOX_DIR);
@@ -444,6 +531,19 @@ async function flushIssueWorkspaceCleanedOutbox(
     try {
       const receipt = parseIssueWorkspaceCleanedReceipt(path);
       assertReceiptWorkspaceContained(root, receipt.workspace_dir);
+      // Bytes still held in the quarantine were never proven to be the
+      // directory this receipt covers. Reporting the cleaned state now would
+      // claim a physical removal that has not happened; leave the receipt for
+      // the sweep that finishes the deletion.
+      if (retainedQuarantineNames.has(basename(receipt.workspace_dir))) {
+        options.onError?.(
+          path,
+          new Error(
+            `Issue workspace bytes are retained in the deletion quarantine; delaying cleaned-state report: ${receipt.workspace_dir}`,
+          ),
+        );
+        continue;
+      }
       // A crash before the workspace rm leaves a harmless stale receipt. Do
       // not tell the server that a directory which still exists was cleaned.
       if (safeLstat(receipt.workspace_dir)) {
@@ -469,7 +569,9 @@ async function flushIssueWorkspaceCleanedOutbox(
       options.assertRootOwner?.();
       rmSync(path, { force: true });
     } catch (error) {
-      options.onError?.(path, error);
+      // One undeliverable receipt must not stall the rest of the outbox, but
+      // ownership loss still ends the round.
+      handleGcFailure(path, error, options, summary, false);
     }
   }
 }

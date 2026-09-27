@@ -243,8 +243,13 @@ export class AccessTokensRepo {
     if (allowedTypes?.length && !allowedTypes.includes(accessToken.type)) return null;
     if (accessToken.revokedAt) return null;
     if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= Date.now()) return null;
-    this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [nowIso(), accessToken.id]);
-    return this.getAccessToken(accessToken.id);
+    // The row read above is the one whose hash, type, revocation and expiry were just checked, and
+    // the only write since is this `last_used_at` stamp — which the returned value does not carry
+    // a stale copy of because `lastUsedAt` is not part of the validation. Re-reading it cost one
+    // query on every authenticated request.
+    const lastUsedAt = nowIso();
+    this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [lastUsedAt, accessToken.id]);
+    return { ...accessToken, lastUsedAt };
   }
 }
 

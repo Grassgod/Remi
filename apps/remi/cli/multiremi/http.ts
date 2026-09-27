@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { loadMultiremiConfig } from "@multiremi/config.js";
+import { remiCliUserAgent } from "../core/user-agent.js";
 import { type CliOptions, stringOpt, stringListOption } from "./options.js";
 
 export interface CliAttachmentFile {
@@ -56,6 +57,7 @@ export async function multiremiApiUploadFile(attachmentFile: CliAttachmentFile, 
   if (issueId) form.append("issue_id", issueId);
   if (connection.workspaceId) form.append("workspace_id", connection.workspaceId);
   const headers: Record<string, string> = {};
+  headers["User-Agent"] = remiCliUserAgent();
   if (connection.token) headers.Authorization = `Bearer ${connection.token}`;
   const response = await fetch(`${connection.serverUrl}/api/upload-file`, {
     method: "POST",
@@ -72,6 +74,7 @@ export async function multiremiApiDownloadFile(downloadUrl: string, options: Cli
   const isRelative = !/^https?:\/\//i.test(downloadUrl);
   const url = isRelative ? `${connection.serverUrl}${downloadUrl.startsWith("/") ? "" : "/"}${downloadUrl}` : downloadUrl;
   const headers: Record<string, string> = {};
+  headers["User-Agent"] = remiCliUserAgent();
   if (isRelative && connection.token) headers.Authorization = `Bearer ${connection.token}`;
   const response = await fetch(url, { method: "GET", headers });
   if (!response.ok) {
@@ -178,6 +181,7 @@ export async function multiremiApiFetch<T = unknown>(
 ): Promise<{ data: T; headers: Headers }> {
   const connection = multiremiApiConnection(options);
   const headers: Record<string, string> = {};
+  headers["User-Agent"] = remiCliUserAgent();
   if (connection.token) headers.Authorization = `Bearer ${connection.token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(connection.serverUrl + path, {

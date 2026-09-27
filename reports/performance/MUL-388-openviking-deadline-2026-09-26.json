@@ -1,0 +1,191 @@
+{
+  "issue": "MUL-388",
+  "generatedAt": "2026-09-26",
+  "machine": "n37-066-008 (linux 5.15.120.bsk.3-amd64 x86_64, 64 vCPU, 247 GiB RAM), Bun 1.3.14",
+  "endpoint": "PUT /api/projects/:id/docs/:ref (in-process app.request, no nginx)",
+  "openviking": "loopback fake (scripts/bench-openviking-deadline.ts); no real OpenViking, no prod access",
+  "runs": [
+    {
+      "label": "before-prod-env",
+      "hang": "write",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 503,
+      "body": {
+        "error": "OpenViking is unavailable",
+        "code": null
+      },
+      "elapsedMs": 1083124,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 3,
+        "POST /api/v1/fs/mkdir": 2,
+        "POST /api/v1/content/batch-write": 6
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "origin/main@a1e61623"
+    },
+    {
+      "label": "before-healthy",
+      "hang": "none",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 200,
+      "body": {
+        "version": 2
+      },
+      "elapsedMs": 13,
+      "openvikingCallsWhileHung": {},
+      "readBack": {
+        "status": 200,
+        "body": "v2 body"
+      },
+      "code": "origin/main@a1e61623"
+    },
+    {
+      "label": "before-scaled-env",
+      "hang": "write",
+      "env": {
+        "timeoutMs": "1000",
+        "maxRetries": "5"
+      },
+      "status": 503,
+      "body": {
+        "error": "OpenViking is unavailable",
+        "code": null
+      },
+      "elapsedMs": 9128,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 3,
+        "POST /api/v1/fs/mkdir": 2,
+        "POST /api/v1/content/batch-write": 6
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "origin/main@a1e61623"
+    },
+    {
+      "label": "after-healthy",
+      "hang": "none",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 200,
+      "body": {
+        "version": 2
+      },
+      "elapsedMs": 13,
+      "openvikingCallsWhileHung": {},
+      "readBack": {
+        "status": 200,
+        "body": "v2 body"
+      },
+      "code": "agent/MUL-388@a61e7481"
+    },
+    {
+      "label": "after-prod-env-hung-write",
+      "hang": "write",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 504,
+      "body": {
+        "error": "OpenViking did not respond in time",
+        "code": "DEADLINE_EXCEEDED"
+      },
+      "elapsedMs": 20005,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 3,
+        "POST /api/v1/fs/mkdir": 2,
+        "POST /api/v1/content/batch-write": 1
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "agent/MUL-388@a61e7481"
+    },
+    {
+      "label": "after-prod-env-hung-all",
+      "hang": "all",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 504,
+      "body": {
+        "error": "OpenViking did not respond in time",
+        "code": "DEADLINE_EXCEEDED"
+      },
+      "elapsedMs": 20005,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 1
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "agent/MUL-388@a61e7481"
+    },
+    {
+      "label": "after-default-env-hung-write",
+      "hang": "write",
+      "env": {
+        "timeoutMs": "unset",
+        "maxRetries": "unset"
+      },
+      "status": 504,
+      "body": {
+        "error": "OpenViking did not respond in time",
+        "code": "TIMEOUT"
+      },
+      "elapsedMs": 15013,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 3,
+        "POST /api/v1/fs/mkdir": 2,
+        "POST /api/v1/content/batch-write": 1
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "agent/MUL-388@a61e7481"
+    },
+    {
+      "label": "after-prod-env-hung-commit",
+      "hang": "commit",
+      "env": {
+        "timeoutMs": "180000",
+        "maxRetries": "5"
+      },
+      "status": 504,
+      "body": {
+        "error": "OpenViking did not respond in time",
+        "code": "DEADLINE_EXCEEDED"
+      },
+      "elapsedMs": 25004,
+      "openvikingCallsWhileHung": {
+        "GET /api/v1/content/read": 3,
+        "POST /api/v1/fs/mkdir": 2,
+        "POST /api/v1/content/batch-write": 2,
+        "POST /api/v1/content/set_tags": 2,
+        "POST /api/v1/snapshot/commit": 2
+      },
+      "readBack": {
+        "status": 200,
+        "body": "v1 body"
+      },
+      "code": "agent/MUL-388@a61e7481"
+    }
+  ]
+}

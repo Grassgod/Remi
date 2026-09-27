@@ -1,0 +1,95 @@
+{
+  "generatedAt": "2026-09-26T11:21:50.182Z",
+  "commit": "16119de8c22239d0a8182d44af50cd63db143b35",
+  "sourceDigest": {
+    "files": {
+      "packages/server/src/repository-wiki/service.ts": "ff5b2d053e66d3b2a301392ded6580ce3f52f9eb086be8e289a910271bc535f4",
+      "packages/server/src/api/routers/workspaces.ts": "4493d2821543d90729648490b669c12da8dd0166d47c293a4575e90874f22071",
+      "frontend/packages/core/api/schemas/repositories.ts": "b7aff03167336a1f610653e7cb27d3aaae8fefee35d8213da5d940117b7b7c5a",
+      "frontend/packages/core/api/endpoints/repositories.ts": "5ee53e02d29ecd81ae78ab26b22f8b5cad594acee0ab945ddda4250baa539d05",
+      "frontend/packages/core/repositories/queries.ts": "9023a9132a331e97f297bd48a4dc2e5c8d6a5fe40bc04b81b908b22dac9cb769"
+    },
+    "combined": "ae76a5d2bd9c01d357a296592e4e553de107d6ecd82208dec8eeef7ff2646661"
+  },
+  "environment": {
+    "apiPort": 20190,
+    "note": "Shipping frontend ApiClient + zod schemas against a real loopback API in openviking mode. Covers the data layer the wiki/knowledge pages render from; not a browser render."
+  },
+  "results": [
+    {
+      "clause": "前端列表",
+      "detail": "zod 解析后拿到 4 篇（响应非空、未被 fallback 丢弃）",
+      "expected": "4",
+      "observed": "4",
+      "passed": true
+    },
+    {
+      "clause": "前端列表",
+      "detail": "列表调用 0 次 OpenViking 读",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "前端列表",
+      "detail": "列表行的 body 为 undefined（不是空串）",
+      "expected": "0",
+      "observed": "0",
+      "passed": true
+    },
+    {
+      "clause": "前端列表",
+      "detail": "列表行仍带 version",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "前端列表",
+      "detail": "列表行仍带 title",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    },
+    {
+      "clause": "前端单篇",
+      "detail": "按选中项取到正文",
+      "expected": "body-2",
+      "observed": "body-2",
+      "passed": true
+    },
+    {
+      "clause": "前端单篇",
+      "detail": "单篇调用只读 1 篇",
+      "expected": "1",
+      "observed": "1",
+      "passed": true
+    },
+    {
+      "clause": "前端搜索",
+      "detail": "q= 仍返回命中篇",
+      "expected": "Page 2",
+      "observed": "Page 2",
+      "passed": true
+    },
+    {
+      "clause": "前端搜索",
+      "detail": "q= 结果仍带正文（原契约）",
+      "expected": "body-2",
+      "observed": "body-2",
+      "passed": true
+    },
+    {
+      "clause": "前端 backlinks",
+      "detail": "backlinks 调用成功",
+      "expected": "true",
+      "observed": "true",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0
+  }
+}

@@ -19,6 +19,10 @@ interface WikiServerHooks {
   failUpdate?: (slug: string) => boolean;
   repositoryDocs?: Map<string, RepositoryDocState>;
   rawSubmissions?: boolean;
+  /** Makes every bounded body read fail with 503. */
+  failRepositoryBody?: boolean;
+  /** Observes each request before the fake server answers it. */
+  onRequest?: (request: Request) => void;
 }
 
 interface RepositoryDocState {
@@ -430,9 +434,90 @@ describe("Wiki working copy", () => {
       expect(repositoryDocs.get("getting-started.md")).toMatchObject({ title: "Getting started", body: "# Getting started\n\nFirst page." });
       const batch = requests.find((request) => request.path.endsWith("/repos/repo_alpha/wiki/batch"));
       expect(batch?.body.operations.every((operation: any) => operation.input?.source_revision === "deadbeef")).toBe(true);
-      expect(requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki")).map((request) => request.method))
-        .toEqual(["GET", "POST", "GET"]);
+      // MUL-387: two metadata reads (plan + post-push reconcile) and one
+      // bounded body request for the two pages the reconcile rewrites.
+      const repositoryRequests = requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki"));
+      expect(repositoryRequests.map((request) => request.method)).toEqual(["GET", "POST", "GET", "GET"]);
+      expect(repositoryRequests[3]!.path).toContain("include_body=true");
+      expect(repositoryRequests[3]!.path).toContain("ids=rwdoc_overview");
     }, { repositoryDocs });
+  });
+
+  test("reuses the baseline for unchanged repository pages and reads only what changed", async () => {
+    const docs = new Map<string, DocState>();
+    const repositoryDocs = new Map<string, RepositoryDocState>([
+      ["stable.md", { id: "rwdoc_stable", path: "stable.md", title: "Stable", body: "stable body", version: 1 }],
+      ["changed.md", { id: "rwdoc_changed", path: "changed.md", title: "Changed", body: "before", version: 1 }],
+    ]);
+    await withWikiServer(docs, async (serverUrl, requests) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      seedRepositoryWorkingCopy(root, repositoryDocs.values());
+      requests.length = 0;
+
+      await runMultiremi(["wiki", "status", ...base], { programName: "multiremi" });
+      // Metadata only: nothing changed, so not one body is fetched.
+      expect(requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki")))
+        .toEqual([{ method: "GET", path: "/api/workspaces/local/repos/repo_alpha/wiki", body: undefined }]);
+      expect(requests.some((request) => request.path.includes("include_body=true"))).toBe(false);
+
+      repositoryDocs.set("changed.md", { ...repositoryDocs.get("changed.md")!, body: "after", version: 2 });
+      await runMultiremi(["wiki", "status", ...base], { programName: "multiremi" });
+
+      const repositoryRequests = requests.filter((request) => request.path.includes("/repos/repo_alpha/wiki"));
+      // One metadata read from the earlier clean status, then metadata + only
+      // the changed page's body.
+      expect(repositoryRequests.map((request) => request.path)).toEqual([
+        "/api/workspaces/local/repos/repo_alpha/wiki",
+        "/api/workspaces/local/repos/repo_alpha/wiki",
+        "/api/workspaces/local/repos/repo_alpha/wiki?include_body=true&ids=rwdoc_changed",
+      ]);
+      expect(repositoryRequests[1]!.body).toBeUndefined();
+      expect(repositoryRequests[2]!.path)
+        .toBe("/api/workspaces/local/repos/repo_alpha/wiki?include_body=true&ids=rwdoc_changed");
+      expect(repositoryRequests[2]!.path).not.toContain("rwdoc_stable");
+    }, { repositoryDocs });
+  });
+
+  test("fails loudly instead of merging when a requested body is missing", async () => {
+    const docs = new Map<string, DocState>();
+    const repositoryDocs = new Map<string, RepositoryDocState>([
+      ["page.md", { id: "rwdoc_page", path: "page.md", title: "Page", body: "before", version: 1 }],
+    ]);
+    await withWikiServer(docs, async (serverUrl) => {
+      const root = workspaceRoot();
+      const base = ["--project", "prj_1", "--server", serverUrl, "--token", "token"];
+      await runMultiremi(["wiki", "pull", ...base], { programName: "multiremi" });
+      seedRepositoryWorkingCopy(root, repositoryDocs.values());
+      repositoryDocs.set("page.md", { ...repositoryDocs.get("page.md")!, body: "remote rewrite", version: 2 });
+      writeFileSync(join(root, "wiki", "repositories", "alpha-po_alpha", "page.md"), "local edit\n");
+      const localBefore = readFileSync(join(root, "wiki", "repositories", "alpha-po_alpha", "page.md"), "utf8");
+
+      await expect(runMultiremi(["wiki", "status", ...base], { programName: "multiremi" }))
+        .rejects.toThrow("repository wiki content is not ready");
+      expect(readFileSync(join(root, "wiki", "repositories", "alpha-po_alpha", "page.md"), "utf8")).toBe(localBefore);
+      expect(existsSync(join(root, ".multiremi", "wiki-conflicts"))).toBe(false);
+    }, { repositoryDocs, failRepositoryBody: true });
+  });
+
+  test("identifies itself as the Remi CLI on every request", async () => {
+    const headersSeen: Array<string | null> = [];
+    const docs = new Map<string, DocState>();
+    const repositoryDocs = new Map<string, RepositoryDocState>();
+    await withWikiServer(docs, async (serverUrl) => {
+      const root = workspaceRoot();
+      await runMultiremi([
+        "wiki", "pull", "--project", "prj_1", "--server", serverUrl, "--token", "token",
+      ], { programName: "multiremi" });
+      seedRepositoryWorkingCopy(root, repositoryDocs.values());
+      await runMultiremi([
+        "wiki", "status", "--project", "prj_1", "--server", serverUrl, "--token", "token",
+      ], { programName: "multiremi" });
+    }, { repositoryDocs, onRequest: (request) => { headersSeen.push(request.headers.get("user-agent")); } });
+
+    expect(headersSeen.length).toBeGreaterThan(0);
+    expect(headersSeen.every((value) => value?.startsWith("remi-cli/"))).toBe(true);
   });
 });
 
@@ -446,11 +531,23 @@ async function withWikiServer(
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
+      hooks.onRequest?.(request);
       const url = new URL(request.url);
       const body = request.method === "GET" || request.method === "DELETE" ? undefined : await request.json();
       requests.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
       if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki" && request.method === "GET") {
-        return Response.json({ docs: [...(hooks.repositoryDocs?.values() ?? [])].map(wireRepositoryDoc) });
+        // MUL-387: metadata by default; bodies only for an explicit bounded
+        // include_body request.
+        const rows = [...(hooks.repositoryDocs?.values() ?? [])];
+        const includeBody = url.searchParams.get("include_body") === "true";
+        const ids = (url.searchParams.get("ids") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+        if (includeBody) {
+          if (hooks.failRepositoryBody) return Response.json({ error: "repository wiki content is not ready" }, { status: 503 });
+          return Response.json({
+            docs: rows.filter((doc) => ids.includes(doc.id)).map((doc) => wireRepositoryDoc(doc, true)),
+          });
+        }
+        return Response.json({ docs: rows.map((doc) => wireRepositoryDoc(doc, false)) });
       }
       if (url.pathname === "/api/workspaces/local/repos/repo_alpha/wiki" && request.method === "POST") {
         if (hooks.rawSubmissions) return rawSubmissionResponse(1);
@@ -610,6 +707,45 @@ function workspaceRoot(): string {
   return root;
 }
 
+/**
+ * Materializes the Repository Wiki working copy + baseline + manifest that the
+ * daemon prepares before a task starts, so CLI tests exercise the steady state
+ * where unchanged pages reuse `.multiremi/wiki-base` instead of being read.
+ */
+function seedRepositoryWorkingCopy(root: string, docs: Iterable<RepositoryDocState>): void {
+  const directory = "alpha-po_alpha";
+  const wikiRoot = join(root, "wiki", "repositories", directory);
+  const baseRoot = join(root, ".multiremi", "wiki-base", "repositories");
+  mkdirSync(wikiRoot, { recursive: true });
+  mkdirSync(baseRoot, { recursive: true });
+  const entries: Array<Record<string, unknown>> = [];
+  for (const doc of docs) {
+    const text = `${doc.body.replace(/[\r\n]+$/, "")}\n`;
+    writeFileSync(join(wikiRoot, doc.path), text, { flag: "w" });
+    mkdirSync(join(baseRoot, "files", directory, ...doc.path.split("/").slice(0, -1)), { recursive: true });
+    const baseFile = join(baseRoot, "files", directory, ...doc.path.split("/"));
+    writeFileSync(baseFile, text);
+    chmodSync(baseFile, 0o444);
+    entries.push({
+      id: doc.id,
+      repositoryId: "repo_alpha",
+      repositoryName: "alpha",
+      path: `${directory}/${doc.path}`,
+      version: doc.version,
+      sourceRevision: "abc123",
+      sha256: createHash("sha256").update(text).digest("hex"),
+      updatedAt: `2026-08-18T00:00:0${doc.version}.000Z`,
+    });
+  }
+  writeFileSync(join(baseRoot, "manifest.json"), `${JSON.stringify({
+    version: 1,
+    workspaceId: "local",
+    pulledAt: "2026-08-18T00:00:00.000Z",
+    repositories: [{ id: "repo_alpha", name: "alpha", directory }],
+    docs: entries,
+  }, null, 2)}\n`);
+}
+
 function wireDoc(doc: DocState): Record<string, unknown> {
   return {
     ...doc,
@@ -625,9 +761,11 @@ function wireDoc(doc: DocState): Record<string, unknown> {
   };
 }
 
-function wireRepositoryDoc(doc: RepositoryDocState): Record<string, unknown> {
+function wireRepositoryDoc(doc: RepositoryDocState, includeBody = true): Record<string, unknown> {
+  const { body, ...metadata } = doc;
   return {
-    ...doc,
+    ...metadata,
+    ...(includeBody ? { body } : {}),
     workspace_id: "local",
     repository_id: "repo_alpha",
     slug: doc.path.replace(/\.md$/i, ""),
