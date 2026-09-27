@@ -432,6 +432,56 @@ export interface HardTaskAffinity {
   kind: DeviceRoutingAffinity;
   /** The machine the affinity resolves to, when it is known without a claim. */
   daemonId: string | null;
+  /** `Issue 工作区` only: every machine a live workspace row admits. */
+  workspaceAliases?: string[];
+  /** `Issue 工作区` only: how many live (not cleaned) workspace rows exist. */
+  workspaceCount?: number;
+}
+
+/**
+ * The machines an Issue's live workspace admits, compared exactly the way the
+ * claim predicate does: the recorded Runtime id, plus that Runtime's daemon
+ * aliases. This is a set, never a single "first" row — the claim SQL passes
+ * when ANY live workspace matches the candidate.
+ *
+ * `count > 0` with an empty alias list means a workspace row exists but names
+ * no reachable machine (for example its Runtime was deleted); such a task is
+ * still hard-affinity pinned, it just cannot be satisfied anywhere.
+ */
+function liveIssueWorkspaceMachines(
+  ctx: StoreContext,
+  issueId: string,
+): { count: number; aliases: string[] } {
+  const rows = ctx.db.query(
+    `SELECT runtime_id FROM multiremi_issue_workspaces
+      WHERE issue_id = ? AND status <> 'cleaned'`,
+  ).all(issueId) as Array<{ runtime_id?: unknown }>;
+  const aliases = new Set<string>();
+  for (const row of rows) {
+    const runtimeId = nullableString(row.runtime_id);
+    if (!runtimeId) continue;
+    aliases.add(runtimeId);
+    const runtime = ctx.runtimes().getRuntime(runtimeId);
+    if (runtime) for (const alias of runtimeDaemonAliases(runtime)) aliases.add(alias);
+  }
+  return { count: rows.length, aliases: [...aliases] };
+}
+
+/**
+ * True when a cached session on this Runtime may still be resumed for the
+ * Issue. A live workspace only permits its own machines; an Issue with no live
+ * workspace (never created, or already cleaned) imposes no machine constraint
+ * and therefore keeps its lane.
+ */
+function laneMatchesIssueWorkspace(
+  ctx: StoreContext,
+  runtime: MultiremiRuntime,
+  issueId: string,
+): boolean {
+  const machines = liveIssueWorkspaceMachines(ctx, issueId);
+  if (machines.count === 0) return true;
+  const own = new Set(runtimeDaemonAliases(runtime));
+  return machines.aliases.some((alias) => own.has(alias));
 }
 
 function hardTaskAffinity(
@@ -454,16 +504,15 @@ function hardTaskAffinity(
   const holdsWorkspace = Number(row.holds_workspace ?? row.holdsWorkspace ?? 1) === 1;
   if (issueId && holdsWorkspace) {
     // The claim SQL pins these through the workspace row, not `runtime_id`, so
-    // resolve the machine here or the wait would stay invisible.
-    const workspace = ctx.db.query(
-      `SELECT runtime_id FROM multiremi_issue_workspaces
-        WHERE issue_id = ? AND status <> 'cleaned' AND runtime_id IS NOT NULL
-        ORDER BY created_at ASC LIMIT 1`,
-    ).get(issueId) as { runtime_id?: unknown } | null;
-    const workspaceRuntimeId = nullableString(workspace?.runtime_id);
-    if (workspaceRuntimeId) {
-      const runtime = ctx.runtimes().getRuntime(workspaceRuntimeId);
-      return { kind: "Issue 工作区", daemonId: runtime?.daemonId ?? workspaceRuntimeId };
+    // resolve the machine set here or the wait would stay invisible.
+    const machines = liveIssueWorkspaceMachines(ctx, issueId);
+    if (machines.count > 0) {
+      return {
+        kind: "Issue 工作区",
+        daemonId: machines.aliases[0] ?? null,
+        workspaceAliases: machines.aliases,
+        workspaceCount: machines.count,
+      };
     }
   }
   if (directoryDaemonId) return { kind: "本机目录", daemonId: directoryDaemonId };
@@ -485,6 +534,8 @@ function sessionLaneResetReason(input: {
   resetRequested: boolean;
   /** Optional: omitted callers keep the pre-MUL-449 reason set. */
   deviceRoutingAllowed?: boolean;
+  /** Optional: false when the cached session sits off the workspace machine. */
+  workspaceCompatible?: boolean;
 }): string {
   if (input.resetRequested) return "provider_session_reset_requested";
   if (!input.lane.providerSessionId) return "provider_session_missing";
@@ -492,6 +543,9 @@ function sessionLaneResetReason(input: {
   if (!input.fingerprintResumable) return "execution_fingerprint_changed";
   if (!input.runtimeAvailable) return "runtime_unavailable";
   if (input.runtimeConflict) return "runtime_affinity_changed";
+  // The workspace machine outranks the cached session, so report the conflict
+  // before the generic runtime reasons (MUL-449).
+  if (input.workspaceCompatible === false) return "issue_workspace_elsewhere";
   if (input.deviceRoutingAllowed === false) return "device_routing_rejected";
   if (!input.runtimeCompatible) return "runtime_incompatible";
   return "provider_session_unavailable";
@@ -533,15 +587,34 @@ export class TasksRepo {
       // claim-time refresh, which re-pools the turn instead.
       const routingAgent = this.ctx.agents().getAgentLite(row.agent_id);
       const affinity = hardTaskAffinity(this.ctx, row, routingAgent?.runtimeId);
+      // A live Issue workspace is judged on its own machines: the task's
+      // `runtime_id` may be a stale soft pin that the claim path ignores, and
+      // naming it would point the user at the wrong machine (MUL-449).
+      const workspaceAliases = affinity?.workspaceAliases ?? [];
+      // A live workspace row whose Runtime is gone admits no machine, so the
+      // judgement stays in "workspace mode" with an empty candidate set.
+      const workspaceBound = (affinity?.workspaceCount ?? 0) > 0;
       const pinnedRuntime = row.runtime_id ? runtimesRepo.getRuntime(row.runtime_id) : null;
       const pinnedDaemonId = pinnedRuntime ? null : affinity?.daemonId ?? null;
-      const routingRefused = affinity !== null && (pinnedRuntime != null
-        ? !this.runtimePassesProjectDeviceRouting(pinnedRuntime, row.id)
-        : pinnedDaemonId != null && !this.deviceRoutingAllowsDaemon(pinnedDaemonId, row));
+      const routingRefused = affinity !== null && (workspaceBound
+        ? !workspaceAliases.some((alias) => {
+          const candidate = runtimesRepo.getRuntime(alias);
+          return candidate
+            ? this.runtimePassesProjectDeviceRouting(candidate, row.id)
+            : this.deviceRoutingAllowsDaemon(alias, row);
+        })
+        : pinnedRuntime != null
+          ? !this.runtimePassesProjectDeviceRouting(pinnedRuntime, row.id)
+          : pinnedDaemonId != null && !this.deviceRoutingAllowsDaemon(pinnedDaemonId, row));
       if (routingRefused) {
-        const runtimeName = pinnedRuntime
-          ? pinnedRuntime.daemonDisplayName ?? pinnedRuntime.name
-          : this.daemonDisplayName(pinnedDaemonId!);
+        const declaredAlias = workspaceAliases[0] ?? null;
+        const declaredRuntime = declaredAlias ? runtimesRepo.getRuntime(declaredAlias) : null;
+        const runtimeName = workspaceBound
+          ? declaredRuntime?.daemonDisplayName ?? declaredRuntime?.name
+            ?? (declaredAlias ? this.daemonDisplayName(declaredAlias) : "未知机器")
+          : pinnedRuntime
+            ? pinnedRuntime.daemonDisplayName ?? pinnedRuntime.name
+            : this.daemonDisplayName(pinnedDaemonId!);
         const reason = deviceRoutingWaitReason({ runtimeName, affinity: affinity.kind });
         if (reason === row.wait_reason) continue;
         const updatedRow = this.ctx.db.query(
@@ -932,13 +1005,24 @@ export class TasksRepo {
       const laneRuntimeCompatible = laneRuntime != null
         && (!runtimeWorkspace || laneRuntime.daemonId === runtimeWorkspace.daemonId)
         && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
+      // A live Issue workspace is a HARD affinity: when the cached provider
+      // session sits on another machine, the session must be dropped and the
+      // turn re-pooled so the workspace machine can take it. Without this the
+      // claim predicate demands the workspace machine while the lane pins a
+      // different one, and neither machine can ever claim the task (MUL-449).
+      // `with_code` snapshots keep their own hard pin and stay exempt.
+      const laneWorkspaceCompatible = laneRuntime == null
+        || issue == null
+        || Boolean(issueSession?.withCode)
+        || laneMatchesIssueWorkspace(this.ctx, laneRuntime, issue.id);
       const laneResumable =
         !input.resetProviderSession
         && !!issueLane.providerSessionId
         && issueLane.provider === agent.provider
         && laneFingerprintResumable
         && laneRuntimeCompatible
-        && laneRoutingAllowed;
+        && laneRoutingAllowed
+        && laneWorkspaceCompatible;
       const runtimeConflict = Boolean(affinity.runtimeId && issueLane.runtimeId && affinity.runtimeId !== issueLane.runtimeId);
       if (laneResumable && !runtimeConflict) {
         runtimeId = issueLane.runtimeId;
@@ -954,6 +1038,7 @@ export class TasksRepo {
             runtimeConflict,
             resetRequested: Boolean(input.resetProviderSession),
             deviceRoutingAllowed: laneRoutingAllowed,
+            workspaceCompatible: laneWorkspaceCompatible,
           }),
         });
         issueLane = this.ctx.issueSessions().getOrCreateSessionAgentLane(issueSession.id, agent.id, executionScope);
@@ -2252,7 +2337,8 @@ export class TasksRepo {
     const name = nullableString(row?.display_name);
     if (name) return name;
     const runtime = this.ctx.runtimes().listRuntimes()
-      .find((candidate) => candidate.daemonId === daemonId || candidate.legacyDaemonId === daemonId);
+      .find((candidate) => candidate.id === daemonId
+        || candidate.daemonId === daemonId || candidate.legacyDaemonId === daemonId);
     return runtime?.daemonDisplayName ?? runtime?.name ?? daemonId;
   }
 
@@ -2421,9 +2507,19 @@ export class TasksRepo {
       if (!session) continue;
       const fullRow = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(task.id) as Row | null;
       if (!fullRow) continue;
-      // The same classifier the observer uses decides what may be re-pooled:
-      // anything it calls a hard affinity keeps its pin and waits visibly.
-      if (hardTaskAffinity(this.ctx, fullRow, agent.runtimeId)) continue;
+      const affinity = hardTaskAffinity(this.ctx, fullRow, agent.runtimeId);
+      // A live Issue workspace is the hard affinity; a `runtime_id` that is not
+      // one of its machines is only a stale provider-session pin. The claim
+      // predicate already demands the workspace machine, so keeping that pin
+      // would strand the turn on a machine the SQL refuses. Drop it and let the
+      // workspace constraint place the task (MUL-449).
+      const workspaceConflict = affinity?.workspaceCount
+        ? !(affinity.workspaceAliases ?? []).some((alias) => {
+          const candidate = this.ctx.runtimes().getRuntime(alias);
+          return candidate ? runtimeDaemonAliases(candidate).includes(task.runtimeId!) : alias === task.runtimeId;
+        })
+        : false;
+      if (affinity && !workspaceConflict) continue;
       const runtime = this.ctx.runtimes().getRuntime(task.runtimeId);
       const issue = session.issueId ? this.ctx.issues().getIssue(session.issueId) : null;
       const routingProjectId = this.deviceRoutingProject(
@@ -2436,7 +2532,7 @@ export class TasksRepo {
         && !this.projectPassesProjectDeviceRouting(runtime, routingProjectId);
       const runtimeUnusable = runtime == null
         || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agent);
-      if (!routingRefused && !runtimeUnusable) continue;
+      if (!workspaceConflict && !routingRefused && !runtimeUnusable) continue;
       const updated = this.ctx.db.run(
         `UPDATE multiremi_tasks
          SET runtime_id = ?, session_id = NULL, work_dir = NULL,
@@ -2451,7 +2547,9 @@ export class TasksRepo {
       );
       if (lane?.runtimeId === task.runtimeId) {
         this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
-          reason: routingRefused ? "device_routing_rejected" : "runtime_incompatible",
+          reason: workspaceConflict
+            ? "issue_workspace_elsewhere"
+            : routingRefused ? "device_routing_rejected" : "runtime_incompatible",
           taskId: task.id,
         });
       }

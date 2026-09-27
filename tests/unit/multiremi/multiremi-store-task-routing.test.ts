@@ -373,6 +373,200 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
   // A lane pinned to a machine the Project no longer allows used to be resumed
   // there, while the claim predicate rejected that machine: neither machine
   // could claim the turn, so it queued forever.
+  // MUL-449 QA round 3: a live Issue workspace outranks a cached provider
+  // session. When the workspace moved to B while the lane still named A, the
+  // claim predicate demanded B (workspace) and A (pin) at once, so neither
+  // machine could take the turn and nothing explained the wait.
+  function workspaceConflictFixture(devices: string[]) {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_wsconf_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-wsconf-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_wsconf_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-wsconf-b",
+    });
+    const agent = store.createAgent({ name: "Workspace conflict", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Workspace conflict", workspaceId: "local" });
+    for (const daemonId of devices) store.createProjectDevice(project.id, { daemonId });
+    const issue = store.createIssue({ title: "Conflicting workspace", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
+    return { store, a, b, agent, project, issue, session };
+  }
+
+  it("names the Issue workspace machine, not the stale pin, when only A is allowed", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    store.claimTask(a.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_onlyA" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    // The wait belongs to the workspace machine B; naming the stale pin A
+    // would send the reader to the wrong device.
+    expect(store.getTask(second.id)?.waitReason).toContain("B");
+    expect(store.getTask(second.id)?.waitReason).toContain("Issue 工作区");
+    expect(store.getTask(second.id)?.waitReason).not.toContain("钉在 A");
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)).toBeNull();
+
+    // Restoring the binding clears the reason and lets B take the turn.
+    store.createProjectDevice(issue.projectId!, { daemonId: "dev-wsconf-b" });
+    expect(store.refreshQueuedCapabilityWaitReasons(now + 300_000).updated).toBe(1);
+    expect(store.getTask(second.id)?.waitReason).toBeNull();
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("lets the workspace machine claim when only B is allowed", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-b"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(b.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_onlyB" });
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(second.id)?.waitReason).toBeNull();
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("keeps normal lane inheritance when the Issue workspace was cleaned", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a", "dev-wsconf-b"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: a.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_cleaned" });
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
+    });
+
+    // With no live workspace there is no machine constraint, so the lane is
+    // still resumable and must not be reset.
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(store.getTask(second.id)).toMatchObject({
+      runtimeId: a.id, sessionId: "sess_wsconf_cleaned",
+    });
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(second.id)?.waitReason).toBeNull();
+    expect(store.claimTask(a.id)?.id).toBe(second.id);
+    // B remains a valid fallback for later turns.
+    expect(store.getTask(second.id)?.runtimeId).not.toBe(b.id);
+  });
+
+  it("does not inherit a lane that sits off the machine holding the Issue workspace", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a", "dev-wsconf-b"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    // A legitimately holds the workspace for the first turn.
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: a.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf" });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({ runtimeId: a.id });
+
+    // The workspace migrates to B: A's row is cleaned, B reports a live one.
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    // The lane named A, but the workspace lives on B: drop the lineage.
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      runtimeId: null, providerSessionId: null,
+    });
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("re-pools a queued turn whose pin conflicts with the live Issue workspace", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a", "dev-wsconf-b"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: a.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_q" });
+
+    // Queue the follow-up while A still holds the workspace, then migrate.
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: a.id, sessionId: "sess_wsconf_q" });
+    store.markIssueWorkspaceCleaned({
+      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
+    });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("does not strand a workspace-backed turn when A and B are both allowed", () => {
+    const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a", "dev-wsconf-b"]);
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    store.claimTask(a.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_both" });
+    store.reportIssueWorkspace({
+      issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
+    });
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+
+    // Both machines satisfy the binding, so the observer must stay silent and
+    // the workspace machine must win the claim.
+    const now = Date.now();
+    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(second.id)?.waitReason).toBeNull();
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
   it("resets an Issue lane whose device the Project no longer allows", () => {
     const store = createLocalStore();
     const a = store.registerRuntime({
