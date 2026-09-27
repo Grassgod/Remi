@@ -133,4 +133,71 @@ MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给�
 - 锁顺序修复：`d4254edd`
 - 合并 `origin/main`（`d905961b`，含 `fd52ff9e`）：`2a802b67`
 - `pid` 观测字段：`d6dd448f`
-- 回归修复（createIssue 的实时推送改回提交后发布，MUL-400 S1 契约）：`3bd9d736`（当前 head）
+- 回归修复（createIssue 的实时推送改回提交后发布，MUL-400 S1 契约）：`3bd9d736`
+
+## 锁序与提交后推送（第二轮 QA 复核后）
+
+第二轮 QA 发现两件事：全仓还有 5 条真实路径把领域行锁排在编号锁之前，以及嵌套调用 `createIssue` 会在最外层 COMMIT 之前推送 `activity:created`。本节记录这两项的修复与验证。
+
+### 一、取锁顺序收敛到 W -> N -> D
+
+契约不变（`store/advisory-locks.ts`）：W（workspace 生命周期行锁）-> N（编号分配锁）-> D（领域行锁）。这一轮把 5 条路径改成符合契约，做法都是把 W、N 提到该路径第一条领域写语句之前：
+
+| 路径 | 修复前 | 修复后 |
+|---|---|---|
+| `FeishuBotRepo.submitMessage` | W -> sender UPSERT(D) -> N -> Chat/Task(D) | **W -> N -> sender UPSERT(D)** -> Chat/Task |
+| `AutopilotsRepo.runAutopilot(create_issue)` | W -> autopilot UPDATE(D) -> N -> Task(D) | **W -> N -> autopilot UPDATE(D)** -> Task |
+| `MessagingOutcomeService.createIssue` | message UPDATE(D) -> W -> N -> outcome(D) | **W -> N -> message UPDATE(D)** -> outcome |
+| `MessagingOutcomeService.approveProposal` | message UPDATE(D) -> W -> N -> outcome(D) | **W -> N -> message UPDATE(D)** -> outcome |
+| `FeishuIngestRepo.createIssueOutcome` | Feishu message UPDATE(D) -> W -> N -> outcome(D) | **W -> N -> message UPDATE(D)** -> outcome |
+| `FeishuIngestRepo.approveIssueProposal` | Feishu message UPDATE(D) -> W -> N -> outcome(D) | **W -> N -> message UPDATE(D)** -> outcome |
+| `FeishuBotRepo.setSenderAllowed` | W -> sender UPDATE(D) -> N -> audit(D) | **W -> N -> sender UPDATE(D)** -> audit(D) |
+
+取舍：`submitMessage` 与 `runAutopilot` 无法在事务开头就确定要不要建单（取决于 sender 解析、execution mode），因此**无条件先取 N**。N 是按 workspace 的编号锁，持有代价是「同 workspace 的建单多等几毫秒」，换来的是取锁顺序与请求内容无关——这一点比省下几毫秒重要。
+
+### 二、提交后推送：嵌套时也必须等最外层 COMMIT
+
+第二轮 QA 的探针在 SQLite 和 PG 上都构造了「外层事务 -> `createIssue` -> 断言尚未收到事件 -> 外层回滚」，2/2 失败：事件在外层回滚前已经发出。根因是 `createIssue` 在自己的 `db.transaction()` 返回后立刻 `emitCommitEvents`，而在嵌套场景里那个返回只是 `RELEASE SAVEPOINT`。
+
+复用 main 上已有的 `CommitEventQueue` / `emitCommitEvents`，补的是这个队列表达不了的「嵌套边界」：
+
+- `SqlDatabase` 增加可选 `afterCommit(fn)`；
+- `PostgresSyncDatabase` 原生实现，按事务帧记账——内层帧干净退出时并入父帧，`ROLLBACK TO SAVEPOINT` 时整帧丢弃，只有最外层帧在真正 COMMIT 之后才执行；
+- `invalidatingDatabase` 包装层为 SQLite 提供同样的语义；
+- `emitWorkspaceEvent`、`notifyTaskEnqueued`、`emitCommitEvents` 都经过这个钩子。
+
+因此事件在嵌套事务里只会等最外层提交，回滚时整队丢弃，且不会重复：一次调用只入队一个回调，按入队顺序排空。
+
+测试（SQLite + PostgreSQL 各一遍，`tests/unit/multiremi/mul405-nested-rollback.test.ts`）：
+
+- 外层事务 -> `createIssue` -> 断言尚未收到 `activity:created` -> 外层提交 -> 恰好 1 条；
+- 外层事务 -> `createIssue` -> 断言尚未收到 -> 外层回滚 -> 仍然 0 条，且行已回滚。
+
+### 三、逐路径锁序断言与变异验证
+
+`tests/unit/multiremi/mul405-lock-order-paths.test.ts` 用记录型 `SqlDatabase` 包住真实 store，对每条路径单独记录取锁序列，断言「每类锁的首次获取」按 W -> N -> D 单调不减（同一事务内重复取已持有的锁不算违规，Postgres 允许，store 也依赖这一点）。覆盖 11 条路径：直接 `createIssue`、quick-create、Feishu bot、Autopilot、`setSenderAllowed`、`recordAudit`、`createPinnedItem`、messaging outcomes 建单与批准、Feishu ingest 建单与批准。
+
+`tests/unit/multiremi/mul405-lock-order.test.ts` 另外把「纯 `createIssue`（quick-create）对 Feishu bot」加进双连接交错回放。
+
+三次变异的实际结果（每次都跑，跑完还原）：
+
+| 变异 | 结果 |
+|---|---|
+| 删掉 `issues-repo.ts` 里 `createIssueWithinTransaction` 的 `lockWorkspaceRuntimeLifecycle`（QA 上轮做过、测试没抓住的那条） | **2 fail / 9 pass**：`direct createIssue` 与 `quick-create` 各自报「first W acquisition comes after a higher class」 |
+| Autopilot 改回「autopilot 行 UPDATE 在 N 之前」 | **1 fail / 10 pass**：`runAutopilot(create_issue)` 报同一断言 |
+| messaging outcomes 改回「message 行锁在 W/N 之前」 | **1 fail / 10 pass**（与上一条同批跑）：`messagingOutcomes.createIssue` 报同一断言 |
+| `afterCommit` 改成立即执行（即提交前推送的旧行为） | **2 fail / 7 pass**：两条嵌套推送用例各自失败 |
+
+还原后：逐路径 11 pass / 0 fail；嵌套回滚 9 用例 x SQLite + PG = 18 pass / 0 fail。
+
+### 四、messaging outcomes 的另一个回滚方向
+
+第二轮 QA 指出该套件只覆盖「内层失败」。补上「内层建单成功、外层随后失败」：内层落库的 Issue、`issue_created` outcome 与消息的 `processed_at` 全部随外层回滚，消息保持可重试。SQLite 与 PG 都跑。
+
+## 第二轮 head
+
+- 合并 `origin/main`（`c33828f0`，含 MUL-406 的事件管线）：`8f5acc70`
+- 合并后补回编号锁与 E1 回放：`3fddad9d`
+- 五条路径锁序 + 最外层提交后推送：`fa8ac817`
+- 逐路径锁序断言 + 纯 `createIssue` 交错回放：`f84f9e5a`
+- 嵌套推送测试 + messaging 外层失败用例：`6af0a289`
