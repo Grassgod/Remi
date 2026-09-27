@@ -246,6 +246,65 @@ describe("MUL-474 daemon GET task status golden", () => {
 });
 
 /**
+ * The claim route reads the Task, awaits knowledge hydration — which is not a
+ * store write — and then re-reads the Task to decide whether it is still
+ * dispatched on this Runtime. That re-read is the only thing standing between a
+ * cancel that lands during hydration and a Task being handed out anyway, so it
+ * must not be answered from the request cache.
+ */
+describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () => {
+  it("returns no task when the cancel lands while hydration is in flight", async () => {
+    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    databases.push(db);
+    const probe: Probe = { statements: [], reset() { this.statements = []; } };
+    const store = new MultiremiStore(countingDatabase(db, probe));
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ id: "agt_mul474_claim", name: "claim agent", provider: "codex", workspaceId: "local" });
+    store.registerRuntime({
+      id: "rt_mul474_claim",
+      name: "claim runtime",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-mul474-claim",
+      ownerId: "local",
+    });
+    const task = store.createTask({ id: "tsk_mul474_claim", agentId: agent.id, workspaceId: "local", prompt: "claim" });
+    const token = await store.createAccessToken({
+      name: "claim daemon",
+      type: "daemon",
+      workspaceId: "local",
+      daemonId: "daemon-mul474-claim",
+    });
+
+    // Hold the claim inside hydration, cancel the Task, then release. Both polls
+    // must come back empty: the claim is not allowed to hand out a cancelled Task.
+    const gate = Promise.withResolvers<void>();
+    const projectKnowledge = {
+      hydrateTaskKnowledge: async (input: unknown) => {
+        await gate.promise;
+        return input;
+      },
+    };
+    const app = createMultiremiApp({
+      store,
+      authToken: AUTH_TOKEN,
+      projectKnowledge: projectKnowledge as never,
+    });
+    const headers = { Authorization: `Bearer ${token.token}`, "content-type": "application/json" };
+    const requests = [0, 1].map(() =>
+      app.request("/api/daemon/runtimes/rt_mul474_claim/tasks/claim", { method: "POST", headers }));
+    await Bun.sleep(20);
+    store.cancelTask(task.id);
+    gate.resolve();
+    for (const response of await Promise.all(requests)) {
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ task: null });
+    }
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+  });
+});
+
+/**
  * The guard's branches are reordered, not removed: the owner is allowlisted by
  * identity before the Feishu exceptions are probed. These cases drive the real
  * app over the same Task with four credentials and assert the answers did not

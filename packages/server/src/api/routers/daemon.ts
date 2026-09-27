@@ -83,6 +83,7 @@ import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
+import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.js";
 
 /** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
 const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
@@ -959,6 +960,12 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           }
         }
         const hydratedTask = await hydrateClaimKnowledge(task, deps.projectKnowledge, deps.repositoryWiki);
+        // The hydration above awaits work outside the store, so nothing this request wrote can
+        // have invalidated the cached Task row: another request may have cancelled the Task while
+        // it ran, and a cached row would still say `dispatched`. Drop the request cache so the
+        // re-check below reads committed state — that check is the whole reason a cancelled Task
+        // is not delivered.
+        invalidateRequestReadCache();
         const current = store.getTask(task.id);
         if (current?.status !== "dispatched" || current.runtimeId !== runtimeId) return null;
         const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
