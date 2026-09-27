@@ -546,6 +546,93 @@ function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
 }
 
 /**
+ * Human-readable "constraint → machine" list for the placement wait text.
+ * Purely descriptive: a wrong label here cannot change what can be claimed.
+ */
+interface TaskPlacementConstraint {
+  kind: "taskPin" | "agentBinding" | "runtimeWorkspace" | "codeSnapshot" | "issueWorkspace" | "localDirectory";
+  label: string;
+  machineAliases: string[];
+}
+
+function constraintMachineAliases(ctx: StoreContext, machineId: string): string[] {
+  const aliases = new Set([machineId]);
+  for (const runtime of ctx.runtimes().listRuntimes()) {
+    const runtimeAliases = runtimeDaemonAliases(runtime);
+    if (runtimeAliases.includes(machineId)) for (const alias of runtimeAliases) aliases.add(alias);
+  }
+  return [...aliases];
+}
+
+function describeTaskPlacementConstraints(
+  ctx: StoreContext,
+  row: {
+    id: string; runtime_id: string | null; issue_id: string | null;
+    issue_session_id: string | null; chat_session_id: string | null;
+    runtime_workspace_id: string | null; holds_workspace: unknown;
+  },
+  agentRuntimeId: string | null | undefined,
+  agentProvider: string | undefined,
+): TaskPlacementConstraint[] {
+  const constraints: TaskPlacementConstraint[] = [];
+  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
+  if (row.runtime_id) constraints.push({
+    kind: "taskPin", label: `任务钉在 ${row.runtime_id}`,
+    // A directory on a not-yet-registered daemon uses its deterministic
+    // future Runtime id. That id and the directory daemon are one machine.
+    machineAliases: directoryDaemonId && agentProvider
+      && row.runtime_id === daemonRuntimeId(directoryDaemonId, agentProvider)
+      ? constraintMachineAliases(ctx, directoryDaemonId)
+      : constraintMachineAliases(ctx, row.runtime_id),
+  });
+  if (agentRuntimeId) constraints.push({
+    kind: "agentBinding", label: `Agent 绑定在 ${agentRuntimeId}`,
+    machineAliases: constraintMachineAliases(ctx, agentRuntimeId),
+  });
+  if (row.runtime_workspace_id) {
+    const workspace = ctx.db.query(
+      "SELECT daemon_id FROM multiremi_runtime_workspaces WHERE id = ?",
+    ).get(row.runtime_workspace_id) as { daemon_id?: unknown } | null;
+    const daemonId = nullableString(workspace?.daemon_id);
+    constraints.push({
+      kind: "runtimeWorkspace", label: `显式 Runtime 工作区在 ${daemonId ?? "未知机器"}`,
+      machineAliases: daemonId ? constraintMachineAliases(ctx, daemonId) : [],
+    });
+  }
+  const session = row.issue_session_id ? ctx.issueSessions().getIssueSession(row.issue_session_id) : null;
+  if (session?.withCode && session.codeRuntimeId) {
+    constraints.push({
+      kind: "codeSnapshot", label: `代码快照在 ${session.codeRuntimeId}`,
+      machineAliases: constraintMachineAliases(ctx, session.codeRuntimeId),
+    });
+  }
+  const issueId = nullableString(row.issue_id);
+  if (issueId && Number(row.holds_workspace ?? 1) === 1) {
+    const machines = liveIssueWorkspaceMachines(ctx, issueId);
+    if (machines.count > 0) {
+      constraints.push({
+        kind: "issueWorkspace",
+        label: machines.aliases.length > 0
+          ? `Issue 工作区在 ${machines.aliases.join(" / ")}`
+          : "Issue 工作区记录失去了所属 Runtime",
+        machineAliases: machines.aliases,
+      });
+    }
+  }
+  if (directoryDaemonId) constraints.push({
+    kind: "localDirectory", label: `本机目录在 ${directoryDaemonId}`,
+    machineAliases: constraintMachineAliases(ctx, directoryDaemonId),
+  });
+  return constraints;
+}
+
+function commonConstraintMachineAliases(constraints: TaskPlacementConstraint[]): string[] {
+  if (constraints.length === 0 || constraints.some((constraint) => constraint.machineAliases.length === 0)) return [];
+  return constraints[0]!.machineAliases.filter((alias) =>
+    constraints.every((constraint) => constraint.machineAliases.includes(alias)));
+}
+
+/**
  * The single hard-affinity classifier (MUL-449). It answers both "may this
  * queued turn be re-pooled?" and "what do we tell the user?", so the skip set
  * and the label can never disagree. `null` means soft affinity: the pin is a
@@ -556,45 +643,6 @@ function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
  * a real workspace row — a plain Chat task defaults to `holds_workspace = 1`
  * but has no Issue workspace, and an Issue task may have no lease either.
  */
-/**
- * Human-readable "constraint → machine" list for the placement wait text.
- * Purely descriptive: a wrong label here cannot change what can be claimed.
- */
-function describeTaskPlacementConstraints(
-  ctx: StoreContext,
-  row: {
-    id: string; runtime_id: string | null; issue_id: string | null;
-    issue_session_id: string | null; chat_session_id: string | null;
-    runtime_workspace_id: string | null; holds_workspace: unknown;
-  },
-  agentRuntimeId: string | null | undefined,
-): string[] {
-  const constraints: string[] = [];
-  if (row.runtime_id) constraints.push(`任务钉在 ${row.runtime_id}`);
-  if (agentRuntimeId) constraints.push(`Agent 绑定在 ${agentRuntimeId}`);
-  if (row.runtime_workspace_id) {
-    const workspace = ctx.db.query(
-      "SELECT daemon_id FROM multiremi_runtime_workspaces WHERE id = ?",
-    ).get(row.runtime_workspace_id) as { daemon_id?: unknown } | null;
-    constraints.push(`显式 Runtime 工作区在 ${nullableString(workspace?.daemon_id) ?? "未知机器"}`);
-  }
-  const session = row.issue_session_id ? ctx.issueSessions().getIssueSession(row.issue_session_id) : null;
-  if (session?.withCode && session.codeRuntimeId) {
-    constraints.push(`代码快照在 ${session.codeRuntimeId}`);
-  }
-  const issueId = nullableString(row.issue_id);
-  if (issueId && Number(row.holds_workspace ?? 1) === 1) {
-    const machines = liveIssueWorkspaceMachines(ctx, issueId);
-    if (machines.count > 0) {
-      constraints.push(machines.aliases.length > 0
-        ? `Issue 工作区在 ${machines.aliases.join(" / ")}`
-        : "Issue 工作区记录失去了所属 Runtime");
-    }
-  }
-  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
-  if (directoryDaemonId) constraints.push(`本机目录在 ${directoryDaemonId}`);
-  return constraints.length > 0 ? constraints : ["该任务的约束"];
-}
 
 export interface HardTaskAffinity {
   kind: DeviceRoutingAffinity;
@@ -703,8 +751,7 @@ function hardTaskAffinity(
   if (directoryDaemonId) return { kind: "本机目录", daemonId: directoryDaemonId };
   // Neither affinity class above, but the pin still cannot be re-pooled: the
   // claim-time refreshes skip frozen retries, so it must explain itself here.
-  const frozen = nullableString(row.execution_fingerprint ?? row.executionFingerprint) !== null
-    || Number(row.attempt ?? 1) > 1;
+  const frozen = nullableString(row.execution_fingerprint ?? row.executionFingerprint) !== null;
   if (frozen) return { kind: "冻结重试", daemonId: null };
   return null;
 }
@@ -902,6 +949,9 @@ export class TasksRepo {
         workspaceRuntimeMissing: probe.workspaceRuntimeMissing,
         frozenRetry: probe.frozenRetry,
         agentBound: probe.agentBound,
+        codeSnapshot: probe.codeSnapshot,
+        localDirectory: probe.localDirectory,
+        agentBindingTarget: probe.agentBindingTarget,
         redispatchTaskId: row.id,
       });
       if (reason === row.wait_reason) continue;
@@ -2624,6 +2674,9 @@ ${routing.sql}
     workspaceRuntimeMissing: boolean;
     frozenRetry: boolean;
     agentBound: boolean;
+    codeSnapshot: boolean;
+    localDirectory: boolean;
+    agentBindingTarget: string | null;
   } {
     const task = this.getTask(row.id);
     const workspaceId = row.workspace_id ?? "local";
@@ -2647,45 +2700,27 @@ ${routing.sql}
     // fingerprint, so it must not be labelled frozen (MUL-449).
     const frozenRetry = cleanOptionalString(row.execution_fingerprint) != null;
     const agentBound = Boolean(agent?.runtimeId && agent.runtimeId === row.runtime_id);
-    const constraints = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId);
-    // (c) needs a machine to point the reader at. Only a HARD affinity that
-    // names an unregistered machine qualifies: soft lineage whose Runtime went
-    // away is re-pooled by the claim path, which must stay unlabelled here.
-    const pending = new Set<string>();
-    if (affinity) {
-      if (row.runtime_workspace_id) {
-        const workspace = this.ctx.db.query(
-          "SELECT daemon_id FROM multiremi_runtime_workspaces WHERE id = ?",
-        ).get(row.runtime_workspace_id) as { daemon_id?: unknown } | null;
-        const daemonId = nullableString(workspace?.daemon_id);
-        if (daemonId && !this.daemonIsRegistered(daemonId)) pending.add(daemonId);
-      }
-      if (agentBound && agent?.runtimeId && !this.ctx.runtimes().getRuntime(agent.runtimeId)) {
-        pending.add(agent.runtimeId);
-      }
-      const directoryDaemonId = this.ctx.localDirectoryDaemonForTask(row);
-      if (directoryDaemonId && !this.daemonIsRegistered(directoryDaemonId)) pending.add(directoryDaemonId);
-      if (frozenRetry && row.runtime_id && !this.ctx.runtimes().getRuntime(row.runtime_id)) {
-        pending.add(row.runtime_id);
-      }
-      if (workspaceRuntimeMissing) {
-        const workspace = this.ctx.db.query(
-          "SELECT runtime_id FROM multiremi_issue_workspaces WHERE issue_id = ? AND status <> 'cleaned'",
-        ).get(row.issue_id) as { runtime_id?: unknown } | null;
-        const workspaceRuntimeId = nullableString(workspace?.runtime_id);
-        if (workspaceRuntimeId) pending.add(workspaceRuntimeId);
-      }
-    }
-    const unresolved = [...pending];
+    const described = describeTaskPlacementConstraints(this.ctx, row, agent?.runtimeId, agent?.provider);
+    const common = commonConstraintMachineAliases(described);
+    // The daemon fallback applies only when every constraint points to the
+    // same unregistered machine, including registered Agent and task pins.
+    const singlePendingDaemon = affinity && common.length === 1 && !this.daemonIsRegistered(common[0]!)
+      ? common[0]! : null;
+    const otherConstraints = described.filter((constraint) => constraint.kind !== "agentBinding"
+      && !(constraint.kind === "taskPin" && row.runtime_id === agent?.runtimeId));
+    const targetAlias = commonConstraintMachineAliases(otherConstraints)[0];
     return {
       verdicts,
       explanation: affinity?.kind ?? "会话",
       hardAffinity: affinity !== null,
-      constraints,
-      singlePendingDaemon: unresolved.length === 1 ? unresolved[0]! : null,
+      constraints: described.length > 0 ? described.map((constraint) => constraint.label) : ["该任务的约束"],
+      singlePendingDaemon,
       workspaceRuntimeMissing,
       frozenRetry,
       agentBound,
+      codeSnapshot: described.some((constraint) => constraint.kind === "codeSnapshot"),
+      localDirectory: described.some((constraint) => constraint.kind === "localDirectory"),
+      agentBindingTarget: targetAlias ? this.daemonDisplayName(targetAlias) : null,
     };
   }
 

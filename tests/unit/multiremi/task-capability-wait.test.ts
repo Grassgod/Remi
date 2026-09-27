@@ -431,7 +431,6 @@ describe("queued task model capability waits", () => {
     store.createProjectDevice(project.id, { daemonId: "dev-unreg-b" });
     const issue = store.createIssue({ title: "Unregistered issue", projectId: project.id, workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "wait for its machine" });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_unregistered_daemon", task.id]);
 
     const now = Date.now();
     ageTask(task.id, GRACE_MS, now);
@@ -584,6 +583,62 @@ describe("queued task model capability waits", () => {
       tasks: { redispatchTaskWithinTransaction(id: string): { replacement: { id: string } } };
     }).tasks.redispatchTaskWithinTransaction(task.id);
     expect(store.claimTask(b.id)?.id).toBe(redispatch.replacement.id);
+  });
+
+  it("reports a placement conflict between a registered Agent binding and an unregistered workspace machine", () => {
+    const store = createLocalStore();
+    const m = store.registerRuntime({
+      id: "rt_mixed_m", name: "M", provider: "codex", workspaceId: "local", daemonId: "dev-mixed-m",
+    });
+    const agent = store.createAgent({ name: "Bound M", provider: "codex", workspaceId: "local", runtimeId: m.id });
+    const project = store.createProject({ title: "Mixed placement", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Mixed issue", projectId: project.id, workspaceId: "local" });
+    const workspace = (store as unknown as {
+      runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
+    }).runtimeWorkspaces.create(m.id, { name: "Unregistered U", root_path: "/tmp/mixed-u" });
+    db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", ["dev-mixed-u", workspace.id]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "M versus U" });
+    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.describeTaskPlacement(task.id).every((verdict) => !verdict.placementOk)).toBe(true);
+    expect(store.claimTask(m.id)).toBeNull();
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)?.waitReason).toStartWith("等待任务落点：");
+  });
+
+  it("does not recommend redispatch when a frozen code snapshot conflicts with an Agent binding", () => {
+    const { store, a, b, agent, issue } = conflictFixture({ codex: "dev-frozen-code-a", other: "dev-frozen-code-b" });
+    const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
+    const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
+    expect(store.claimTask(a.id)?.id).toBe(seed.id);
+    store.startTask(seed.id);
+    store.completeTask(seed.id, { output: "ok", sessionId: "sess_frozen_code" });
+    const side = store.createIssueSession(issue.id, {
+      title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+    });
+    store.updateAgent(agent.id, { runtimeId: b.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "frozen snapshot" });
+    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = 'frozen-code-fp' WHERE id = ?", [task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).toStartWith("等待任务落点：");
+    expect(reason).not.toContain("redispatch");
+    expect(reason).toContain("A");
+    // Restore only the binding here. updateAgent intentionally cancels frozen
+    // queued executions when their target changes, a separate lifecycle rule.
+    db!.run(
+      `UPDATE multiremi_agents SET runtime_id = ?,
+         execution_group_id = (SELECT execution_group_id FROM multiremi_runtimes WHERE id = ?)
+       WHERE id = ?`,
+      [a.id, a.id, agent.id],
+    );
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: a.id });
+    expect(store.describeTaskPlacement(task.id).find((verdict) => verdict.runtimeId === a.id))
+      .toMatchObject({ placementOk: true, routingOk: true });
+    expect(store.claimTask(a.id)?.id).toBe(task.id);
   });
 
   it("explains an Agent-bound Runtime that conflicts with the live Issue workspace", () => {

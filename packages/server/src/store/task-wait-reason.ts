@@ -71,8 +71,8 @@ export function deviceRoutingWaitReason(input: {
  * Why no machine can take this Task. The remedy is chosen by priority so the
  * text always names ONE action that actually resolves the conflict:
  *   1. a workspace whose Runtime is gone   → re-register that machine
- *   2. a frozen retry                      → redispatch (drops the frozen pin)
- *   3. an Agent-bound Runtime              → re-bind or unbind the Agent
+ *   2. a frozen retry without data pins    → redispatch (drops the frozen pin)
+ *   3. an Agent-bound Runtime              → re-bind to the other constraints' machine
  *   4. anything else                       → make the constraints agree
  */
 export function placementWaitReason(input: {
@@ -80,6 +80,9 @@ export function placementWaitReason(input: {
   workspaceRuntimeMissing?: boolean;
   frozenRetry?: boolean;
   agentBound?: boolean;
+  codeSnapshot?: boolean;
+  localDirectory?: boolean;
+  agentBindingTarget?: string | null;
   redispatchTaskId?: string;
 }): string {
   const listed = input.constraints.join("；");
@@ -87,10 +90,10 @@ export function placementWaitReason(input: {
   if (input.workspaceRuntimeMissing) {
     remedy = "该 Issue 的工作区记录失去了所属 Runtime（状态 runtime_offline）；"
       + "重新注册原机器后可在其上重新接管，否则需要人工处理";
-  } else if (input.frozenRetry && input.redispatchTaskId) {
+  } else if (input.frozenRetry && !input.codeSnapshot && !input.localDirectory && input.redispatchTaskId) {
     remedy = `运行 remi task redispatch ${input.redispatchTaskId} 冷启动，落点会按当前工作区重新计算`;
-  } else if (input.agentBound) {
-    remedy = "把该 Agent 的 Runtime 绑定改到工作区所在机器，或解除绑定（remi agent update --runtime）";
+  } else if (input.agentBound && input.agentBindingTarget) {
+    remedy = `把该 Agent 的 Runtime 绑定改到 ${input.agentBindingTarget}（remi agent update --runtime）`;
   } else {
     remedy = "让这些约束指向同一台机器";
   }

@@ -775,13 +775,15 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
     type Shape =
       | "chat" | "issue-no-workspace" | "issue-workspace-on-M" | "issue-holds-zero"
-      | "with-code-on-M" | "frozen-retry-on-M" | "runtime-workspace-on-M" | "workspace-runtime-gone";
+      | "with-code-on-M" | "frozen-retry-on-M" | "runtime-workspace-on-M" | "runtime-workspace-on-U"
+      | "workspace-runtime-gone";
     type Pin = "none" | "agent-bound-M-legacy" | "task-pinned-M-legacy";
     type Devices = "unbound" | "bound-M" | "bound-M-legacy" | "bound-M-and-M-legacy";
 
     const SHAPES: Shape[] = [
       "chat", "issue-no-workspace", "issue-workspace-on-M", "issue-holds-zero",
-      "with-code-on-M", "frozen-retry-on-M", "runtime-workspace-on-M", "workspace-runtime-gone",
+      "with-code-on-M", "frozen-retry-on-M", "runtime-workspace-on-M", "runtime-workspace-on-U",
+      "workspace-runtime-gone",
     ];
     const PINS: Pin[] = ["none", "agent-bound-M-legacy", "task-pinned-M-legacy"];
     const DEVICES: Devices[] = ["unbound", "bound-M", "bound-M-legacy", "bound-M-and-M-legacy"];
@@ -824,9 +826,19 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         id: "rt_inv_settler", name: "settler", provider: "claude", workspaceId: "local",
         daemonId: "dev-inv-settler",
       });
-      if (dedicated) store.updateDaemonDedicated("local", M, true, "local");
+      store.updateDaemonDedicated("local", "dev-inv-settler", true, "local");
+      if (shape === "runtime-workspace-on-U") {
+        db!.run(
+          `INSERT INTO multiremi_daemon_profiles (workspace_id, daemon_id, display_name, dedicated, updated_at)
+           VALUES ('local', ?, 'U', ?, ?)`,
+          [U, dedicated ? 1 : 0, new Date().toISOString()],
+        );
+      } else if (dedicated) {
+        store.updateDaemonDedicated("local", M, true, "local");
+      }
 
-      const provider = pin === "agent-bound-M-legacy" || shape === "with-code-on-M" ? "codex" : "codex";
+      const provider = shape === "issue-workspace-on-M" && pin === "none" && devices === "bound-M"
+        ? "claude" : "codex";
       const agent = store.createAgent({
         name: `matrix ${shape}`, provider, workspaceId: "local",
         ...(pin === "agent-bound-M-legacy" ? { runtimeId: legacy.id } : {}),
@@ -892,10 +904,13 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         });
         // ON DELETE SET NULL, the state `deleteRuntimeWithinTransaction` leaves.
         db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issueId]);
-      } else if (shape === "runtime-workspace-on-M") {
+      } else if (shape === "runtime-workspace-on-M" || shape === "runtime-workspace-on-U") {
         const workspace = (store as unknown as {
           runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
         }).runtimeWorkspaces.create(codex.id, { name: `matrix ${label}`, root_path: "/tmp/matrix-rw" });
+        if (shape === "runtime-workspace-on-U") {
+          db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [U, workspace.id]);
+        }
         db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
       } else if (shape === "frozen-retry-on-M") {
         db!.run(
@@ -964,7 +979,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
           for (const devices of DEVICES) {
             // A Chat task has no Project, so the device columns collapse to the
             // "unbound" case and run once per dedicated flag.
-            if (shape === "chat" && devices !== "unbound") continue;
+            if ((shape === "chat" || shape === "runtime-workspace-on-U") && devices !== "unbound") continue;
             for (const dedicated of [false, true]) {
               cells++;
               const fixture = cell(shape, pin, devices, dedicated);
@@ -1003,7 +1018,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
               if (shape === "issue-workspace-on-M" && devices === "bound-M" && pin === "none") {
                 // A pin that conflicts with the workspace legitimately removes
                 // every candidate, so this holds only without one.
-                expectations.push([probed.includes(fixture.codexId),
+                expectations.push([probed.includes(fixture.claudeId),
                   `workspace on M + binding on M must admit M (probed ${JSON.stringify(probed)})`]);
               }
               if (shape === "issue-no-workspace" && pin === "none" && devices === "bound-M" && !dedicated) {
@@ -1055,44 +1070,35 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
                   fail(`(b) expected a device wait, got: ${reason}`);
                   continue;
                 }
-                // One name per MACHINE (the observer dedups by daemon); any
-                // registered Runtime on that daemon is a valid way to name it.
-                const daemonIds = [...new Set(placementCandidates
-                  .map((verdict) => verdict.daemonId)
-                  .filter((value): value is string => value != null))];
-                for (const daemonId of daemonIds) {
-                  // The observer dedups by DAEMON, so any Runtime registered on
-                  // that machine is a valid way to name it.
-                  const names = new Set<string>([daemonId]);
-                  for (const runtimeId of [...runtimeIds(fixture), "rt_inv_settler"]) {
-                    const runtime = fixture.store.getRuntime(runtimeId);
-                    if (!runtime) continue;
-                    if (runtime.daemonId === daemonId || runtime.legacyDaemonId === daemonId
-                      || runtime.id === daemonId) {
-                      if (runtime.daemonDisplayName) names.add(runtime.daemonDisplayName);
-                      if (runtime.name) names.add(runtime.name);
-                    }
-                  }
-                  if (![...names].some((name) => reason.includes(name))) {
-                    fail(`(b) no name for machine ${daemonId} (${[...names].join("/")}) in: ${reason}`);
-                  }
+                const expected = new Set(placementCandidates.map((verdict) => verdict.daemonId));
+                const listed = reason.match(/^等待项目设备：任务钉在 (.*?)（/)?.[1]?.split(" / ") ?? [];
+                const actual = new Set(listed.map((name) => {
+                  const matching = [...runtimeIds(fixture), "rt_inv_settler"]
+                    .map((id) => fixture.store.getRuntime(id))
+                    .find((runtime) => runtime && (runtime.daemonDisplayName === name || runtime.name === name));
+                  return matching?.daemonId ?? name;
+                }));
+                if (JSON.stringify([...actual].sort()) !== JSON.stringify([...expected].sort())) {
+                  fail(`(b) machine names ${JSON.stringify([...actual])} differ from placement ${JSON.stringify([...expected])}: ${reason}`);
                 }
                 continue;
               }
               // (c) nothing satisfies placement. Either the conflict text, or the
               // daemon fallback when every constraint names one unregistered machine.
-              if (reason !== null
-                && !reason.startsWith("等待任务落点：")
-                && !reason.startsWith("等待项目设备：")) {
-                fail(`(c) unexpected reason: ${reason}`);
+              if (shape === "runtime-workspace-on-U" && pin === "none") {
+                const expectedPrefix = dedicated ? "等待项目设备：" : null;
+                if (expectedPrefix ? !reason?.startsWith(expectedPrefix) : reason !== null) {
+                  fail(`(c) pure U expected ${expectedPrefix ?? "no reason"}, got: ${reason}`);
+                }
+              } else if (!reason?.startsWith("等待任务落点：")) {
+                fail(`(c) expected placement wait, got: ${reason}`);
               }
             }
           }
         }
       }
-      // 8 shapes x 3 pins x 4 device columns x 2 dedicated flags, minus the
-      // Chat rows that have no Project (3 pins x 3 extra device columns x 2).
-      expect(cells).toBe(8 * 3 * 4 * 2 - 3 * 3 * 2);
+      // Chat and explicit U workspaces use only the unbound device column.
+      expect(cells).toBe(9 * 3 * 4 * 2 - 2 * 3 * 3 * 2);
       expect(failures).toEqual([]);
     },
     { timeout: 120_000 });

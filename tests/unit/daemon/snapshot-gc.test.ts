@@ -134,8 +134,6 @@ describe("snapshot TTL GC", () => {
     const f = fixture();
     const blocked = f.tree("a-blocked", f.now - ttlMs - 1);
     const next = f.tree("b-next", f.now - ttlMs - 1);
-    const entries = readdirSync(dirname(blocked)).map((name) => join(dirname(blocked), name));
-    expect(new Set(entries)).toEqual(new Set([blocked, next]));
     let failNext = false;
     const errors: string[] = [];
     expect(await runSnapshotGcOnce({
@@ -152,9 +150,12 @@ describe("snapshot TTL GC", () => {
       },
       onError: (path) => errors.push(path),
     })).toEqual({ removed: 1, retained: 0, skipped: 1 });
-    expect(errors).toEqual([entries[0]]);
-    expect(existsSync(entries[0]!)).toBe(true);
-    expect(existsSync(entries[1]!)).toBe(false);
+    expect(errors).toHaveLength(1);
+    const failedPath = errors[0]!;
+    expect([blocked, next]).toContain(failedPath);
+    const removedPath = failedPath === blocked ? next : blocked;
+    expect(existsSync(failedPath)).toBe(true);
+    expect(existsSync(removedPath)).toBe(false);
   });
 
   it("aborts the sweep when the ownership fence keeps rejecting", async () => {
