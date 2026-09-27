@@ -32,10 +32,12 @@ import {
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
 import {
+  IssueTopicConfigError,
   readWorkspaceIssueTopics,
   readWorkspaceIssueTopicsForDelivery,
 } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
+import { createLogger } from "@shared/logger.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import {
   buildCardHeader,
@@ -85,6 +87,8 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+const log = createLogger("multiremi-store");
 
 /** How many ambiguous candidates travel to the reply card. */
 const MAX_STOP_CANDIDATES = 5;
@@ -1994,8 +1998,21 @@ export class FeishuBotRepo {
       const kind = cleanOptionalString(row.kind);
       let mention = parseOutboundMention(parseJson(row.mention_snapshot, null));
       if (supportsTaskStream && row.task_id && !row.mention_snapshot) {
-        const topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
-        if (topics.enabled && topics.chatId === row.chat_id) {
+        // An old relay row derives its @ here, and that read is the one place a
+        // stored config could still abort the whole heartbeat: the claim runs
+        // before any delivery in the same batch, so throwing here would strand
+        // every row behind it — including the text degradation of a request
+        // this workspace already accepted. Only an invalid config is tolerated;
+        // an unknown failure still propagates (MUL-407).
+        let topics: IssueTopicConfig | null = null;
+        try {
+          topics = readWorkspaceIssueTopics(this.ctx.workspaces().getWorkspace(workspaceId)?.settings ?? {});
+        } catch (error) {
+          if (!(error instanceof IssueTopicConfigError)) throw error;
+          // Never log the raw config: the unusable value is usually an open_id.
+          log.warn(`Feishu outbound claim: ignoring an invalid issueTopics config for ${workspaceId}`);
+        }
+        if (topics?.enabled && topics.chatId === row.chat_id) {
           mention = {
             mode: topics.notifyMode ?? "group_owner",
             ...(topics.notifyMode === "person" ? { openId: topics.notifyOpenId } : {}),

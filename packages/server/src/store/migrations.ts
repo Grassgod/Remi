@@ -4206,12 +4206,14 @@ function isPostgresDialect(db: SqlDatabase, explicit?: SqlDatabaseDialect): bool
   return resolveSqlDialect(db, explicit) === "postgres";
 }
 
-// A stranded copy is only ever left by an early version of this migration;
-// `origin/main` has never created this table (the name does not appear in that
-// revision). Both sides are therefore ours to reconcile, and a key collision
-// means the two versions genuinely disagree rather than that something expected
-// happened. The caller routes both the ordinary rebuild and the recovery through
-// `mergeHumanRequestPushTables`, so there is one code path to reason about.
+// A stranded copy is only ever left by an early version of this migration.
+// `origin/main` does create the live table (migrations.ts:2382), but it has never
+// created the `_legacy` one, so the two sides here are the same table at two
+// points in our own rebuild: the live copy and the copy a crashed run stranded.
+// A key collision therefore means the two versions genuinely disagree rather
+// than that something expected happened. The caller routes both the ordinary
+// rebuild and the recovery through `mergeHumanRequestPushTables`, so there is one
+// code path to reason about.
 
 function tableExists(db: SqlDatabase, table: string): boolean {
   return Boolean(db.query(

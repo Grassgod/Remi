@@ -183,17 +183,23 @@ written before that validation existed can still hold — is read leniently rath
 than throwing. Save-time validation is unchanged, and such a config degrades to
 the text delivery above instead of producing a request that reaches nobody.
 
-That leniency has to cover the runtime directive, not only the delivery writes.
-The directive is read on every heartbeat, before the outbound claim, so a strict
-read there answered 500 and the text delivery the same request had already queued
-never reached the host. The directive uses only `enabled` and `chatId`, so it
-reads the config the same forgiving way: a rejected `person` target, a missing
-field, a wrong type or a settings blob that is not JSON all leave the host running
-with an empty `no_mention_chat_ids` rather than failing the heartbeat. Two other
-readers stay strict on purpose and are outside this change: the inbound-message
-path (`submitMessage`) and the mention resolution inside the outbound claim. Both
-are `origin/main` behavior, and a config that reaches them has already been
-rejected at save time; the queue is where the outage actually showed up.
+That leniency has to cover every reader a daemon request runs through, not only
+the delivery writes. The directive is read on every heartbeat, before the
+outbound claim, so a strict read there answered 500 and the text delivery the
+same request had already queued never reached the host. The directive uses only
+`enabled` and `chatId`, so it reads the config the same forgiving way: a rejected
+`person` target, a missing field, a wrong type or a settings blob that is not JSON
+all leave the host running with an empty `no_mention_chat_ids` rather than
+failing the heartbeat. The claim derives the `@` for an older relay row (a Task
+id with no stored mention) from the same config, and that read sits ahead of every
+delivery in the batch: a rejection there stranded the whole queue, so it tolerates
+exactly `IssueTopicConfigError` — the old row goes out as plain text with no `@`,
+and the next row still ships. Any other failure still propagates.
+
+One reader stays strict on purpose and is outside this change: the
+inbound-message path (`submitMessage`). It is `origin/main` behavior, and a config
+that reaches it has already been rejected at save time; the queue is where the
+outage actually showed up.
 
 An expired request is never an approval: the terminal card reads
 「已超时，未回答」and the task takes the existing cancel path. The decision lanes

@@ -117,6 +117,62 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
     expect(store.claimFeishuBotOutbound(workspaceId, runtimeId, new Date(expiresAt - 10_000))).toBeNull();
   });
 
+  it("claims the older relay row and then the degraded card that follows it", () => {
+    // The fifth-round blocker on Postgres: the same two rows in one queue, the
+    // same claim that has to tolerate the stored config. The tolerance is one
+    // code path, but the row it claims and the settings blob it reads come from
+    // a different backend, so the behaviour is asserted here too.
+    const { workspaceId, agentId, runtimeId, issue, request: seededRequest } = scaffold();
+    // Clear the scaffold's own card so the queue starts empty.
+    const seeded = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
+    expect(seeded.humanRequestId).toBe(seededRequest.id);
+    store.reportFeishuBotOutbound(workspaceId, runtimeId, seeded.id, {
+      claimToken: seeded.claimToken, status: "sent", externalMessageId: "om_pg_seeded",
+    });
+    const binding = db.query(
+      `SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE workspace_id = ? AND issue_id = ?`,
+    ).get(workspaceId, issue.id) as { id: string };
+    // A relay row from before MUL-407: a real Task id, no mention snapshot. Its
+    // `created_at` predates the degradation, so the claim reaches it first.
+    const legacyTask = store.createTask({ agentId, issueId: issue.id, workspaceId, prompt: "Legacy relay" });
+    db.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id,
+         body, status, available_at, created_at, updated_at)
+       VALUES ('fbo_pg_legacy', ?, ?, ?, 'oc_pg', NULL, 'om_root', 'Legacy relay text',
+         'pending', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z')`,
+      [workspaceId, binding.id, legacyTask.id],
+    );
+    // The illegal `person` config, written straight into the database, then the
+    // request that must degrade to text behind the old row.
+    const workspace = store.getWorkspace(workspaceId)!;
+    store.updateWorkspace(workspaceId, {
+      settings: {
+        ...workspace.settings,
+        issueTopics: { enabled: true, chatId: "oc_pg", notifyMode: "person", notifyOpenId: "not-an-open-id" },
+      },
+    });
+    const task = store.createTask({ agentId, issueId: issue.id, workspaceId, prompt: "Degraded" });
+    const request = store.createTaskHumanRequest({
+      taskId: task.id, kind: "question", payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] },
+    });
+
+    // The claim tolerates the stored config instead of throwing, so the old row
+    // goes out first — with no @ invented from an unusable config.
+    const legacy = store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined, true, true, true)!;
+    expect(legacy.id).toBe("fbo_pg_legacy");
+    expect(legacy.body).toBe("Legacy relay text");
+    expect(legacy.mention).toBeUndefined();
+
+    // The degradation that was behind it is claimed next, as plain text.
+    const degraded = store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined, true, true, true)!;
+    expect(degraded.kind).toBe("decision_card");
+    expect(degraded.degraded).toBe("invalid_recipient");
+    expect(degraded.humanRequestId).toBe(request.id);
+    expect(degraded.body).not.toContain("<at id=");
+    expect(degraded.body).toContain("Continue?");
+  });
+
   it("lets exactly one of two concurrent claims take the delivery", async () => {
     const { workspaceId, runtimeId } = scaffold(60 * 60 * 1000);
     // A second, independent connection to the same database.

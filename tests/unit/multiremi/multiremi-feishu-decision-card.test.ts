@@ -22,7 +22,10 @@ import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { MultiremiDaemon } from "@multiremi/worker/daemon.js";
-import { sendDecisionLane as sendDecisionLaneForTest } from "../../../apps/remi/cli/multiremi.js";
+import {
+  controlPlaneConciergeHost,
+  sendDecisionLane as sendDecisionLaneForTest,
+} from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
@@ -865,10 +868,79 @@ describe("Feishu decision cards for Issue human requests", () => {
  * would look. QA's repro for the heartbeat 500 starts here.
  */
 function writeInvalidPersonTopicConfig(): void {
+  writePersonTopicConfig("not-an-open-id");
+}
+
+/** Write a `person` topic config straight into the database. */
+function writePersonTopicConfig(openId: string): void {
   const workspaceRow = db!.query("SELECT settings FROM multiremi_workspaces WHERE id = 'local'").get() as { settings: string };
   const settings = JSON.parse(workspaceRow.settings) as Record<string, unknown>;
-  settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "person", notifyOpenId: "not-an-open-id" };
+  settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "person", notifyOpenId: openId };
   db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+}
+
+/**
+ * A relay wake row from before MUL-407: a real Task id and no mention snapshot,
+ * which is what makes the claim derive its @ from the stored topic config.
+ */
+function queueLegacyRelayDelivery(store: MultiremiStore, agentId: string, issueId: string): { id: string; body: string; taskId: string } {
+  const taskId = sourceTask(store, agentId, issueId);
+  const id = "fbo_legacy_relay";
+  const body = "MUL-407 legacy relay text";
+  db!.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+      id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id,
+      body, status, available_at, created_at, updated_at)
+    VALUES (?, 'local', (SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE issue_id = ?),
+      ?, 'oc_decision_card', NULL, 'om_root', ?, 'pending', ?, ?, ?)`,
+  [id, issueId, taskId, body, "2000-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"]);
+  return { id, body, taskId };
+}
+
+/**
+ * The real concierge host over a recording channel, so a test can see which
+ * lane the host picked and what it put on the wire. Only the transport is
+ * replaced — the routing, the lane choice and the @ handling are production.
+ */
+function recordingConciergeHost(input: { daemon?: MultiremiDaemon }) {
+  const calls: string[] = [];
+  const sentCards: Array<Record<string, unknown>> = [];
+  const sentText: string[] = [];
+  let mentionOpenId: string | undefined;
+  const handle = {
+    appId: "cli_decision_card",
+    start: Promise.resolve(),
+    stop: async () => {},
+    publishBotMenu: async () => ({ dryRun: true, defaultPublished: false, userMenuCount: 0 }),
+    uploadImage: async () => ({ imageKey: "img" }),
+    sendProactiveCard: async (card: { card: Record<string, unknown> }) => {
+      calls.push("card:send");
+      sentCards.push(card.card);
+      return { messageId: "om_card" };
+    },
+    sendProactiveThreadReply: async (reply: { body: string }) => {
+      calls.push("text:send");
+      sentText.push(reply.body);
+      return { messageId: "om_text" };
+    },
+    updateProactiveCard: async () => { calls.push("card:patch"); },
+    sendProactiveAttachment: async () => ({ messageId: "om_att" }),
+    resolveProactiveMention: async () => "ou_the_person",
+    streamProactiveTask: async (
+      _chatId: string, _sessionKey: string, _stream: unknown, _meta: unknown,
+      options?: { mentionOpenId?: string },
+    ) => {
+      calls.push("task:stream");
+      mentionOpenId = options?.mentionOpenId;
+      return { messageId: "om_stream" };
+    },
+  } as unknown as FeishuChannelHandle;
+  const host = controlPlaneConciergeHost({
+    daemon: () => input.daemon,
+    workspacesRoot: () => "/tmp/workspaces",
+    current: () => handle,
+    attach: () => {},
+  });
+  return { host, calls, sentCards, sentText, mentionOpenId: () => mentionOpenId };
 }
 
 /**
@@ -1000,6 +1072,101 @@ describe("Feishu decision card heartbeat delivery", () => {
     })).toBe(true);
     expect(store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(1);
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+  });
+
+  it("delivers the older relay row and then the degradation when both are queued", async () => {
+    // QA's fifth-round repro, both shapes in one batch: a relay row from before
+    // MUL-407 (a Task id, no mention snapshot) sits at the head of the same
+    // host's queue, and the illegal `person` degradation is queued behind it.
+    // The claim no longer aborts on the stored config, so neither the old text
+    // nor the card that promises to degrade is stranded.
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const legacy = queueLegacyRelayDelivery(store, agentId, issue.id);
+    writeInvalidPersonTopicConfig();
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+
+    const first = await withRealClient(app, store, async (client) => {
+      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      expect(ack.status).toBe("ok");
+      return ack.pending_feishu_outbound!;
+    });
+    // The head is the old row, unchanged and with no @: an unusable config must
+    // not quietly attach a mention the operator never configured.
+    expect(first.id).toBe(legacy.id);
+    expect(first.body).toBe(legacy.body);
+    expect(first.kind).toBeUndefined();
+    expect(first.mention).toBeUndefined();
+
+    // The real host takes the relay lane for it (no card lane), so the text goes
+    // out exactly as it did before, minus the mention.
+    const relay = recordingConciergeHost({ daemon: decisionDaemon(store) });
+    await relay.host.sendOutbound!(first, {
+      signal: new AbortController().signal,
+      prepareMention: async openId => openId,
+      onStarted: async () => {},
+    });
+    expect(relay.calls).toEqual(["task:stream"]);
+    expect(relay.mentionOpenId()).toBeUndefined();
+
+    // The next heartbeat is the same request's text degradation.
+    const second = await withRealClient(app, store, async (client) => {
+      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      expect(ack.status).toBe("ok");
+      return ack.pending_feishu_outbound!;
+    });
+    expect(second.kind).toBe("decision_card");
+    expect(second.degraded).toBe("invalid_recipient");
+    expect(second.humanRequestId).toBe(request.id);
+    expect(second.body).toContain("Continue?");
+    expect(second.body).not.toContain("<at id=");
+
+    // Same real host: a degraded row is text, never a card and never a retry.
+    const receipts: Array<{ messageId: string; interactionOpenId?: string | null; degraded?: string | null }> = [];
+    await relay.host.sendOutbound!(second, {
+      signal: new AbortController().signal, onStarted: async () => {},
+      onDecisionSent: async receipt => { receipts.push(receipt); },
+    });
+    expect(relay.calls).toEqual(["task:stream", "text:send"]);
+    expect(relay.sentCards).toHaveLength(0);
+    expect(relay.sentText).toHaveLength(1);
+    expect(relay.sentText[0]).toContain("Continue?");
+    expect(relay.sentText[0]).not.toContain("<at id=");
+    expect(receipts).toEqual([{ messageId: "om_text", interactionOpenId: null, degraded: "invalid_recipient" }]);
+
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", second.id, {
+      claimToken: second.claimToken, status: "sent", externalMessageId: "om_text",
+      degraded: "invalid_recipient",
+    })).toBe(true);
+    expect(store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(1);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+  });
+
+  it("still attaches the @ to an older relay row when the stored config is valid", async () => {
+    // The control group for the tolerance above: the same older row, the same
+    // derivation, a config the save-time validation accepts — the mention is
+    // still resolved and used.
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const legacy = queueLegacyRelayDelivery(store, agentId, issue.id);
+    writePersonTopicConfig("ou_the_person");
+
+    const first = await withRealClient(app, store, async (client) => {
+      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      expect(ack.status).toBe("ok");
+      return ack.pending_feishu_outbound!;
+    });
+    expect(first.id).toBe(legacy.id);
+    expect(first.mention).toEqual({ mode: "person", openId: "ou_the_person" });
+
+    const relay = recordingConciergeHost({ daemon: decisionDaemon(store) });
+    await relay.host.sendOutbound!(first, {
+      signal: new AbortController().signal,
+      prepareMention: async openId => openId,
+      onStarted: async () => {},
+    });
+    expect(relay.calls).toEqual(["task:stream"]);
+    expect(relay.mentionOpenId()).toBe("ou_the_person");
   });
 
   it("does not 500 the heartbeat for a damaged topic config", async () => {
