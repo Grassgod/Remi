@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { ChevronLeft } from "lucide-react";
 import { useNavigation } from "../../navigation";
+import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
@@ -79,6 +80,7 @@ export function IssueDetail({
   const { t } = useT("issues");
   const id = issueId;
   const router = useNavigation();
+  const { pathname } = router;
   const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
 
@@ -233,6 +235,14 @@ export function IssueDetail({
   }, [id, clearSelection]);
 
   const loading = issueLoading;
+
+  // MUL-472 b: publish this route's main-content readiness. The body is the
+  // thing the user is waiting for, and it is mounted as soon as the detail
+  // query settles — success (found), empty (404 / deleted) and failure all
+  // count, so a broken detail page cannot hold the deferred shell chrome back
+  // forever. `pathname` rather than the issue id: this publisher belongs to the
+  // route visit, not to one issue inside it.
+  useRouteContentReady(pathname, !issueLoading);
 
   // Shared issue actions (mutations, pin, copy-link, modal dispatch, etc.).
   // Called before the `if (!issue)` early return so hook order stays stable.

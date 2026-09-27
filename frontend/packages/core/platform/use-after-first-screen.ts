@@ -293,6 +293,11 @@ export function resetAfterFirstScreenForTest(): void {
   contentFallbackMs = AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS;
 }
 
+/** Test-only: did a route publish that its main content settled? */
+export function isRouteContentReadyForTest(routeKey: string): boolean {
+  return gates.get(routeKey)?.contentReady === true;
+}
+
 /** Test-only: read the shell flag without mounting a consumer. */
 export function isShellGatePassedForTest(): boolean {
   return shellPassed;
