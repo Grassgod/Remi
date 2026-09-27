@@ -1388,15 +1388,20 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(store.getIssue(dependent.id)!.status).toBe("in_progress");
   });
 
-  it("keeps prerequisite completion successful when recording a skipped auto-start fails", () => {
+  it("keeps prerequisite completion successful when recording a skipped auto-start fails", async () => {
     const { store, prereq, dependent } = parkedChain("skip_write");
+    const app = createMultiremiApp({ store });
     const target = seams(store);
     const restoreRound = injectOnce(target.tasks, "createTaskWithinTransaction", () => true);
     const restoreSkip = injectOnce(target.ctx, "appendIssueActivity", (args) =>
       (args[1] as { type?: string })?.type === "dependency_auto_start_skipped");
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(() => store.updateIssue(prereq.id, { status: "done" })).not.toThrow();
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
       expect(store.getIssue(prereq.id)!.status).toBe("done");
       expect(store.getIssue(dependent.id)!.status).toBe("backlog");
       expect(allTaskRows(store, dependent.id)).toEqual([]);
