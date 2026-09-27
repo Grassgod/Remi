@@ -141,6 +141,12 @@ export function ChatWindow({
   );
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
+  // MUL-472 b: while the floating window is minimised (the FAB is showing, so
+  // the conversation is not on screen) this component must not preload the
+  // session list, the message page, the pending task or the mention recents.
+  // Only `enabled` gates are added; the window structure is untouched so the
+  // MUL-403 branch can keep merging main. The chat *page* is always visible.
+  const chatVisible = isPage || isOpen;
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
@@ -151,7 +157,7 @@ export function ChatWindow({
     isLoading: sessionsLoading,
     isError: sessionsError,
     refetch: refetchSessions,
-  } = useQuery(chatSessionsOptions(wsId));
+  } = useQuery(chatSessionsOptions(wsId, "all", { enabled: chatVisible }));
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -160,7 +166,9 @@ export function ChatWindow({
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(chatMessagesPageOptions(activeSessionId ?? ""));
+  } = useInfiniteQuery(
+    chatMessagesPageOptions(activeSessionId ?? "", undefined, { enabled: chatVisible }),
+  );
   // When no active session, always show empty — don't use stale cache.
   // Page 0 contains the latest chronological window; later cursor pages are
   // older chronological windows. Reverse pages so older fetched pages render
@@ -187,7 +195,7 @@ export function ChatWindow({
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
   const { data: pendingTask } = useQuery(
-    pendingChatTaskOptions(activeSessionId ?? ""),
+    pendingChatTaskOptions(activeSessionId ?? "", { enabled: chatVisible }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
   useChatScopeSubscription(activeSessionId, !!activeSessionId);
@@ -601,7 +609,7 @@ export function ChatWindow({
     pointerEvents: isOpen ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId);
+  const contextItems = useChatContextItems(wsId, chatVisible);
 
   const conversation = (
     <>

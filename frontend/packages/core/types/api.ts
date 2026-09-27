@@ -61,6 +61,12 @@ export interface ListIssuesParams {
   offset?: number;
   workspace_id?: string;
   status?: IssueStatus;
+  /**
+   * Comma list form of `status` (MUL-472 c). `GET /api/issues` has always read
+   * `statuses` and `status` through the same splitter; this only exposes the
+   * list form to callers that want one request for several statuses.
+   */
+  statuses?: IssueStatus[];
   priority?: IssuePriority;
   assignee_id?: string;
   assignee_ids?: string[];

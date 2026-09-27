@@ -25,10 +25,15 @@ export const agentRunCountsKeys = {
 // The 30s staleTime is a safety net only; the primary freshness signal is
 // WS task events, coalesced over a short window to avoid refetch storms.
 // Without WS, presence still updates within 30s on focus / mount.
-export function agentTaskSnapshotOptions(wsId: string) {
+export function agentTaskSnapshotOptions(
+  wsId: string,
+  /** `false` keeps a cached snapshot usable while deferring the fetch (MUL-472 b). */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: agentTaskSnapshotKeys.list(wsId),
     queryFn: () => api.getAgentTaskSnapshot(),
+    enabled: options.enabled ?? true,
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,

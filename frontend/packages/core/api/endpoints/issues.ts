@@ -37,6 +37,7 @@ export class IssuesEndpoints {
     if (params?.offset) search.set("offset", String(params.offset));
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.status) search.set("status", params.status);
+    if (params?.statuses?.length) search.set("statuses", params.statuses.join(","));
     if (params?.priority) search.set("priority", params.priority);
     if (params?.assignee_id) search.set("assignee_id", params.assignee_id);
     if (params?.assignee_ids?.length) search.set("assignee_ids", params.assignee_ids.join(","));

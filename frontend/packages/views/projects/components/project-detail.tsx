@@ -26,6 +26,7 @@ import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useModalStore } from "@multiremi/core/modals";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useRecentContextStore } from "@multiremi/core/chat";
 import { useWorkspacePaths } from "@multiremi/core/paths";
@@ -134,7 +135,10 @@ function ProjectIssuesContent({
   const labelFilters = useViewStore((s) => s.labelFilters);
   const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
 
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const afterFirstScreen = useAfterFirstScreen();
+  const { data: snapshot = [] } = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
     for (const task of snapshot) {
@@ -167,7 +171,9 @@ function ProjectIssuesContent({
     [assigneeGroups, agentRunningFilter, runningIssueIds],
   );
 
-  const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = new Map() } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)

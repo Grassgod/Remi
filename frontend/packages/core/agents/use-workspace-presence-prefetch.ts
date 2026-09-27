@@ -21,9 +21,19 @@ import { agentTaskSnapshotOptions } from "./queries";
 // wiring here. The workspace-scoped layouts on both apps gate rendering on
 // "workspace resolved", so callers can safely pass useWorkspaceId() — by the
 // time this hook mounts, wsId is guaranteed non-empty.
-export function useWorkspacePresencePrefetch(wsId: string | undefined): void {
-  useQuery({ ...agentListOptions(wsId ?? ""), enabled: !!wsId });
+export function useWorkspacePresencePrefetch(
+  wsId: string | undefined,
+  /**
+   * MUL-472 b / MUL-383 A5: `false` while the route is still inside its first
+   * screen. `runtimes` is the exception — the sidebar's runtime indicator reads
+   * it and it is not part of the deferred set, so it keeps its normal
+   * lifecycle. The other three are exactly the "shell requests every page
+   * pays for" the plan moves behind `useAfterFirstScreen()`.
+   */
+  warmChildSurfaces = true,
+): void {
+  useQuery({ ...agentListOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
   useQuery({ ...runtimeListOptions(wsId ?? ""), enabled: !!wsId });
-  useQuery({ ...agentTaskSnapshotOptions(wsId ?? ""), enabled: !!wsId });
-  useQuery({ ...squadListOptions(wsId ?? ""), enabled: !!wsId });
+  useQuery({ ...agentTaskSnapshotOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
+  useQuery({ ...squadListOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
 }

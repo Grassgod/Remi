@@ -137,10 +137,16 @@ export function pendingChatTasksRefetchInterval(query: {
     : false;
 }
 
-export function chatSessionsOptions(wsId: string, status: "all" | "active" | "archived" = "all") {
+export function chatSessionsOptions(
+  wsId: string,
+  status: "all" | "active" | "archived" = "all",
+  /** MUL-472 b: the minimised chat window keeps cached sessions but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.sessionList(wsId, status),
     queryFn: () => api.listChatSessions({ status }),
+    enabled: options.enabled ?? true,
     staleTime: Infinity,
   });
 }
@@ -163,7 +169,12 @@ export function chatMessagesOptions(sessionId: string) {
   });
 }
 
-export function chatMessagesPageOptions(sessionId: string, limit = 50) {
+export function chatMessagesPageOptions(
+  sessionId: string,
+  limit = 50,
+  /** MUL-472 b: the minimised chat window keeps cached pages but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return infiniteQueryOptions({
     queryKey: chatKeys.messagesPage(sessionId),
     queryFn: ({ pageParam }) =>
@@ -171,7 +182,7 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
     initialPageParam: null as { created_at: string; id: string } | null,
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
-    enabled: !!sessionId,
+    enabled: !!sessionId && (options.enabled ?? true),
     staleTime: Infinity,
   });
 }
@@ -183,11 +194,15 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
  * poll reconciles missed WS events so the UI cannot stay queued forever after
  * the server has already completed the task.
  */
-export function pendingChatTaskOptions(sessionId: string) {
+export function pendingChatTaskOptions(
+  sessionId: string,
+  /** MUL-472 b: the minimised chat window keeps the cached task but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.pendingTask(sessionId),
     queryFn: () => api.getPendingChatTask(sessionId),
-    enabled: !!sessionId,
+    enabled: !!sessionId && (options.enabled ?? true),
     refetchInterval: pendingChatTaskRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: Infinity,
@@ -223,10 +238,15 @@ export function taskMessagesOptions(taskId: string) {
  * Drives the FAB "running" indicator while the chat window is minimised —
  * no per-session query is active then, so we need this roll-up.
  */
-export function pendingChatTasksOptions(wsId: string) {
+export function pendingChatTasksOptions(
+  wsId: string,
+  /** MUL-472 b: the FAB keeps reading a cached roll-up while the window is closed. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.pendingTasks(wsId),
     queryFn: () => api.listPendingChatTasks(),
+    enabled: options.enabled ?? true,
     refetchInterval: pendingChatTasksRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: Infinity,

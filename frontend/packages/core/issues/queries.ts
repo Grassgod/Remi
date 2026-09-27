@@ -514,10 +514,15 @@ export function issueWorkspaceOptions(issueId: string) {
   });
 }
 
-export function childIssueProgressOptions(wsId: string) {
+export function childIssueProgressOptions(
+  wsId: string,
+  /** `false` defers the roll-up; the list renders without the ring until then (MUL-472 b). */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: issueKeys.childProgress(wsId),
     queryFn: () => api.getChildIssueProgress(),
+    enabled: options.enabled ?? true,
     select: (data) => {
       const map = new Map<string, { done: number; total: number }>();
       for (const entry of data.progress) {

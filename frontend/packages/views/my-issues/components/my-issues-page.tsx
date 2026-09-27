@@ -22,6 +22,7 @@ import { myIssueAssigneeGroupsOptions, myIssueListOptions, childIssueProgressOpt
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { myIssuesViewStore } from "@multiremi/core/issues/stores/my-issues-view-store";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { MyIssuesHeader } from "./my-issues-header";
@@ -51,7 +52,11 @@ export function MyIssuesPage() {
   // See issues-page.tsx for the rationale — derive a workspace-wide set
   // of issue ids with at least one running task, drive the "agents
   // working" quick-filter from it.
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  // MUL-472 b: see issues-page.tsx — workspace roll-ups wait for the first screen.
+  const afterFirstScreen = useAfterFirstScreen();
+  const { data: snapshot = [] } = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
     for (const t of snapshot) {
@@ -162,7 +167,9 @@ export function MyIssuesPage() {
     [myIssues, priorityFilters, agentRunningFilter, runningIssueIds],
   );
 
-  const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = new Map() } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)

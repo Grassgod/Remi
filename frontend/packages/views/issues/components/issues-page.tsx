@@ -22,6 +22,7 @@ import {
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { PageHeader } from "../../layout/page-header";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
@@ -67,7 +68,14 @@ export function IssuesPage() {
   // filter pure and lets the snapshot stay cached at one workspace-
   // scoped place — every issue card already subscribes for its own
   // indicator, so this is a no-op extra fetch.
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  // MUL-472 b: both of these are roll-ups over the workspace, not the page's
+  // own list request. They wait for the route's first content commit, so the
+  // first screen goes out without them; the board still renders, just without
+  // the running-agent dots and sub-issue rings for that first moment.
+  const afterFirstScreen = useAfterFirstScreen();
+  const { data: snapshot = [] } = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
     for (const t of snapshot) {
@@ -152,7 +160,9 @@ export function IssuesPage() {
 
   // Fetch sub-issue progress from the backend so counts are accurate
   // regardless of client-side pagination or filtering of done issues.
-  const { data: childProgressMap = EMPTY_CHILD_PROGRESS } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = EMPTY_CHILD_PROGRESS } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)
