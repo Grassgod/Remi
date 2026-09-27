@@ -1337,6 +1337,12 @@ export interface MultiremiIssueDecisionEntry {
   /** Original payload for the existing human-request cards. */
   payload?: Record<string, unknown>;
   answer: MultiremiIssueDecisionAnswer | null;
+  /**
+   * Every answer in chronological order, oldest first. Present on `decision`
+   * entries (and `[]` when never answered) so a member revision does not hide
+   * the owner's original call; human-request entries omit the key.
+   */
+  history?: MultiremiIssueDecisionAnswer[];
   createdAt: string;
   updatedAt: string;
 }

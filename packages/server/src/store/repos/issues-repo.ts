@@ -221,6 +221,8 @@ const DECISION_KINDS = new Set<MultiremiIssueDecisionKind>(["permission", "merge
 const DECISION_KIND_ORDER: Record<MultiremiIssueDecisionKind, number> = {
   permission: 0, merge: 1, production_change: 2, question: 3, criteria: 4, other: 5,
 };
+/** "Recently answered" window for the parent page; applied in SQL by answered_at. */
+const DECISION_ANSWERED_LIMIT = 50;
 
 export class IssueDecisionError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
@@ -337,9 +339,17 @@ export class IssuesRepo {
   }
 
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
-    const decisions = (this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_decisions WHERE issue_id = ? AND status != 'withdrawn' ORDER BY created_at DESC, id DESC",
-    ).all(issueId) as Row[]).map(toIssueDecision);
+    // Each bucket is queried by status so the "recently answered" window is
+    // applied in SQL. QA round 1: slicing an all-statuses list by created_at
+    // dropped just-answered old rows; the window must follow answered_at.
+    const open = (status: "pending" | "escalated") => (this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE issue_id = ? AND status = ? ORDER BY created_at DESC, id DESC",
+    ).all(issueId, status) as Row[]).map(toIssueDecision);
+    const answered = (this.ctx.db.query(
+      `SELECT * FROM multiremi_issue_decisions
+       WHERE issue_id = ? AND status = 'answered'
+       ORDER BY answered_at DESC NULLS LAST, id DESC LIMIT ?`,
+    ).all(issueId, DECISION_ANSWERED_LIMIT) as Row[]).map(toIssueDecision);
     const requests = this.ctx.db.query(
       `SELECT h.id, h.kind, h.payload, h.status, h.created_at, t.issue_id, t.id AS task_id
        FROM multiremi_task_human_requests h
@@ -347,8 +357,7 @@ export class IssuesRepo {
        JOIN multiremi_issues i ON i.id = t.issue_id
        WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)`,
     ).all(issueId, issueId) as Row[];
-    const waiting_on_human: MultiremiIssueDecisionEntry[] = decisions
-      .filter((decision) => decision.status === "escalated")
+    const waiting_on_human: MultiremiIssueDecisionEntry[] = open("escalated")
       .map((decision) => decisionEntry(decision, "waiting_on_human"));
     for (const row of requests) {
       const payload = parseJson<Record<string, unknown>>(nullableString(row.payload), {});
@@ -362,12 +371,11 @@ export class IssuesRepo {
         createdAt: String(row.created_at), updatedAt: String(row.created_at),
       });
     }
-    const pending_owner = decisions.filter((decision) => decision.status === "pending")
+    const pending_owner = open("pending")
       .map((decision) => decisionEntry(decision, "pending_owner"));
-    const answered = decisions.filter((decision) => decision.status === "answered")
-      .slice(0, 50).map((decision) => decisionEntry(decision, "answered"));
-    for (const group of [waiting_on_human, pending_owner, answered]) group.sort(compareDecisionEntries);
-    return { waiting_on_human, owner_and_answered: { pending: pending_owner, answered }, count: waiting_on_human.length };
+    const answered_entries = answered.map((decision) => decisionEntry(decision, "answered"));
+    for (const group of [waiting_on_human, pending_owner, answered_entries]) group.sort(compareDecisionEntries);
+    return { waiting_on_human, owner_and_answered: { pending: pending_owner, answered: answered_entries }, count: waiting_on_human.length };
   }
 
   createIssueDecision(sourceIssueId: string, input: CreateIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
@@ -557,11 +565,24 @@ export class IssuesRepo {
 
   private notifyDecisionRequested(parent: MultiremiIssue, decision: MultiremiIssueDecision, events: CommitEventQueue): void {
     const recipients = new Set<string>();
-    if (parent.assigneeType === "member" && parent.assigneeId) recipients.add(parent.assigneeId);
-    const owner = this.decisionOwner(parent);
-    if (owner?.ownerId) recipients.add(owner.ownerId);
+    // Only members that actually resolve in this workspace count as an
+    // audience: an unresolvable `owner_id`, a member of another workspace or an
+    // archived subscriber must not swallow the escalation.
+    const add = (id: string | null | undefined) => {
+      const member = id ? this.ctx.resolveWorkspaceMemberForNotification(parent.workspaceId, id) : null;
+      if (member && !member.archivedAt) recipients.add(member.id);
+    };
+    if (parent.assigneeType === "member") add(parent.assigneeId);
+    add(this.decisionOwner(parent)?.ownerId);
     for (const subscriber of this.listIssueSubscribers(parent.id)) {
-      if (subscriber.userType === "member") recipients.add(subscriber.userId);
+      if (subscriber.userType === "member") add(subscriber.userId);
+    }
+    // QA round 1: an escalated decision whose explicit audience resolves to
+    // nobody reached no inbox at all, so it silently left the human queue. Fall
+    // back to the issue creator, then to the workspace owners (a workspace
+    // always keeps at least one owner).
+    if (recipients.size === 0) {
+      for (const memberId of this.decisionFallbackRecipients(parent)) recipients.add(memberId);
     }
     for (const memberId of recipients) {
       const item = this.ctx.createInboxItem({
@@ -573,6 +594,24 @@ export class IssuesRepo {
         type: "inbox:new", workspaceId: parent.workspaceId, actorType: "system", payload: { item },
       });
     }
+  }
+
+  /**
+   * Fallback audience for an escalated decision nobody explicit owns: the
+   * Issue creator when it resolves to a live member of this workspace, else
+   * every workspace owner. Returns at most one group so the first hit wins.
+   */
+  private decisionFallbackRecipients(parent: MultiremiIssue): string[] {
+    const workspaces = this.ctx.workspaces();
+    const createdBy = parent.createdBy;
+    if (createdBy) {
+      // Same resolution as createIssue: an agent or unknown id resolves to null.
+      const creator = workspaces.getWorkspaceMember(createdBy) ?? workspaces.findWorkspaceMemberForUser(createdBy, parent.workspaceId);
+      if (creator && creator.workspaceId === parent.workspaceId && !creator.archivedAt) return [creator.id];
+    }
+    return workspaces.listWorkspaceMembers(parent.workspaceId)
+      .filter((member) => member.role === "owner" && !member.archivedAt)
+      .map((member) => member.id);
   }
 
   createIssue(input: CreateIssueInput): MultiremiIssue {
@@ -4616,6 +4655,9 @@ function decisionEntry(decision: MultiremiIssueDecision, bucket: MultiremiIssueD
     body: decision.body, status: decision.status, issueId: decision.issueId,
     sourceIssueId: decision.sourceIssueId, sourceTaskId: decision.sourceTaskId,
     options: decision.options, answer: decision.answer,
+    // MUL-414 (S7) renders "the owner already decided" from the whole trail, so
+    // the entry carries every answer. Human requests have no such trail.
+    history: decision.history,
     createdAt: decision.createdAt, updatedAt: decision.updatedAt,
   };
 }

@@ -15005,7 +15005,49 @@
         ],
         "owner_and_answered": {
           "pending": [],
-          "answered": []
+          "answered": [
+            {
+              "id": "dcs_snapshot",
+              "bucket": "answered",
+              "type": "decision",
+              "kind": "merge",
+              "title": "Snapshot merge decision",
+              "body": "Snapshot decision body",
+              "status": "answered",
+              "issueId": "iss_snapshot",
+              "sourceIssueId": "iss_snapshot",
+              "sourceTaskId": "tsk_snapshot",
+              "options": null,
+              "answer": {
+                "answererType": "member",
+                "answererId": "mem_snapshot_one",
+                "answer": "Hold for QA",
+                "reason": "Human review",
+                "overturn": null,
+                "answeredAt": "<timestamp>"
+              },
+              "history": [
+                {
+                  "answererType": "agent",
+                  "answererId": "agt_snapshot",
+                  "answer": "Merge after CI",
+                  "reason": "Checks passed",
+                  "overturn": "A member can reverse this if QA fails",
+                  "answeredAt": "<timestamp>"
+                },
+                {
+                  "answererType": "member",
+                  "answererId": "mem_snapshot_one",
+                  "answer": "Hold for QA",
+                  "reason": "Human review",
+                  "overturn": null,
+                  "answeredAt": "<timestamp>"
+                }
+              ],
+              "createdAt": "<timestamp>",
+              "updatedAt": "<timestamp>"
+            }
+          ]
         },
         "count": 1
       }
