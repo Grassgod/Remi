@@ -17,7 +17,7 @@ const TEST_BUDGET_MS = 600;
 const AUTHORIZATION = { Authorization: "Bearer root-secret" };
 const WIKI_ROOT = "/api/workspaces/local/repos/repo_deadline/wiki";
 
-type HangRule = (call: { op: string }) => boolean;
+type HangRule = (call: { op: string; uri: string }) => boolean;
 
 /** In-memory OpenViking HTTP API covering the repository-wiki calls; any call can be made to hang. */
 class FakeOpenVikingHttp {
@@ -26,6 +26,8 @@ class FakeOpenVikingHttp {
   hang: HangRule = () => false;
   /** Reads answered with a retryable 503 before the next one succeeds. */
   failReads = 0;
+  /** Reads for these URIs answer OpenViking's `TIMEOUT` code. */
+  readonly timeoutReadUris = new Set<string>();
   /** Per-read latency once the fixture is published; models the 209 read floor. */
   readDelayMs = 0;
   private commits = 0;
@@ -43,7 +45,7 @@ class FakeOpenVikingHttp {
       this.maxActiveReads = Math.max(this.maxActiveReads, this.activeReads);
     }
     try {
-      if (this.hang({ op })) {
+      if (this.hang({ op, uri: url.searchParams.get("uri") ?? "" })) {
         const signal = init!.signal!;
         return await new Promise<Response>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
       }
@@ -70,6 +72,9 @@ class FakeOpenVikingHttp {
       case "GET /api/v1/fs/stat":
         return this.files.has(uri) ? ok({ uri }) : notFound();
       case "GET /api/v1/content/read":
+        if (this.timeoutReadUris.has(uri)) {
+          return Response.json({ status: "error", error: { code: "TIMEOUT", message: "OpenViking request timed out" } }, { status: 504 });
+        }
         if (this.failReads > 0) {
           this.failReads--;
           return Response.json({ status: "error", error: { message: "busy" } }, { status: 503 });
@@ -169,7 +174,7 @@ async function setup(options: {
     ...init,
     headers: { ...AUTHORIZATION, ...(init.headers as Record<string, string> | undefined) },
   });
-  return { store, openviking, docs, app, request, budgets };
+  return { store, openviking, repositoryWiki, docs, app, request, budgets };
 }
 
 /** Runs `action` with console.log captured and returns the `openviking_request_timeout` lines it wrote. */
@@ -403,6 +408,43 @@ describe("repository wiki reads under an OpenViking request deadline", () => {
       expect(await response.json()).toEqual({ error: "OpenViking did not respond in time", code: "TIMEOUT" });
     }
     expect(lines).toHaveLength(2);
+  });
+
+  it("degrades a timing-out page in a deadline-less list instead of failing the call", async () => {
+    const { store, openviking, repositoryWiki, docs } = await setup({ pages: 3, maxRetries: 0 });
+    openviking.timeoutReadUris.add(docs[1]!.contentUri!);
+    // No request deadline: claim hydration and migration callers keep the tolerant
+    // behaviour, so the call resolves with exactly the failing page degraded.
+    const { result: listed, lines } = await captureTimeoutLogs(() => repositoryWiki.list("local", "repo_deadline"));
+    expect(listed.map((doc) => doc.id).sort()).toEqual(docs.map((doc) => doc.id).sort());
+    // The public doc type does not carry the tolerant marker; assert the runtime shape.
+    const tolerant = listed as Array<(typeof listed)[number] & { bodyUnavailable?: boolean }>;
+    const degraded = tolerant.filter((doc) => doc.bodyUnavailable === true);
+    expect(degraded.map((doc) => doc.id)).toEqual([docs[1]!.id]);
+    expect(degraded[0]!.body).toBe("");
+    expect(listed.find((doc) => doc.id === docs[0]!.id)!.body).toBe("Body 0");
+    expect(listed.find((doc) => doc.id === docs[2]!.id)!.body).toBe("Body 2");
+    expect(lines).toHaveLength(0);
+  });
+
+  it("skips a timing-out unrelated page so a batch write still succeeds", async () => {
+    const { store, openviking, repositoryWiki, docs } = await setup({ pages: 3, maxRetries: 0 });
+    const writable = docs[0]!;
+    const unrelated = docs[1]!;
+    openviking.timeoutReadUris.add(unrelated.contentUri!);
+    // The unrelated page cannot be hydrated, but it must not block the edit: only the
+    // pages the batch actually mutates stay strict.
+    const { result: written, lines } = await captureTimeoutLogs(() => repositoryWiki.applyBatch("local", "repo_deadline", [{
+      kind: "update" as const,
+      ref: writable.id,
+      input: { title: "Renamed", expectedVersion: writable.version, expected_version: writable.version },
+    }]));
+    expect(written).toHaveLength(1);
+    expect(written[0]!.doc).toMatchObject({ id: writable.id, title: "Renamed" });
+    expect(lines).toHaveLength(0);
+    // The unrelated identity survives the write; only its body was unavailable.
+    const after = store.getRepositoryWikiDocByRef("local", "repo_deadline", unrelated.id)!;
+    expect(after).toMatchObject({ id: unrelated.id, title: unrelated.title, version: unrelated.version });
   });
 
   it("serves single-page and include_body reads normally when OpenViking is healthy", async () => {
