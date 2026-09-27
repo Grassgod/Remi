@@ -28,13 +28,16 @@ Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex 
 - `[features] default_mode_request_user_input = true` 仍能打开 Default 模式下的同步 `request_user_input`。该开关在 Codex 里标记为 "under development"、默认关闭，Remi 在 `packages/daemon/src/agent-runtime/relay-sync.ts` 的 `mergeCodexSessionConfig` 里为每个会话 Home 补齐；`remi runtime prepare` 安装 bundle 后用真实执行文件确认（先只写一个含开关的临时 Home，再读开关状态）：
 
   ```bash
-  export TMP_CODEX_HOME=$(mktemp -d)
+  # 在仓库根目录执行；bundle 目录名由 runtime-versions.json 的 codex 三段版本组成。
+  CODEX_VERSIONS=$(bun -p 'const c=require("./packages/acp/src/runtime-versions.json").codex; `${c.acp}-${c.sdk}-${c.executable}`')
+  CODEX_BIN="${REMI_HOME:-$HOME/.remi}/acp/bundles/codex-$CODEX_VERSIONS/node_modules/.bin/codex"
+  TMP_CODEX_HOME=$(mktemp -d)
   printf '[features]\ndefault_mode_request_user_input = true\n' > "$TMP_CODEX_HOME/config.toml"
-  CODEX_HOME="$TMP_CODEX_HOME" <bundle>/node_modules/.bin/codex features list | grep default_mode_request_user_input
+  CODEX_HOME="$TMP_CODEX_HOME" "$CODEX_BIN" features list | grep default_mode_request_user_input
   # 期望：default_mode_request_user_input          under development  true
   ```
 
-  不写 config.toml 时同一命令输出 `false`，据此确认开关确实由 Remi 写入而非 Codex 默认开启。`<bundle>` 为 `${REMI_HOME:-~/.remi}/acp/bundles/codex-<bridge>-<sdk>-<executable>/`；本项在 codex-acp 1.13.1 + Codex 0.157.1 上实测通过（2026-09-27）。
+  删掉临时 Home 里的 config.toml 后，同一命令输出 `false`，据此确认开关由 Remi 写入，而非 Codex 默认开启。本项在 codex-acp 1.13.1 + Codex 0.157.1 上实测通过（2026-09-27）。
 - Default 模式下提问仍能走到 form elicitation：codex agent 调用同步 `request_user_input` 后，客户端应收到 `elicitation/create`（`mode: "form"`）而不是 "unavailable in Default mode" 错误。`packages/acp/src/client.ts` 声明 `elicitation: { form: {} }`；表单字段布局见 `packages/contracts/src/acp-elicitation.ts`。
 - 表单布局版本判定仍然成立：codex-acp 1.11 用 `<id>__other` + `_meta.codex.isOtherAnswer`，1.12 起改为 `<id>_note` + `_meta.codex.role = "user_note"`，并把问题正文放在 `title`、短标题放在 `description`。`buildUserInputRequest` / `convertUserInputResponse` 的行号注释需要一起更新。
 
