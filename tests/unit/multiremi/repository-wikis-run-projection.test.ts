@@ -446,6 +446,54 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
     expect(docsStatement).not.toMatch(/SELECT \*/);
   });
 
+  it("skips schedule-only runs that no compilation row references, without changing the counters", async () => {
+    const { store, sql, raw } = createRecordingStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: REPOSITORY_ID, name: "Projection", url: "https://github.com/acme/projection.git", source: "github" },
+    ]);
+    const { autopilot } = configureRepositoryWikiAutomation(store);
+
+    // A schedule-only run that nothing references: the loop below always skipped
+    // it, so the statement must not ship it any more.
+    const orphan = store.runAutopilot(autopilot.id, { source: "manual" });
+    raw.run(
+      `UPDATE multiremi_autopilot_runs SET schedule_target = ?, repository_id = NULL,
+         status = 'completed', completed_at = ? WHERE id = ?`,
+      [JSON.stringify({ kind: "repository", id: REPOSITORY_ID }), "2026-09-18T00:00:00.000Z", orphan.id],
+    );
+    // A schedule-only run WITH a repository-scoped compilation record: the loop
+    // does consume it, so it must stay in the result set.
+    const referenced = store.runAutopilot(autopilot.id, { source: "manual" });
+    raw.run(
+      `UPDATE multiremi_autopilot_runs SET schedule_target = ?, repository_id = NULL,
+         status = 'completed', completed_at = ? WHERE id = ?`,
+      [JSON.stringify({ kind: "repository", id: REPOSITORY_ID }), "2026-09-19T00:00:00.000Z", referenced.id],
+    );
+    raw.run(
+      `INSERT INTO multiremi_knowledge_compilation_runs (
+         id, workspace_id, project_id, repository_id, task_id, agent_id, autopilot_run_id,
+         mode, status, result_summary, dedupe_key, created_at, completed_at
+       ) VALUES (?, 'local', NULL, ?, NULL, NULL, ?, 'incremental_update', 'published', 'Published', NULL, ?, ?)`,
+      "krun_a2_schedule_only", REPOSITORY_ID, referenced.id,
+      "2026-09-20T00:00:00.000Z", "2026-09-20T00:00:00.000Z",
+    );
+    sql.length = 0;
+
+    const observability = store.repositoryWikiObservability("local");
+    expect(observability[REPOSITORY_ID]).toMatchObject({ builds_since_publish: 1, consecutive_blocked: 0 });
+    // A schedule-only run carries no task, so it contributes nothing to
+    // `latest_completed_outcome`; the referenced run still counts a build.
+    expect(observability[REPOSITORY_ID]!.latest_completed_outcome).toBeNull();
+
+    const statement = sql.map((entry) => entry.replace(/\s+/g, " ").trim())
+      .find((entry) => /^SELECT r\.id, r\.repository_id, r\.schedule_target, r\.task_id, r\.completed_at, r\.created_at/.test(entry));
+    expect(statement, `no observability statement in: ${sql.join(" | ")}`).toBeDefined();
+    // The row-reduction predicate: schedule-only runs only survive when a
+    // repository-scoped compilation row references them.
+    expect(statement).toMatch(/r\.schedule_target IS NOT NULL AND EXISTS \(\s*SELECT 1 FROM multiremi_knowledge_compilation_runs k WHERE k\.autopilot_run_id = r\.id AND k\.repository_id IS NOT NULL AND k\.workspace_id = \?\)\)\)/);
+  });
+
   it("ranks runs in SQL so only the latest row per repository crosses the bridge", async () => {
     const { store, autopilot } = fixture();
     // Two runs for one repository: only the newer one may come back, and the
@@ -474,8 +522,11 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
       `INSERT INTO multiremi_autopilot_runs (
          id, autopilot_id, source, status, repository_id, dedupe_key, triggered_at, completed_at, payload, result, created_at
        ) VALUES (?, ?, 'scm_event', 'running', ?, ?, ?, NULL, ?, NULL, ?)`,
-      "run_a2_active", autopilot.id, REPOSITORY_ID,
-      `${REPOSITORY_ID}:incremental_update:active`, createdAt, JSON.stringify({ data: { merge_sha: "active" } }), createdAt,
+      [
+        "run_a2_active", autopilot.id, REPOSITORY_ID,
+        `${REPOSITORY_ID}:incremental_update:active`, createdAt,
+        JSON.stringify({ data: { merge_sha: "active" } }), createdAt,
+      ],
     );
 
     const runs = store.listLatestRepositoryAutopilotRuns("local");

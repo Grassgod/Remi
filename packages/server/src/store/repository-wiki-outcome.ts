@@ -97,13 +97,22 @@ export function repositoryWikiObservability(ctx: StoreContext, workspaceId: stri
   // PG bridge for a request that only reads the six columns below. `status` is
   // filtered in the WHERE clause and never read back, so it stays out of the
   // projection too.
+  //
+  // Row reduction (MUL-398 A2): a schedule-only run whose id no repository-scoped
+  // compilation row references is skipped by the loop below, yet it still crosses
+  // the bridge. On 209 that was 399 of the 1,842 rows. The EXISTS clause is
+  // exactly that skip condition pushed into SQL — the same predicate the
+  // build-state query uses — so the rows the loop keeps are unchanged.
   const runs = ctx.db.query(`SELECT r.id, r.repository_id, r.schedule_target, r.task_id,
       r.completed_at, r.created_at
     FROM multiremi_autopilot_runs r
     JOIN multiremi_autopilots a ON a.id = r.autopilot_id
-    WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_target IS NOT NULL)
+    WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR
+        (r.schedule_target IS NOT NULL AND EXISTS (
+          SELECT 1 FROM multiremi_knowledge_compilation_runs k
+          WHERE k.autopilot_run_id = r.id AND k.repository_id IS NOT NULL AND k.workspace_id = ?)))
       AND r.status IN ('completed', 'failed')
-    ORDER BY r.completed_at DESC, r.created_at DESC, r.id DESC`).all(workspaceId) as Array<{
+    ORDER BY r.completed_at DESC, r.created_at DESC, r.id DESC`).all(workspaceId, workspaceId) as Array<{
       id: string; repository_id: string | null; schedule_target: string | null; task_id: string | null;
       completed_at: string | null; created_at: string;
     }>;
