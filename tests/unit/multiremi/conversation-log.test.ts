@@ -27,6 +27,26 @@ describe("conversation log (MUL-426)", () => {
       .entries.map((entry) => entry.id)).toEqual([comments[2]!.id, comments[3]!.id]);
   });
 
+  it("returns the same 404 for hidden, deleted and missing locate ids", async () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Locate visibility", workspaceId: "local" });
+    const comment = store.createIssueComment(issue.id, { body: "remove me" });
+    const sessionId = comment.issueSessionId!;
+    store.updateIssueComment(comment.id, { body: "edited" });
+    const hidden = store.listConversationLogEntries(sessionId).find((entry) => entry.kind === "message_edited")!;
+    store.deleteIssueComment(comment.id);
+    const app = createMultiremiApp({ store });
+    const bodies = [];
+    for (const id of [hidden.id, comment.id, "clog_missing"]) {
+      const response = await app.request(`/api/sessions/${sessionId}/log/locate?id=${id}`);
+      expect(response.status).toBe(404);
+      bodies.push(await response.json());
+      expect(store.locateConversationLogEntry(sessionId, id)).toBeNull();
+    }
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(bodies[1]).toEqual(bodies[2]);
+  });
+
   it("updates comments in place, emits resolved patches, and never mirrors legacy resolve markers", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Patches", workspaceId: "local" });

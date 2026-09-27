@@ -114,6 +114,36 @@ export class ConversationLogRepo {
   /** The seq `head` row occupies; also the anchor when no anchor is requested. */
   static readonly HEAD_SEQ = 0;
 
+  private legacyHeadSeq(sessionId: string): number {
+    const issue = this.ctx.db.query(
+      "SELECT MAX(seq) AS seq FROM multiremi_session_events WHERE session_id = ?",
+    ).get(sessionId) as { seq: number | string | null } | null;
+    const chat = this.ctx.db.query(
+      "SELECT message_sequence AS seq FROM multiremi_chat_sessions WHERE id = ?",
+    ).get(sessionId) as { seq: number | string | null } | null;
+    return Math.max(0, Number(issue?.seq ?? 0), Number(chat?.seq ?? 0));
+  }
+
+  private ensureCounterWithinTransaction(sessionId: string, at: string, seq = 0): void {
+    // Acquire the writer lock before reading legacy rows. SQLite's deferred
+    // transaction otherwise cannot upgrade a concurrent read to a write.
+    this.ctx.db.run(
+      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
+       VALUES (?, 0, 0, ?)
+       ON CONFLICT(session_id) DO NOTHING`,
+      [sessionId, at],
+    );
+    const initialSeq = Math.max(seq, this.legacyHeadSeq(sessionId));
+    this.ctx.db.run(
+      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
+       VALUES (?, ?, 0, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         head_seq = CASE WHEN multiremi_conversation_heads.head_seq < excluded.head_seq
+           THEN excluded.head_seq ELSE multiremi_conversation_heads.head_seq END`,
+      [sessionId, initialSeq, at],
+    );
+  }
+
   /**
    * Create the `head` row and the counter for a session. Idempotent: a second
    * call for the same session is a no-op so migrations and lazy creation can
@@ -124,12 +154,7 @@ export class ConversationLogRepo {
     input: { bodyMd: string; title?: string | null; metadata?: ConversationLogEntryMetadata; createdAt?: string } = { bodyMd: "" },
   ): ConversationLogEntry {
     const now = input.createdAt ?? nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
-       VALUES (?, 0, 0, ?)
-       ON CONFLICT(session_id) DO NOTHING`,
-      [sessionId, now],
-    );
+    this.ensureCounterWithinTransaction(sessionId, now);
     const metadata: ConversationLogEntryMetadata = {
       ...(input.metadata ?? {}),
       ...(input.title != null ? { title: input.title } : {}),
@@ -252,12 +277,7 @@ export class ConversationLogRepo {
    * processes on both backends; the row is created if the session is new.
    */
   nextSeqWithinTransaction(sessionId: string): number {
-    this.ctx.db.run(
-      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
-       VALUES (?, 0, 0, ?)
-       ON CONFLICT(session_id) DO NOTHING`,
-      [sessionId, nowIso()],
-    );
+    this.ensureCounterWithinTransaction(sessionId, nowIso());
     const row = this.ctx.db.query(
       `UPDATE multiremi_conversation_heads
        SET head_seq = head_seq + 1, log_version = log_version + 1, updated_at = ?
@@ -275,14 +295,7 @@ export class ConversationLogRepo {
    * that increments it.
    */
   private raiseHeadWithinTransaction(sessionId: string, seq: number): void {
-    this.ctx.db.run(
-      `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
-       VALUES (?, ?, 0, ?)
-       ON CONFLICT(session_id) DO UPDATE SET
-         head_seq = CASE WHEN multiremi_conversation_heads.head_seq < excluded.head_seq
-           THEN excluded.head_seq ELSE multiremi_conversation_heads.head_seq END`,
-      [sessionId, seq, nowIso()],
-    );
+    this.ensureCounterWithinTransaction(sessionId, nowIso(), seq);
   }
 
   /** The head row: `head_seq`, `log_version` and `updated_at`. */
@@ -321,7 +334,7 @@ export class ConversationLogRepo {
 
   /** Locate one row's seq by id, for deep links. */
   locate(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
-    const row = this.runQuery(query, "SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ?", [sessionId, id]).get() as Row | null;
+    const row = this.runQuery(query, "SELECT id, seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ? AND visibility = 'shown' AND deleted_at IS NULL", [sessionId, id]).get() as Row | null;
     if (!row) return null;
     const head = this.getHead(sessionId, query);
     return { id: String(row.id), seq: Number(row.seq ?? 0), head_seq: head?.headSeq ?? 0 };

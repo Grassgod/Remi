@@ -3662,10 +3662,6 @@ runMigrations(this.db);
     return this.sessions.listSessionEvents(sessionId, input);
   }
 
-  listSessionEventsFromLog(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
-    return this.sessions.listSessionEventsFromLog(sessionId, input);
-  }
-
   // ── conversation log (MUL-402 B1) ────────────────────────────────────────
   // The read side of the v2 conversation storage. `window` and `locate` accept a
   // `query(sql, params)` seam so MUL-403's read pool can be wired in without

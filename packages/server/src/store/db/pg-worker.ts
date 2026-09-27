@@ -98,7 +98,8 @@ workerSelf.onmessage = async (event: MessageEvent) => {
     }
     const rows = Array.isArray(res) ? res : Array.from(res ?? []);
     const count = res && typeof (res as any).count === "number" ? (res as any).count : rows.length;
-    respond(STATUS_DONE, JSON.stringify({ rows, count }));
+    const command = typeof (res as any)?.command === "string" ? (res as any).command : undefined;
+    respond(STATUS_DONE, JSON.stringify({ rows, count, command }));
   } catch (err: any) {
     respond(STATUS_ERROR, JSON.stringify({ error: String(err?.message ?? err) }));
   } finally {

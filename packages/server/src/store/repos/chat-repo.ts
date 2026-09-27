@@ -633,6 +633,7 @@ export class ChatRepo {
        WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
       [taskId, chatSessionId],
     );
+    this.patchPendingDeliveryLog(rows, true, taskId);
     const selected = rows.slice(-safeLimit);
     return {
       messages: selected.map(toChatMessage),
@@ -641,21 +642,47 @@ export class ChatRepo {
   }
 
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number {
-    return this.ctx.db.run(
+    const rows = this.ctx.db.query(
+      `SELECT id FROM multiremi_chat_messages
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1 AND agent_delivery_task_id = ?`,
+    ).all(chatSessionId, taskId) as Row[];
+    const changes = this.ctx.db.run(
       `UPDATE multiremi_chat_messages
        SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
        WHERE chat_session_id = ? AND pending_agent_delivery = 1 AND agent_delivery_task_id = ?`,
       [chatSessionId, taskId],
     ).changes;
+    this.patchPendingDeliveryLog(rows, false, null);
+    return changes;
   }
 
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number {
-    return this.ctx.db.run(
+    const rows = this.ctx.db.query(
+      `SELECT id FROM multiremi_chat_messages
+       WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
+    ).all(chatSessionId) as Row[];
+    const changes = this.ctx.db.run(
       `UPDATE multiremi_chat_messages
        SET pending_agent_delivery = 0, agent_delivery_task_id = NULL
        WHERE chat_session_id = ? AND pending_agent_delivery = 1`,
       [chatSessionId],
     ).changes;
+    this.patchPendingDeliveryLog(rows, false, null);
+    return changes;
+  }
+
+  private patchPendingDeliveryLog(rows: Row[], pending: boolean, taskId: string | null): void {
+    for (const row of rows) {
+      const entry = this.ctx.conversationLog().getConversationLogEntryById(String(row.id));
+      if (!entry) continue; // Legacy messages are backfilled by MUL-427.
+      this.ctx.conversationLog().updateWithinTransaction(entry.session_id, entry.seq, {
+        fields: { metadata: {
+          ...entry.metadata,
+          pending_agent_delivery: pending,
+          agent_delivery_task_id: taskId,
+        } },
+      });
+    }
   }
 
   getChatMessage(id: string): MultiremiChatMessage | null {

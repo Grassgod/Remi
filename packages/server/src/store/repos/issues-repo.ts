@@ -1036,6 +1036,10 @@ export class IssuesRepo {
       }
       const next = this.getIssue(id)!;
       this.linkReferencedAttachmentsToIssue(id, next.description);
+      if ((input.title !== undefined && input.title !== current.title)
+        || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {
+        this.syncIssueHeads(next, updatedAt);
+      }
       this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: next,
         previousStatus: current.status,
@@ -1043,6 +1047,7 @@ export class IssuesRepo {
         actorId: null,
         automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
       });
+      this.notifyParentOfChildDone(current, next, cleanOptionalString(input.parentTaskId ?? input.parent_task_id));
       return next;
     })();
     this.ctx.appendIssueActivity(id, {
@@ -1052,22 +1057,11 @@ export class IssuesRepo {
       body: null,
       data: input,
     });
-    // The Issue title and description live in the head row of every session of
-    // this Issue, so an edit updates each mirror in place and bumps `revision`.
-    if ((input.title !== undefined && input.title !== previous!.title)
-      || (input.description !== undefined && (input.description ?? null) !== (previous!.description ?? null))) {
-      this.syncIssueHeads(updated);
-    }
     if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
     if (previous!.status !== "done" && updated.status === "done") {
       this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
     }
-    this.notifyParentOfChildDone(
-      previous!,
-      updated,
-      cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-    );
     return { issue: updated, cancelledTasks };
   }
 
@@ -1231,6 +1225,18 @@ export class IssuesRepo {
     taskId: string | null = null,
     issueSessionId: string | null = null,
   ): MultiremiIssueComment {
+    return this.ctx.db.transaction(() => this.createSystemIssueCommentWithinTransaction(
+      issueId, body, data, taskId, issueSessionId,
+    ))();
+  }
+
+  private createSystemIssueCommentWithinTransaction(
+    issueId: string,
+    body: string,
+    data: Record<string, unknown>,
+    taskId: string | null,
+    issueSessionId: string | null,
+  ): MultiremiIssueComment {
     const id = createId("cmt");
     const now = nowIso();
     const issueSession = issueSessionId
@@ -1245,7 +1251,7 @@ export class IssuesRepo {
        ) VALUES (?, ?, ?, 'system', ?, ?, NULL, ?, 'system', ?, ?)`,
       [id, issueId, issueSession.id, SYSTEM_AUTHOR_ID, taskId, body, now, now],
     );
-    this.ctx.issueSessions().appendSessionEvent(issueSession.id, {
+    this.ctx.issueSessions().appendSessionEventWithinTransaction(issueSession.id, {
       authorType: "system",
       authorId: SYSTEM_AUTHOR_ID,
       kind: "system",
@@ -1567,6 +1573,11 @@ export class IssuesRepo {
   ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    // Lock before reading Issue/session state so concurrent first comments can
+    // both reach the shared seq allocator on SQLite's deferred transactions.
+    if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
+      throw new Error(`Issue not found: ${issueId}`);
+    }
     const authorType = input.authorType ?? "member";
     if (options.deferAgentMentionDispatch && authorType !== "agent") {
       throw new Error("Only agent comment mentions can be deferred");
@@ -1670,9 +1681,8 @@ export class IssuesRepo {
 
   /**
    * Dispatch mentions for an agent comment that was persisted by an outer
-   * transaction. PostgresSyncDatabase has no nested transaction/savepoint
-   * support, so task creation and enqueue notification must happen only after
-   * that caller commits.
+   * transaction. Task enqueue notifications happen only after that caller
+   * commits, even though nested database writes now use savepoints.
    */
   dispatchDeferredAgentCommentMentions(commentId: string): MultiremiTask[] {
     const comment = this.getIssueComment(commentId);

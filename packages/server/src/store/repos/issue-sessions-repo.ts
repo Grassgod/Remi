@@ -457,7 +457,7 @@ export class IssueSessionsRepo {
       );
       if (target != null) mapped.metadata.target_seq = target;
     }
-    if (mapped.kind === "task_completed" || mapped.kind === "task_failed" || mapped.kind === "task_cancelled") {
+    if (mapped.kind === "task_completed" || mapped.kind === "task_failed" || mapped.kind === "task_cancelled" || mapped.kind === "task_steer") {
       const target = mapped.taskId
         ? this.ctx.db.query(
           "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
@@ -491,27 +491,6 @@ export class IssueSessionsRepo {
       : this.ctx.db.query(
         "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
       ).all(sessionId, sinceSeq, toSeq) as Row[];
-    return rows.map(toSessionEvent);
-  }
-
-  listSessionEventsFromLog(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
-    if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
-    // Keep the old event id and metadata wire while the log owns the seq filter.
-    // B7 has not backfilled old sessions yet; those keep their legacy read.
-    if (!this.ctx.conversationLog().getConversationLogHead(sessionId)) return this.listSessionEvents(sessionId, input);
-    const since = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
-    const to = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
-    const rows = (to == null
-      ? this.ctx.db.query(
-        `SELECT event.* FROM multiremi_conversation_log log
-         JOIN multiremi_session_events event ON event.session_id = log.session_id AND event.seq = log.seq
-         WHERE log.session_id = ? AND log.seq > ? ORDER BY log.seq ASC`,
-      ).all(sessionId, since)
-      : this.ctx.db.query(
-        `SELECT event.* FROM multiremi_conversation_log log
-         JOIN multiremi_session_events event ON event.session_id = log.session_id AND event.seq = log.seq
-         WHERE log.session_id = ? AND log.seq > ? AND log.seq <= ? ORDER BY log.seq ASC`,
-      ).all(sessionId, since, to)) as Row[];
     return rows.map(toSessionEvent);
   }
 

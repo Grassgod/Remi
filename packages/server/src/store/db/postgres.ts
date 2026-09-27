@@ -262,10 +262,10 @@ class PgBridge {
     }
   }
 
-  exec(sql: string, params: unknown[]): { rows: any[]; count: number } {
+  exec(sql: string, params: unknown[]): { rows: any[]; count: number; command?: string } {
     try {
       const r = this.request({ sql, params });
-      return { rows: r.rows ?? [], count: r.count ?? 0 };
+      return { rows: r.rows ?? [], count: r.count ?? 0, command: r.command };
     } catch (err) {
       // The size guardrail's message is user-facing: route handlers answer with
       // `c.json({ error: message })`, so appending SQL here would leak schema
@@ -281,24 +281,28 @@ class PgBridge {
 }
 
 class PgStatement implements SqlStatement {
-  constructor(private readonly bridge: PgBridge, private readonly sql: string) {}
+  constructor(
+    private readonly execute: (sql: string, params: unknown[]) => { rows: any[]; count: number },
+    private readonly sql: string,
+  ) {}
   get(...params: unknown[]): any {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows[0] ?? null;
+    return this.execute(this.sql, normalizeParams(params)).rows[0] ?? null;
   }
   all(...params: unknown[]): any[] {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows;
+    return this.execute(this.sql, normalizeParams(params)).rows;
   }
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
-    return { changes: this.bridge.exec(this.sql, normalizeParams(params)).count, lastInsertRowid: 0 };
+    return { changes: this.execute(this.sql, normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   values(...params: unknown[]): any[][] {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows.map((r) => Object.values(r));
+    return this.execute(this.sql, normalizeParams(params)).rows.map((r) => Object.values(r));
   }
 }
 
 export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
+  private failedAtDepth: number | null = null;
   constructor(url: string) {
     this.bridge = new PgBridge(url);
   }
@@ -306,41 +310,80 @@ export class PostgresSyncDatabase implements SqlDatabase {
   get inTransaction(): boolean {
     return this.transactionDepth > 0;
   }
+  private execute(sql: string, params: unknown[]): { rows: any[]; count: number; command?: string } {
+    try {
+      return this.bridge.exec(sql, params);
+    } catch (error) {
+      if (this.inTransaction) {
+        this.failedAtDepth = this.failedAtDepth == null
+          ? this.transactionDepth
+          : Math.min(this.failedAtDepth, this.transactionDepth);
+      }
+      throw error;
+    }
+  }
   query(sql: string): SqlStatement {
-    return new PgStatement(this.bridge, translateSqliteToPg(sql));
+    return new PgStatement((statement, params) => this.execute(statement, params), translateSqliteToPg(sql));
   }
   prepare(sql: string): SqlStatement {
     return this.query(sql);
   }
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
-    return { changes: this.bridge.exec(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
+    return { changes: this.execute(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   exec(sql: string): void {
     for (const stmt of splitStatements(sql)) {
       const translated = translateSqliteToPg(stmt);
-      if (translated.trim()) this.bridge.exec(translated, []);
+      if (translated.trim()) this.execute(translated, []);
     }
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
-      // PostgreSQL has no SQLite-style implicit savepoint here. Reuse the
-      // caller's transaction so an inner write cannot commit it early.
-      if (this.inTransaction) return fn(...args);
-      this.bridge.exec("BEGIN", []);
+      if (this.inTransaction) {
+        const savepointDepth = this.transactionDepth;
+        const savepoint = `sp_${savepointDepth}`;
+        this.execute(`SAVEPOINT ${savepoint}`, []);
+        this.transactionDepth += 1;
+        try {
+          const result = fn(...args);
+          this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+          return result;
+        } catch (err) {
+          try {
+            this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
+            if (this.failedAtDepth != null && this.failedAtDepth > savepointDepth) this.failedAtDepth = null;
+            this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+          } catch {
+            // The outer transaction sees the remaining failure flag.
+          }
+          throw err;
+        } finally {
+          this.transactionDepth -= 1;
+        }
+      }
+      this.execute("BEGIN", []);
       this.transactionDepth += 1;
+      this.failedAtDepth = null;
       try {
         const result = fn(...args);
-        this.bridge.exec("COMMIT", []);
+        if (this.failedAtDepth != null) {
+          throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
+        }
+        const committed = this.execute("COMMIT", []);
+        if (committed.command?.toUpperCase() === "ROLLBACK") {
+          throw new Error("Postgres rolled back an aborted transaction at COMMIT");
+        }
         return result;
       } catch (err) {
         try {
-          this.bridge.exec("ROLLBACK", []);
+          this.execute("ROLLBACK", []);
         } catch {
           // connection already aborted the transaction
         }
         throw err;
       } finally {
         this.transactionDepth -= 1;
+        this.failedAtDepth = null;
       }
     };
   }

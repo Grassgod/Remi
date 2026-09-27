@@ -15,6 +15,10 @@ try {
         sessionId: sessionId!, kind: "message", authorType: "system", bodyMd: `${process.pid}:${index}`,
       });
     }
+  } else if (operation === "first-comment") {
+    const session = store.getIssueSession(sessionId!);
+    if (!session) throw new Error(`Missing session: ${sessionId}`);
+    store.createIssueComment(session.issueId, { issueSessionId: sessionId!, body: `${process.pid}` });
   }
 } finally {
   db.close();

@@ -70,7 +70,7 @@ rows, so traces are stored twice.
 Constraints: the end state is required in one release with no compatibility
 layer; wake-up rules are ported 1:1 (rule changes belong to MUL-404); the schema
 is written once in SQLite dialect and translated for Postgres, foreign keys are
-not enforced on either backend, and Postgres transactions have no savepoints.
+not enforced on either backend. Postgres nested transactions use savepoints.
 
 ## Decision
 

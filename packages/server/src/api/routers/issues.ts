@@ -1418,7 +1418,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const sinceSeq = Number(c.req.query("since_seq") ?? 0);
     const rawToSeq = c.req.query("to_seq");
     const toSeq = rawToSeq == null ? null : Number(rawToSeq);
-    return c.json(store.listSessionEventsFromLog(session.id, { sinceSeq, toSeq }).map(sessionEventCompatibilityResponse));
+    return c.json(store.listSessionEvents(session.id, { sinceSeq, toSeq }).map(sessionEventCompatibilityResponse));
   });
   app.post("/api/issues/:id/sessions/:sessionId/messages", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");

@@ -4421,15 +4421,19 @@ export class TasksRepo {
         return null;
       }
       const parent = task.triggerCommentId ? this.ctx.issues().getIssueComment(task.triggerCommentId) : null;
-      const comment = this.ctx.issues().createIssueComment(task.issueId, {
-        issueSessionId: task.issueSessionId,
-        authorType: "agent",
-        authorId: task.agentId,
-        // Links the reply to its run so the chat stream can open the transcript.
-        taskId: task.id,
-        parentId: parent && parent.issueId === task.issueId ? parent.id : null,
-        body,
-      });
+      const comment = this.ctx.db.transaction(() => {
+        const created = this.ctx.issues().createIssueComment(task.issueId!, {
+          issueSessionId: task.issueSessionId,
+          authorType: "agent",
+          authorId: task.agentId,
+          // Links the reply to its run so the chat stream can open the transcript.
+          taskId: task.id,
+          parentId: parent && parent.issueId === task.issueId ? parent.id : null,
+          body,
+        });
+        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.id });
+        return created;
+      })();
       return { id: comment.id };
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
