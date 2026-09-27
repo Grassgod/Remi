@@ -56,6 +56,16 @@ so the mechanism cannot be owned by the issue timeline component.
    keys, dragging the scrollbar — releases the pin. Returning to within the pin
    threshold, `pin()`, or the existing "back to latest" control re-engages it.
 
+   The "back to latest" control drives the hook's own return trip rather than the
+   virtualizer's `scrollToIndex(LAST)`. The virtualizer can only place the last
+   *row* at the viewport edge, while the agent-stream row and the composer live
+   below the list in the same scroll container; the trip therefore used to stop
+   short of the end, inside the virtualizer's band but outside this hook's, so
+   the machine stayed released and the next comment did not follow. The hook's
+   trip travels to the end of the content and pins on its own threshold, which
+   also means `pin()` adopts a zero distance instead of whatever gap the
+   virtualizer happened to stop at.
+
    The state machine is also the single authority for following new content.
    The list is rendered by a virtualizer with its own, much wider notion of
    "at the bottom" (Virtuoso's default band is 120 px, roughly the composer
@@ -66,6 +76,10 @@ so the mechanism cannot be owned by the issue timeline component.
    behaviour this issue removes. Follow only while the hook reports `pinned`,
    and re-pin on the virtualizer's at-bottom signal only together with a
    downward scroll since the release, so the band alone can never re-engage it.
+   That gate is not enough on its own: `pin()` anchors at the distance present
+   when it is called, so a consumer that pins from inside the wider band holds
+   the page short of the end and later content maintains the gap rather than
+   closing it. Only pin when the container is inside the hook's own threshold.
 
 3. **The hooks are pure DOM modules with no data knowledge.** They live in
    `frontend/packages/views/common/` (the `views` package has the jsdom test
