@@ -176,7 +176,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     for (const [pattern, status] of statuses) {
       expect(status, `${pattern} answered ${status} as all`).not.toBe(421);
     }
-  });
+    // Unlike the split roles, `all` runs every handler, so this sweep costs the
+    // whole inventory rather than a guard short-circuit. The default 5 s budget is
+    // not enough when the full suite loads the machine in parallel.
+  }, 60_000);
 
   it("refuses /api/daemon/* and nothing else as ui", async () => {
     const daemon = await sweep("ui");
