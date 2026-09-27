@@ -172,6 +172,94 @@ describe("Chat queues", () => {
     expect(store.sendChatMessage(chat.id, { content: "restored" }).queued).toBe(false);
   });
 
+  it("publishes the chat-cancel events only after the archive/delete transaction commits", () => {
+    // MUL-400 S1 QA round 4: these main-existing cancel paths now own a commit
+    // event queue. The observable change is that every task/activity event they
+    // produce is delivered after `db.inTransaction` is false, and a rollback
+    // leaves no phantom event behind.
+    const { store, runtime, chat } = setup();
+    const first = store.sendChatMessage(chat.id, { content: "running" });
+    const second = store.sendChatMessage(chat.id, { content: "waiting" });
+    store.claimTask(runtime.id);
+    store.startTask(first.task.id);
+
+    const events: Array<{ type: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" || event.type === "chat:session_updated") {
+        events.push({ type: event.type, inTransaction: db!.inTransaction });
+      }
+    });
+    try {
+      store.updateChatSession(chat.id, { status: "archived" });
+    } finally {
+      unsubscribe();
+    }
+    expect(store.getTask(first.task.id)?.status).toBe("cancelled");
+    expect(store.getTask(second.task.id)?.status).toBe("cancelled");
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+
+    // Delete path: same contract.
+    const other = setup();
+    const one = other.store.sendChatMessage(other.chat.id, { content: "running" });
+    other.store.claimTask(other.runtime.id);
+    other.store.startTask(one.task.id);
+    const deletedEvents: Array<{ type: string; inTransaction: boolean }> = [];
+    const unsubscribeDelete = other.store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created" || event.type === "chat:session_deleted") {
+        deletedEvents.push({ type: event.type, inTransaction: db!.inTransaction });
+      }
+    });
+    try {
+      other.store.deleteChatSession(other.chat.id);
+    } finally {
+      unsubscribeDelete();
+    }
+    expect(deletedEvents.length).toBeGreaterThan(0);
+    expect(deletedEvents.filter((event) => event.inTransaction)).toHaveLength(0);
+  });
+
+  it("drops the chat-cancel queue when the archive transaction rolls back", () => {
+    const { store, runtime, chat } = setup();
+    const first = store.sendChatMessage(chat.id, { content: "running" });
+    store.claimTask(runtime.id);
+    store.startTask(first.task.id);
+
+    const events: Array<{ type: string; action: string }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") events.push({ type: event.type, action: entry?.action ?? "" });
+    });
+    // Fail after the cancel inside the transaction, before it commits.
+    const original = store.updateChatSession.bind(store);
+    let threw = false;
+    try {
+      const internals = store as unknown as {
+        chat: { pendingTasks: (id: string) => Array<{ id: string }> };
+      };
+      const originalPending = internals.chat.pendingTasks.bind(internals.chat);
+      internals.chat.pendingTasks = (id: string) => {
+        const tasks = originalPending(id);
+        if (tasks.length > 0) throw new Error("chat archive rollback injection");
+        return tasks;
+      };
+      try {
+        store.updateChatSession(chat.id, { status: "archived" });
+      } finally {
+        internals.chat.pendingTasks = originalPending;
+      }
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toBe("chat archive rollback injection");
+    } finally {
+      void original;
+      unsubscribe();
+    }
+    expect(threw).toBe(true);
+    expect(store.getTask(first.task.id)?.status).not.toBe("cancelled");
+    expect(events).toHaveLength(0);
+  });
+
   it("deletes the Chat and cancels all pending work before publishing cancellation", () => {
     const { store, runtime, chat } = setup();
     const first = store.sendChatMessage(chat.id, { content: "running" });

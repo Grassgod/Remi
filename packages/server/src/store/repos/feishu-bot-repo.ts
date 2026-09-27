@@ -21,7 +21,7 @@ import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
 import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
-import type { StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import {
@@ -782,6 +782,8 @@ export class FeishuBotRepo {
     const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
     const topicConfig = workspace ? readWorkspaceIssueTopics(workspace.settings) : null;
     let enqueuedTask: MultiremiTask | null = null;
+    const submitChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const submitEvents = createCommitEventQueue();
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
@@ -930,7 +932,7 @@ export class FeishuBotRepo {
           prompt: text,
           requestingUserName: sender.displayName,
           requestingUserProfileDescription: sender.profileDescription,
-        });
+        }, submitChanges, submitEvents);
         enqueuedTask = task;
       }
 
@@ -1004,6 +1006,8 @@ export class FeishuBotRepo {
       };
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
+    this.ctx.tasks().runCollectedChildStatusChanges(submitChanges);
+    this.ctx.emitCommitEvents(submitEvents);
     return result;
   }
 
@@ -1177,7 +1181,9 @@ export class FeishuBotRepo {
     const bot = this.statusSnapshot(issue.workspaceId);
     if (bot.status !== "online" || !bot.config) return null;
 
-    return this.ctx.db.transaction(() => {
+    const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const wakeTask = this.ctx.db.transaction(() => {
       const binding = this.ctx.db.query(
         `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
          JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
@@ -1206,7 +1212,7 @@ export class FeishuBotRepo {
         prompt: humanRequestPushPrompt(issue, sourceTask, request),
         requestingUserName: "Multiremi",
         requestingUserProfileDescription: "System notification for a pending Issue human request.",
-      });
+      }, childStatusChanges, deferredEvents);
       const now = nowIso();
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_human_request_pushes (
@@ -1246,13 +1252,44 @@ export class FeishuBotRepo {
       );
       return wakeTask;
     })();
+    if (wakeTask) this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
+    return wakeTask;
   }
 
-  /** Caller owns the terminal-task transaction. */
-  prepareIssueRoundPushesWithinTransaction(input: {
+  /**
+   * Non-transactional entry point for callers that own no transaction (tests,
+   * standalone tooling): it opens the only transaction itself and publishes
+   * everything after COMMIT. Production terminal paths call the `Within...`
+   * variant with the queue they already own.
+   */
+  prepareIssueRoundPushes(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
   }): MultiremiTask[] {
+    const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const tasks = this.ctx.db.transaction(() =>
+      this.prepareIssueRoundPushesWithinTransaction({ ...input, childStatusChanges, deferredEvents }))();
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
+    for (const task of tasks) this.ctx.notifyTaskEnqueued(task);
+    return tasks;
+  }
+
+  /** Caller owns the terminal-task transaction. Both the collector and the
+   * queue are required: this writer produces Issue transitions and realtime
+   * pushes, and neither may be dropped or sent before COMMIT (MUL-400 S1). */
+  prepareIssueRoundPushesWithinTransaction(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+    /** Caller-owned collector for Issue transitions these fresh rounds produce. */
+    childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector;
+    /** Caller-owned queue for the realtime pushes these rounds would emit. */
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue;
+  }): MultiremiTask[] {
+    const childStatusChanges = input.childStatusChanges;
+    const deferredEvents = input.deferredEvents;
     const config = this.getConfig(input.issue.workspaceId);
     if (!config?.enabled) return [];
     const rows = this.ctx.db.query(
@@ -1313,7 +1350,7 @@ export class FeishuBotRepo {
           prompt: roundPushPrompt(input.issue),
           requestingUserName: "Multiremi",
           requestingUserProfileDescription: "System-triggered summary for a completed Issue work round.",
-        });
+        }, childStatusChanges, deferredEvents);
         enqueued.push(wakeTask);
       }
       const now = nowIso();

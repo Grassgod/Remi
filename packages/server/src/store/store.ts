@@ -84,6 +84,8 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  IssueDependencyError,
+  ParentStatusGuardError,
   type IssueTimelineCursor,
   type IssueTimelinePageResult,
   type BeginIssueDeletionResult,
@@ -166,6 +168,7 @@ export type {
 } from "@multiremi/store/repos/workspaces-repo.js";
 import {
   StoreContext,
+  createCommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
   type TaskMessagesListener,
@@ -176,6 +179,7 @@ import type {
   AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   CreateAccessTokenInput,
   CreateBotMenuPublishRequestInput,
@@ -259,6 +263,7 @@ import type {
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssue,
   CreateKnowledgeCompilationRunInput,
   CreateKnowledgeSubmissionInput,
@@ -381,6 +386,7 @@ import type {
   UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   UpdateIssueCommentInput,
   UpdateIssueSessionInput,
   UpdateLabelInput,
@@ -1931,9 +1937,18 @@ runMigrations(this.db);
     return this.feishuBot.prepareHumanRequestPush(request);
   }
 
+  prepareFeishuIssueRoundPushes(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    return this.feishuBot.prepareIssueRoundPushes(input);
+  }
+
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
     return this.feishuBot.prepareIssueRoundPushesWithinTransaction(input);
   }
@@ -3142,7 +3157,11 @@ runMigrations(this.db);
     return this.issues.listAssigneeFrequency(input);
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     return this.issues.batchUpdateIssues(input);
   }
 
@@ -3193,7 +3212,7 @@ runMigrations(this.db);
     return this.issues.getChildIssueProgress(parentIssueId);
   }
 
-  listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
+  listIssueDependencies(issueId: string): MultiremiIssueDependencyView[] {
     return this.issues.listIssueDependencies(issueId);
   }
 
@@ -3201,7 +3220,7 @@ runMigrations(this.db);
     issueId: string,
     input: CreateIssueDependencyInput,
     activity?: IssueMutationActivityContext,
-  ): MultiremiIssueDependency {
+  ): MultiremiIssueDependencyView {
     return this.issues.createIssueDependency(issueId, input, activity);
   }
 
@@ -3217,12 +3236,63 @@ runMigrations(this.db);
     return this.issues.deleteIssueDependency(issueId, dependencyId, activity);
   }
 
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.updateIssueWithOutcome(id, input).issue;
+  updateIssue(id: string, input: UpdateIssueInput, options: UpdateIssueOptions = {}): MultiremiIssue {
+    return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
-  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
-    return this.issues.updateIssueWithOutcome(id, input);
+  updateIssueWithOutcome(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions = {},
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+    /** The Issue the write itself saw, after its row lock (see the repo). */
+    previous: MultiremiIssue;
+  } {
+    return this.issues.updateIssueWithOutcome(id, input, options);
+  }
+
+  /** MUL-400 E3: prerequisites that are not `done` yet. */
+  listUnmetPrerequisites(issueId: string): import("@multiremi/store/repos/issue-dependencies.js").IssueDependencyUnmetRef[] {
+    return this.issues.listUnmetPrerequisites(issueId);
+  }
+
+  /** MUL-400 E3: `waiting_on` page data (unmet + all direct prerequisites). */
+  getIssueWaitingOn(issueId: string): import("@multiremi/contracts/types.js").MultiremiIssueWaitingOn {
+    return this.issues.getIssueWaitingOn(issueId);
+  }
+
+  /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: import("@multiremi/contracts/types.js").CreateIssueDependencyInput,
+    activity: import("@multiremi/store/repos/issues-repo.js").IssueMutationActivityContext = {},
+  ): import("@multiremi/contracts/types.js").MultiremiIssueDependencyView {
+    return this.issues.createIssueDependencyWithinTransaction(issueId, input, activity);
+  }
+
+  countOpenChildIssues(parentIssueId: string): number {
+    return this.issues.countOpenChildIssues(parentIssueId);
+  }
+
+  holdParentStatusForOpenChildren(
+    issueId: string,
+    requested: string,
+    options: { exempt?: boolean; deferredEvents: import("./context.js").CommitEventQueue },
+  ): string {
+    return this.issues.holdParentStatusForOpenChildren(issueId, requested, options);
+  }
+
+  notifyChildStatusChange(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+  ): void {
+    this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -3237,8 +3307,8 @@ runMigrations(this.db);
     return this.issues.issueArchiveSweepIntervalMs();
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
-    return this.issues.assignIssue(id, input);
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
+    return this.issues.assignIssue(id, input, options);
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
@@ -4410,8 +4480,13 @@ runMigrations(this.db);
     return this.tasks.createTask(input);
   }
 
-  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
-    return this.tasks.createTaskWithinTransaction(input);
+  /** Caller owns the transaction and replays the collector after it commits. */
+  createTaskWithinTransaction(
+    input: CreateTaskInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   ensureDelegationWakeup(input: {
@@ -4600,7 +4675,13 @@ runMigrations(this.db);
     audit: MultiremiOrganizerAction;
     comment: MultiremiIssueComment;
   } {
+    const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
+    // MUL-400 S1 (QA round 3): the audit comment is written inside this
+    // transaction, so its realtime push waits for the COMMIT. On rollback the
+    // queue is dropped and no client ever sees a comment that does not exist.
+    const deferredEvents = createCommitEventQueue();
     let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    let cancelledResult: ReturnType<TasksRepo["cancelTaskWithinTransaction"]> | null = null;
     const result = this.db.transaction(() => {
       const supervisorTask = this.getTask(input.supervisorTaskId);
       const supervisorAgent = this.getAgent(input.supervisorAgentId);
@@ -4647,9 +4728,12 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        task = this.tasks.cancelTask(target.id);
+        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
+        // its COMMIT would end this one early on Postgres (no savepoints).
+        cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
+        task = cancelledResult.task;
       } else if (input.action === "redispatch") {
-        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = redispatchResult.cancelled;
         replacementTask = redispatchResult.replacement;
       } else {
@@ -4686,7 +4770,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true });
+      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -4697,7 +4781,13 @@ runMigrations(this.db);
       });
       return { task, replacementTask, message, audit, comment };
     })();
+    // The organizer transaction collected the cancelled task's Issue transitions;
+    // replay them now that it has committed (MUL-400 E1/E2).
+    this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+    if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    // The transaction committed: publish everything it deferred.
+    this.ctx.emitCommitEvents(deferredEvents);
     this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
@@ -4745,8 +4835,19 @@ runMigrations(this.db);
     return this.tasks.failTask(taskId, input);
   }
 
-  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult {
-    return this.tasks.cancelTaskWithinTransaction(taskId);
+  cancelTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): import("./repos/tasks-repo.js").CancelTaskResult {
+    return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+  }
+
+  runCollectedChildStatusChanges(
+    changes: import("./repos/tasks-repo.js").ChildStatusChange[],
+    seen?: Set<string>,
+  ): void {
+    this.tasks.runCollectedChildStatusChanges(changes, seen);
   }
 
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void {
