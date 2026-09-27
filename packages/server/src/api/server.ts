@@ -824,10 +824,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       const socketAddress = server.requestIP(req)?.address;
       setWebhookClientIpAddress(req, resolveWebhookClientIpAddress(req, socketAddress));
       const url = new URL(req.url);
-      // MUL-461: an upgrade is answered here, not by the Hono guard — the middleware
-      // chain never sees it — so the role check has to be repeated at both upgrade
-      // sites. A misdirected upgrade is 421, not 426: the client asked for the right
-      // protocol at the wrong process.
+      // MUL-461: `server.upgrade` short-circuits before Hono, so an upgrade never
+      // reaches the guard middleware above and the decision has to be repeated once
+      // here — it covers both upgrade sites below. A misdirected upgrade is 421, not
+      // 426: the client asked for the right protocol at the wrong process.
       if (startupApiRole !== "all" && isMisdirectedPath(startupApiRole, url.pathname)) {
         return misdirectedResponse(startupApiRole);
       }
