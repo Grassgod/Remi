@@ -215,6 +215,7 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // at its repo and nothing else changes.
 export interface IssuesSurface {
   createIssue(input: CreateIssueInput): MultiremiIssue;
+  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
