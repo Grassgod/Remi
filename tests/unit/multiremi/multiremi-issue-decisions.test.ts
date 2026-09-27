@@ -144,7 +144,6 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
   }
 }
 
-
 /**
  * Advance a mocked clock by one second per call. `nowIso()` reads Date.now(), so
  * this makes created_at / answered_at deterministic for the window ordering.
@@ -160,14 +159,12 @@ function steppedClock(startAt = Date.parse("2026-09-27T00:00:00.000Z")): () => s
 }
 
 interface DecisionApi {
-  app: ReturnType<typeof createMultiremiApp>;
   request: (path: string, token: string, body?: unknown) => Promise<Response>;
 }
 
 function decisionApi(store: MultiremiStore): DecisionApi {
   const app = createMultiremiApp({ store, authToken: "test-master" });
   return {
-    app,
     // `app.request` is overloaded and returns a bare Response when the init is
     // passed as the second argument, so normalize it to a Promise here.
     request: async (path, token, body) => await app.request(path, {
