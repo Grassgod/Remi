@@ -19,16 +19,43 @@ import {
   readPoolErrorStatus,
   ReadPoolNotSelectError,
   ReadPoolSaturatedError,
+  ReadPoolSideEffectError,
   ReadPoolTimeoutError,
+  findForbiddenFunction,
   READ_POOL_QUEUE_LIMIT,
   SqliteReadPool,
   type ReadPool,
 } from "@multiremi/store/db/read-pool.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
+// The fallback is a local, throwaway placeholder — never a real credential. It
+// only decides whether the Postgres block is skipped when the environment does
+// not point the suite somewhere.
 const PG_ADMIN_URL =
-  process.env.MULTIREMI_TEST_POSTGRES_URL ?? "postgres://multimira:multimira@localhost:5432/postgres";
+  process.env.MULTIREMI_TEST_POSTGRES_URL ?? "postgres://multiremi:local-only@localhost:5432/postgres";
 const TEST_DB = `multiremi_mul439_read_pool_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+
+/**
+ * Where the test database is, in a form that is safe to log.
+ *
+ * `MULTIREMI_TEST_POSTGRES_URL` may carry a password (and in production
+ * deployments the equivalent `MULTIREMI_DATABASE_URL` does). A skip message is
+ * the last place that should end up in a CI log, so it reports the host and
+ * port only — enough to tell "nothing is running here" from "the wrong
+ * instance is running" — and never the credentials or the path. The parse is
+ * wrapped because this helper runs on the failure path, where the value is by
+ * definition suspect.
+ */
+export function describeTestDatabaseTarget(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const database = parsed.pathname.replace(/^\//u, "");
+    const host = parsed.host || "unknown-host";
+    return database ? `${host}/${database}` : host;
+  } catch {
+    return "an unparseable MULTIREMI_TEST_POSTGRES_URL";
+  }
+}
 
 async function probePostgres(): Promise<boolean> {
   try {
@@ -43,8 +70,9 @@ async function probePostgres(): Promise<boolean> {
 
 const pgAvailable = await probePostgres();
 if (!pgAvailable) {
+  const configured = process.env.MULTIREMI_TEST_POSTGRES_URL ? "" : " (MULTIREMI_TEST_POSTGRES_URL is unset)";
   console.warn(
-    `[mul439-read-pool] Postgres not reachable at ${PG_ADMIN_URL} — skipping the pool's Postgres checks.`,
+    `[mul439-read-pool] Postgres not reachable at ${describeTestDatabaseTarget(PG_ADMIN_URL)}${configured} — skipping the pool's Postgres checks.`,
   );
 }
 
@@ -105,6 +133,40 @@ describe("read pool: the SELECT gate", () => {
     await expect(sqlite.query("DELETE FROM multiremi_tasks")).rejects.toBeInstanceOf(
       ReadPoolNotSelectError,
     );
+  });
+});
+
+describe("read pool: the skip message does not leak the DSN", () => {
+  it("reports host and database, never credentials", () => {
+    // The skip message is written to a CI log. `MULTIREMI_TEST_POSTGRES_URL`
+    // (and its production twin) carries a password, so the message must be
+    // built from a parse that drops the userinfo.
+    const target = describeTestDatabaseTarget(
+      "postgres://multiremi:SUPERSECRETPW@db.internal:5432/multiremi",
+    );
+    expect(target).toBe("db.internal:5432/multiremi");
+    expect(target).not.toContain("SUPERSECRETPW");
+    expect(target).not.toContain("multiremi:SUPERSECRETPW");
+  });
+
+  it("drops a percent-encoded password too", () => {
+    const target = describeTestDatabaseTarget("postgres://user:pa%40ss@127.0.0.1:55440/postgres");
+    expect(target).not.toContain("pa%40ss");
+    expect(target).toBe("127.0.0.1:55440/postgres");
+  });
+
+  it("handles a value that is not a URL without echoing it", () => {
+    // The helper runs on the failure path, where the value is suspect by
+    // definition. It must not hand the raw string back.
+    const target = describeTestDatabaseTarget("postgres://u:secretpw@");
+    expect(target).not.toContain("secretpw");
+    expect(describeTestDatabaseTarget("nonsense")).toBe(
+      "an unparseable MULTIREMI_TEST_POSTGRES_URL",
+    );
+  });
+
+  it("omits the database when the URL has none, and says so when unset", () => {
+    expect(describeTestDatabaseTarget("postgres://user:pw@host:5432")).toBe("host:5432");
   });
 });
 
@@ -179,7 +241,7 @@ describe("read pool: SQLite degradation", () => {
   it("picks the Postgres arm from the URL without connecting", async () => {
     // Constructing must not open a connection: the pool is created at startup,
     // before the database may be reachable.
-    const pool = createReadPool({ databaseUrl: "postgres://user:pass@127.0.0.1:1/none" });
+    const pool = createReadPool({ databaseUrl: "postgres://placeholder:placeholder@127.0.0.1:1/none" });
     expect(pool).toBeInstanceOf(PostgresReadPool);
     expect(pool.postgres).toBe(true);
     await pool.close();
@@ -329,6 +391,224 @@ describe.skipIf(!pgAvailable)("read pool: Postgres", () => {
     const closing = makePool();
     await closing.close();
     await expect(closing.query("SELECT 1")).rejects.toThrow(/closed/u);
+  });
+});
+
+/**
+ * The bypasses independent review found in MUL-439 `cmt_u0bywkppcajq`.
+ *
+ * Each case is the counterexample QA reproduced against the first cut, kept
+ * here so the hardening cannot silently regress. They run on a real server
+ * because the previous behaviour was a property of real sessions and locks —
+ * a mock would have "passed" the vulnerable code just as happily.
+ */
+describe.skipIf(!pgAvailable)("read pool: session state cannot be disarmed", () => {
+  let pool: PostgresReadPool;
+  let url = "";
+  let inspect: Bun.SQL;
+
+  /** A pool against the escalation fixture database. */
+  function makePool(target: string = url): PostgresReadPool {
+    return new PostgresReadPool(target);
+  }
+
+  beforeAll(async () => {
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_esc WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${TEST_DB}_esc`);
+    await admin.end();
+    const parsed = new URL(PG_ADMIN_URL);
+    parsed.pathname = `/${TEST_DB}_esc`;
+    url = parsed.toString();
+
+    inspect = new Bun.SQL(url, { max: 1 });
+    await inspect.unsafe("CREATE TABLE write_probe (id int primary key)");
+    // The write function QA used: reachable only through a `SELECT`, so the
+    // statement classifier alone cannot tell it from a read.
+    await inspect.unsafe(`
+      CREATE OR REPLACE FUNCTION mul439_write_row() RETURNS int LANGUAGE sql AS $$
+        INSERT INTO write_probe VALUES (1); SELECT 1;
+      $$`);
+    await inspect.unsafe("CREATE SEQUENCE IF NOT EXISTS mul439_seq");
+    await inspect.unsafe("CREATE TABLE mul439_target AS SELECT 1 AS id");
+  });
+
+  afterAll(async () => {
+    await inspect?.end();
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_esc WITH (FORCE)`);
+    await admin.end();
+  });
+
+  async function writeProbeRows(): Promise<number> {
+    return (await inspect.unsafe("SELECT count(*)::int AS n FROM write_probe"))[0].n as number;
+  }
+
+  /** The raw driver behind the pool, used to prove a bypass without the gate. */
+  function rawDriver(target: PostgresReadPool): Bun.SQL {
+    return (target as unknown as { sql: Bun.SQL }).sql;
+  }
+
+  it("refuses set_config, so the session default can never be disarmed through the pool", async () => {
+    pool = makePool(url);
+    await expect(
+      pool.query("SELECT set_config('default_transaction_read_only','off',false)"),
+    ).rejects.toBeInstanceOf(ReadPoolSideEffectError);
+    // And the underlying session still says read-only.
+    expect((await rawDriver(pool).unsafe("SHOW default_transaction_read_only"))[0].default_transaction_read_only).toBe("on");
+    await pool.close();
+  });
+
+  it("refuses set_config for statement_timeout, and the server ceiling still applies", async () => {
+    // QA's second disarm: `set_config('statement_timeout','0',false)` used to
+    // clear the 2 s ceiling. Even with the session value rewritten directly on
+    // the driver (bypassing the gate), `SET LOCAL` inside the transaction keeps
+    // the statement bounded.
+    pool = makePool(url);
+    await expect(
+      pool.query("SELECT set_config('statement_timeout','0',false)"),
+    ).rejects.toBeInstanceOf(ReadPoolSideEffectError);
+
+    const driver = rawDriver(pool);
+    await driver.unsafe("SELECT set_config('statement_timeout','0',false)");
+    const started = performance.now();
+    await expect(pool.query("SELECT pg_sleep(5)")).rejects.toThrow(/statement timeout/u);
+    const elapsed = performance.now() - started;
+    expect(elapsed, `pg_sleep ran for ${Math.round(elapsed)}ms`).toBeLessThan(4_000);
+    // The transaction scoping means the pool's next read is bounded again.
+    await expect(pool.query("SELECT pg_sleep(5)")).rejects.toThrow(/statement timeout/u);
+    await pool.close();
+  }, 30_000);
+
+  it("keeps a write out even when the session default is disarmed underneath it", async () => {
+    // The exact escalation QA demonstrated: disarm the session, then call a
+    // write function through `SELECT`. The transaction's own mode is what
+    // blocks it, so the disarmed session value makes no difference.
+    pool = makePool(url);
+    const before = await writeProbeRows();
+    await rawDriver(pool).unsafe("SELECT set_config('default_transaction_read_only','off',false)");
+
+    await expect(pool.query("SELECT mul439_write_row()")).rejects.toThrow(/read-only transaction/u);
+    // Fail-closed: no row, and nothing left over for a retry to double up.
+    expect(await writeProbeRows()).toBe(before);
+
+    // A plain read still works on the same disarmed connection.
+    await expect(pool.query("SELECT 42 AS answer")).resolves.toEqual([{ answer: 42 }]);
+    await pool.close();
+  }, 30_000);
+
+  it("refuses to flip the transaction to read-write mid-flight", async () => {
+    // `SET TRANSACTION READ WRITE` as the first statement of a transaction is
+    // accepted by Postgres and would reopen the write path. It is a `SET`, so
+    // the classifier already turns it away; this pins that.
+    pool = makePool(url);
+    await expect(pool.query("SET TRANSACTION READ WRITE")).rejects.toBeInstanceOf(
+      ReadPoolNotSelectError,
+    );
+    await expect(pool.query("SET default_transaction_read_only = off")).rejects.toBeInstanceOf(
+      ReadPoolNotSelectError,
+    );
+    await pool.close();
+  });
+
+  it("refuses the side-effecting functions QA listed", async () => {
+    pool = makePool(url);
+    const cases: Array<[string, string, string]> = [
+      ["set_config", "set_config", "SELECT set_config('default_transaction_read_only','off',false)"],
+      ["pg_notify", "pg_notify", "SELECT pg_notify('mul439_channel','payload')"],
+      ["pg_advisory_lock", "pg_advisory_lock", "SELECT pg_advisory_lock(439001)"],
+      ["pg_advisory_lock_shared", "pg_advisory_lock_shared", "SELECT pg_advisory_lock_shared(439002)"],
+      ["pg_try_advisory_lock", "pg_try_advisory_lock", "SELECT pg_try_advisory_lock(439003)"],
+      ["pg_advisory_xact_lock", "pg_advisory_xact_lock", "SELECT pg_advisory_xact_lock(439004)"],
+      ["pg_terminate_backend", "pg_terminate_backend", "SELECT pg_terminate_backend(1)"],
+      ["pg_cancel_backend", "pg_cancel_backend", "SELECT pg_cancel_backend(1)"],
+      ["nextval", "nextval", "SELECT nextval('mul439_seq')"],
+      ["setval", "setval", "SELECT setval('mul439_seq', 5)"],
+      ["pg_read_file", "pg_read_file", "SELECT pg_read_file('/etc/hostname')"],
+      ["pg_read_binary_file", "pg_read_binary_file", "SELECT pg_read_binary_file('/etc/hostname')"],
+      ["pg_ls_dir", "pg_ls_dir", "SELECT pg_ls_dir('/tmp')"],
+      ["lo_create", "lo_create", "SELECT lo_create(0)"],
+      ["lo_import", "lo_import", "SELECT lo_import('/etc/hostname')"],
+      ["dblink", "dblink", "SELECT dblink('dbname=postgres','SELECT 1')"],
+      ["dblink_exec", "dblink_exec", "SELECT dblink_exec('dbname=postgres','SELECT 1')"],
+    ];
+    for (const [label, fn, sql] of cases) {
+      const error = await pool.query(sql).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      expect(error, `${label} was allowed through the gate`).toBeInstanceOf(ReadPoolSideEffectError);
+      expect((error as ReadPoolSideEffectError).functionName).toBe(fn);
+      expect((error as ReadPoolSideEffectError).code).toBe("read_pool_side_effect");
+    }
+    await pool.close();
+  });
+
+  it("leaves no advisory lock behind after the refused calls", async () => {
+    // QA observed a lock still held after the statement returned. Nothing that
+    // takes a lock reaches the server now, so the count has to be zero.
+    pool = makePool(url);
+    await pool.query("SELECT pg_advisory_lock(439005)").catch(() => null);
+    await pool.query("SELECT pg_try_advisory_lock(439006)").catch(() => null);
+    await pool.query("SELECT pg_advisory_xact_lock(439007)").catch(() => null);
+
+    const held = await inspect.unsafe(
+      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+    );
+    expect(held[0].n).toBe(0);
+    await pool.close();
+  });
+
+  it("does not terminate another backend", async () => {
+    // QA's case: `pg_terminate_backend` returned true for a sibling connection.
+    // The victim is a connection this test owns, so a regression fails loudly
+    // here instead of taking out an unrelated client.
+    pool = makePool(url);
+    const victim = new Bun.SQL(url, { max: 1 });
+    const victimPid = (await victim.unsafe("SELECT pg_backend_pid() AS pid"))[0].pid as number;
+
+    await expect(
+      pool.query("SELECT pg_terminate_backend(?)", [victimPid]),
+    ).rejects.toBeInstanceOf(ReadPoolSideEffectError);
+    await expect(
+      pool.query("SELECT pg_cancel_backend(?)", [victimPid]),
+    ).rejects.toBeInstanceOf(ReadPoolSideEffectError);
+
+    // The victim is alive: a terminated connection would fail this query.
+    const alive = (await victim.unsafe("SELECT 1 AS alive")) as Array<{ alive: number }>;
+    expect(alive).toEqual([{ alive: 1 }]);
+    await victim.end();
+    await pool.close();
+  });
+
+  it("still allows ordinary reads, including functions that only read", async () => {
+    // The denylist must not turn into "no functions". These are the shapes the
+    // conversation-log queries use.
+    pool = makePool(url);
+    await expect(pool.query("SELECT now() AS ts")).resolves.toHaveLength(1);
+    await expect(pool.query("SELECT current_setting('server_version_num') AS v")).resolves.toHaveLength(1);
+    await expect(pool.query("SELECT length('abc') AS n")).resolves.toEqual([{ n: 3 }]);
+    await expect(pool.query("SELECT count(*)::int AS n FROM mul439_target")).resolves.toEqual([{ n: 1 }]);
+    await expect(
+      pool.query("SELECT COALESCE(?::text, 'fallback') AS v", [null]),
+    ).resolves.toEqual([{ v: "fallback" }]);
+    // A column named like a forbidden function is not a call to it.
+    await expect(
+      pool.query("SELECT set_config AS set_config FROM (SELECT 1 AS set_config) AS t"),
+    ).resolves.toEqual([{ set_config: 1 }]);
+    await pool.close();
+  });
+
+  it("bounds every statement with SET LOCAL even after a session-level change", async () => {
+    // Positive control for the timeout claim: the SHOW inside the transaction
+    // has to report the pool's value, not whatever the session was set to.
+    pool = makePool(url);
+    const driver = rawDriver(pool);
+    await driver.unsafe("SELECT set_config('statement_timeout','0',false)");
+    const shown = await pool.query("SELECT current_setting('statement_timeout') AS v");
+    // Postgres normalises 2000 to `2s`.
+    expect(["2000", "2000ms", "2s"]).toContain(shown[0].v as string);
+    await pool.close();
   });
 });
 

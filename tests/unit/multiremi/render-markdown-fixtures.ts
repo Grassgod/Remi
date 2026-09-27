@@ -9,6 +9,16 @@
  *
  * They are data, not test code, so the parity test reads as one loop and the
  * list is easy to extend when a new rendering feature lands.
+ *
+ * **What the 20 cases actually prove, precisely**: 19 of them are compared
+ * structurally against the browser component (same elements, nesting, text and
+ * link targets, with the client-only chrome normalised away by
+ * `render-markdown-compare.ts`). The 20th — the oversized fence — is a
+ * *documented divergence*: the server keeps a plain `<pre>` while the browser
+ * highlights after its async pass, so it asserts the downgrade and the shared
+ * code text instead of a structure match. The highlighting that the 19 do not
+ * cover byte-for-byte is pinned separately, byte for byte, by the dedicated
+ * "fenced block is byte-identical" case in the parity test.
  */
 export interface RenderFixture {
   name: string;

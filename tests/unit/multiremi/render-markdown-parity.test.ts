@@ -29,7 +29,7 @@
 import { describe, expect, test } from "bun:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { renderMarkdown, RENDER_VERSION } from "@multiremi/render/markdown.js";
+import { renderMarkdown, RENDER_VERSION, SANITIZE_SCHEMA } from "@multiremi/render/markdown.js";
 import { RENDER_PIPELINE_INPUTS } from "@multiremi/render/render-version.js";
 import { FIXTURES } from "./render-markdown-fixtures.js";
 import { describeNodes, normalizeBrowserHtml, normalizeHtml } from "./render-markdown-compare.js";
@@ -43,6 +43,29 @@ interface MinimalMarkdownProps {
 interface MinimalMarkdownModule {
   /** React component: props in, element out. */
   Markdown: (props: MinimalMarkdownProps) => React.ReactElement;
+  /** The sanitize schema the component uses; compared against the server's. */
+  sanitizeSchema: Record<string, unknown>;
+}
+
+/**
+ * Turn a sanitize schema into a plain, comparable structure.
+ *
+ * `toEqual` treats two distinct `RegExp` objects as different, and the schema
+ * carries regex whitelists (`/^language-/`), so each one is rendered back to its
+ * source string. Arrays and plain objects are copied; anything else is left
+ * alone so an unexpected value type still shows up in the diff.
+ */
+function normalizeSchema(value: unknown): unknown {
+  if (value instanceof RegExp) return `/${value.source}/${value.flags}`;
+  if (Array.isArray(value)) return value.map(normalizeSchema);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = normalizeSchema(entry);
+    }
+    return out;
+  }
+  return value;
 }
 
 /**
@@ -137,17 +160,28 @@ describe("renderMarkdown parity with frontend Markdown.tsx (MUL-439)", () => {
     }
   });
 
-  test("fenced code is highlighted with the same Shiki HTML and options", async () => {
-    // The structural test collapses code blocks to one marker, so this is what
-    // actually pins the highlighting: same themes, same `defaultColor: false`,
-    // same per-token spans as the browser's `CodeBlock` produces. A theme,
-    // option or engine change shows up here as a byte difference.
+  test("a fenced block is byte-identical to what the browser's CodeBlock would inject", async () => {
+    // The structural comparison collapses code blocks to one marker, so the
+    // highlighting itself needs its own check. This is a **byte** comparison
+    // against the HTML the browser path produces: the same `shiki` entry point,
+    // the same themes, the same `defaultColor: false`, the same language set —
+    // so a theme, option or engine change fails here rather than silently
+    // repainting the first paint.
+    //
+    // (The previous version of this test only compared the colour tokens and
+    // the theme pair. Review pointed out the claim was stronger than the check,
+    // MUL-439 `cmt_u0bywkppcajq`; this closes that gap.)
     const { codeToHtml } = await import("shiki");
     const fixtures: Array<[string, string]> = [
       ["typescript", "const answer: number = 42;\nexport default answer;\n"],
       ["python", "def f(x: int) -> str:\n    return str(x)\n"],
       ["bash", "set -euo pipefail\necho ok\n"],
       ["sql", "SELECT a, b FROM t WHERE a = 1 ORDER BY b DESC;\n"],
+      ["json", '{"a": [1, 2], "b": null}\n'],
+      ["yaml", "a: 1\nb:\n  - x\n"],
+      ["go", 'func main() { fmt.Println("hi") }\n'],
+      ["diff", "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n"],
+      ["text", "no grammar, plain text\n"],
     ];
     for (const [lang, code] of fixtures) {
       const expected = await codeToHtml(code, {
@@ -155,18 +189,31 @@ describe("renderMarkdown parity with frontend Markdown.tsx (MUL-439)", () => {
         themes: { light: "github-light", dark: "github-dark" },
         defaultColor: false,
       });
-      // The renderer's own output for the same fence has to contain that HTML
-      // verbatim: fenced blocks pass through sanitize untouched (the classes
-      // survive) and Shiki re-emits them from the same source text.
       const server = renderMarkdown(`\`\`\`${lang}\n${code}\`\`\``);
-      const shikiPre = expected.replace(/<span class="line">([\s\S]*?)<\/span>\n?/gu, "$1");
-      const serverBody = server.html.replace(/<span class="line">/gu, "").replace(/<\/span>\n/gu, "");
-      for (const token of shikiPre.match(/--shiki-light:#[0-9A-Fa-f]{6}/gu) ?? []) {
-        expect(serverBody, `${lang}: token colour missing from the rendered fence`).toContain(token);
-      }
-      expect(server.html, `${lang}: fence must carry both themes`).toContain("shiki-themes github-light github-dark");
-      expect(server.html, `${lang}: fence must not use a single theme colour`).not.toContain("--shiki-light-bg:#fff;\"");
+      // The renderer emits the Shiki `<pre>` as the block's markup, so the
+      // browser's own highlighting output must appear in it exactly once,
+      // character for character.
+      expect(
+        server.html.includes(expected),
+        `${lang}: rendered fence is not byte-identical to the browser's Shiki output\n` +
+          `server: ${server.html.slice(0, 400)}\nexpected: ${expected.slice(0, 400)}`,
+      ).toBe(true);
+      expect(server.html.split(expected)).toHaveLength(2);
     }
+  });
+
+  test("the highlight comparison is not vacuous: the expected HTML is non-trivial", async () => {
+    // Guards the test above from passing if Shiki started returning a bare
+    // `<pre>`. Each expectation has to carry per-token colours for both themes.
+    const { codeToHtml } = await import("shiki");
+    const expected = await codeToHtml("const a: number = 1;\n", {
+      lang: "typescript",
+      themes: { light: "github-light", dark: "github-dark" },
+      defaultColor: false,
+    });
+    expect(expected).toContain("shiki-themes github-light github-dark");
+    expect(expected.match(/--shiki-light:#[0-9A-Fa-f]{6}/gu)?.length ?? 0).toBeGreaterThan(1);
+    expect(expected.match(/--shiki-dark:#[0-9A-Fa-f]{6}/gu)?.length ?? 0).toBeGreaterThan(1);
   });
 
   test("a fence past 64 KiB is downgraded to a plain <pre>", () => {
@@ -180,6 +227,41 @@ describe("renderMarkdown parity with frontend Markdown.tsx (MUL-439)", () => {
     expect(over.downgraded).toBe(true);
     expect(over.html).toContain("<pre>");
     expect(over.html).not.toContain("shiki");
+  });
+
+  test("SANITIZE_SCHEMA is equal to the frontend's exported schema", () => {
+    // The server carries a copy of the schema because `packages/server` may not
+    // import `frontend/packages/ui` (see the workspace-alias allowlist in
+    // tests/arch/package-boundaries.test.ts). A behavioural test over hostile
+    // inputs only covers the attributes it happens to exercise, so this asserts
+    // the whole structure — including the regex whitelists, which a deep-equal
+    // therefore has to compare as regexes rather than as opaque objects.
+    //
+    // Drift here is a real risk both ways: a protocol the frontend adds would be
+    // stripped from `body_html`, and an attribute the server adds would let the
+    // client render something the client itself would have removed.
+    const frontend = FRONTEND_MD.sanitizeSchema;
+    expect(frontend, "frontend Markdown.tsx must export sanitizeSchema").toBeDefined();
+    expect(normalizeSchema(SANITIZE_SCHEMA)).toEqual(normalizeSchema(frontend));
+  });
+
+  test("SANITIZE_SCHEMA keeps the two internal protocols and the card attributes", () => {
+    // Guards the test above from passing vacuously if both sides were emptied.
+    expect(SANITIZE_SCHEMA.protocols?.href).toEqual(
+      expect.arrayContaining(["mention", "slash", "http", "https"]),
+    );
+    expect(SANITIZE_SCHEMA.attributes?.div).toEqual(
+      expect.arrayContaining(["dataType", "dataHref", "dataFilename"]),
+    );
+    const codeRules = SANITIZE_SCHEMA.attributes?.code ?? [];
+    const codeClassNames = codeRules
+      .filter((rule): rule is [string, RegExp] => Array.isArray(rule))
+      .map(([, pattern]) => String(pattern));
+    expect(codeClassNames).toContain(String(/^language-/));
+    expect(codeClassNames).toContain(String(/^math-/));
+    // And the schema still has the GitHub base underneath it.
+    expect(SANITIZE_SCHEMA.tagNames).toContain("table");
+    expect(SANITIZE_SCHEMA.tagNames).not.toContain("script");
   });
 
   test("the sanitize schema and the frontend's agree on a hostile input", () => {

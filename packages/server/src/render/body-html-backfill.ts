@@ -29,6 +29,7 @@
  * candidate set.
  */
 import { createLogger } from "@shared/logger.js";
+import { scrubErrorForLog } from "@multiremi/store/db/dsn-redaction.js";
 import { renderMarkdown, RENDER_VERSION } from "./markdown.js";
 
 const log = createLogger("body-html-backfill");
@@ -158,7 +159,7 @@ export class BodyHtmlBackfillTask {
     try {
       processed = await this.runBatch();
     } catch (error) {
-      log.warn(`body_html backfill batch failed: ${(error as Error).message}`);
+      log.warn(`body_html backfill batch failed: ${scrubErrorForLog(error)}`);
     }
     if (this.stopped) return;
     // A full batch means there is more waiting, so come back immediately; a
@@ -190,7 +191,7 @@ export class BodyHtmlBackfillTask {
           // One unrenderable row must not stall the rest of the batch; leave it
           // a candidate so the next pass retries it.
           log.warn(
-            `body_html backfill could not render ${row.session_id}/${row.seq}: ${(error as Error).message}`,
+            `body_html backfill could not render ${row.session_id}/${row.seq}: ${scrubErrorForLog(error)}`,
           );
           continue;
         }
