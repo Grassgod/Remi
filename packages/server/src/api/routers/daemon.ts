@@ -639,8 +639,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     // for a host that declared the matching capability, exactly like the queue.
     const humanRequestCards = store.listFeishuBotLiveDecisionCards(workspaceId, runtimeId);
     const issueDecisionCards = store.listFeishuIssueDecisionCards(workspaceId, runtimeId);
+    // The S5a rows keep exactly their old shape; only the new family carries a
+    // discriminator, so an older daemon's parser is unaffected.
     const cards = [
-      ...humanRequestCards.map(card => ({ ...card, lane: "human_request" })),
+      ...humanRequestCards,
       ...issueDecisionCards.map(card => ({
         lane: "issue_decision",
         issue_id: card.issue_id,

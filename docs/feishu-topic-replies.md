@@ -286,6 +286,70 @@ HTTP 到测试内 API 的那一跳。
 可问，直接把文字行排进队列。它不经过「卡片被飞书拒绝」这条路径，因此**不能替代
 第 5 步**。
 
+## Decision Cards ("待你决定") in the Topic
+
+An E4 decision handed to a person rides the same card pipeline as the human
+requests above (MUL-412). The control plane writes one `decision_card` delivery
+into the topic of the Issue the decision hangs on — the parent when there is
+one, otherwise the source Issue — and the bot host sends it, registers the
+submit button, and rewrites the same message when the decision settles.
+
+Only two states get a card: `pending -> escalated` and a decision created
+straight as `escalated`. A decision the parent's owner agent answers itself
+never leaves the web workbench, and a decision whose Issue has no topic seed
+message records `decision_card_skipped` with `reason = no_topic` and stays on
+the web rather than being re-aimed at the source Issue's topic.
+
+A decision has no deadline. There is no timeout state and no expiry column; the
+card gets exactly one text nudge 50 minutes after it was sent, deduped on the
+decision row's own `reminder_sent_at`, and that nudge @s the person the card was
+addressed to. Answers and withdrawals — from the topic, the web workbench or the
+CLI — all queue one `decision_card_patch` that rewrites the original message to
+「已回答」or「已撤回」. A card that went out as plain text (`notifyMode = none`,
+an unusable `person` target, or a Feishu rejection that retrying cannot fix)
+gets neither a patch nor a reminder, because there is no card on screen to
+rewrite.
+
+Permissions follow the human-request lane, with one addition. Only the operator
+named on the card, in the chat it was sent to, may submit; anyone else is told
+「请由卡片中指定的处理人提交」. The operator's Feishu `open_id` is then resolved
+server-side to a live, non-archived, non-agent workspace member — one the users
+table already knows through SSO (`external_id`), a Feishu `union_id`, or the
+bot's sender log — and an operator that resolves to nothing is refused with
+`decision_member_unmapped`. The request body carries no answerer: it names the
+operator that Feishu reported and nothing else, and the write goes through the
+same store function as the HTTP answer route, so `history`, `answered_at`, the
+`decision_answered` / `decision_received` activities, the inbox item and the
+wakeup of the source Issue's owner are identical whichever surface answered.
+
+A bot host may read and answer only decisions on an Issue that has an active
+topic binding under its own app; creating, escalating and withdrawing stay with
+the executing side and the human surfaces. The capability flag
+(`feishu_issue_decision_card`) is declared separately from the human-request
+one, so a host that predates decisions is handed no decision card at all — the
+decision simply stays on the web workbench, exactly as it did before.
+
+### 真人与第二个人验收（D6）
+
+前置条件与上一节相同，另加两条：decision 挂在**父单**上（子单里 `remi issue
+decision request` 出来的是子单自己的父单），且 bot host 的 heartbeat 报
+`feishu_issue_decision_card = 1`。清单里的「网页」指父单详情页的「待你决定」
+区域，或 `remi issue decision list <parent>`。
+
+| # | 谁来操作 | 操作 | 飞书上看到什么 | 预期活动 / 数据 |
+|---|---|---|---|---|
+| 1 | 发起人 | 在子单里提一个 `production_change`（`remi issue decision request <child> --kind production_change --title "..." --option 是 --option 否`），或让父单负责人 agent 把一个 `merge` 上交给人 | 父单话题里出现一张**独立卡片**：标题、正文、编号选项、自定义回答框、提交按钮，并 @ 被问的人 | 父单活动 `decision_escalated` 与 `decision_card_queued`（`kind=decision_card`）；投递行 `decision.degraded` 为 NULL |
+| 2 | 第二个人 | 点卡片上的提交 | 第二个人只看到 toast「请由卡片中指定的处理人提交」，卡片不变、问题仍在 | 不写任何活动；decision 仍为 `escalated` |
+| 3 | 贺华杰（被问的人） | 在卡片里选一项或填自定义回答并提交 | 提示「已提交」，**同一张卡片原地**变成终态：答案、答者、时间，不新增消息 | decision 变 `answered`，压入一条 `history`；父单 `decision_answered`、来源单 `decision_received` 各一条；来源单负责人的排队任务被唤醒；投递走后一条 `decision_card_patch` |
+| 4 | 发起人 | 另提一个 decision，然后在 Remi 工作台网页答掉 | 飞书那张卡片同样**原地**变终态（答案与答者取自网页那次回答） | 与第 3 步相同的一组活动；`decision_card_patch` 只有一条 |
+| 5 | 发起人 | 再提一个 decision，然后撤回（`remi issue decision withdraw <parent> <decision>`） | 卡片**原地**变成「已撤回」，不出现「已超时」字样，也不再可点 | decision 变 `withdrawn`；同样一条 `decision_card_patch`；没有任何 timeout 状态写入 |
+| 6 | 发起人 | 提一个 decision 后放着不答，等 50 分钟 | 话题里出现**一条 @ 被问的人**的文字提醒，且只出现一次；卡片仍是等待回答，不会超时 | decision 行 `reminder_sent_at` 写入一次；父单活动 `decision_card_reminder` 恰一条；再等不会出现第二条 |
+| 7 | 发起人 | 删掉/改掉话题配置使该话题没有 seed（或在没有 seed 的新单上提 decision）；另将 `remi workspace issue-topics set --notify none` 后提一个 decision | 前者话题里**什么也不出现**；后者只出现**文字**（标题、正文、编号选项、父单网页链接），不出卡片、不 @ 任何人 | 前者 `decision_card_skipped`（`reason=no_topic`）；后者 `decision_card_degraded`（`reason=notify_none`）且投递行 `degraded=notify_none`；两者 decision 本身照常出现在网页与收件箱 |
+
+第 7 步的两种降级必须分别做：`no_topic` 是**不发**（只在网页），`notify_none`
+是**发文字**。跑这一步之前不要在 209 上改任何配置；这是本单交付后由带头大哥
+安排的实测步骤。
+
 ## Continuing Issue Work From a Topic
 
 The bound-topic prompt teaches Remi to distinguish a progress question or an

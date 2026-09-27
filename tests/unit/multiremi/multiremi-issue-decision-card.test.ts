@@ -287,12 +287,32 @@ describe("MUL-412 issue decision cards", () => {
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store)!;
     const host = await daemonToken(store);
+    // A stranger with no account at all.
     const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
       body: JSON.stringify({ answer: "yes", operator_open_id: "ou_somebody_else" }),
     });
     expect(response.status).toBe(403);
+    expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
+
+    // And a *resolved* member who simply is not the person the card named —
+    // this is the S5a rule, not the identity mapping: a workspace member may
+    // not answer somebody else's card.
+    const otherUser = store.getOrCreateUser({ externalId: "ou_other_member", name: "Other", email: "other@example.com" });
+    const other = store.createWorkspaceMember({
+      workspaceId: "local", userId: otherUser.id, name: "Other", email: "other@example.com", role: "member",
+    });
+    expect(store.resolveFeishuDecisionOperatorMember("local", "ou_other_member")!.id).toBe(other.id);
+    const notAddressed = await app(store).request(
+      `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ answer: "yes", operator_open_id: "ou_other_member" }),
+      },
+    );
+    expect(notAddressed.status).toBe(403);
+    expect(await notAddressed.json()).toMatchObject({ code: "decision_operator_mismatch" });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
   });
 
@@ -564,8 +584,8 @@ describe("MUL-412 issue decision cards", () => {
   });
 
   for (const mode of [
-    { notifyMode: "none" as const, reason: "notify_none" },
-    { notifyMode: "person" as const, notifyOpenId: "not-an-open-id", reason: "invalid_recipient" },
+    { notifyMode: "none" as const, reason: "notify_none" as const },
+    { notifyMode: "person" as const, notifyOpenId: "not-an-open-id", reason: "invalid_recipient" as const },
   ]) {
     it(`degrades to text when the topic has nobody to ask (${mode.reason})`, () => {
       const { store, agentId, member } = scaffold({ notifyMode: mode.notifyMode, notifyOpenId: mode.notifyOpenId });
@@ -766,18 +786,22 @@ describe("MUL-412 issue decision cards", () => {
     sendCard(store, "om_clickable")!;
     const host = await daemonToken(store);
     const client = {
-      getFeishuIssueDecision: (issueId: string, decisionId: string) => app(store).request(
-        `/api/daemon/issues/${issueId}/decisions/${decisionId}`,
-        { headers: { Authorization: `Bearer ${host.token}` } },
-      ).then(async response => response.ok ? (await response.json()).decision : null),
-      answerFeishuIssueDecision: (issueId: string, decisionId: string, input: { answer: string; operatorOpenId: string }) =>
-        app(store).request(`/api/daemon/issues/${issueId}/decisions/${decisionId}/answer`, {
+      getFeishuIssueDecision: async (issueId: string, decisionId: string) => {
+        const response = await app(store).request(
+          `/api/daemon/issues/${issueId}/decisions/${decisionId}`,
+          { headers: { Authorization: `Bearer ${host.token}` } },
+        );
+        return response.ok ? (await response.json()).decision : null;
+      },
+      answerFeishuIssueDecision: async (issueId: string, decisionId: string, input: { answer: string; operatorOpenId: string }) => {
+        const response = await app(store).request(`/api/daemon/issues/${issueId}/decisions/${decisionId}/answer`, {
           method: "POST",
           headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
           body: JSON.stringify({ answer: input.answer, operator_open_id: input.operatorOpenId }),
-        }).then(async response => response.ok
-          ? (await response.json()).decision
-          : Promise.reject(new Error(`HTTP ${response.status}`))),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return (await response.json()).decision;
+      },
     };
     registerIssueDecisionCardInteraction({
       appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId: "om_clickable",
