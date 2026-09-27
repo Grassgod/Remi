@@ -1049,7 +1049,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       // MUL-400 E3: the task-creation gate reports the same 409 code as the
       // status gate, so a client handles both with one branch.
       return result.code
-        ? c.json({ error: result.error, code: result.code }, result.status)
+        ? c.json({ error: result.error, code: result.code, unmet: result.unmet ?? [] }, result.status)
         : c.json({ error: result.error }, result.status);
     }
     return c.json(taskCompatibilityResponse(result.task), 202);
@@ -1595,6 +1595,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {
+      const dependencyResponse = issueDependencyErrorResponse(c, error);
+      if (dependencyResponse) return dependencyResponse;
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   });

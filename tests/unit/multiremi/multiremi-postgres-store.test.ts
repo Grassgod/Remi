@@ -227,6 +227,100 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
+  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
+    "writes the %s dependency exemption after commit (PG)",
+    (source) => {
+      const runtime = store.registerRuntime({
+        id: `rt_pg_exemption_${++wsCounter}`, name: `PG exemption ${source}`, provider: "claude",
+      });
+      const agent = store.createAgent({ name: `PG exemption ${source} ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+      const prerequisite = store.createIssue({ title: `PG prerequisite ${source}`, status: "in_progress" });
+      const issue = store.createIssue({ title: `PG earlier work ${source}`, status: "in_progress" });
+      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
+      if (source === "redispatch") store.cancelTask(previous.id);
+      if (source === "retry") {
+        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
+        store.startTask(previous.id);
+        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
+      }
+      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+      store.updateIssue(issue.id, { status: "backlog" });
+      const eventStates: boolean[] = [];
+      const stop = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
+          eventStates.push(db.inTransaction);
+        }
+      });
+      db.resetTransactionDepthStats();
+      const task = store.createTask({
+        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
+        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
+        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
+        ...(source === "delegation_return" ? {
+          delegationId: `dlg_exemption_${wsCounter}`, delegatedByAgentId: agent.id, parentTaskId: previous.id,
+        } : {}),
+        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+      });
+      stop();
+      expect(db.maxTransactionDepth).toBe(1);
+      expect(eventStates).toEqual([false]);
+      expect(store.getTask(task.id)?.status).toBe("queued");
+      const activities = store.listIssueActivity(issue.id).filter((row) => row.type === "dependency_gate_exempted");
+      expect(activities).toHaveLength(1);
+      expect(activities[0]!.data).toMatchObject({
+        source, taskId: task.id, task_id: task.id,
+        previousTaskId: previous.id, previous_task_id: previous.id,
+        unmet: [{ key: prerequisite.key }],
+      });
+    },
+  );
+
+  it("does not auto-claim a backlog issue with an active exempt round (PG)", () => {
+    const runtime = store.registerRuntime({ id: `rt_pg_active_${++wsCounter}`, name: "Active exemption", provider: "claude" });
+    const agent = store.createAgent({ name: `Active exemption ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+    const prerequisite = store.createIssue({ title: "Active prerequisite", status: "in_progress" });
+    const issue = store.createIssue({
+      title: "Active dependent", status: "backlog", blockedBy: [prerequisite.id],
+      assigneeType: "agent", assigneeId: agent.id,
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, prompt: "existing continuation",
+      attempt: 2, preserveIssueStatus: true,
+    });
+    db.resetTransactionDepthStats();
+    store.updateIssue(prerequisite.id, { status: "done" });
+    expect(db.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(issue.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(issue.id).map((row) => row.id)).toEqual([task.id]);
+    expect(store.listIssueActivity(issue.id).filter((row) =>
+      row.type === "dependency_auto_started" || row.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+  });
+
+  it("maps a waiting session task request to 409 with unmet prerequisites (PG)", async () => {
+    const agent = store.createAgent({ name: `Session gate ${++wsCounter}`, provider: "claude" });
+    const prerequisite = store.createIssue({ title: "Session prerequisite", status: "in_progress" });
+    const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id, prompt: "blocked" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prerequisite.key }] });
+    expect(store.listTasksForIssue(issue.id)).toEqual([]);
+    expect(store.getIssue(issue.id)?.status).toBe("backlog");
+    const unknownAgent = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "agt_not_found", prompt: "blocked" }),
+    });
+    expect(unknownAgent.status).toBe(404);
+  });
+
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.
   it("moves legacy Chat ownership into Feishu topics and is idempotent", async () => {

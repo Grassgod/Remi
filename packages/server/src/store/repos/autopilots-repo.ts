@@ -1402,7 +1402,7 @@ export class AutopilotsRepo {
           workspaceId: autopilot.workspaceId,
           projectId: autopilot.projectId,
           createdBy: autopilot.id,
-        });
+        }, { childStatusChanges: autopilotChanges, deferredEvents: autopilotEvents });
       } else if (autopilot.executionMode === "trigger_issue") {
         if (!triggerIssueId) throw new Error("trigger_issue runs require trigger_issue_id");
         issue = this.ctx.issues().getIssue(triggerIssueId);

@@ -165,7 +165,16 @@ describe("messaging outcomes", () => {
     expect(again.outcome.id).toBe(proposed.outcome.id);
 
     const proposalId = proposed.outcome.id;
+    const createdEventTransactionStates: boolean[] = [];
+    const stop = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created"
+        && (event.payload.entry as { action?: string })?.action === "issue_created") {
+        createdEventTransactionStates.push(db!.inTransaction);
+      }
+    });
     const approved = outcomes.approveProposal(proposalId, { workspaceId: "local", approvedBy: ownerId });
+    stop();
+    expect(createdEventTransactionStates).toEqual([false]);
     expect(approved.created).toBe(true);
     expect(approved.proposal.proposalStatus).toBe("approved");
     expect(approved.issue?.title).toBe("API outage reported in chat");

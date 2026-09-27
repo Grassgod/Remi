@@ -1,5 +1,6 @@
 import { createId, nowIso } from "@multiremi/ids.js";
-import type { StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import type { ChildStatusChangeCollector } from "./tasks-repo.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -967,12 +968,17 @@ export class FeishuIngestRepo {
     input: CreateFeishuIssueOutcomeInput,
   ): CreateFeishuIssueOutcomeResult {
     const issueInput = normalizeIssueProposalInput(input);
-    return this.ctx.db.transaction(() => this.createIssueOutcomeWithinTransaction(messageId, {
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => this.createIssueOutcomeWithinTransaction(messageId, {
       ...issueInput,
       workspaceId: input.workspaceId,
       taskId: cleanOptionalString(input.taskId),
       createdBy: cleanOptionalString(input.createdBy),
-    }))();
+    }, childStatusChanges, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return result;
   }
 
   createIssueProposal(
@@ -1089,7 +1095,9 @@ export class FeishuIngestRepo {
     proposalId: string,
     input: { workspaceId: string; approvedBy: string },
   ): ResolveFeishuIssueProposalResult {
-    return this.ctx.db.transaction(() => {
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const approved = this.ctx.db.transaction(() => {
       let proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
       this.lockMessage(proposal.messageId);
       proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
@@ -1099,7 +1107,7 @@ export class FeishuIngestRepo {
         workspaceId: input.workspaceId,
         taskId: null,
         createdBy: input.approvedBy,
-      });
+      }, childStatusChanges, deferredEvents);
       const resolvedAt = nowIso();
       this.ctx.db.run(
         `UPDATE multiremi_feishu_message_outcomes
@@ -1114,6 +1122,9 @@ export class FeishuIngestRepo {
         proposal: toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId)),
       };
     })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return approved;
   }
 
   rejectIssueProposal(
@@ -1162,6 +1173,8 @@ export class FeishuIngestRepo {
   private createIssueOutcomeWithinTransaction(
     messageId: string,
     input: CreateFeishuIssueOutcomeInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
   ): CreateFeishuIssueOutcomeResult {
     const message = this.getMessage(messageId);
     if (!message || message.workspaceId !== input.workspaceId) {
@@ -1200,7 +1213,7 @@ export class FeishuIngestRepo {
         message_app_link: message.messageAppLink,
       }],
       createdBy: cleanOptionalString(input.createdBy),
-    });
+    }, { childStatusChanges, deferredEvents });
     const createdAt = nowIso();
     const outcome = this.insertOutcome({
       workspaceId: input.workspaceId,

@@ -296,6 +296,20 @@ describe("formatActivity — dependency activities", () => {
     ).toBe('activity.dependency_satisfied {"key":"MUL-8"}');
   });
 
+  it("renders a structural dependency exemption in all four locales", async () => {
+    expect(formatActivity(activity("dependency_gate_exempted", { details: { source: "redispatch" } }), t))
+      .toBe('activity.dependency_gate_exempted {"source":"activity.dependency_gate_exempted_redispatch"}');
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"),
+      import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"),
+      import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) expect(bundle.default.activity.dependency_gate_exempted).toContain("{{source}}");
+    expect(bundles[0]!.default.activity.dependency_gate_exempted).toContain("等待依赖");
+    expect(bundles[0]!.default.activity.dependency_gate_exempted_retry).toBe("重试");
+  });
+
   it("renders a skipped automatic start with the satisfying prerequisite key", () => {
     expect(
       formatActivity(activity("dependency_auto_start_skipped", { details: { satisfied_by_key: "MUL-9" } }), t),
