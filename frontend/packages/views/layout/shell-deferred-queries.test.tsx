@@ -93,6 +93,35 @@ describe("shell queries wait for the first screen (MUL-472 b)", () => {
     await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps fetching after the gate opens, so the deferred UI still fills in", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } },
+    });
+
+    // Before: nothing asked the API. After: the page can render its pins /
+    // invitation badge / presence dots without a second user action.
+    render(
+      <QueryClientProvider client={queryClient}>
+        <WorkspacePresencePrefetch />
+      </QueryClientProvider>,
+    );
+    expect(getAgentTaskSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      flushIdle();
+    });
+
+    await waitFor(() => expect(getAgentTaskSnapshot).toHaveBeenCalledTimes(1));
+    // The data actually lands in the cache the UI reads (not just "a request
+    // went out"), which is what makes the badge/pins/CLI hint appear.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(["workspaces", "ws-1", "agent-task-snapshot", "list"])?.status)
+        .toBe("success"),
+    );
+    expect(queryClient.getQueryData(["workspaces", "ws-1", "agents"])).toEqual([]);
+    expect(queryClient.getQueryData(["workspaces", "ws-1", "squads"])).toEqual([]);
+  });
+
   it("keeps the runtimes list on its normal lifecycle", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: 0 } },
