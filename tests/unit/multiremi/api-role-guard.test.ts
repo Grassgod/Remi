@@ -123,8 +123,6 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
   return statuses;
 }
 
-
-
 /**
  * A real `Bun.serve` instance plus the metrics lines it produced.
  *
