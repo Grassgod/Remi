@@ -24687,9 +24687,7 @@
       "body": {
         "connections": 0,
         "enabled": true,
-        "transport": "websocket",
-        "role": "all",
-        "peer_healthy": false
+        "transport": "websocket"
       }
     },
     {
