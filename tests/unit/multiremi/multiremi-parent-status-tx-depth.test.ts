@@ -523,6 +523,104 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
       .toHaveLength(1);
   });
 
+  it("rolls the SCM status, audit rows and effect mark back on a grant-used failure", () => {
+    const { store, agent } = setupDepthStore();
+    const connection = seedScm(store);
+    const parent = store.createIssue({
+      title: "SCM atomic parent", workspaceId: "local", status: "in_progress",
+      assigneeType: "agent", assigneeId: agent.id,
+    });
+    store.updateIssue(store.createIssue({
+      title: "SCM finished child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, "local");
+    store.createIssueComment(parent.id, { body: "SCM summary", authorType: "agent", authorId: agent.id });
+    projectChangeRequest(store, connection.id, `${parent.key} atomic delivery`);
+
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") events.push(entry?.action ?? "");
+    });
+    const original = StoreContext.prototype.appendIssueActivity;
+    let injected = false;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      issueId: string,
+      input: { type: string },
+      ...rest: unknown[]
+    ) {
+      original.call(this, issueId, input as never, ...rest as [never]);
+      if (input.type === "parent_done_grant_used") {
+        injected = true;
+        throw new Error("scm grant-used injection");
+      }
+    } as typeof StoreContext.prototype.appendIssueActivity;
+    try {
+      recordMerge(store, connection.id, "change.merged:42:scm-atomic");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribe();
+    }
+    expect(injected).toBe(true);
+    // The injected failure is caught by the effect loop and recorded as a retry
+    // reason: the parent must NOT be done and no audit row may survive.
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(types).not.toContain("parent_done_grant_used");
+    expect(types).not.toContain("scm_merge_completed");
+    expect(events.filter((action) => action === "issue_updated" || action === "parent_done_grant_used"))
+      .toHaveLength(0);
+    const pending = db!.query(
+      "SELECT status, last_error FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(parent.id) as { status?: string; last_error?: string | null } | null;
+    expect(pending?.status).toBe("pending");
+    expect(String(pending?.last_error ?? "")).toContain("scm grant-used injection");
+
+    // Retrying the same dispatch settles it exactly once.
+    recordMerge(store, connection.id, "change.merged:42:scm-atomic");
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(1);
+    const settled = db!.query(
+      "SELECT status FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(parent.id) as { status?: string } | null;
+    expect(settled?.status).toBe("applied");
+  });
+
+  it("emits the SCM grant-used events exactly once and only after COMMIT", () => {
+    const { store, agent } = setupDepthStore();
+    const connection = seedScm(store);
+    const parent = store.createIssue({
+      title: "SCM event parent", workspaceId: "local", status: "in_progress",
+      assigneeType: "agent", assigneeId: agent.id,
+    });
+    store.updateIssue(store.createIssue({
+      title: "SCM event child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+    }).id, { status: "done" });
+    store.grantParentDone(parent.id, "local");
+    store.createIssueComment(parent.id, { body: "SCM summary", authorType: "agent", authorId: agent.id });
+    projectChangeRequest(store, connection.id, `${parent.key} event delivery`);
+    const events: Array<{ action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type !== "activity:created") return;
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
+    });
+    try {
+      recordMerge(store, connection.id, "change.merged:42:scm-events");
+    } finally {
+      unsubscribe();
+    }
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(events.filter((event) => event.action === "parent_done_grant_used")).toHaveLength(1);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
+  });
+
   it("keeps the granted and summarized done branch at depth 1", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
@@ -546,6 +644,109 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "issue_status_forced"))
       .toHaveLength(0);
+  });
+});
+
+describe("MUL-457 — grant use is atomic with the parent status", () => {
+  /**
+   * QA round 1, blocker 1: the API path wrote `issue_updated` and
+   * `parent_done_grant_used` after the status transaction committed, and the SCM
+   * path marked its effect `applied` even later. Injecting a failure at the
+   * grant-used INSERT therefore left the parent `done` with the audit rows
+   * already visible. Both paths now write status + audit + effect in one
+   * transaction, so the injected failure must roll all of it back and the SCM
+   * effect must still be retryable.
+   */
+  function grantedParentCase(store: Store, agentId: string) {
+    const parent = store.createIssue({
+      title: "Granted parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agentId,
+    });
+    const child = store.createIssue({
+      title: "Finished child",
+      parentIssueId: parent.id,
+      status: "in_progress",
+    });
+    store.updateIssue(child.id, { status: "done" });
+    store.grantParentDone(parent.id, "local");
+    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: agentId });
+    return { parent, child };
+  }
+
+  function failOnGrantUsedOnce(): { restore(): void; fired(): boolean } {
+    const original = StoreContext.prototype.appendIssueActivity;
+    let fired = false;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      issueId: string,
+      input: { type: string },
+      ...rest: unknown[]
+    ) {
+      original.call(this, issueId, input as never, ...rest as [never]);
+      if (input.type === "parent_done_grant_used") {
+        fired = true;
+        throw new Error("grant-used injection");
+      }
+    } as typeof StoreContext.prototype.appendIssueActivity;
+    return {
+      fired: () => fired,
+      restore() { StoreContext.prototype.appendIssueActivity = original; },
+    };
+  }
+
+  it("rolls the API status, both audit rows and every event back on a grant-used failure", () => {
+    const { store, agent } = setupDepthStore();
+    const { parent } = grantedParentCase(store, agent.id);
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") events.push(entry?.action ?? "");
+    });
+    const injection = failOnGrantUsedOnce();
+    let thrown: Error | null = null;
+    try {
+      store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent.id });
+    } catch (err) {
+      thrown = err as Error;
+    } finally {
+      injection.restore();
+      unsubscribe();
+    }
+    expect(injection.fired()).toBe(true);
+    expect(thrown?.message).toBe("grant-used injection");
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(types).not.toContain("issue_updated");
+    expect(types).not.toContain("parent_done_grant_used");
+    expect(events).toHaveLength(0);
+
+    // Retrying after the injected failure settles exactly once.
+    store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent.id });
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_updated")).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+  });
+
+  it("emits the API grant-used events exactly once and only after COMMIT", () => {
+    const { store, agent } = setupDepthStore();
+    const { parent } = grantedParentCase(store, agent.id);
+    const events: Array<{ action: string; inTransaction: boolean }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      if (event.type !== "activity:created") return;
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
+    });
+    try {
+      store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent.id });
+    } finally {
+      unsubscribe();
+    }
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(events.filter((event) => event.action === "issue_updated")).toHaveLength(1);
+    expect(events.filter((event) => event.action === "parent_done_grant_used")).toHaveLength(1);
+    expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
   });
 });
 

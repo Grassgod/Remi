@@ -54,6 +54,16 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `comment` on that parent after the final child closes. The same alternative
    applies to SCM merge completion; member closure retains the completed-round
    rule. The check reads tasks and comments on the parent.
+
+   The author identity of a (b) comment comes from the credential, never the
+   request body: a task token resolves to that agent, a user JWT or PAT resolves
+   to a member. Deployments using the master credential, and deployments with
+   auth disabled, trust the identity fields in the request body; that is an
+   administrator capability and is outside (b)'s protection, because such a
+   caller can already close the parent as a member (with `force`). (b) is a
+   process constraint on the authorized agent, not an authorization boundary —
+   the boundary is the member-only grant plus the token-derived agent identity
+   checked when the parent is closed.
 4. **`force` is member-only.** `UpdateIssueInput.force` passes the guards and
    records `issue_status_forced` (with the child count it overrode). A task
    identity sending `force` gets 403 on all three status writers (both PATCH
@@ -61,8 +71,12 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    children unless a member granted this parent to its current owner agent.
    The grant stores that agent id; reassignment makes it ineffective until a
    member grants again. Grant creation and revocation are member-only, audited
-   actions. The grant check trusts the agent id in the task token. Workflow:
-   attempt without `--force` to see the reason, then repeat with it.
+   actions. The grant check trusts the agent id in the task token.
+   `force` is a MEMBER-only override: a member retries the same write with
+   `--force` after reading the refusal reason. A task identity that sends
+   `force` gets 403 `issue_force_requires_member` on both PATCH routes and on
+   batch update — there is no task-side retry with `force`, and the grant does
+   not change that.
    The system-only bypass is deliberately NOT a field on `UpdateIssueInput`: it
    is an `UpdateIssueOptions` argument passed positionally by the store, because
    the wire layer builds `UpdateIssueInput` straight from the request body, and

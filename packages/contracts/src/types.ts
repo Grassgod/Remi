@@ -2260,6 +2260,16 @@ export interface UpdateIssueOptions {
   holdParentStatus?: boolean;
   /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
   holdParentStatusData?: Record<string, unknown> | null;
+  /**
+   * MUL-400 S1c (QA round 1): where the `parent_done_grant_used` audit row came
+   * from. The SCM merge effect closes the parent through the same in-transaction
+   * writer as the API, so the row must still distinguish the two. Server-only —
+   * `UpdateIssueOptions` is passed positionally by the store and is never built
+   * from the request body.
+   */
+  parentDoneGrantSource?: "api" | "scm_merge";
+  /** Extra audit fields for the merge-sourced grant use (PR number and URL). */
+  parentDoneGrantData?: Record<string, unknown> | null;
 }
 
 export interface BatchUpdateIssuesInput {

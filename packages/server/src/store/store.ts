@@ -3253,6 +3253,31 @@ runMigrations(this.db);
     return this.issues.updateIssueWithOutcome(id, input, options);
   }
 
+  /**
+   * MUL-400 S1c (QA round 1): the caller owns the transaction. The status write
+   * and its audit activities commit together, and the caller replays the
+   * collected child-status transitions and flushes `deferredEvents` after
+   * COMMIT (see `runIssueUpdatePostCommit`).
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
+  }
+
+  runIssueUpdatePostCommit(
+    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    input: UpdateIssueInput,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): void {
+    this.issues.runIssueUpdatePostCommit(result, input, collector, deferredEvents);
+  }
+
   countOpenChildIssues(parentIssueId: string): number {
     return this.issues.countOpenChildIssues(parentIssueId);
   }

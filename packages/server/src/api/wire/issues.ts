@@ -268,7 +268,11 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       code: err.code,
       reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
       open_children: err.details.openChildren ?? 0,
-      ...(err.details.lastChildClosedAt !== undefined ? { last_child_closed_at: err.details.lastChildClosedAt } : {}),
+      // MUL-400 S1c (QA round 1): same shape as the native route — the guard's
+      // structured detail rides under `data.lastChildClosedAt`.
+      ...(err.details.lastChildClosedAt !== undefined
+        ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
+        : {}),
       ...rejectedIssueIds(err),
     }, 409);
   }

@@ -87,7 +87,12 @@ describe("MUL-457 parent done grant", () => {
     });
     const held = await done();
     expect(held.status).toBe(409);
-    expect(await held.json()).toMatchObject({ code: "final_summary_missing", reason: "final_summary_missing", last_child_closed_at: expect.any(String) });
+    // MUL-400 S1c (QA round 1): the guard's structured detail is under `data`.
+    expect(await held.json()).toMatchObject({
+      code: "final_summary_missing",
+      reason: "final_summary_missing",
+      data: { lastChildClosedAt: expect.any(String) },
+    });
     const comment = await app.request(`/api/issues/${parent.id}/comments`, {
       method: "POST", headers: auth(taskToken), body: JSON.stringify({ body: "All child work is complete." }),
     });
@@ -98,6 +103,90 @@ describe("MUL-457 parent done grant", () => {
     expect(activities(store, parent.id, "parent_done_grant_used")[0]?.data).toMatchObject({ source: "api" });
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(memberToken).toBeTruthy();
+  });
+
+  it("returns the guard detail under data on both issue prefixes", async () => {
+    const { store, owner, parent, child, app } = setup();
+    const { taskToken } = await tokens(store, owner.id);
+    store.grantParentDone(parent.id, "local");
+    store.updateIssue(child.id, { status: "done" });
+    for (const base of ["/api/issues", "/api/multiremi/issues"]) {
+      const response = await app.request(`${base}/${parent.id}`, {
+        method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status, base).toBe(409);
+      const body = await response.json();
+      expect(body, base).toMatchObject({
+        code: "final_summary_missing",
+        data: { lastChildClosedAt: expect.any(String) },
+      });
+      // The QA round 1 top-level name is gone; nothing should keep parsing it.
+      expect(body.last_child_closed_at, base).toBeUndefined();
+    }
+  });
+
+  it("keeps a forged comment from satisfying A1 for the authorized agent", async () => {
+    const { store, owner, other, parent, child, app } = setup();
+    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const otherTaskToken = (await tokens(store, other.id)).taskToken;
+    store.grantParentDone(parent.id, "local");
+    store.updateIssue(child.id, { status: "done" });
+
+    // 1. Another agent posts with its own task token but claims the owner's id.
+    const forgedByAgent = await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST",
+      headers: auth(otherTaskToken),
+      body: JSON.stringify({
+        body: "Forged summary",
+        author_type: "agent",
+        author_id: owner.id,
+        authorType: "agent",
+        authorId: owner.id,
+      }),
+    });
+    expect(forgedByAgent.status).toBe(201);
+    const agentComment = await forgedByAgent.json();
+    const storedAgentComment = store.getIssueComment(agentComment.id ?? agentComment.comment?.id);
+    expect(storedAgentComment).toMatchObject({ authorType: "agent", authorId: other.id });
+    const afterAgentForgery = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(afterAgentForgery.status).toBe(409);
+    expect((await afterAgentForgery.json()).code).toBe("final_summary_missing");
+
+    // 2. A member PAT posts with the same forged identity; the stored author is
+    //    the member, so (b) still does not hold for the agent.
+    const forgedByMember = await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST",
+      headers: auth(memberToken),
+      body: JSON.stringify({
+        body: "Member forged summary",
+        author_type: "agent",
+        author_id: owner.id,
+        authorType: "agent",
+        authorId: owner.id,
+      }),
+    });
+    expect(forgedByMember.status).toBe(201);
+    const memberComment = await forgedByMember.json();
+    const storedMemberComment = store.getIssueComment(memberComment.id ?? memberComment.comment?.id);
+    expect(storedMemberComment).toMatchObject({ authorType: "member", authorId: "local" });
+    const afterMemberForgery = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(afterMemberForgery.status).toBe(409);
+    expect((await afterMemberForgery.json()).code).toBe("final_summary_missing");
+
+    // 3. The authorized agent's own comment does satisfy (b).
+    const own = await app.request(`/api/issues/${parent.id}/comments`, {
+      method: "POST", headers: auth(taskToken), body: JSON.stringify({ body: "Owner summary" }),
+    });
+    expect(own.status).toBe(201);
+    const accepted = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(accepted.status).toBe(200);
+    expect(store.getIssue(parent.id)?.status).toBe("done");
   });
 
   it("keeps member A1 unchanged and invalidates a grant after reassignment", async () => {

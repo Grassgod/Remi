@@ -441,7 +441,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         code: err.code,
         reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
         open_children: err.details.openChildren ?? 0,
-        ...(err.details.lastChildClosedAt !== undefined ? { last_child_closed_at: err.details.lastChildClosedAt } : {}),
+        // MUL-400 S1c (QA round 1): the guard's machine-readable details live
+        // under `data`, matching the activity envelope this repo already uses
+        // for structured payloads (`entry.details` on the timeline). Only the
+        // newer `lastChildClosedAt` moves; `reason`/`open_children` keep their
+        // existing top-level names for compatibility.
+        ...(err.details.lastChildClosedAt !== undefined
+          ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
+          : {}),
         ...rejected,
       }, 409);
     }
