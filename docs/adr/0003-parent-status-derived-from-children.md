@@ -139,6 +139,11 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      caller, the worker bridge, and the SQLite backend's differing semantics),
      well outside this issue. The constraint is instead held by the call-site
      convention above and by the depth-counter regression tests.
+   - S2's dependency gate lives in this same hook. Its automatic start
+     (`assignIssue`) opens its own transaction, so it must stay *outside* the
+     report transaction — before it, committing separately — and only its
+     returned readiness lines feed the report. Verified on a scratch merge of
+     the two branches: the combined path still measures depth 1 on Postgres.
 9. **A batch update is pre-flighted as a whole, then written row by row.** Before
    the first write, `batchUpdateIssues` evaluates guard A (A1 and A4 included)
    for every row and refuses the whole batch if any row would be rejected,
@@ -150,6 +155,19 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    behaviour of silently skipping non-guard errors (missing or inaccessible
    rows) is unchanged, and a refusal in the write loop now surfaces as an error
    instead of a 200.
+10. **Unchanged behaviours this ADR pins down.** Two things the second QA round
+    raised are deliberate and stay as they are:
+    - `batchUpdateIssues` still silently skips a row whose write fails for a
+      reason other than the parent-status guard (a missing or inaccessible
+      Issue, for instance). That is the historic batch contract and the `updated`
+      count is what the caller uses; the guard is the one refusal that must
+      surface. A caller should not read `updated` as "everything else succeeded".
+    - `recoverOrphans` only produces an E2 report when the orphan's failure
+      actually moves its Issue's status. A failed task whose Issue still has
+      another live round leaves that Issue where it was, so there is no child
+      ending to report and none is fabricated.
+
+## Alternatives considered
 
 - **Enforce in the HTTP layer.** The task-terminal path never goes through HTTP,
   so guard B would not exist and MUL-383 would persist. Put the rule where both
