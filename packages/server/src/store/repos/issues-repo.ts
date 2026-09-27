@@ -68,6 +68,7 @@ import type {
   MultiremiIssueDependency,
   MultiremiIssueDependencyType,
   MultiremiIssueKind,
+  MultiremiIssueParentDoneGrant,
   MultiremiIssuePriority,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
@@ -117,12 +118,30 @@ function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
   }
 }
 
-/** 409 for a held parent transition; the route maps it to the API error code. */
+/**
+ * MUL-400 S1c (A4): why an agent was refused `done` on a parent it does not (or
+ * no longer does) hold an effective grant for. The wire response repeats it so
+ * a run can tell "ask a member to authorize me" apart from "the grant lapsed".
+ */
+export type ParentDoneGrantRefusalReason =
+  | "grant_missing"
+  | "not_owner_agent"
+  | "assignee_changed"
+  | "owner_not_agent"
+  | "force_requires_member"
+  | "final_summary_missing"
+  | "children_open";
+
+/** 409/403 for a held parent transition; the route maps it to the API error code. */
 export class ParentStatusGuardError extends Error {
   constructor(
     readonly code: "issue_status_held" | "final_summary_missing" | "parent_done_requires_member",
     message: string,
-    readonly details: { openChildren?: number; lastChildClosedAt?: string | null } = {},
+    readonly details: {
+      openChildren?: number;
+      lastChildClosedAt?: string | null;
+      reason?: ParentDoneGrantRefusalReason;
+    } = {},
   ) {
     super(message);
   }
@@ -141,6 +160,10 @@ export class BatchParentStatusGuardError extends ParentStatusGuardError {
     super(cause.code, cause.message, cause.details);
     this.rejectedIssueIds = rejectedIssueIds;
   }
+}
+
+export class ParentDoneGrantOwnerError extends Error {
+  readonly code = "parent_done_grant_owner_not_agent";
 }
 
 /** Statuses a parent with unfinished children must not enter. */
@@ -1357,6 +1380,9 @@ export class IssuesRepo {
    * that touch other fields — the auto-retitle service, the merge-completion
    * effect and every title/description/priority edit in the UI — are not status
    * decisions and must keep working on parents that already have children.
+   *
+   * MUL-400 S1c (A4): a task identity may close a parent when a member has
+   * authorized THIS issue's owner agent — see {@link parentDoneGrantStatus}.
    */
   private assertParentStatusAllowed(
     id: string,
@@ -1366,16 +1392,26 @@ export class IssuesRepo {
   ): void {
     if (!statusNeedsChildGuard(nextStatus)) return;
     const force = input.force === true;
-    const hasChildren = this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
-    ).get(id) != null;
+    const hasChildren = this.hasChildIssues(id);
     if (!hasChildren) return;
-    // A4: a task identity may never close a parent issue at all, force or not.
+    // A4: a task identity may never close a parent issue at all, force or not —
+    // unless a member has authorized exactly this agent on this parent (S1c).
     if (statusIsMemberOnlyParentTerminal(nextStatus) && input.actorType === "agent") {
-      throw new ParentStatusGuardError(
-        "parent_done_requires_member",
-        `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member can close an issue that has children`,
-      );
+      const grant = this.parentDoneGrantStatus(current);
+      if (!grant.effective || grant.agentId !== input.actorId) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member, or the owner agent a member has authorized on this issue, can close an issue that has children`,
+          { reason: grant.effective ? "not_owner_agent" : grant.reason ?? "grant_missing" },
+        );
+      }
+      if (force) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Only a member can force ${current.key} to ${nextStatus}; the owner agent must finish the children and publish a summary`,
+          { reason: "force_requires_member" },
+        );
+      }
     }
     if (force) return;
     const openChildren = this.countOpenChildIssues(id);
@@ -1383,19 +1419,96 @@ export class IssuesRepo {
       throw new ParentStatusGuardError(
         "issue_status_held",
         `${current.key} still has ${openChildren} unfinished child issue(s); finish or cancel them, or repeat the request with force`,
-        { openChildren },
+        { openChildren, reason: "children_open" },
       );
     }
     if (nextStatus === "done") {
-      const summary = this.finalSummaryAfterLastChild(id);
+      // A1. The authorized owner agent (S1c D2) may satisfy it either with a
+      // finished result-bearing round or with a summary comment it posted after
+      // the last child closed; every other caller keeps the original rule.
+      const grant = input.actorType === "agent" ? this.parentDoneGrantStatus(current) : null;
+      const acceptCommentBy = grant?.effective && grant.agentId === input.actorId ? input.actorId : null;
+      const summary = this.finalSummaryAfterLastChild(id, { acceptCommentBy });
       if (!summary.satisfied) {
         throw new ParentStatusGuardError(
           "final_summary_missing",
-          `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
-          { lastChildClosedAt: summary.lastChildClosedAt },
+          acceptCommentBy
+            ? `Post a summary comment on ${current.key} after the last child finished, then set it to done`
+            : `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
+          { lastChildClosedAt: summary.lastChildClosedAt, reason: "final_summary_missing" },
         );
       }
     }
+  }
+
+  /**
+   * MUL-400 S1c (A4): does this Issue have any children at all? `countOpenChildIssues`
+   * answers a different question (unfinished children), and the grant rules key
+   * off "has children", not "has open children".
+   */
+  hasChildIssues(issueId: string): boolean {
+    return this.ctx.db.query(
+      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
+    ).get(issueId) != null;
+  }
+
+  /**
+   * MUL-400 S1c (A4): the ONE place that decides whether the stored grant still
+   * authorizes the CURRENT owner agent. Read by guard A (inside its row lock),
+   * the SCM merge effect and the detail routes, so all three agree.
+   *
+   * The effective agent is re-resolved from the Issue's assignee on every read
+   * (`resolveRunnableAgentForAssignee`: agent -> itself, squad -> its leader).
+   * A grant records the agent that was the owner when the member granted it, so
+   * re-assigning the parent makes the grant ineffective (`assignee_changed`,
+   * D1) instead of silently following the new owner.
+   */
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: ParentDoneGrantRefusalReason | null;
+  } {
+    const grantedAt = issue.parentDoneGrantAt ?? null;
+    const grantedBy = issue.parentDoneGrantBy ?? null;
+    const agentId = issue.parentDoneGrantAgentId ?? null;
+    const granted = grantedAt != null && agentId != null;
+    if (!granted) {
+      return { granted: false, grantedAt, grantedBy, agentId, ownerAgentId: null, effective: false, reason: "grant_missing" };
+    }
+    const ownerAgentId = issue.assigneeType && issue.assigneeId
+      ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id ?? null
+      : null;
+    const effective = granted && ownerAgentId != null && ownerAgentId === agentId;
+    const reason: ParentDoneGrantRefusalReason | null = effective
+      ? null
+      : !granted
+        ? "grant_missing"
+        : ownerAgentId == null
+          ? "owner_not_agent"
+          : "assignee_changed";
+    return { granted, grantedAt, grantedBy, agentId, ownerAgentId, effective, reason };
+  }
+
+  /**
+   * The wire shape for `issue.parent_done_grant` (S7 / MUL-414 renders the
+   * toggle from it). `null` means "no grant was ever recorded"; a recorded but
+   * ineffective grant still returns its data with `effective: false` so the UI
+   * can say "re-authorize" instead of pretending nothing happened.
+   */
+  issueParentDoneGrantView(issue: MultiremiIssue): MultiremiIssueParentDoneGrant | null {
+    const status = this.parentDoneGrantStatus(issue);
+    if (!status.granted || status.grantedAt == null || status.grantedBy == null || status.agentId == null) return null;
+    return {
+      granted_at: status.grantedAt,
+      granted_by: status.grantedBy,
+      agent_id: status.agentId,
+      effective: status.effective,
+      ineffective_reason: status.effective ? null : status.reason === "assignee_changed" ? "assignee_changed" : "owner_not_agent",
+    };
   }
 
   /**
@@ -1405,12 +1518,11 @@ export class IssuesRepo {
    * with a non-empty result and `completed_at` at or after the last child's
    * terminal timestamp.
    *
-   * System paths that close an Issue on an external authority's behalf (the SCM
-   * merge effect) skip this and guard A4 entirely: the merge already required
-   * 贺华杰's authorization, so the Issue's terminal state carries the same human
-   * decision the guard exists to protect.
+   * An authorized owner agent may also satisfy A1 with its own non-empty
+   * comment after the final child closes. SCM checks the same signal before
+   * bypassing guard A; member closure keeps the original completed-task rule.
    */
-  finalSummaryAfterLastChild(parentIssueId: string): { satisfied: boolean; lastChildClosedAt: string | null } {
+  finalSummaryAfterLastChild(parentIssueId: string, options: { acceptCommentBy?: string | null } = {}): { satisfied: boolean; lastChildClosedAt: string | null } {
     const parent = this.getIssue(parentIssueId);
     if (!parent) return { satisfied: false, lastChildClosedAt: null };
     if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
@@ -1426,6 +1538,16 @@ export class IssuesRepo {
       ? this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId)?.id ?? null
       : null;
     if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
+    if (options.acceptCommentBy === parentAgentId) {
+      const comments = this.ctx.db.query(
+        `SELECT body FROM multiremi_issue_comments
+         WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
+           ${lastChildClosedAt ? "AND created_at >= ?" : ""}`,
+      ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
+      if (comments.some((row) => String(row.body ?? "").trim().length > 0)) {
+        return { satisfied: true, lastChildClosedAt };
+      }
+    }
     // `result` is a JSON blob written by completeTask; "has a result" means the
     // stored payload carries non-empty output text, so evaluate it in JS rather
     // than pattern-matching the serialized column in SQL.
@@ -1438,6 +1560,57 @@ export class IssuesRepo {
     ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
     const satisfied = rows.some((row) => storedTaskResultHasOutput(row.result));
     return { satisfied, lastChildClosedAt };
+  }
+
+  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      const ownerAgentId = current.assigneeType && current.assigneeId
+        ? this.ctx.resolveRunnableAgentForAssignee(current.assigneeType, current.assigneeId)?.id ?? null
+        : null;
+      if (!ownerAgentId) throw new ParentDoneGrantOwnerError("Assign an agent or squad owner before granting parent closure");
+      if (current.parentDoneGrantAt && current.parentDoneGrantAgentId === ownerAgentId) return current;
+      const now = nowIso();
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = ?, parent_done_grant_by = ?, parent_done_grant_agent_id = ?, updated_at = ? WHERE id = ?",
+        [now, memberId, ownerAgentId, now, issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_created",
+        data: {
+          agentId: ownerAgentId, agent_id: ownerAgentId, memberId, member_id: memberId,
+          previousAgentId: current.parentDoneGrantAgentId, previous_agent_id: current.parentDoneGrantAgentId,
+          grantedAt: now, granted_at: now,
+        },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
+  }
+
+  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      if (!current.parentDoneGrantAt) return current;
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = NULL, parent_done_grant_by = NULL, parent_done_grant_agent_id = NULL, updated_at = ? WHERE id = ?",
+        [nowIso(), issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_revoked",
+        data: { agentId: current.parentDoneGrantAgentId, agent_id: current.parentDoneGrantAgentId, memberId, member_id: memberId },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
   }
 
   listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
@@ -1531,208 +1704,279 @@ export class IssuesRepo {
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
   ): { issue: MultiremiIssue; cancelledTasks: number } {
+    // MUL-400 S1c (QA round 1): the row write and its audit activities are one
+    // transaction, and every outbound event waits for COMMIT. The write lives in
+    // {@link updateIssueWithinTransaction} so the SCM merge effect can join the
+    // same transaction and roll the status back together with its bookkeeping.
+    const collector: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => this.updateIssueWithinTransaction(
+      id,
+      input,
+      options,
+      collector,
+      deferredEvents,
+    ))();
+    this.runIssueUpdatePostCommit(result, input, collector, deferredEvents);
+    return { issue: result.issue, cancelledTasks: result.cancelledTasks };
+  }
+
+  /**
+   * MUL-400 S1c (QA round 1): the caller owns the transaction.
+   *
+   * The row update, `issue_updated`, `issue_status_forced` and
+   * `parent_done_grant_used` commit together, so an exception after any of them
+   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: Postgres
+   * has no savepoints, so this method never opens a transaction and never emits
+   * a workspace event directly. The caller must run
+   * {@link runIssueUpdatePostCommit} after its COMMIT.
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
     let previous: MultiremiIssue | null = null;
-    let updatedAt = "";
     let cancelledTasks = 0;
-    const transactionEvents = createCommitEventQueue();
-    const updated = this.ctx.db.transaction(() => {
-      if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
-        const initial = this.getIssue(id);
-        if (initial) {
-          // Match Task creation's workspace-before-Issue lock order so a
-          // first execution cannot race a directory change on Postgres.
-          const targetWorkspace = input.workspaceId ?? input.workspace_id ?? initial.workspaceId;
-          for (const workspaceId of [...new Set([initial.workspaceId, targetWorkspace])].sort()) {
-            this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-          }
+    if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
+      const initial = this.getIssue(id);
+      if (initial) {
+        // Match Task creation's workspace-before-Issue lock order so a
+        // first execution cannot race a directory change on Postgres.
+        const targetWorkspace = input.workspaceId ?? input.workspace_id ?? initial.workspaceId;
+        for (const workspaceId of [...new Set([initial.workspaceId, targetWorkspace])].sort()) {
+          this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
         }
       }
-      // A no-op UPDATE is a portable write lock: Postgres locks this Issue row
-      // until commit, while SQLite serializes the writer transaction. Re-read
-      // only after acquiring it so a user terminal transition and a worker
-      // lifecycle transition can never derive writes from the same stale row.
-      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-      if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
-      const current = this.getIssue(id);
-      if (!current) throw new Error(`Issue not found: ${id}`);
-      previous = current;
+    }
+    // A no-op UPDATE is a portable write lock: Postgres locks this Issue row
+    // until commit, while SQLite serializes the writer transaction. Re-read
+    // only after acquiring it so a user terminal transition and a worker
+    // lifecycle transition can never derive writes from the same stale row.
+    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
+    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`Issue not found: ${id}`);
+    previous = current;
 
-      const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
-      let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
-      const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
-      let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
-      const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
-      const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
-      if (picksProject && picksDirectory) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
-      if (picksDirectory) nextProjectId = null;
-      if (picksProject) nextRuntimeWorkspaceId = null;
-      if (nextRuntimeWorkspaceId !== (current.runtimeWorkspaceId ?? null)) {
-        new RuntimeWorkspacesRepo(this.ctx).assertIssueBindingChange(id, nextRuntimeWorkspaceId, nextWorkspaceId);
-      } else if (nextRuntimeWorkspaceId && nextWorkspaceId !== current.workspaceId) {
-        new RuntimeWorkspacesRepo(this.ctx).require(nextRuntimeWorkspaceId, nextWorkspaceId);
-      }
-      let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
-      let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
-      const nextStartDate = hasAnyField(input, "startDate", "start_date")
-        ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
-        : current.startDate;
-      const nextDueDate = hasAnyField(input, "dueDate", "due_date")
-        ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
-        : current.dueDate;
-      const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
-        ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
-        : current.acceptanceCriteria;
-      const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
-        ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
-        : current.contextRefs;
+    const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+    let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
+    const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
+    const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
+    const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
+    if (picksProject && picksDirectory) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
+    if (picksDirectory) nextProjectId = null;
+    if (picksProject) nextRuntimeWorkspaceId = null;
+    if (nextRuntimeWorkspaceId !== (current.runtimeWorkspaceId ?? null)) {
+    new RuntimeWorkspacesRepo(this.ctx).assertIssueBindingChange(id, nextRuntimeWorkspaceId, nextWorkspaceId);
+    } else if (nextRuntimeWorkspaceId && nextWorkspaceId !== current.workspaceId) {
+    new RuntimeWorkspacesRepo(this.ctx).require(nextRuntimeWorkspaceId, nextWorkspaceId);
+    }
+    let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
+    let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
+    const nextStartDate = hasAnyField(input, "startDate", "start_date")
+      ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
+      : current.startDate;
+    const nextDueDate = hasAnyField(input, "dueDate", "due_date")
+      ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
+      : current.dueDate;
+    const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
+      ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
+      : current.acceptanceCriteria;
+    const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
+      ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
+      : current.contextRefs;
 
-      if (nextProjectId) {
-        const project = this.ctx.projects().getProject(nextProjectId);
-        if (!project) throw new Error(`Project not found: ${nextProjectId}`);
-        if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
-      }
-      if (nextParentIssueId) {
-        const parent = this.getIssue(nextParentIssueId);
-        if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
-        if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
-        this.validateIssueParent(id, nextParentIssueId);
-      }
-      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
-        const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
-          ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
-          : hasAnyField(input, "assigneeId", "assignee_id")
-            ? null
-            : nextAssigneeType;
-        const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
-        nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
-        nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
-        this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
-      }
-
-      updatedAt = nowIso();
-      const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
-      // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
-      // children cannot be parked in review or closed, and only a member may
-      // override. Runs before the write so a rejected request changes nothing.
-      // Field-only edits are never status decisions, so the guard stays out of
-      // their way even for a task identity.
-      const statusChanged = nextStatus !== current.status;
-      // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
-      // not decide a guarded parent transition, and must not fail either — it
-      // records why the request was held and leaves the status to the human. The
-      // hold replaces the guard rather than tripping it, and the write below is
-      // skipped entirely, so nothing about the Issue moves.
-      const holdParentStatus = options.holdParentStatus === true;
-      if (holdParentStatus) {
-        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, transactionEvents);
-      } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
-        this.assertParentStatusAllowed(id, current, nextStatus, input);
-      }
-      const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
-      const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
-      const nextCompletedAt = enteringTerminal
-        ? updatedAt
-        : leavingTerminal
+    if (nextProjectId) {
+      const project = this.ctx.projects().getProject(nextProjectId);
+      if (!project) throw new Error(`Project not found: ${nextProjectId}`);
+      if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
+    }
+    if (nextParentIssueId) {
+      const parent = this.getIssue(nextParentIssueId);
+      if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
+      this.validateIssueParent(id, nextParentIssueId);
+    }
+    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
+      const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
+        ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
+        : hasAnyField(input, "assigneeId", "assignee_id")
           ? null
-          : current.completedAt;
-      const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
-      // A held transition writes nothing at all: the request is audited as held
-      // and the Issue keeps its current status.
-      if (holdParentStatus) return current;
-      this.ctx.db.run(
-        `UPDATE multiremi_issues SET
-        title = ?,
-        description = ?,
-        status = ?,
-        priority = ?,
-        workspace_id = ?,
-        project_id = ?,
-        runtime_workspace_id = ?,
-        parent_issue_id = ?,
-        assignee_type = ?,
-        assignee_id = ?,
-        position = ?,
-        start_date = ?,
-        due_date = ?,
-        acceptance_criteria = ?,
-        context_refs = ?,
-        completed_at = ?,
-        archived_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.title ?? current.title,
-        input.description === undefined ? current.description : input.description,
-        nextStatus,
-        normalizeIssuePriority(input.priority ?? current.priority),
-        nextWorkspaceId,
-        nextProjectId,
-        nextRuntimeWorkspaceId,
-        nextParentIssueId,
-        nextAssigneeType,
-        nextAssigneeId,
-        input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
-        nextStartDate,
-        nextDueDate,
-        toJson(nextAcceptanceCriteria),
-        toJson(nextContextRefs),
-        nextCompletedAt,
-        nextArchivedAt,
-        updatedAt,
-        id,
-        ],
-      );
-      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
-        && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
-        cancelledTasks = this.unassignIssueWithinTransaction(id, {
-          actorType: input.actorType ?? "system",
-          actorId: input.actorId ?? null,
-          parentTaskId: input.parentTaskId ?? input.parent_task_id,
-        }, transactionEvents);
-      }
-      const next = this.getIssue(id)!;
-      this.linkReferencedAttachmentsToIssue(id, next.description);
-      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
-        issue: next,
-        previousStatus: current.status,
-        actorType: "system",
-        actorId: null,
-        automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-      });
-      return next;
-    })();
-    this.ctx.emitCommitEvents(transactionEvents);
-    if (updated === previous) return { issue: updated, cancelledTasks };
+          : nextAssigneeType;
+      const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
+      nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
+      nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
+      this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
+    }
+
+    const updatedAt = nowIso();
+    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+    // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
+    // children cannot be parked in review or closed, and only a member may
+    // override. Runs before the write so a rejected request changes nothing.
+    // Field-only edits are never status decisions, so the guard stays out of
+    // their way even for a task identity.
+    const statusChanged = nextStatus !== current.status;
+    // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
+    // not decide a guarded parent transition, and must not fail either — it
+    // records why the request was held and leaves the status to the human. The
+    // hold replaces the guard rather than tripping it, and the write below is
+    // skipped entirely, so nothing about the Issue moves.
+    const holdParentStatus = options.holdParentStatus === true;
+    if (holdParentStatus) {
+      this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, deferredEvents);
+    } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
+      this.assertParentStatusAllowed(id, current, nextStatus, input);
+    }
+    const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
+    const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
+    const nextCompletedAt = enteringTerminal
+      ? updatedAt
+      : leavingTerminal
+        ? null
+        : current.completedAt;
+    const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
+    // A held transition writes nothing at all: the request is audited as held
+    // and the Issue keeps its current status.
+    if (holdParentStatus) return { issue: current, previous: current, cancelledTasks: 0 };
+    this.ctx.db.run(
+      `UPDATE multiremi_issues SET
+      title = ?,
+      description = ?,
+      status = ?,
+      priority = ?,
+      workspace_id = ?,
+      project_id = ?,
+      runtime_workspace_id = ?,
+      parent_issue_id = ?,
+      assignee_type = ?,
+      assignee_id = ?,
+      position = ?,
+      start_date = ?,
+      due_date = ?,
+      acceptance_criteria = ?,
+      context_refs = ?,
+      completed_at = ?,
+      archived_at = ?,
+      updated_at = ?
+     WHERE id = ?`,
+    [
+      input.title ?? current.title,
+      input.description === undefined ? current.description : input.description,
+      nextStatus,
+      normalizeIssuePriority(input.priority ?? current.priority),
+      nextWorkspaceId,
+      nextProjectId,
+      nextRuntimeWorkspaceId,
+      nextParentIssueId,
+      nextAssigneeType,
+      nextAssigneeId,
+      input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
+      nextStartDate,
+      nextDueDate,
+      toJson(nextAcceptanceCriteria),
+      toJson(nextContextRefs),
+      nextCompletedAt,
+      nextArchivedAt,
+      updatedAt,
+      id,
+      ],
+    );
+    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
+      && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
+      cancelledTasks = this.unassignIssueWithinTransaction(id, {
+        actorType: input.actorType ?? "system",
+        actorId: input.actorId ?? null,
+        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+      }, deferredEvents);
+    }
+    const next = this.getIssue(id)!;
+    this.linkReferencedAttachmentsToIssue(id, next.description);
+    this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      issue: next,
+      previousStatus: current.status,
+      actorType: "system",
+      actorId: null,
+      automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+    });
+    // MUL-400 S1c (QA round 1): every audit row below commits with the status
+    // write above. The events go on the caller's queue, so a rollback leaves
+    // neither rows nor listeners behind.
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
       type: "issue_updated",
       body: null,
       data: input,
-    });
+    }, deferredEvents);
     // MUL-400 E1: a member override has to be auditable next to the write it
     // allowed, including the child count it overrode at the time.
-    if (previous!.status !== updated.status && input.force === true && statusNeedsChildGuard(updated.status)) {
+    if (current.status !== next.status && input.force === true && statusNeedsChildGuard(next.status)) {
       this.ctx.appendIssueActivity(id, {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
         type: "issue_status_forced",
-        body: updated.status,
+        body: next.status,
         data: {
-          status: updated.status,
-          previousStatus: previous!.status,
-          previous_status: previous!.status,
+          status: next.status,
+          previousStatus: current.status,
+          previous_status: current.status,
           openChildren: this.countOpenChildIssues(id),
           open_children: this.countOpenChildIssues(id),
           ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
         },
-      });
+      }, deferredEvents);
     }
-    if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
-    if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
-    if (previous!.status !== "done" && updated.status === "done") {
-      this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
+    if (current.status !== "done" && next.status === "done" && input.actorType === "agent") {
+      const grant = this.parentDoneGrantStatus(next);
+      if (grant.effective && grant.agentId === input.actorId && this.hasChildIssues(id)) {
+        this.ctx.appendIssueActivity(id, {
+          actorType: "agent", actorId: input.actorId, type: "parent_done_grant_used",
+          data: {
+            source: options.parentDoneGrantSource ?? "api",
+            agentId: grant.agentId,
+            grantedBy: grant.grantedBy,
+            grantedAt: grant.grantedAt,
+            ...(options.parentDoneGrantData ?? {}),
+          },
+        }, deferredEvents);
+      }
     }
+    if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, current.projectId]);
+    if (next.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, next.projectId]);
+    if (current.status !== "done" && next.status === "done") {
+      this.ctx.knowledge().createIssueCompletionKnowledgeBundle(next);
+    }
+    return { issue: next, previous: current, cancelledTasks };
+  }
+
+  /**
+   * MUL-400 S1c: the post-COMMIT half of {@link updateIssueWithinTransaction}.
+   *
+   * Publishes the audit events the committed write queued, then runs the E1/E2
+   * child-status hook, replays the transitions that hook itself produced and
+   * flushes the hook's own events. The write must already be durable — the hook
+   * opens its own transaction and Postgres has no savepoints.
+   */
+  runIssueUpdatePostCommit(
+    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    input: UpdateIssueInput,
+    collector: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const updated = result.issue;
+    const previous = result.previous;
+    // The write is durable: publish its audit rows (the `issue_updated` line,
+    // the member force record, the grant-use row, a hold) before the hook runs.
+    // The hook gets its OWN queue, so a hook failure cannot retroactively
+    // publish events for rows its rolled-back transaction just erased.
+    this.ctx.emitCommitEvents(deferredEvents);
+    if (updated === previous) return;
+    const hookEvents = createCommitEventQueue();
     // The write above is committed; the hook runs after it on purpose (ADR
     // 0003). A failure here therefore cannot undo the Issue's own transition —
     // it is logged and rethrown so the caller learns the report did not land.
@@ -1742,11 +1986,9 @@ export class IssuesRepo {
     // never dropped) so the replay walks all the way to the grandparent. The
     // deferred queue covers the hook's own realtime pushes; it is flushed only
     // after the hook returned and its transaction committed.
-    const collector: ChildStatusChangeCollector = [];
-    const deferredEvents = createCommitEventQueue();
     try {
       this.notifyChildStatusChange(
-        previous!,
+        previous,
         updated,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
         collector,
@@ -1754,9 +1996,9 @@ export class IssuesRepo {
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
       // event for the family it LEFT, so the old parent re-derives as well. The
       // new parent is covered by the hook above.
-      if (parentStatusGuardEnabled() && previous!.parentIssueId && previous!.parentIssueId !== updated.parentIssueId) {
-        const oldParent = this.getIssue(previous!.parentIssueId);
-        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, deferredEvents);
+      if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
+        const oldParent = this.getIssue(previous.parentIssueId);
+        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
       }
     } catch (err) {
       // The hook's own transaction rolled back, so its transitions and events
@@ -1767,8 +2009,7 @@ export class IssuesRepo {
       throw err;
     }
     this.ctx.tasks().runCollectedChildStatusChanges(collector);
-    this.ctx.emitCommitEvents(deferredEvents);
-    return { issue: updated, cancelledTasks };
+    this.ctx.emitCommitEvents(hookEvents);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -1997,6 +2238,7 @@ export class IssuesRepo {
         openChildren,
         open_children: openChildren,
         status: "in_progress",
+        reason: "children_open",
         ...(extra ?? {}),
       },
     }, deferredEvents);
@@ -5284,6 +5526,9 @@ function toIssue(row: Row): MultiremiIssue {
     contextRefs: parseJson(row.context_refs, []),
     metadata: parseIssueMetadata(row.metadata),
     labels: [],
+    parentDoneGrantAt: nullableString(row.parent_done_grant_at),
+    parentDoneGrantBy: nullableString(row.parent_done_grant_by),
+    parentDoneGrantAgentId: nullableString(row.parent_done_grant_agent_id),
     createdBy: nullableString(row.created_by),
     completedAt: nullableString(row.completed_at),
     archivedAt: nullableString(row.archived_at),
