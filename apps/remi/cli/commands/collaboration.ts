@@ -374,6 +374,40 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.workspace", ["issue", "workspace"], "Show issue worktree state", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/workspace`);
     }),
+    nativeSpec("issue.decision.request", ["issue", "decision", "request"], "Record a non-blocking decision request", "write", HUMAN_TASK, [refPositional("issue")], [
+      { name: "kind", type: "string", valueName: "kind", description: "permission|merge|production_change|question|criteria|other" },
+      { name: "title", type: "string", valueName: "title", description: "Decision title" },
+      { name: "body", type: "string", valueName: "text", description: "Decision context" },
+      { name: "body-stdin", type: "boolean", description: "Read decision context from stdin" },
+      { name: "option", type: "string", valueName: "choice", repeatable: true, description: "Available choice" },
+    ], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "decisions"), {
+        kind: requiredOption(invocation, "kind"), title: requiredOption(invocation, "title"),
+        body: invocation.options["body-stdin"] === true ? readFileSync(0, "utf8") : stringOption(invocation, "body"),
+        options: stringOptions(invocation, "option"),
+      });
+    }),
+    nativeSpec("issue.decision.list", ["issue", "decision", "list"], "List decisions and pending human requests", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
+      await getAndRender(invocation, issueSubpath(invocation, "decisions"));
+    }),
+    nativeSpec("issue.decision.answer", ["issue", "decision", "answer"], "Answer or revise a decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [
+      { name: "text", type: "string", valueName: "answer", description: "Answer text" },
+      { name: "option", type: "string", valueName: "choice", description: "Chosen option" },
+      { name: "reason", type: "string", valueName: "text", description: "Reason for the answer (required for agents)" },
+      { name: "overturn", type: "string", valueName: "text", description: "How a human can overturn it (required for agents)" },
+    ], async (invocation) => {
+      const answer = stringOption(invocation, "text") ?? stringOption(invocation, "option");
+      if (!answer) throw new CliError("usage", "--text or --option is required");
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/answer`, {
+        answer, reason: stringOption(invocation, "reason"), overturn: stringOption(invocation, "overturn"),
+      });
+    }),
+    nativeSpec("issue.decision.escalate", ["issue", "decision", "escalate"], "Hand a pending decision to a member", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/escalate`, {});
+    }),
+    nativeSpec("issue.decision.withdraw", ["issue", "decision", "withdraw"], "Withdraw an unanswered decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/withdraw`, {});
+    }),
     nativeSpec("issue.dependency.list", ["issue", "dependency", "list"], "List issue dependencies", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "dependencies"), ["dependencies"]);
     }),

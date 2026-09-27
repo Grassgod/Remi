@@ -2460,6 +2460,39 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_pending ON multiremi_task_human_requests(status, task_id);
+
+    -- MUL-400 E4: the light "waiting for your decision" row. A child run raises
+    -- one of these instead of blocking; the parent owner answers it or hands it
+    -- to a human. No scope, expiry or revocation: that is not a grant object.
+    CREATE TABLE IF NOT EXISTS multiremi_issue_decisions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      source_issue_id TEXT NOT NULL,
+      source_task_id TEXT,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      options TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      answer TEXT,
+      answered_by_member_id TEXT,
+      answered_at TEXT,
+      history TEXT NOT NULL DEFAULT '[]',
+      owner_agent_id TEXT,
+      created_by_agent_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    -- The read model asks "this Issue's open/pending rows" on every parent page.
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_decisions_issue
+      ON multiremi_issue_decisions(issue_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_decisions_source
+      ON multiremi_issue_decisions(source_issue_id, created_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_task_steer_messages (
       id TEXT PRIMARY KEY,

@@ -2516,6 +2516,71 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.decision.request": {
+      "command": "remi issue decision request",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.request",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.list": {
+      "command": "remi issue decision list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.answer": {
+      "command": "remi issue decision answer",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.answer",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.escalate": {
+      "command": "remi issue decision escalate",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.escalate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.withdraw": {
+      "command": "remi issue decision withdraw",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.withdraw",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.dependency.list": {
       "command": "remi issue dependency list",
       "auth": [
