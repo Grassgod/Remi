@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 759,
+    "routeCount": 764,
     "routeCountByPrefix": {
       "native": 210,
-      "compat": 535,
+      "compat": 540,
       "root": 14
     },
-    "getRoutes": 324,
-    "getRoutesWithBody": 321,
+    "getRoutes": 325,
+    "getRoutesWithBody": 322,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 435,
+    "mutationRoutes": 439,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -214,6 +214,7 @@
     "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
+    "GET /api/issues/:id/decisions",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
@@ -584,6 +585,10 @@
     "POST /api/invitations/:id/decline",
     "POST /api/issues",
     "POST /api/issues/:id/comments",
+    "POST /api/issues/:id/decisions",
+    "POST /api/issues/:id/decisions/:decisionId/answer",
+    "POST /api/issues/:id/decisions/:decisionId/escalate",
+    "POST /api/issues/:id/decisions/:decisionId/withdraw",
     "POST /api/issues/:id/dependencies",
     "POST /api/issues/:id/labels",
     "POST /api/issues/:id/reactions",
@@ -958,6 +963,7 @@
     "GET /api/issues/:id/change-requests",
     "GET /api/issues/:id/children",
     "GET /api/issues/:id/comments",
+    "GET /api/issues/:id/decisions",
     "GET /api/issues/:id/dependencies",
     "GET /api/issues/:id/generated-issues",
     "GET /api/issues/:id/labels",
@@ -9556,6 +9562,61 @@
             "allowed": true
           },
           {
+            "id": "issue.decision.answer",
+            "command": "remi issue decision answer",
+            "capability": "issue.decision.answer",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.escalate",
+            "command": "remi issue decision escalate",
+            "capability": "issue.decision.escalate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.list",
+            "command": "remi issue decision list",
+            "capability": "issue.decision.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.request",
+            "command": "remi issue decision request",
+            "capability": "issue.decision.request",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.decision.withdraw",
+            "command": "remi issue decision withdraw",
+            "capability": "issue.decision.withdraw",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "issue.delete",
             "command": "remi issue delete",
             "capability": "issue.delete",
@@ -14673,7 +14734,8 @@
             "emoji": "+1",
             "created_at": "<timestamp>"
           }
-        ]
+        ],
+        "pending_decision_count": 1
       }
     },
     {
@@ -14912,6 +14974,41 @@
           ]
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/issues/:id/decisions",
+      "route": "GET /api/issues/:id/decisions",
+      "path": "/api/issues/iss_snapshot/decisions",
+      "status": 200,
+      "body": {
+        "waiting_on_human": [
+          {
+            "id": "hrq_snapshot",
+            "bucket": "waiting_on_human",
+            "type": "human_request",
+            "kind": "permission",
+            "title": "Permission request",
+            "body": null,
+            "status": "pending",
+            "issueId": "iss_snapshot",
+            "sourceIssueId": "iss_snapshot",
+            "sourceTaskId": "tsk_snapshot",
+            "options": null,
+            "payload": {
+              "tool": "Bash",
+              "command": "ls"
+            },
+            "answer": null,
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>"
+          }
+        ],
+        "owner_and_answered": {
+          "pending": [],
+          "answered": []
+        },
+        "count": 1
+      }
     },
     {
       "key": "get-sweep GET /api/issues/:id/dependencies",
@@ -19441,7 +19538,8 @@
               "createdAt": "<timestamp>"
             }
           ],
-          "child_count": 1
+          "child_count": 1,
+          "pending_decision_count": 1
         },
         "children": [
           {

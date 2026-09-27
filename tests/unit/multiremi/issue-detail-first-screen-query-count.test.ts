@@ -5,7 +5,7 @@
 // pins two properties that a future refactor could quietly break:
 //
 //   1. the response shape does not drift — each route's body is compared
-//      against a golden captured from the pre-optimization implementation
+//      against a pinned golden (including S4's pending decision count)
 //      (`tests/fixtures/multiremi/issue-detail-first-screen-golden.json`), and
 //      a `bun run scripts/snapshot-api-routes.ts --check` run covers the same
 //      ground for the whole route table;
@@ -99,7 +99,7 @@ function createStore(): { store: MultiremiStore; db: Database } {
 }
 
 describe("MUL-385 issue detail first-screen response shape", () => {
-  it("matches the pre-optimization golden for all three routes", async () => {
+  it("matches the pinned golden for all three routes", async () => {
     // The golden was captured with the same PRNG + clock pin, so ids and page
     // cursors line up and only a genuine shape change can fail this comparison.
     const restoreIds = installDeterministicIds();
@@ -145,7 +145,7 @@ describe("MUL-385 issue detail first-screen response shape", () => {
 });
 
 describe("MUL-385 issue detail first-screen query counts", () => {
-  it("keeps /api/issues/:id at exactly four statements", async () => {
+  it("adds only one aggregate query for the pending decision count", async () => {
     const { store, db, probe } = createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const fixture = seedIssueDetailFirstScreenFixture(store, {
@@ -156,12 +156,11 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     const response = await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS });
     expect(response.status).toBe(200);
 
-    // `SELECT *` for the issue, the label join, its reactions and its
-    // attachments. Tasks, children, child progress and dependencies belong to
-    // `/api/multiremi/issues/:id`, which must keep loading them.
-    expect(probe.statements).toBe(4);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_tasks"))).toBe(false);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("parent_issue_id"))).toBe(false);
+    // The original four reads remain; S4 adds one aggregate over escalated
+    // decisions and pending human requests on this Issue and direct children.
+    expect(probe.statements).toBe(5);
+    expect([...probe.bySql.keys()].filter((sql) => sql.includes("multiremi_issue_decisions"))).toHaveLength(1);
+    expect([...probe.bySql.keys()].some((sql) => sql.includes("SELECT * FROM multiremi_tasks"))).toBe(false);
     expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_issue_dependencies"))).toBe(false);
   });
 

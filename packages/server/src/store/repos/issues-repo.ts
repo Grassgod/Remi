@@ -33,12 +33,15 @@ import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
   AssignIssueResult,
+  AnswerIssueDecisionInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateAttachmentInput,
   CreateIssueCommentInput,
   CreateIssueDependencyInput,
   CreateIssueInput,
+  CreateIssueDecisionInput,
+  IssueDecisionActor,
   CreateLabelInput,
   ListIssueCommentsInput,
   ListIssueCommentsResult,
@@ -52,6 +55,11 @@ import type {
   MultiremiInboxPage,
   MultiremiInboxSummary,
   MultiremiIssue,
+  MultiremiIssueDecision,
+  MultiremiIssueDecisionAnswer,
+  MultiremiIssueDecisionEntry,
+  MultiremiIssueDecisionKind,
+  MultiremiIssueDecisionList,
   MultiremiIssueAutoTitleMetadata,
   MultiremiIssueActivity,
   MultiremiIssueAssigneeGroup,
@@ -209,6 +217,14 @@ const MAX_ISSUE_METADATA_KEYS = 50;
 const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 const COMMENT_HARD_CAP = 2000;
 const COMMENT_SUMMARY_RUNES = 200;
+const DECISION_KINDS = new Set<MultiremiIssueDecisionKind>(["permission", "merge", "production_change", "question", "criteria", "other"]);
+const DECISION_KIND_ORDER: Record<MultiremiIssueDecisionKind, number> = {
+  permission: 0, merge: 1, production_change: 2, question: 3, criteria: 4, other: 5,
+};
+
+export class IssueDecisionError extends Error {
+  constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
+}
 
 export type IssueDeletionBlockCode =
   | "issue_not_found"
@@ -286,6 +302,278 @@ const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
 
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
+
+  private decisionOwner(issue: MultiremiIssue): MultiremiAgent | null {
+    const id = issue.assigneeType === "agent" ? issue.assigneeId
+      : issue.assigneeType === "squad" && issue.assigneeId
+        ? this.ctx.squads().getSquad(issue.assigneeId)?.leaderId ?? null : null;
+    const agent = id ? this.ctx.agents().getAgent(id) : null;
+    return agent && !agent.archivedAt && agent.workspaceId === issue.workspaceId ? agent : null;
+  }
+
+  private decisionTaskActorAllowed(actor: IssueDecisionActor, issue: MultiremiIssue, owner: MultiremiAgent | null): boolean {
+    if (actor.type !== "agent" || !actor.taskId || !owner || actor.id !== owner.id) return false;
+    const task = this.ctx.tasks().getTask(actor.taskId);
+    return !!task && task.agentId === actor.id && task.issueId === issue.id && task.workspaceId === issue.workspaceId;
+  }
+
+  getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE id = ? AND issue_id = ?",
+    ).get(decisionId, issueId) as Row | null;
+    return row ? toIssueDecision(row) : null;
+  }
+
+  countPendingIssueDecisions(issueId: string): number {
+    const row = this.ctx.db.query(
+      `SELECT
+        (SELECT COUNT(*) FROM multiremi_issue_decisions WHERE issue_id = ? AND status = 'escalated') +
+        (SELECT COUNT(*) FROM multiremi_task_human_requests h
+          JOIN multiremi_tasks t ON t.id = h.task_id
+          JOIN multiremi_issues i ON i.id = t.issue_id
+          WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)) AS total`,
+    ).get(issueId, issueId, issueId) as { total: number } | null;
+    return Number(row?.total ?? 0);
+  }
+
+  listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
+    const decisions = (this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE issue_id = ? AND status != 'withdrawn' ORDER BY created_at DESC, id DESC",
+    ).all(issueId) as Row[]).map(toIssueDecision);
+    const requests = this.ctx.db.query(
+      `SELECT h.id, h.kind, h.payload, h.status, h.created_at, t.issue_id, t.id AS task_id
+       FROM multiremi_task_human_requests h
+       JOIN multiremi_tasks t ON t.id = h.task_id
+       JOIN multiremi_issues i ON i.id = t.issue_id
+       WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)`,
+    ).all(issueId, issueId) as Row[];
+    const waiting_on_human: MultiremiIssueDecisionEntry[] = decisions
+      .filter((decision) => decision.status === "escalated")
+      .map((decision) => decisionEntry(decision, "waiting_on_human"));
+    for (const row of requests) {
+      const payload = parseJson<Record<string, unknown>>(nullableString(row.payload), {});
+      const kind = String(row.kind) === "permission" ? "permission" : "question";
+      const title = String(payload.title ?? payload.message ?? (kind === "permission" ? "Permission request" : "Question"));
+      waiting_on_human.push({
+        id: String(row.id), bucket: "waiting_on_human", type: "human_request", kind,
+        title, body: typeof payload.message === "string" ? payload.message : null,
+        status: String(row.status), issueId, sourceIssueId: String(row.issue_id),
+        sourceTaskId: String(row.task_id), options: null, payload, answer: null,
+        createdAt: String(row.created_at), updatedAt: String(row.created_at),
+      });
+    }
+    const pending_owner = decisions.filter((decision) => decision.status === "pending")
+      .map((decision) => decisionEntry(decision, "pending_owner"));
+    const answered = decisions.filter((decision) => decision.status === "answered")
+      .slice(0, 50).map((decision) => decisionEntry(decision, "answered"));
+    for (const group of [waiting_on_human, pending_owner, answered]) group.sort(compareDecisionEntries);
+    return { waiting_on_human, owner_and_answered: { pending: pending_owner, answered }, count: waiting_on_human.length };
+  }
+
+  createIssueDecision(sourceIssueId: string, input: CreateIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    const source = this.getIssue(sourceIssueId);
+    if (!source) throw new IssueDecisionError(404, "source issue not found");
+    if (actor.type === "agent") {
+      const task = actor.taskId ? this.ctx.tasks().getTask(actor.taskId) : null;
+      if (!task || task.issueId !== source.id || task.agentId !== actor.id || task.workspaceId !== source.workspaceId) {
+        throw new IssueDecisionError(403, "task does not belong to the source issue");
+      }
+    }
+    const kind = String(input.kind ?? "") as MultiremiIssueDecisionKind;
+    const title = String(input.title ?? "").trim();
+    if (!DECISION_KINDS.has(kind) || !title || title.length > 500) throw new IssueDecisionError(400, "valid kind and title are required");
+    if (input.options != null && (!Array.isArray(input.options) || input.options.some((option) => typeof option !== "string"))) {
+      throw new IssueDecisionError(400, "options must be a list of strings");
+    }
+    const events = createCommitEventQueue();
+    const changes: ChildStatusChangeCollector = [];
+    const created = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(source.workspaceId);
+      const currentSource = this.getIssue(source.id)!;
+      const parent = currentSource.parentIssueId ? this.getIssue(currentSource.parentIssueId) : null;
+      if (currentSource.parentIssueId && !parent) throw new IssueDecisionError(409, "parent issue not found");
+      const target = parent ?? currentSource;
+      const owner = parent ? this.decisionOwner(parent) : null;
+      const status = !parent || !owner || kind === "production_change" ? "escalated" : "pending";
+      const id = createId("dcs");
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_issue_decisions
+         (id, workspace_id, issue_id, source_issue_id, source_task_id, kind, title, body, options,
+          status, owner_agent_id, created_by_agent_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, source.workspaceId, target.id, currentSource.id, actor.type === "agent" ? actor.taskId : null,
+          kind, title, String(input.body ?? ""), input.options == null ? null : toJson(input.options),
+          status, owner?.id ?? null, actor.type === "agent" ? actor.id : null, now, now],
+      );
+      const decision = this.getIssueDecision(target.id, id)!;
+      this.decisionEvent(events, "decision:created", decision);
+      if (status === "pending") this.queueDecisionRound(target, owner!, `Decision ${id} (${kind}): ${title}\nReview the request on ${target.key}. Answer with a reason and how a human can overturn it, or escalate it.`, changes, events);
+      else {
+        this.ctx.appendIssueActivity(target.id, {
+          actorType: "system", actorId: SYSTEM_AUTHOR_ID, type: "decision_escalated",
+          body: title, data: { decision_id: id, kind, direct: true },
+        }, events);
+        this.notifyDecisionRequested(target, decision, events);
+      }
+      return decision;
+    })();
+    this.ctx.tasks().runCollectedChildStatusChanges(changes);
+    this.ctx.emitCommitEvents(events);
+    return created;
+  }
+
+  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    const answer = String(input.answer ?? "").trim();
+    const reason = String(input.reason ?? "").trim();
+    const overturn = String(input.overturn ?? "").trim();
+    if (!answer) throw new IssueDecisionError(400, "answer is required");
+    if (actor.type === "agent" && (!reason || !overturn)) throw new IssueDecisionError(400, "agent answers require reason and overturn instructions");
+    const events = createCommitEventQueue();
+    const changes: ChildStatusChangeCollector = [];
+    const updated = this.ctx.db.transaction(() => {
+      const parent = this.getIssue(issueId);
+      if (!parent) throw new IssueDecisionError(404, "decision not found");
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+      const decision = this.getIssueDecision(issueId, decisionId);
+      if (!decision) throw new IssueDecisionError(404, "decision not found");
+      const owner = this.decisionOwner(parent);
+      if (actor.type === "agent" && (!this.decisionTaskActorAllowed(actor, parent, owner)
+        || decision.status !== "pending" || decision.kind === "production_change")) {
+        throw new IssueDecisionError(403, "only the parent owner task can answer a pending decision");
+      }
+      if (decision.status === "withdrawn") throw new IssueDecisionError(409, "decision was withdrawn");
+      const record: MultiremiIssueDecisionAnswer = {
+        answererType: actor.type, answererId: actor.id, answer, reason,
+        overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
+      };
+      this.ctx.db.run(
+        `UPDATE multiremi_issue_decisions
+         SET status = 'answered', answer = ?, answered_by_member_id = ?, answered_at = ?, history = ?, updated_at = ?
+         WHERE id = ?`,
+        [toJson(record), actor.type === "member" ? actor.id : null,
+          record.answeredAt, toJson([...decision.history, record]), record.answeredAt, decision.id],
+      );
+      const result = this.getIssueDecision(issueId, decisionId)!;
+      this.ctx.appendIssueActivity(parent.id, {
+        actorType: actor.type, actorId: actor.id, type: "decision_answered",
+        body: `${decision.title}: ${answer}`,
+        data: { decision_id: decision.id, kind: decision.kind, answer, reason, overturn: record.overturn, answerer_type: actor.type },
+      }, events);
+      this.ctx.appendIssueActivity(decision.sourceIssueId, {
+        actorType: actor.type, actorId: actor.id, type: "decision_received",
+        body: `${decision.title}: ${answer}`,
+        data: { decision_id: decision.id, parent_issue_id: parent.id, answerer_type: actor.type },
+      }, events);
+      const source = this.getIssue(decision.sourceIssueId)!;
+      const prompt = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${answer}\nFor subsequent actions cite decision:${decision.id}.`;
+      const sourceOwner = this.decisionOwner(source);
+      if (sourceOwner) this.queueDecisionRound(source, sourceOwner, prompt, changes, events);
+      if (actor.type === "member" && decision.answer?.answererType === "agent" && owner) {
+        this.queueDecisionRound(parent, owner, `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`, changes, events);
+      }
+      this.decisionEvent(events, "decision:updated", result);
+      return result;
+    })();
+    this.ctx.tasks().runCollectedChildStatusChanges(changes);
+    this.ctx.emitCommitEvents(events);
+    return updated;
+  }
+
+  escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    const events = createCommitEventQueue();
+    const updated = this.ctx.db.transaction(() => {
+      const parent = this.getIssue(issueId);
+      if (!parent) throw new IssueDecisionError(404, "decision not found");
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+      const decision = this.getIssueDecision(issueId, decisionId);
+      if (!decision) throw new IssueDecisionError(404, "decision not found");
+      if (actor.type === "agent" && !this.decisionTaskActorAllowed(actor, parent, this.decisionOwner(parent))) {
+        throw new IssueDecisionError(403, "only the parent owner task can escalate");
+      }
+      if (decision.status !== "pending") throw new IssueDecisionError(409, "only pending decisions can be escalated");
+      this.ctx.db.run("UPDATE multiremi_issue_decisions SET status = 'escalated', updated_at = ? WHERE id = ?", [nowIso(), decision.id]);
+      const result = this.getIssueDecision(issueId, decisionId)!;
+      this.ctx.appendIssueActivity(parent.id, {
+        actorType: actor.type, actorId: actor.id, type: "decision_escalated",
+        body: decision.title, data: { decision_id: decision.id, kind: decision.kind },
+      }, events);
+      this.notifyDecisionRequested(parent, result, events);
+      this.decisionEvent(events, "decision:updated", result);
+      return result;
+    })();
+    this.ctx.emitCommitEvents(events);
+    return updated;
+  }
+
+  withdrawIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    const events = createCommitEventQueue();
+    const updated = this.ctx.db.transaction(() => {
+      const issue = this.getIssue(issueId);
+      if (!issue) throw new IssueDecisionError(404, "decision not found");
+      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
+      const decision = this.getIssueDecision(issueId, decisionId);
+      if (!decision) throw new IssueDecisionError(404, "decision not found");
+      if (actor.type === "agent") {
+        const task = actor.taskId ? this.ctx.tasks().getTask(actor.taskId) : null;
+        if (!task || task.issueId !== decision.sourceIssueId || task.agentId !== actor.id || decision.createdByAgentId !== actor.id) {
+          throw new IssueDecisionError(403, "only the requesting agent task can withdraw");
+        }
+      }
+      if (decision.status === "withdrawn") return decision;
+      if (decision.status === "answered") throw new IssueDecisionError(409, "answered decisions cannot be withdrawn");
+      this.ctx.db.run("UPDATE multiremi_issue_decisions SET status = 'withdrawn', updated_at = ? WHERE id = ?", [nowIso(), decision.id]);
+      const result = this.getIssueDecision(issueId, decisionId)!;
+      this.decisionEvent(events, "decision:updated", result);
+      return result;
+    })();
+    this.ctx.emitCommitEvents(events);
+    return updated;
+  }
+
+  private queueDecisionRound(issue: MultiremiIssue, agent: MultiremiAgent, prompt: string, changes: ChildStatusChangeCollector, events: CommitEventQueue): void {
+    const sessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id).id;
+    const queued = this.findQueuedTaskForIssueAndAgent(issue.id, agent.id, sessionId);
+    if (queued) {
+      const updated = this.ctx.db.run(
+        "UPDATE multiremi_tasks SET prompt = ?, updated_at = ? WHERE id = ? AND status = 'queued' AND continued_from_task_id IS NULL",
+        [`${queued.prompt}\n\n${prompt}`, nowIso(), queued.id],
+      );
+      if (updated.changes > 0) return;
+    }
+    const task = this.ctx.tasks().createTaskWithinTransaction({
+      agentId: agent.id, issueId: issue.id, issueSessionId: sessionId, workspaceId: issue.workspaceId,
+      prompt, preserveIssueStatus: true,
+    }, changes, events);
+    events.enqueuedTasks.push(task);
+  }
+
+  private decisionEvent(events: CommitEventQueue, type: "decision:created" | "decision:updated", decision: MultiremiIssueDecision): void {
+    events.workspace.push({
+      type, workspaceId: decision.workspaceId, actorType: "system",
+      payload: { issue_id: decision.issueId, decision },
+    });
+  }
+
+  private notifyDecisionRequested(parent: MultiremiIssue, decision: MultiremiIssueDecision, events: CommitEventQueue): void {
+    const recipients = new Set<string>();
+    if (parent.assigneeType === "member" && parent.assigneeId) recipients.add(parent.assigneeId);
+    const owner = this.decisionOwner(parent);
+    if (owner?.ownerId) recipients.add(owner.ownerId);
+    for (const subscriber of this.listIssueSubscribers(parent.id)) {
+      if (subscriber.userType === "member") recipients.add(subscriber.userId);
+    }
+    for (const memberId of recipients) {
+      const item = this.ctx.createInboxItem({
+        issueId: parent.id, memberId, type: "decision_requested", severity: "action",
+        title: `${parent.key}: ${decision.title}`, body: decision.body,
+        actorType: "system", details: { decision_id: decision.id, kind: decision.kind },
+      });
+      if (item) events.workspace.push({
+        type: "inbox:new", workspaceId: parent.workspaceId, actorType: "system", payload: { item },
+      });
+    }
+  }
 
   createIssue(input: CreateIssueInput): MultiremiIssue {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
@@ -4304,6 +4592,37 @@ export class IssuesRepo {
 
 function formatIssueKey(number: number): string {
   return `MUL-${number}`;
+}
+
+function toIssueDecision(row: Row): MultiremiIssueDecision {
+  return {
+    id: String(row.id), workspaceId: String(row.workspace_id), issueId: String(row.issue_id),
+    sourceIssueId: String(row.source_issue_id), sourceTaskId: nullableString(row.source_task_id),
+    kind: String(row.kind) as MultiremiIssueDecisionKind, title: String(row.title), body: String(row.body ?? ""),
+    options: parseJson<string[] | null>(nullableString(row.options), null),
+    status: String(row.status) as MultiremiIssueDecision["status"],
+    answer: parseJson<MultiremiIssueDecisionAnswer | null>(nullableString(row.answer), null),
+    answeredByMemberId: nullableString(row.answered_by_member_id),
+    answeredAt: nullableString(row.answered_at),
+    history: parseJson<MultiremiIssueDecisionAnswer[]>(nullableString(row.history), []),
+    ownerAgentId: nullableString(row.owner_agent_id), createdByAgentId: nullableString(row.created_by_agent_id),
+    createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+  };
+}
+
+function decisionEntry(decision: MultiremiIssueDecision, bucket: MultiremiIssueDecisionEntry["bucket"]): MultiremiIssueDecisionEntry {
+  return {
+    id: decision.id, bucket, type: "decision", kind: decision.kind, title: decision.title,
+    body: decision.body, status: decision.status, issueId: decision.issueId,
+    sourceIssueId: decision.sourceIssueId, sourceTaskId: decision.sourceTaskId,
+    options: decision.options, answer: decision.answer,
+    createdAt: decision.createdAt, updatedAt: decision.updatedAt,
+  };
+}
+
+function compareDecisionEntries(a: MultiremiIssueDecisionEntry, b: MultiremiIssueDecisionEntry): number {
+  return DECISION_KIND_ORDER[a.kind] - DECISION_KIND_ORDER[b.kind]
+    || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
 
 function commentMentionPrompt(_comment: MultiremiIssueComment): string {

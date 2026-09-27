@@ -168,12 +168,19 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 668,
+      mapped: 673,
       exempt: 91,
       missing: 0,
-      total: 759,
+      total: 764,
     });
     expect(manifest.max_planned_routes).toBe(0);
+    for (const [route, command] of [
+      ["GET /api/issues/:id/decisions", "issue.decision.list"],
+      ["POST /api/issues/:id/decisions", "issue.decision.request"],
+      ["POST /api/issues/:id/decisions/:decisionId/answer", "issue.decision.answer"],
+      ["POST /api/issues/:id/decisions/:decisionId/escalate", "issue.decision.escalate"],
+      ["POST /api/issues/:id/decisions/:decisionId/withdraw", "issue.decision.withdraw"],
+    ]) expect(manifest.routes[route!]).toEqual({ command });
     expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
       .toEqual({ command: "workspace.relay.probe" });
     expect(manifest.commands["workspace.relay.probe"]).toMatchObject({

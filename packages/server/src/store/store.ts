@@ -262,6 +262,11 @@ import type {
   ListIssueCommentsResult,
   MultiremiIssueDependency,
   MultiremiIssue,
+  MultiremiIssueDecision,
+  MultiremiIssueDecisionList,
+  CreateIssueDecisionInput,
+  AnswerIssueDecisionInput,
+  IssueDecisionActor,
   CreateKnowledgeCompilationRunInput,
   CreateKnowledgeSubmissionInput,
   MultiremiKnowledgeCompilationOutput,
@@ -3080,6 +3085,34 @@ runMigrations(this.db);
 
   getIssue(id: string): MultiremiIssue | null {
     return this.issues.getIssue(id);
+  }
+
+  getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecision(issueId, decisionId);
+  }
+
+  listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
+    return this.issues.listIssueDecisions(issueId);
+  }
+
+  countPendingIssueDecisions(issueId: string): number {
+    return this.issues.countPendingIssueDecisions(issueId);
+  }
+
+  createIssueDecision(sourceIssueId: string, input: CreateIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.createIssueDecision(sourceIssueId, input, actor);
+  }
+
+  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  }
+
+  escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.escalateIssueDecision(issueId, decisionId, actor);
+  }
+
+  withdrawIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.withdrawIssueDecision(issueId, decisionId, actor);
   }
 
   getIssueWorkspace(issueId: string): MultiremiIssueWorkspace | null {
