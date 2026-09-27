@@ -28,7 +28,18 @@ export const chatKeys = {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PREFIXED_TASK_ID_PATTERN = /^tsk_[a-z0-9_]+$/i;
-export const CHAT_PENDING_REFETCH_INTERVAL_MS = 3000;
+/**
+ * Fallback re-poll cadence for chat pending tasks (MUL-472 a / A6).
+ *
+ * WS events remain the primary refresh signal (`createChatHandlers` invalidates
+ * both the per-session and the aggregate key on every chat/task lifecycle
+ * event, which refetches immediately). This poll only reconciles events the
+ * socket missed. At 3 s one open tab with a queued task kept ~136 SQL/s of
+ * `pending-tasks` load alive (MUL-383 `cmt_lnvu0atqu87w`), so the steady state
+ * is 10 s; `refetchIntervalInBackground: false` on the consumers stops it
+ * entirely while the tab is hidden.
+ */
+export const CHAT_PENDING_REFETCH_INTERVAL_MS = 10_000;
 const TASK_MESSAGE_IN_FLIGHT_MAX_PER_TASK = 200;
 const TASK_MESSAGE_IN_FLIGHT_MAX_TASKS = 100;
 const inFlightTaskMessages = new Map<string, TaskMessagePayload[]>();
@@ -178,7 +189,7 @@ export function pendingChatTaskOptions(sessionId: string) {
     queryFn: () => api.getPendingChatTask(sessionId),
     enabled: !!sessionId,
     refetchInterval: pendingChatTaskRefetchInterval,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     staleTime: Infinity,
   });
 }
@@ -217,7 +228,7 @@ export function pendingChatTasksOptions(wsId: string) {
     queryKey: chatKeys.pendingTasks(wsId),
     queryFn: () => api.listPendingChatTasks(),
     refetchInterval: pendingChatTasksRefetchInterval,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     staleTime: Infinity,
   });
 }
