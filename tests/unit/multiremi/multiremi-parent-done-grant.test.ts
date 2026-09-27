@@ -66,6 +66,11 @@ describe("MUL-457 parent done grant", () => {
     expect((await removed.json()).parent_done_grant).toBeNull();
     await app.request(`/api/multiremi/issues/${parent.id}/parent-done-grant`, { method: "DELETE", headers: auth(memberToken) });
     expect(activities(store, parent.id, "parent_done_grant_revoked")).toHaveLength(1);
+    const revoked = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(revoked.status).toBe(403);
+    expect((await revoked.json()).reason).toBe("grant_missing");
   });
 
   it("accepts only an authorized agent's non-empty comment after the final child closed", async () => {
@@ -128,6 +133,14 @@ describe("MUL-457 parent done grant", () => {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
     expect(await held.json()).toMatchObject({ code: "issue_status_held", reason: "children_open", open_children: 1 });
+    const forced = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done", force: true }),
+    });
+    expect(forced.status).toBe(403);
+    expect((await forced.json()).code).toBe("issue_force_requires_member");
+    expect(() => store.updateIssue(parent.id, {
+      status: "done", force: true, actorType: "agent", actorId: owner.id,
+    })).toThrow("Only a member can force");
     const otherToken = (await tokens(store, other.id)).taskToken;
     const denied = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(otherToken), body: JSON.stringify({ status: "done" }),
@@ -137,6 +150,32 @@ describe("MUL-457 parent done grant", () => {
     const invalid = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
     expect(invalid.status).toBe(409);
     expect((await invalid.json()).code).toBe("parent_done_grant_owner_not_agent");
+    const human = store.createWorkspaceMember({ name: "Human owner" });
+    store.updateIssue(parent.id, { assigneeType: "member", assigneeId: human.id });
+    const memberOwner = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
+    expect(memberOwner.status).toBe(409);
+    expect((await memberOwner.json()).code).toBe("parent_done_grant_owner_not_agent");
+  });
+
+  it("authorizes a squad's leader but not another squad member", async () => {
+    const { store, owner, other, parent, child, app } = setup();
+    const squad = store.createSquad({ name: "Parent squad", leaderId: owner.id, memberIds: [other.id] });
+    store.updateIssue(parent.id, { assigneeType: "squad", assigneeId: squad.id });
+    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const granted = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
+    expect(granted.status).toBe(200);
+    expect((await granted.json()).parent_done_grant).toMatchObject({ agent_id: owner.id, effective: true });
+    store.updateIssue(child.id, { status: "done" });
+    store.createIssueComment(parent.id, { body: "Squad summary", authorType: "agent", authorId: owner.id });
+    const teammateToken = (await tokens(store, other.id)).taskToken;
+    const teammate = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(teammateToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(teammate.status).toBe(403);
+    const leader = await app.request(`/api/issues/${parent.id}`, {
+      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
+    });
+    expect(leader.status).toBe(200);
   });
 
   it("accepts a completed result-bearing owner round and applies authorized batch updates atomically", async () => {

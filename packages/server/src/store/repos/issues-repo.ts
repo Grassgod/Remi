@@ -120,6 +120,7 @@ export type ParentDoneGrantRefusalReason =
   | "not_owner_agent"
   | "assignee_changed"
   | "owner_not_agent"
+  | "force_requires_member"
   | "final_summary_missing"
   | "children_open";
 
@@ -1058,6 +1059,13 @@ export class IssuesRepo {
           "parent_done_requires_member",
           `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member, or the owner agent a member has authorized on this issue, can close an issue that has children`,
           { reason: grant.effective ? "not_owner_agent" : grant.reason ?? "grant_missing" },
+        );
+      }
+      if (force) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Only a member can force ${current.key} to ${nextStatus}; the owner agent must finish the children and publish a summary`,
+          { reason: "force_requires_member" },
         );
       }
     }
