@@ -54,8 +54,8 @@ export interface MirrorSessionEvent {
 
 /**
  * Kinds the log stores, keyed by the `session_events.kind` that produces them.
- * `thread_resolved` / `thread_unresolved` are deliberately absent: production
- * never wrote them for a resolve, and the v2 resolve is an in-place update.
+ * `thread_resolved` / `thread_unresolved` are deliberately absent: the legacy
+ * table keeps those markers until B2/B9, while the log updates its comment row.
  */
 const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   message: "message",
@@ -112,10 +112,11 @@ export function sessionEventToConversationLog(event: MirrorSessionEvent): {
   // `metadata` is the whole blob: keep the legacy keys and drop the ones the log
   // models as columns, so a reader never sees two sources for `parent_id`.
   const { parent_comment_id: _parentCommentId, ...metadata } = raw;
+  if (kind === "message_edited") metadata.body = event.body;
   return {
     sessionId: event.session_id,
     seq: Number(event.seq),
-    id: event.id,
+    id: event.source_comment_id ?? event.id,
     kind,
     authorType: event.author_type,
     authorId: event.author_id,
@@ -165,7 +166,7 @@ export function chatMessageToConversationLog(
       authorId: session.creatorId,
       bodyMd: message.body,
       // The optimistic-send key, kept verbatim so the client can merge in place.
-      metadata: message.client_id ? { client_id: message.client_id } : {},
+      metadata: message.client_id != null ? { client_id: message.client_id } : {},
     };
   }
   if (message.role === "assistant") {

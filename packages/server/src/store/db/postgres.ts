@@ -323,6 +323,9 @@ export class PostgresSyncDatabase implements SqlDatabase {
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
+      // PostgreSQL has no SQLite-style implicit savepoint here. Reuse the
+      // caller's transaction so an inner write cannot commit it early.
+      if (this.inTransaction) return fn(...args);
       this.bridge.exec("BEGIN", []);
       this.transactionDepth += 1;
       try {

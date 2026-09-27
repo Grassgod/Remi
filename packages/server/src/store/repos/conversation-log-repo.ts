@@ -279,7 +279,8 @@ export class ConversationLogRepo {
       `INSERT INTO multiremi_conversation_heads (session_id, head_seq, log_version, updated_at)
        VALUES (?, ?, 0, ?)
        ON CONFLICT(session_id) DO UPDATE SET
-         head_seq = CASE WHEN head_seq < excluded.head_seq THEN excluded.head_seq ELSE head_seq END`,
+         head_seq = CASE WHEN multiremi_conversation_heads.head_seq < excluded.head_seq
+           THEN excluded.head_seq ELSE multiremi_conversation_heads.head_seq END`,
       [sessionId, seq, nowIso()],
     );
   }
@@ -375,7 +376,7 @@ export class ConversationLogRepo {
     params.push(now);
     const revision = current.revision + 1;
     sets.push("revision = revision + 1");
-    if (input.touch !== false && current.kind !== "head") {
+    if (input.touch !== false) {
       this.ctx.db.run(
         "UPDATE multiremi_conversation_heads SET log_version = log_version + 1, updated_at = ? WHERE session_id = ?",
         [now, sessionId],
@@ -461,6 +462,18 @@ export class ConversationLogRepo {
       hasMoreAfter = anchor < headSeq;
     }
     const entries = rows.map(toConversationLogEntry);
+    if (entries.length) {
+      hasMoreBefore = (this.runQuery(
+        input.query,
+        `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq < ? AND ${visible} ORDER BY seq DESC LIMIT 1`,
+        [sessionId, entries[0]!.seq],
+      ).get() as Row | null) != null;
+      hasMoreAfter = (this.runQuery(
+        input.query,
+        `SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND ${visible} ORDER BY seq ASC LIMIT 1`,
+        [sessionId, entries[entries.length - 1]!.seq],
+      ).get() as Row | null) != null;
+    }
     const result: ConversationLogWindow = {
       entries,
       head_seq: headSeq,
@@ -542,12 +555,12 @@ export class ConversationLogRepo {
     const rows = (to == null
       ? this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND visibility = 'shown'
+         WHERE session_id = ? AND seq > ? AND visibility = 'shown' AND deleted_at IS NULL
          ORDER BY seq ASC`,
       ).all(sessionId, since)
       : this.ctx.db.query(
         `SELECT * FROM multiremi_conversation_log
-         WHERE session_id = ? AND seq > ? AND seq <= ? AND visibility = 'shown'
+         WHERE session_id = ? AND seq > ? AND seq <= ? AND visibility = 'shown' AND deleted_at IS NULL
          ORDER BY seq ASC`,
       ).all(sessionId, since, to)) as Row[];
     return rows.map(toConversationLogEntry);

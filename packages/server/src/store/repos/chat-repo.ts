@@ -326,6 +326,54 @@ export class ChatRepo {
     return rows.map(toChatMessage);
   }
 
+  listChatMessagesFromLog(chatSessionId: string): MultiremiChatMessage[] {
+    if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
+    const rows = this.ctx.db.query(
+      `SELECT message.*, log.seq AS cursor_seq FROM multiremi_conversation_log log
+       JOIN multiremi_chat_messages message ON message.chat_session_id = log.session_id AND message.sequence = log.seq
+       WHERE log.session_id = ? AND log.seq >= 1 AND log.visibility = 'shown' AND log.deleted_at IS NULL
+       UNION ALL
+       SELECT message.*, message.sequence AS cursor_seq FROM multiremi_chat_messages message
+       WHERE message.chat_session_id = ? AND NOT EXISTS (
+         SELECT 1 FROM multiremi_conversation_log log WHERE log.session_id = message.chat_session_id AND log.seq = message.sequence
+       )
+       ORDER BY cursor_seq ASC`,
+    ).all(chatSessionId, chatSessionId) as Row[];
+    return rows.map(toChatMessage);
+  }
+
+  listChatMessagesPageFromLog(chatSessionId: string, limit: number, beforeId?: string | null, beforeCreatedAt?: string | null): {
+    messages: MultiremiChatMessage[];
+    hasMore: boolean;
+  } | null {
+    if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
+    const sequence = this.ctx.db.query(
+      "SELECT message_sequence FROM multiremi_chat_sessions WHERE id = ?",
+    ).get(chatSessionId) as { message_sequence: number };
+    let anchor = Math.max(this.ctx.conversationLog().getConversationLogHead(chatSessionId)?.headSeq ?? 0, Number(sequence.message_sequence));
+    if (beforeId && beforeCreatedAt) {
+      const cursor = this.ctx.db.query(
+        "SELECT sequence, created_at FROM multiremi_chat_messages WHERE id = ? AND chat_session_id = ?",
+      ).get(beforeId, chatSessionId) as { sequence: number; created_at: string } | null;
+      if (!cursor || cursor.created_at !== beforeCreatedAt) return null;
+      anchor = Number(cursor.sequence) - 1;
+    }
+    const rows = this.ctx.db.query(
+      `SELECT message.*, log.seq AS cursor_seq FROM multiremi_conversation_log log
+       JOIN multiremi_chat_messages message ON message.chat_session_id = log.session_id AND message.sequence = log.seq
+       WHERE log.session_id = ? AND log.seq >= 1 AND log.seq <= ?
+         AND log.visibility = 'shown' AND log.deleted_at IS NULL
+       UNION ALL
+       SELECT message.*, message.sequence AS cursor_seq FROM multiremi_chat_messages message
+       WHERE message.chat_session_id = ? AND message.sequence <= ? AND NOT EXISTS (
+         SELECT 1 FROM multiremi_conversation_log log WHERE log.session_id = message.chat_session_id AND log.seq = message.sequence
+       )
+       ORDER BY cursor_seq DESC LIMIT ?`,
+    ).all(chatSessionId, anchor, chatSessionId, anchor, limit + 1) as Row[];
+    const hasMore = rows.length > limit;
+    return { messages: rows.slice(0, limit).reverse().map(toChatMessage), hasMore };
+  }
+
   appendChatMessageWithinTransaction(input: {
     id?: string;
     chatSessionId: string;
@@ -492,6 +540,7 @@ export class ChatRepo {
         taskId: task.id,
         role: "user",
         body,
+        clientId: input.client_id,
         createdAt: now,
       });
       const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];

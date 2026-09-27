@@ -51,6 +51,10 @@ export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
 
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    return this.ctx.db.transaction(() => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById))();
+  }
+
+  private getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const existing = this.ctx.db.query(
@@ -72,6 +76,12 @@ export class IssueSessionsRepo {
       `${SESSION_SELECT} WHERE issue_id = ? AND is_default = 1 LIMIT 1`,
     ).get(issueId) as Row | null;
     if (!row) throw new Error(`Failed to create default session for issue: ${issueId}`);
+    if (String(row.id) === id) {
+      this.ctx.conversationLog().syncIssueHeadWithinTransaction(id, {
+        title: issue.title,
+        description: issue.description,
+      }, now);
+    }
     return toIssueSession(row);
   }
 
@@ -445,12 +455,7 @@ export class IssueSessionsRepo {
         },
         { ...mapped.metadata, comment_id: mapped.metadata.comment_id as string | undefined },
       );
-      if (target != null) {
-        this.ctx.db.run(
-          "UPDATE multiremi_conversation_log SET metadata = ? WHERE session_id = ? AND seq = ?",
-          [toJson({ ...mapped.metadata, target_seq: target }), mapped.sessionId, mapped.seq],
-        );
-      }
+      if (target != null) mapped.metadata.target_seq = target;
     }
     if (mapped.kind === "task_completed" || mapped.kind === "task_failed" || mapped.kind === "task_cancelled") {
       const target = mapped.taskId
@@ -458,12 +463,7 @@ export class IssueSessionsRepo {
           "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
         ).get(mapped.sessionId, mapped.taskId) as { seq?: number } | null
         : null;
-      if (target?.seq != null) {
-        this.ctx.db.run(
-          "UPDATE multiremi_conversation_log SET metadata = ? WHERE session_id = ? AND seq = ?",
-          [toJson({ ...mapped.metadata, target_seq: Number(target.seq) }), mapped.sessionId, mapped.seq],
-        );
-      }
+      if (target?.seq != null) mapped.metadata.target_seq = Number(target.seq);
     }
     this.ctx.conversationLog().appendWithinTransaction({
       sessionId: mapped.sessionId,
@@ -491,6 +491,27 @@ export class IssueSessionsRepo {
       : this.ctx.db.query(
         "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
       ).all(sessionId, sinceSeq, toSeq) as Row[];
+    return rows.map(toSessionEvent);
+  }
+
+  listSessionEventsFromLog(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
+    if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
+    // Keep the old event id and metadata wire while the log owns the seq filter.
+    // B7 has not backfilled old sessions yet; those keep their legacy read.
+    if (!this.ctx.conversationLog().getConversationLogHead(sessionId)) return this.listSessionEvents(sessionId, input);
+    const since = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
+    const to = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
+    const rows = (to == null
+      ? this.ctx.db.query(
+        `SELECT event.* FROM multiremi_conversation_log log
+         JOIN multiremi_session_events event ON event.session_id = log.session_id AND event.seq = log.seq
+         WHERE log.session_id = ? AND log.seq > ? ORDER BY log.seq ASC`,
+      ).all(sessionId, since)
+      : this.ctx.db.query(
+        `SELECT event.* FROM multiremi_conversation_log log
+         JOIN multiremi_session_events event ON event.session_id = log.session_id AND event.seq = log.seq
+         WHERE log.session_id = ? AND log.seq > ? AND log.seq <= ? ORDER BY log.seq ASC`,
+      ).all(sessionId, since, to)) as Row[];
     return rows.map(toSessionEvent);
   }
 

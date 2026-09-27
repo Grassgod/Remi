@@ -13,6 +13,7 @@ import {
   issueCommentCreateInput,
   issueFromParam,
   issueListQuery,
+  loadChatSessionForCurrentUser,
   issueMutationActor,
   denyAttachmentCreationAccess,
   issueSubscriberCaller,
@@ -1256,6 +1257,40 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       store.listSessionParticipants(session.id),
     ));
   });
+  const logSessionAccess = (c: Context): string | Response => {
+    const sessionId = c.req.param("sessionId") ?? "";
+    const issueSession = store.getIssueSession(sessionId);
+    if (issueSession) {
+      return denyCurrentUserWorkspaceAccess(c, store, issueSession.workspaceId) ?? sessionId;
+    }
+    const chat = loadChatSessionForCurrentUser(c, store, sessionId);
+    return chat instanceof Response ? chat : chat.session.id;
+  };
+  app.get("/api/sessions/:sessionId/log/locate", (c) => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const id = c.req.query("id");
+    if (!id) return c.json({ error: "id is required" }, 400);
+    const location = store.locateConversationLogEntry(sessionId, id);
+    return location ? c.json(location) : c.json({ error: "entry not found" }, 404);
+  });
+  app.get("/api/sessions/:sessionId/log", (c) => {
+    const sessionId = logSessionAccess(c);
+    if (sessionId instanceof Response) return sessionId;
+    const readNumber = (name: string): number | null | undefined => {
+      const raw = c.req.query(name);
+      if (raw == null) return undefined;
+      const value = Number(raw);
+      return raw !== "" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    };
+    const anchor = readNumber("anchor");
+    const before = readNumber("before");
+    const after = readNumber("after");
+    if (anchor === null || before === null || after === null || (before ?? 0) + (after ?? 0) > 100) {
+      return c.json({ error: "invalid log window" }, 400);
+    }
+    return c.json(store.conversationLogWindow(sessionId, { anchor, before, after }));
+  });
   app.get("/api/sessions/:sessionId/inherited-context", (c) => {
     const session = store.getIssueSession(c.req.param("sessionId"));
     if (!session) return c.json({ error: "session not found" }, 404);
@@ -1383,7 +1418,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const sinceSeq = Number(c.req.query("since_seq") ?? 0);
     const rawToSeq = c.req.query("to_seq");
     const toSeq = rawToSeq == null ? null : Number(rawToSeq);
-    return c.json(store.listSessionEvents(session.id, { sinceSeq, toSeq }).map(sessionEventCompatibilityResponse));
+    return c.json(store.listSessionEventsFromLog(session.id, { sinceSeq, toSeq }).map(sessionEventCompatibilityResponse));
   });
   app.post("/api/issues/:id/sessions/:sessionId/messages", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
