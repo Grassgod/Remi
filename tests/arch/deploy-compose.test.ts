@@ -15,6 +15,8 @@ const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.appl
 const envExample = readFileSync(resolve(repoRoot, "deploy/docker/application.env.example"), "utf8");
 const apiEnvExample = readFileSync(resolve(repoRoot, "deploy/docker/api.env.example"), "utf8");
 const apiDockerfile = readFileSync(resolve(repoRoot, "deploy/docker/Dockerfile.api"), "utf8");
+const splitUpstream = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-upstream.conf"), "utf8");
+const splitLocations = readFileSync(resolve(repoRoot, "deploy/nginx/api-runtime-split-locations.conf"), "utf8");
 
 describe("application compose stack", () => {
   test("ships no ingestion service, profile, or endpoint registry", () => {
@@ -51,9 +53,12 @@ describe("application compose stack", () => {
     expect(runtime.env_file).toEqual(compose.services.api!.env_file);
     expect(runtime.volumes).toEqual(compose.services.api!.volumes);
     expect(runtime.ports).toEqual(["127.0.0.1:${REMI_API_RUNTIME_BIND_PORT:-16121}:6120"]);
-    // The role env on `api` is a pass-through with an `all` default, so an
-    // unconfigured installation behaves exactly as it did before.
-    expect(compose.services.api!.environment.MULTIREMI_API_ROLE).toBe("${REMI_API_ROLE:-all}");
+    // The role env on `api` is a pass-through with an **empty** default, not
+    // `all`. MUL-461 only reports a `role` field in /health and /readyz when the
+    // variable is explicitly set, so defaulting to the literal `all` would change
+    // those payloads for every existing installation. Empty means "unset" to the
+    // server, which resolves it to `all` internally without advertising it.
+    expect(compose.services.api!.environment.MULTIREMI_API_ROLE).toBe("${REMI_API_ROLE:-}");
     expect(compose.services.api!.environment.MULTIREMI_PEER_URL).toBe("${REMI_API_PEER_URL:-}");
   });
 
@@ -80,6 +85,23 @@ describe("application compose stack", () => {
       expect(source).not.toMatch(/^[A-Z_]*LARK[A-Z_]*=/mu);
       expect(source).not.toMatch(/^MULTIREMI_FEISHU_(?:APP_SECRET|SIDECAR)[A-Z_]*=/mu);
     }
+  });
+
+  test("splits the nginx snippet by the context each directive is legal in", () => {
+    // MUL-464 QA: the first version shipped one file to paste into a `server`
+    // block, which makes `nginx -t` fail with
+    // `"upstream" directive is not allowed here`. `upstream` is http-only and
+    // `location` is server-only, so the two cannot share one include target.
+    expect(splitUpstream).toMatch(/^upstream multica_api_runtime \{ server 127\.0\.0\.1:16121; keepalive 32; \}$/mu);
+    expect(splitUpstream).not.toMatch(/^\s*location /mu);
+    expect(splitLocations).toMatch(/^location \/api\/daemon\/ \{/mu);
+    expect(splitLocations).not.toMatch(/^\s*upstream /mu);
+    // The prefix must stay an ordinary prefix with a trailing slash: `^~` would
+    // stop the archive-upload regex below it from ever being evaluated, and
+    // without the trailing slash `/api/daemons/:id` (a browser route) would be
+    // captured too.
+    expect(splitLocations).not.toMatch(/\^~\s*\/api\/daemon\//u);
+    expect(splitLocations).not.toMatch(/location \/api\/daemon[^/\s]/u);
   });
 
   test("grants no container the Docker socket or host control", () => {

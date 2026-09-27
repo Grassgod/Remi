@@ -20,7 +20,7 @@ services:
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-0}
       MULTIREMI_SSH_MESH_CONTROL_PLANE: 0
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
-      MULTIREMI_API_ROLE: ${REMI_API_ROLE:-all}
+      MULTIREMI_API_ROLE: ${REMI_API_ROLE:-}
       MULTIREMI_PEER_URL: ${REMI_API_PEER_URL:-}
     # lark-cli ships in this image and reads its credential from $HOME, so the
     # Feishu message provider needs no service, port, or network of its own.

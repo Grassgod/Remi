@@ -39,6 +39,12 @@ const DEFAULT_CORE_SERVICES = ["api", "web", "ssh-mesh-control-plane"] as const;
  */
 const DEFAULT_PULL_SERVICES = ["api", "web"] as const;
 /**
+ * Services whose absence from a configured list means the host silently stops
+ * being upgraded. Both share the API image, and `web` is the only route to the
+ * browser surface.
+ */
+const REQUIRED_SERVICES = ["api", "web"] as const;
+/**
  * The service that used to run Feishu ingestion. It is gone from the Compose
  * file, but an installation upgrading across that change still has its
  * container running — and because it borrowed the API container's network
@@ -75,6 +81,17 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     this.extraHealthUrls = config.extraHealthUrls
       ?? parseServiceList(process.env.MULTIREMI_PLATFORM_EXTRA_HEALTH_URLS)
       ?? [];
+    // An explicit list is the operator's statement about this host's topology,
+    // so a partial one is obeyed, not repaired: inventing services here would
+    // start containers the operator did not ask for. But dropping `api` or `web`
+    // means the platform stops being upgraded, which is silent and only visible
+    // days later, so it is worth one line in the journal. The default list and
+    // an injected config never warn.
+    for (const required of REQUIRED_SERVICES) {
+      if (!this.coreServices.includes(required) && !this.pullServices.includes(required)) {
+        console.warn(`[platform-updater] MULTIREMI_PLATFORM_CORE_SERVICES does not include "${required}": that service will not be pulled, switched or restarted`);
+      }
+    }
   }
 
   async inspect(): Promise<PlatformInspection> {

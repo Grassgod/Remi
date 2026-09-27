@@ -212,6 +212,45 @@ describe("Docker Compose driver: core service list", () => {
     }
   });
 
+  it("warns when a configured list drops api or web, without repairing it", () => {
+    // Acceptance is not "make the platform work anyway" — the operator owns the
+    // list. But a list without `api` silently stops upgrading the platform, so
+    // the driver says so once per missing service instead of staying quiet.
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+    try {
+      process.env.MULTIREMI_PLATFORM_CORE_SERVICES = "ssh-mesh-control-plane,api-runtime";
+      const bed = driverBed();
+      try {
+        expect(warnings.filter((line) => line.includes('"api"')).length).toBe(1);
+        expect(warnings.filter((line) => line.includes('"web"')).length).toBe(1);
+        // The list is obeyed verbatim: reporting is the whole intervention.
+        expect(bed.driver).toBeDefined();
+      } finally {
+        bed.stop();
+      }
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  it("does not warn for the default list or a complete configured list", () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => { warnings.push(String(message)); };
+    try {
+      const defaults = driverBed();
+      defaults.stop();
+      process.env.MULTIREMI_PLATFORM_CORE_SERVICES = SPLIT_SERVICES;
+      const complete = driverBed();
+      complete.stop();
+      expect(warnings).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it("checks only the API and Web health URLs when no extra URL is configured", async () => {
     const bed = driverBed();
     try {
