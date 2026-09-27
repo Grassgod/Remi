@@ -99,6 +99,14 @@ export interface ApiCollectors {
  * Drops the query and replaces ID-like path segments with `:id`. Identifiers we
  * already know from `/api/me` + `/api/workspaces` are masked by value, because a
  * workspace id such as `local` is not recognisable by shape.
+ *
+ * The `<prefix>_...` rule accepts underscores inside the suffix, not only
+ * alphanumerics: fixture and test ids are written by hand
+ * (`iss_zerojump_short`, `iss_local_long`) while generated ones are opaque, and
+ * the two have to normalize the same way or a local run's report still shows raw
+ * ids (MUL-395 review, `cmt_tf79501ls2zg` §4). Checked against
+ * `scripts/api-routes.golden.json`: no static route segment contains an
+ * underscore at all, so no real path can be swallowed by the wider rule.
  */
 export function sanitizePath(rawUrl: string, origin: string, knownIds: string[] = []): string {
   let pathname = rawUrl;
@@ -127,8 +135,8 @@ export function sanitizePath(rawUrl: string, origin: string, knownIds: string[] 
       /^[0-9a-f]{8,}$/i.test(segment) ||
       /^[0-9a-f-]{20,}$/i.test(segment) ||
       /^[A-Z]{2,}-\d+$/.test(segment) ||
-      /^(att|iss|tsk|agt|cmt|mem|prj|run|sess|ses|pdoc|wsp|repo|usr|evt|inb)_[A-Za-z0-9]+$/.test(segment) ||
-      /^[a-z]{2,}_[A-Za-z0-9]{8,}$/.test(segment) ||
+      /^(att|iss|tsk|agt|cmt|mem|prj|run|sess|ses|pdoc|wsp|repo|usr|evt|inb)_[A-Za-z0-9_]+$/.test(segment) ||
+      /^[a-z]{2,}_[A-Za-z0-9_]{8,}$/.test(segment) ||
       (/^[0-9a-f-]{6,}$/i.test(segment) && segment.includes("-"));
     return isIdLike ? ":id" : segment;
   });
