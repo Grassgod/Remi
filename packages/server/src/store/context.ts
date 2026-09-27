@@ -496,6 +496,8 @@ export interface TasksSurface {
   /** Full rows for the ids a page kept, in the caller's order. */
   hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
+  /** Read one human request without going through the facade (MUL-407). */
+  getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
