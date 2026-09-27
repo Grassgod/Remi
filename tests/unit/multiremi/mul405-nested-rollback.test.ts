@@ -232,13 +232,16 @@ function seedMessaging(
     id: ref.connectionId, workspaceId, provider: "test_provider", channel: "test_channel",
     name: "Rollback connection", status: "ready",
   });
+  // One source per connection: a Source cannot be rebound to another
+  // connection, and the PostgreSQL suite reuses one database across cases.
+  const sourceId = `msrc_${ref.connectionId}`;
   store.messaging.upsertSource({
-    id: "msrc_rollback", workspaceId, connectionId: ref.connectionId, name: "Rollback source",
+    id: sourceId, workspaceId, connectionId: ref.connectionId, name: "Rollback source",
     allowlist: [{ externalConversationId: "conversation_rollback", addedAt: "2026-09-01T00:00:00.000Z" }],
   });
   store.messaging.ingestMessages({
     connectionId: ref.connectionId,
-    sourceId: "msrc_rollback",
+    sourceId,
     messages: [{
       externalMessageId: ref.externalMessageId,
       externalConversationId: "conversation_rollback",
@@ -389,6 +392,33 @@ describe("MUL-405 nested transaction rollback", () => {
         expect(retried.created).toBe(true);
       });
 
+      it("messaging outcomes: a successful Issue is rolled back when a later outer step fails", () => {
+        const store = backend.makeStore();
+        const workspaceId = store.createWorkspace({ name: "Outcomes late", slug: `outcomes-late-${backend.name}` }).id;
+        const ref = { connectionId: "mconn_rollback_late", externalMessageId: "external_rollback_late" };
+        seedMessaging(store, workspaceId, ref);
+        const before = snapshot(backend.db());
+        const db = backend.db();
+
+        // QA round 2: the other direction of the messaging rollback contract.
+        // The inner createIssue SUCCEEDS — Issue, outcome and the message's
+        // processed_at all land — and then the outer transaction fails. Nothing
+        // may survive: no Issue, no outcome, and no message state change.
+        expect(() => db.transaction(() => {
+          store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Committed then rolled back" });
+          expect(store.messaging.getMessage(ref.connectionId, ref.externalMessageId)?.processedAt).not.toBeNull();
+          throw new Error("injected outer failure");
+        })()).toThrow("injected outer failure");
+
+        expect(snapshot(backend.db())).toEqual(before);
+        expect(store.messaging.getMessage(ref.connectionId, ref.externalMessageId)?.processedAt).toBeNull();
+        expect(store.messaging.listOutcomes(ref.connectionId, ref.externalMessageId)).toHaveLength(0);
+
+        // The rollback left the message retryable.
+        const retried = store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Retried after outer failure" });
+        expect(retried.created).toBe(true);
+      });
+
       it("Autopilot: an inner failure rolls back the run, Issue, Session and Task", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Autopilot", slug: `autopilot-${backend.name}` }).id;
@@ -437,6 +467,63 @@ describe("MUL-405 nested transaction rollback", () => {
         injection.disarm();
         expect(snapshot(backend.db())).toEqual(before);
         expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(0);
+      });
+
+      it("nested createIssue publishes nothing before the outermost commit", () => {
+        const store = backend.makeStore();
+        const workspaceId = store.createWorkspace({ name: "Nested commit", slug: `nested-commit-${backend.name}` }).id;
+        // The store's own handle, not the raw one: that is where the after-commit
+        // queue lives, and a caller-owned outer transaction runs through it.
+        const db = (store as unknown as { db: SqlDatabase }).db;
+
+        const seen: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => {
+          if (event.type === "activity:created"
+            && (event.payload.entry as { action?: string } | undefined)?.action === "issue_created") {
+            seen.push(String((event.payload.entry as { action?: string }).action));
+          }
+        });
+
+        try {
+          // Outer transaction -> createIssue (a nested transaction) -> still
+          // inside the outer one. The activity push must not have happened yet:
+          // on Postgres the inner call only released a SAVEPOINT.
+          db.transaction(() => {
+            store.createIssue({ title: "Nested before commit", workspaceId });
+            expect(seen).toHaveLength(0);
+          })();
+        } finally {
+          unsubscribe();
+        }
+
+        // Committed: exactly one push, and only now.
+        expect(seen).toHaveLength(1);
+      });
+
+      it("nested createIssue publishes nothing when the outer transaction rolls back", () => {
+        const store = backend.makeStore();
+        const workspaceId = store.createWorkspace({ name: "Nested rollback", slug: `nested-rollback-${backend.name}` }).id;
+        const db = (store as unknown as { db: SqlDatabase }).db;
+        const before = snapshot(backend.db());
+
+        const seen: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => {
+          if (event.type === "activity:created"
+            && (event.payload.entry as { action?: string } | undefined)?.action === "issue_created") {
+            seen.push(String((event.payload.entry as { action?: string }).action));
+          }
+        });
+
+        expect(() => db.transaction(() => {
+          store.createIssue({ title: "Nested then rollback", workspaceId });
+          expect(seen).toHaveLength(0);
+          throw new Error("outer rollback");
+        })()).toThrow("outer rollback");
+
+        unsubscribe();
+        // Nothing was published, and the row is gone with the rollback.
+        expect(seen).toHaveLength(0);
+        expect(snapshot(backend.db())).toEqual(before);
       });
 
       it("captured inner failure leaves the outer transaction usable", () => {
