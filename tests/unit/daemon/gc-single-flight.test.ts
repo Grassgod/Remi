@@ -439,7 +439,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async (...args: unknown[]) => {
+        getSessionArchiveStatus: async (...args: unknown[]) => {
           requests.push(args);
           return {
             latest: null,
@@ -458,7 +458,12 @@ describe("daemon Session archive GC orchestration", () => {
       sourceRevision: "a".repeat(64),
       sha256: "b".repeat(64),
     });
-    expect(requests).toEqual([["rt_1", "iss_1", "a".repeat(64), "b".repeat(64)]]);
+    expect(requests).toEqual([[
+      "rt_1",
+      { kind: "issue", id: "iss_1" },
+      "a".repeat(64),
+      "b".repeat(64),
+    ]]);
   });
 
   it("requests physical verification for the deletion-time fresh snapshot", async () => {
@@ -473,7 +478,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async (...args: unknown[]) => {
+        getSessionArchiveStatus: async (...args: unknown[]) => {
           requests.push(args);
           return {
             latest: null,
@@ -493,8 +498,8 @@ describe("daemon Session archive GC orchestration", () => {
       ): Promise<unknown>;
     }).ensureIssueSessionArchive("iss_1", root, true)).toMatchObject({ archiveId: "isar_1" });
     expect(requests).toHaveLength(2);
-    expect(requests[0]).toEqual(["rt_1", "iss_1"]);
-    expect(requests[1]?.slice(0, 2)).toEqual(["rt_1", "iss_1"]);
+    expect(requests[0]).toEqual(["rt_1", { kind: "issue", id: "iss_1" }]);
+    expect(requests[1]?.slice(0, 2)).toEqual(["rt_1", { kind: "issue", id: "iss_1" }]);
     expect(requests[1]?.[4]).toBe(true);
   });
 
@@ -506,23 +511,23 @@ describe("daemon Session archive GC orchestration", () => {
     mkdirSync(join(root, ".multiremi"), { recursive: true });
     symlinkSync(outside, join(root, ".multiremi", "sessions"));
 
-    const reports: Array<{ runtimeId: string; issueId: string; input: unknown }> = [];
+    const reports: Array<{ runtimeId: string; subject: { kind: string; id: string }; input: unknown }> = [];
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => ({
+        getSessionArchiveStatus: async () => ({
           latest: null,
           latest_ready: null,
           requested_ready: null,
           gc_ready: false,
         }),
-        reportIssueSessionArchiveFailure: async (
+        reportSessionArchiveFailure: async (
           runtimeId: string,
-          issueId: string,
+          subject: { kind: string; id: string },
           input: unknown,
         ) => {
-          reports.push({ runtimeId, issueId, input });
+          reports.push({ runtimeId, subject, input });
           return { id: "sar_failure", status: "failed" };
         },
       },
@@ -534,7 +539,7 @@ describe("daemon Session archive GC orchestration", () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]).toMatchObject({
       runtimeId: "rt_1",
-      issueId: "iss_1",
+      subject: { kind: "issue", id: "iss_1" },
       input: {
         stage: "prepare",
         error: expect.stringContaining("must not contain symlinks"),
@@ -554,7 +559,7 @@ describe("daemon Session archive GC orchestration", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => ({
+        getSessionArchiveStatus: async () => ({
           latest: {
             id: "sar_failure",
             status: "pending",
@@ -564,7 +569,7 @@ describe("daemon Session archive GC orchestration", () => {
           requested_ready: { id: "sar_ready", status: "ready" },
           gc_ready: true,
         }),
-        initIssueSessionArchive: async (...args: unknown[]) => {
+        initSessionArchive: async (...args: unknown[]) => {
           initialized.push(args);
           return {
             archive: { id: "sar_ready", status: "ready" },

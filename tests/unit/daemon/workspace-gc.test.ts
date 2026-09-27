@@ -387,7 +387,7 @@ describe("Issue workspace GC", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => {
+        getSessionArchiveStatus: async () => {
           statusCalls++;
           return {
             latest: {
@@ -401,7 +401,7 @@ describe("Issue workspace GC", () => {
             gc_ready: false,
           };
         },
-        reportIssueSessionArchiveFailure: async () => {
+        reportSessionArchiveFailure: async () => {
           preparationFailureReports++;
         },
       },
@@ -443,7 +443,7 @@ describe("Issue workspace GC", () => {
     Object.assign(daemon, {
       options: { runtimeId: "rt_1", sessionArchiveMaxSourceBytes: 1024 },
       client: {
-        getIssueSessionArchiveStatus: async () => {
+        getSessionArchiveStatus: async () => {
           statusCalls++;
           return {
             latest: {
@@ -457,7 +457,7 @@ describe("Issue workspace GC", () => {
             gc_ready: false,
           };
         },
-        reportIssueSessionArchiveFailure: async () => {
+        reportSessionArchiveFailure: async () => {
           preparationFailureReports++;
         },
       },
