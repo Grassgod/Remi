@@ -236,7 +236,13 @@ describe.skipIf(!pgAvailable)("Task list pagination on PostgreSQL (MUL-357)", ()
     const headers = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
     // Reference set: what the unpaginated route returned on the parent commit,
     // computed here with the same two guards the route applies.
-    const reference = store.listTasks().map((task) => task.id);
+    //
+    // Read through the narrow `id/status/runtime_id/agent_id` projection: this
+    // fixture is >8 MB of full task rows, and since MUL-386 C.1 the bridge
+    // legitimately refuses a reply that size. The id set is what this comparison
+    // needs, so the projection is equivalent here — and that refusal is itself
+    // the guardrail working.
+    const reference = store.listTaskRefs({ statuses: [] }).map((task) => task.id);
     const collected: string[] = [];
     let offset = 0;
     // The fixture is ~6k rows, so a cap of 100 pages at limit=100 is generous.
