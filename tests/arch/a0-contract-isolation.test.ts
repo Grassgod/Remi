@@ -105,6 +105,21 @@ const WIRING_OWNER = new Map<string, string>([
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
+/** The A-0 modules MUL-435's Live Hub takes a type-only reference to. */
+const TRACE_CONSUMER_SPECIFIERS = ["@multiremi/contracts/trace", "@multiremi/api/trace/trace-sink"];
+
+/**
+ * True when `src` imports `specifier` in its `import type { ... } from "..."` form.
+ *
+ * Both the bare and the `.js` ESM spelling are accepted, because the codebase uses
+ * the extension while the package name is what a reader looks for. A value import
+ * does not match: `import type` is the whole point of the assertion.
+ */
+function hasTypeImport(src: string, specifier: string): boolean {
+  const escaped = specifier.replace(/[/.]/g, "\\$&");
+  return new RegExp(`import type\\s*\\{[^}]*\\}\\s*from\\s*"${escaped}(\\.js)?";`).test(src);
+}
+
 describe("A-0 modules are not yet wired into runtime code", () => {
   for (const { specifier, wired } of A0_MODULES) {
     it(`${specifier} is imported by ${wired ? "runtime code" : "nothing but tests"}`, () => {
@@ -146,24 +161,35 @@ describe("A-0 modules are not yet wired into runtime code", () => {
     const hubPath = join(REPO_ROOT, "packages/server/src/api/hub/live-hub.ts");
     const hub = readFileSync(hubPath, "utf8");
     const specs = [...hub.matchAll(IMPORT_RE)].map((match) => match[1]!);
-    for (const specifier of ["@multiremi/contracts/trace", "@multiremi/api/trace/trace-sink"]) {
+    for (const specifier of TRACE_CONSUMER_SPECIFIERS) {
       // Both the bare and the `.js` ESM spelling count.
       expect(
         specs.includes(specifier) || specs.includes(`${specifier}.js`),
         `live-hub.ts does not import ${specifier}`,
       ).toBe(true);
-      // It is a *type* import: A-0 keeps its "no runtime behaviour" claim only
-      // while nothing pulls these modules into a request path at runtime. A value
-      // import here would be a real wiring, not a contract reference.
-      // Written as `import type`, so nothing pulls these modules into the module
-      // graph at runtime; a value import would be a real wiring, not a contract
-      // reference, and A-0's "no runtime behaviour" claim would stop being true.
-      const escaped = specifier.replace(/[/.]/g, "\\$&");
+      // A-0 keeps its "no runtime behaviour" claim only while nothing pulls these
+      // modules into a request path at runtime, so the import must be the `import
+      // type` form; a value import here would be a real wiring, not a contract
+      // reference.
       expect(
-        new RegExp(`import type\\s*\\{[^}]*\\}\\s*from\\s*"${escaped}\\.js";`).test(hub),
-        `${specifier} must be imported with \`import type\``,
+        hasTypeImport(hub, specifier),
+        `${specifier} must be imported with \`import type\` (with or without \`.js\`)`,
       ).toBe(true);
     }
+  });
+
+  it("accepts the bare and the `.js` spelling of a type import alike", () => {
+    // The assertion above used to accept a bare specifier for the "is imported"
+    // half and then require `\.js` in the shape half, so a bare `import type`
+    // would pass one half and fail the other. Pin both spellings, and pin that
+    // the shape half still rejects a value import.
+    const specifier = "@multiremi/contracts/trace";
+    const bare = `import type { TraceEvent } from "${specifier}";`;
+    const withExt = `import type { TraceEvent } from "${specifier}.js";`;
+    const value = `import { TraceEvent } from "${specifier}.js";`;
+    expect(hasTypeImport(bare, specifier)).toBe(true);
+    expect(hasTypeImport(withExt, specifier)).toBe(true);
+    expect(hasTypeImport(value, specifier)).toBe(false);
   });
 
   it("scans a root set broad enough to catch a real wiring", () => {

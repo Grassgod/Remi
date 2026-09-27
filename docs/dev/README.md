@@ -29,7 +29,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0005](../adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 帧与可靠性分级、版本协商、升级通道；当前实现仍是 HTTP 轮询 |
-| 改浏览器实时订阅、Live Hub 或前端本地副本 | [ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的序号归属、gap 补读、副本新鲜度与单进程约束；C0 只落契约与空骨架 |
+| 改浏览器实时订阅、Live Hub 或前端本地副本 | [ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的序号归属、gap 补读、副本新鲜度与默认 all 的按角色部署；C0 只落契约与空骨架 |
 | 改项目 Memory/Wiki | [项目知识契约](../project-wiki-memory-spec.md) | 查询、提案、发布、物化与权限 |
 | 改飞书消息接入 | [消息接入](../feishu-message-ingestion.md) | Connection、Source、消息处理与凭据 |
 | 配置部署或排障 | [部署](../../deploy/README.md)、[本机 stable/dev](../deploy/local-profiles.md)、[daemon 环境](../deploy/66-8-remi-environment.md) | 服务组成、配置和启动条件 |

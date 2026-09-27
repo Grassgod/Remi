@@ -1,12 +1,14 @@
-# ADR 0007: One in-process Live Hub, with a browser replica instead of per-tab polling
+# ADR 0007: One Live Hub per API process, with a browser replica instead of per-tab polling
 
 ## Status
 
 Draft (MUL-403, message architecture v2-C). Written at C0, before the
-implementation, per the plan's §4 outline (MUL-403 `cmt_8u0ols22z3a1`), and
-revised when A-0's final commit (`43e41952`) merged into this branch. C1–C11 fill
-in the code this ADR describes; the decisions below are the ones the
-implementation must not contradict without a new ADR.
+implementation, per the plan's §4 outline (MUL-403 `cmt_8u0ols22z3a1`), revised
+when A-0's final commit (`43e41952`) merged into this branch, and rewritten in
+place at C0 to the current decision under the plan's 7/6 revision (MUL-403
+`cmt_c8hq9xitmhnh`, `cmt_47v5jalbtofp`) and the owner's decision table
+(`cmt_co06ay4zo9ex`). C1–C11 fill in the code this ADR describes; the decisions
+below are the ones the implementation must not contradict without a new ADR.
 
 Ten questions were put to the product owner (MUL-403 `cmt_7fdlky2b1tp4`). This
 document records the answer for each and marks every one that is still unconfirmed
@@ -55,13 +57,14 @@ ADR 0005 records the daemon half of the same problem.
 
 Three constraints shape any replacement:
 
-- **The API is a single Bun process, and it is single-threaded.** Fan-out happens
-  on the same event loop that serves HTTP, so a slow subscriber must never block
-  an append, and the fan-out cost per frame has to be one `send` per subscriber.
-  MUL-383 answered its own "cross-process or explicitly single process" question
-  in favour of single process (0/20 cross-process deliveries against 20/20
-  in-process in a local measurement), so the design must state and enforce
-  single-process rather than assume it.
+- **Each API process is single-threaded, and there is more than one of them.**
+  Fan-out happens on the same event loop that serves HTTP, so a slow subscriber
+  must never block an append and the fan-out cost per frame has to be one `send`
+  per subscriber. The server also runs as two roles now (MUL-455 / S10), so a
+  design that assumes one process would serve a silently partial stream: MUL-383
+  measured 0/20 cross-process deliveries against 20/20 in-process, which is the
+  evidence behind the current 「one hub per process, streams owned by process,
+  pointers across processes」 decision rather than a single global hub.
 - **The sequence already exists upstream.** The daemon assigns dense, append-only
   `trace_seq` per task (ADR 0005), and MUL-402's conversation log is keyed by
   `(session_id, seq)` with an explicit `revision` for in-place updates (ADR 0006).
@@ -74,32 +77,68 @@ Three constraints shape any replacement:
 
 ## Decision
 
-We will replace the per-tab invalidation socket with a process-local Live Hub that
-fans out two ordered streams, and give the browser a single local replica per
+We will replace the per-tab invalidation socket with an in-process Live Hub in
+**every** API process that carries one, fan out two ordered streams whose owner is
+decided per stream kind, and give the browser a single local replica per
 `(user, workspace)` instead of a per-tab view of the network.
 
-### 1. One in-process hub, sequences taken from upstream
+Sources for this decision: MUL-403 方案 7/6 (`cmt_c8hq9xitmhnh` 结论与选型,
+`cmt_47v5jalbtofp` 实施与验收) and the owner's decision table
+(`cmt_co06ay4zo9ex`). Where the C0 draft said something else, this section is the
+current decision and the draft's wording lives only in Alternatives.
 
-`packages/server/src/api/hub/` holds one `LiveHub` that serves two stream keys:
-`log:<session_id>` (MUL-402's conversation log: display units and hidden markers)
-and `trace:<task_id>` (MUL-401's trace events). The hub assigns **no** sequence:
-a `log:` frame carries the conversation-log row's own `seq`, a `trace:` frame the
-daemon's `trace_seq`. Deduplication follows from that — anything at or below the
-head is a replay and is dropped.
+### 1. One hub per API process, stream ownership per kind
 
-The hub does **not** read the database to backfill. A subscription whose
-`fromSeq` predates the retained ring gets `gap: {from, to}`, and the subscriber
-fetches that range from the read route that owns it: the browser from
+`packages/server/src/api/hub/` holds one `LiveHub` **per API process**. The
+process's role comes from MUL-461's `config/api-role.ts` — `resolveApiRole()` reads
+`MULTIREMI_API_ROLE` and returns `ui | runtime | all` (default `all`). Each process
+serves two stream keys: `log:<session_id>` (MUL-402's conversation log: display
+units and hidden markers) and `trace:<task_id>` (MUL-401's trace events). The hub
+assigns **no** sequence: a `log:` frame carries the conversation-log row's own
+`seq`, a `trace:` frame the daemon's `trace_seq`. Deduplication follows from that —
+anything at or below the head is a replay and is dropped.
+
+**`log:` streams are owned by the database, not by a process.** The process that
+writes an entry appends to its own ring and publishes a **head pointer only** —
+`{kind: "head", key, head, log_version}`, roughly 100 bytes. A peer that holds the
+stream (an active subscriber, or a ring that is not yet evicted) reads
+`(local_head, head]` through C4's read-only pool, feeds the ring and fans it out; a
+peer that does not hold the stream only records `known_head`. A frame whose `seq`
+is not `head + 1` waits in a **500ms continuity buffer** and is filled through the
+pool if the hole does not close, so `subscribe(fromSeq)`, `gap` and replay keep the
+2/6 semantics verbatim in both processes. A subscription whose `fromSeq` predates
+what the ring still retains gets `gap: {from, to}` and fetches that range from the
+read route that owns it — the browser from
 `GET /api/sessions/:id/log?anchor&before&after`, the Feishu connector from
-`trace.fetch`, the server from MUL-402's `readTrace`. A cold stream reads
-`head_seq` / `log_version` once at first subscription (C4's read pool) so the
-first `stream.ack` is honest, and nothing more.
+`trace.fetch`. The pool fill above is the hub repairing its own ring, not a read
+route for subscribers.
 
-Single-process is a **runtime invariant**, not a convention: C1 takes a
-`pg_try_advisory_lock` on a dedicated connection at startup, retries for 30 s (the
-updater's `up -d --no-deps` stops then starts), and exits non-zero if it never
-gets it. `HubTransport` is the seam for the opposite decision: a future
-cross-process bus adds an adapter and leaves every subscription call site alone.
+**`trace:` streams do not cross processes.** They live only in the process the
+daemon is connected to — `runtime`. Browser trace subscriptions therefore go to
+`/api/trace/ws`, which nginx routes to `runtime` (B5's trace HTTP endpoints route
+there too). Trace bytes across processes are zero by construction.
+
+**The cross-process channel is MUL-462's `publish(subscribe)topic` peer channel**,
+topic `hub`; C1a adds the `HubTransport` peer adapter on top of it (topic `hub`,
+sending `{kind: "head"}`). There is no second peer link: 7/6's `/internal/hub`,
+`X-Peer-Secret`, `api/role.ts` and `EventBridge` are superseded by MUL-461/462. The
+head pointer is the whole payload, so the channel's ≤200ms budget is comfortable.
+MUL-462's receiver-side 「可能漏了」 signal is what makes the hub **reconcile**: on
+that signal a process re-reads the head of every stream it holds and fills the
+difference, which is also the recovery path after the channel reconnects.
+
+The role guard is an advisory lock **per role**, not one global lock: C1a takes
+`pg_try_advisory_lock(hashtext('remi:hub:ui'))` or
+`hashtext('remi:hub:runtime')` on a dedicated connection at startup, retries for
+30 s (the updater's `up -d --no-deps` stops then starts), and exits non-zero if it
+never gets the lock. An `all` process takes **both** locks when it has no peer
+configured; an `all` process **with** a peer configured takes only the `ui` lock,
+because the transition topology runs `api=all` beside `api-runtime=runtime` and a
+second taker for the runtime lock would make one of them exit.
+
+`HubTransport` remains the seam for the adapter, and the local adapter stays the
+default: with a single process, or with `MULTIREMI_API_ROLE` unset, fan-out and
+observable behaviour are exactly what they were before this ADR changed.
 
 ### 2. The browser replica is chosen once per browser, not once per tab
 
@@ -155,13 +194,24 @@ and keeps ADR 0008. This supersedes the plan's "both hooks are C's" wording, whi
 was written when MUL-390 had no branch and would have blocked every frontend
 sub-issue behind it.
 
-### 5. The adapter seam, not a bus
+### 5. The adapter seam over MUL-462's peer channel
 
 `HubTransport` has one implementation today, `local`, which does nothing on
-publish because the hub already fanned the frame out in this process. The
-interface exists so that C2's re-evaluation can add a cross-process adapter by
-publishing every frame that entered a ring and feeding remote frames into the
-local ring first. Ordering stays the hub's job; the bus only moves bytes.
+publish because the hub already fanned the frame out in this process. C1a adds the
+second one on top of MUL-462's `publish(topic) / subscribe(topic)` peer channel
+rather than on a link of its own: the adapter publishes `{kind: "head", key, head,
+log_version}` on topic `hub` and feeds the peer's pointers into the receiving
+ring, where the pool does the filling. Existing realtime events and the daemon
+wake-up frame travel that same channel through MUL-462's own `realtime` topic.
+
+Ordering stays the hub's job; the channel only moves small messages. A `trace:`
+stream never enters it. Because the pointer is derived from the database rather
+than from a durable queue, a dropped or late pointer cannot lose data — the
+receiver's reconcile pass re-reads the head and fills the difference.
+
+Three implementation details deliberately stay out of this decision and land in
+the ADR when **C1a (MUL-436)** builds them: the peer adapter itself, the `/readyz`
+`hub.*` fields and the per-role read-pool sizes. C0 fixes the decision only.
 
 ### 6. Close codes: four are terminal, everything else reconnects
 
@@ -194,16 +244,39 @@ state of `agent/MUL-403` still runs.
 
 ## Alternatives considered
 
-- **A hub that backfills from the database.** Makes the hub a second read route
-  alongside MUL-402's window endpoints, with two implementations of the same
-  query and two places to change when the log schema moves.
+- **A hub that answers backfill reads from the database.** Makes the hub a second
+  read route alongside MUL-402's window endpoints, with two implementations of the
+  same query and two places to change when the log schema moves. The receiver-side
+  pool fill above is a continuity repair of a ring the process already holds, not a
+  read route: a subscriber that falls behind a gap is still sent to the endpoint
+  that owns the window.
 - **Routing every realtime event through the hub.** The lifecycle and
   workspace/user events have no sequence, so they would need one invented here,
   and the target scope is frozen. They stay invalidation signals; only `log:` and
   `trace:` become ordered streams.
-- **A cross-process `LISTEN/NOTIFY` bus now.** MUL-383 measured cross-process
-  delivery at 0/20 and there is one API process; a bus would buy nothing and cost
-  a second source of truth. The `HubTransport` seam keeps the door open.
+- **「单进程 + 全局锁」** (the C0 draft's decision: one process holding one global
+  advisory lock). It binds the whole realtime path to a single API process, and the
+  server is being split into `ui` / `runtime` roles (MUL-455 / S10), so the second
+  process would serve a silently partial stream. Replaced by one hub per process
+  with per-role locks.
+- **A PostgreSQL `LISTEN/NOTIFY` bus.** Not available: Bun 1.3.14's `Bun.SQL` has
+  no `listen`/`notify` (it arrived in Bun 1.4.0), and an 8000-byte NOTIFY payload
+  cannot carry a daemon trace batch anyway — a `trace:` stream has no home in the
+  other process to fetch from.
+- **A second PostgreSQL driver, only for `LISTEN`.** Adding `postgres` or any
+  other driver means a second connection pool and a second set of failure modes
+  for one notification path, when MUL-462's peer channel already exists.
+- **An independent WebSocket peer link** (the route 7/6 planned as C1b:
+  `/internal/hub`, `X-Peer-Secret`, `api/role.ts`, `EventBridge`; C1b was never
+  opened). Superseded by MUL-462's `publish/subscribe` channel: it would duplicate
+  that code, fight it for `MULTIREMI_PEER_URL` (one `ws://`, one `http://`) and put
+  a second inter-process channel on production.
+- **Fanning out every ring frame across processes** (so both processes hold every
+  stream). It moves the heaviest data across the link for consumers only one
+  process has, requires two copies of every ring plus two continuity judgements,
+  and turns any frame loss into a `gap`.
+- **A database table polled as a cross-process bus.** A `SELECT` every 100ms
+  against PostgreSQL is exactly the load MUL-383 exists to remove.
 - **Per-tab OPFS databases (wa-sqlite `opfs-wl`).** Connections and subscriptions
   grow with tab count, it introduces a non-official VFS, and it does not answer
   "which tab subscribes".
@@ -229,9 +302,19 @@ state of `agent/MUL-403` still runs.
   or 4 MiB, the process at 128 MiB, and streams with no subscriber are evicted by
   LRU after 15 minutes of no access. Eviction only shortens replay, because a
   short ring is reported as a `gap` and the subscriber backfills.
-- **Negative:** the single-process constraint binds deployment. Adding a second
-  API replica requires the `HubTransport` adapter first; without it the second
-  process would serve a silently partial stream.
+- **Negative:** two processes means the `log:` head pointer can arrive late. A
+  late pointer is invisible to subscribers — the receiver fills the difference
+  through the pool and the frames simply arrive later — but a channel that stays
+  down for longer than the ring retains takes the ordinary `stream.gap` path.
+  `trace:` is unaffected, because it never crosses.
+- **Negative / transition:** while the topology runs `api=all` beside
+  `api-runtime=runtime`, a daemon still attached to the `all` process keeps its
+  trace in that process, so a browser routed to `runtime` cannot see it until the
+  daemon reconnects. nginx sends daemon traffic to `runtime`, so the window is
+  short.
+- **Negative:** the advisory lock keys (`hashtext('remi:hub:ui')`,
+  `hashtext('remi:hub:runtime')`) are a new lock namespace; they must not collide
+  with MUL-405's migration constants or the parent-id transaction locks.
 - **Negative:** a single-threaded fan-out can be delayed by a blocking
   `Atomics.wait`. Mitigations are pre-serializing frames once, batching per
   subscriber, merging flushes with `setImmediate`, and never blocking the producer
