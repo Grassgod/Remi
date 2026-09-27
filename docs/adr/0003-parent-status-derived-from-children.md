@@ -239,7 +239,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      to the shared task-cancellation writer. Autopilot, Feishu ingest, and Feishu
      bot creation transactions call `createIssueWithinTransaction` with their
      owner queue for `issue_created`; Feishu ingest's two owners flush after
-     commit. The standalone `createIssue` path still emits directly. These
+     commit. Messaging outcome direct creation and proposal approval do the
+     same from their own transactions. The standalone `createIssue` path still
+     emits directly. These
      entries describe historical main behavior and the forward repairs; the
      two nesting sites remain separate work.
      Coverage boundary: the scan's **0** only describes branches the tests
