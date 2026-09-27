@@ -238,31 +238,38 @@ const TASK_ROUTING_PROJECT_SQL = `CASE WHEN t.runtime_workspace_id IS NOT NULL T
     AND chat_project.workspace_id = t.workspace_id AND chat_project.archived_at IS NULL
 )) END`;
 
-const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
+/**
+ * Device routing (Project bindings + dedicated devices) for one Project
+ * expression. Placeholder order is `daemonId, dedicated, daemonId`; the
+ * expression itself must not introduce bound parameters.
+ */
+const projectDeviceRoutingEligibilitySql = (projectExpression: string) => `(
   (
-    ${TASK_ROUTING_PROJECT_SQL} IS NULL
+    ${projectExpression} IS NULL
     OR NOT EXISTS (
       SELECT 1 FROM multiremi_project_devices project_device
-      WHERE project_device.project_id = ${TASK_ROUTING_PROJECT_SQL}
+      WHERE project_device.project_id = ${projectExpression}
     )
     OR EXISTS (
       SELECT 1 FROM multiremi_project_devices project_device
-      WHERE project_device.project_id = ${TASK_ROUTING_PROJECT_SQL}
+      WHERE project_device.project_id = ${projectExpression}
         AND project_device.daemon_id = ?
     )
   )
   AND (
     ? = 0
     OR (
-      ${TASK_ROUTING_PROJECT_SQL} IS NOT NULL
+      ${projectExpression} IS NOT NULL
       AND EXISTS (
         SELECT 1 FROM multiremi_project_devices project_device
-        WHERE project_device.project_id = ${TASK_ROUTING_PROJECT_SQL}
+        WHERE project_device.project_id = ${projectExpression}
           AND project_device.daemon_id = ?
       )
     )
   )
 )`;
+
+const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySql(TASK_ROUTING_PROJECT_SQL);
 
 interface DelegationWakeupInput {
   sourceTaskId: string;
@@ -1127,6 +1134,10 @@ export class TasksRepo {
     const availableChatProjectId = boundChatProject?.workspaceId === agent.workspaceId && !boundChatProject.archivedAt
       ? boundChatProject.id : null;
     const chatWorkspace = resolveChatWorkspace(this.ctx, chatSession);
+    // Mirrors TASK_ROUTING_PROJECT_SQL: a Runtime workspace is not a Project,
+    // and an Issue Project outranks the Chat binding. Archived/foreign Chat
+    // Projects already resolved to null above and no longer route.
+    const deviceRoutingProjectId = runtimeWorkspaceId ? null : issue?.projectId ?? availableChatProjectId;
     const directoryProjectId = runtimeWorkspaceId ? null : issue?.projectId ?? (chatWorkspace?.mode === "managed" ? null : availableChatProjectId);
     const assignment = holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"
       ? (chatWorkspace && !issue ? chatWorkspace.assignment
@@ -1159,7 +1170,11 @@ export class TasksRepo {
       // re-pool (the claim predicate would reject a stale/foreign pin forever).
       if (this.sessionResumable(chatSession, agent, executionFingerprint, hasPlugins) && chatSession.sessionRuntimeId) {
         const runtime = this.ctx.runtimes().getRuntime(chatSession.sessionRuntimeId);
-        if (runtime && this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)) {
+        // Device routing is checked alongside agent runnability: pinning to a
+        // machine the Project does not allow would queue forever once the claim
+        // predicate applies routing to every task (MUL-449).
+        if (runtime && this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)
+          && this.projectPassesProjectDeviceRouting(runtime, deviceRoutingProjectId)) {
           return { runtimeId: runtime.id, inheritChatSession: true };
         }
       }
@@ -1175,7 +1190,8 @@ export class TasksRepo {
       const directoryRuntime = chatSession.sessionRuntimeId
         ? this.ctx.runtimes().getRuntime(chatSession.sessionRuntimeId)
         : null;
-      if (directoryRuntime && this.ctx.runtimes().runtimeCanRunAgent(directoryRuntime, agent)) {
+      if (directoryRuntime && this.ctx.runtimes().runtimeCanRunAgent(directoryRuntime, agent)
+        && this.projectPassesProjectDeviceRouting(directoryRuntime, deviceRoutingProjectId)) {
         return { runtimeId: directoryRuntime.id, inheritChatSession: true };
       }
       return { runtimeId: null, inheritChatSession: false };
@@ -2040,6 +2056,23 @@ export class TasksRepo {
     return { daemonId, dedicated, params: [daemonId, dedicated ? 1 : 0, daemonId] };
   }
 
+  /**
+   * The same Project device-routing contract as the claim predicate, evaluated
+   * for a concrete Project instead of a task row. Chat affinity needs this
+   * because the task it places may not exist yet, or may carry no issue_id.
+   * `null` is the Project-less case: only non-dedicated devices may run it.
+   * The Project is bound through the trailing FROM subquery, so the eligibility
+   * template keeps binding only daemonId/dedicated/daemonId.
+   */
+  private projectPassesProjectDeviceRouting(runtime: MultiremiRuntime, projectId: string | null): boolean {
+    const routing = this.runtimeDeviceRoutingContext(runtime);
+    const row = this.ctx.db.query(
+      `SELECT CASE WHEN ${projectDeviceRoutingEligibilitySql("project_scope.project_id")} THEN 1 ELSE 0 END AS eligible
+       FROM (SELECT CAST(? AS TEXT) AS project_id) project_scope`,
+    ).get(...routing.params, projectId) as { eligible?: unknown } | null;
+    return Number(row?.eligible ?? 0) === 1;
+  }
+
   private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
     const routing = this.runtimeDeviceRoutingContext(runtime);
     const row = this.ctx.db.query(
@@ -2108,7 +2141,7 @@ export class TasksRepo {
       && this.runtimeMatchesCodeSnapshot(runtime, task)
       && (!task.issueId || !task.holdsWorkspace || runtimeSupportsIssueWorkspaces(runtime))
       && (!task.issueId || runtimeSupportsParallelExecution(runtime))
-      && (!task.holdsWorkspace || this.runtimePassesProjectDeviceRouting(runtime, task.id));
+      && this.runtimePassesProjectDeviceRouting(runtime, task.id);
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
@@ -2346,7 +2379,7 @@ export class TasksRepo {
                  )
              )
            )
-           AND (t.holds_workspace = 0 OR ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL})
+           AND ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL}
            AND (
              COALESCE(code_session.with_code, 0) = 0
              OR code_session.code_runtime_id IN (${daemonAliasPlaceholders})

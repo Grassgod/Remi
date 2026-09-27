@@ -2,7 +2,8 @@
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
 // guards, re-pooling on runtime changes, and the execution-engine session snapshots.
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -89,6 +90,290 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const constrained = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "bound" });
     expect(store.claimTask(unidentified.id)).toBeNull();
     expect(store.claimTask(dedicated.id)?.id).toBe(constrained.id);
+  });
+
+  // MUL-449: device routing must gate EVERY task. `holds_workspace` may stay
+  // decoupled from the Issue workspace, but it must never decouple the device.
+  it("keeps dedicated devices away from tasks that hold no Issue workspace", () => {
+    const store = createStore();
+    const personal = store.registerRuntime({
+      id: "rt_holds_personal",
+      name: "personal",
+      provider: "codex",
+      daemonId: "device-holds-personal",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_holds_devbox",
+      name: "devbox",
+      provider: "codex",
+      daemonId: "device-holds-devbox",
+    });
+    const agent = store.createAgent({ name: "No-lease agent", provider: "codex" });
+    store.updateDaemonDedicated("local", "device-holds-personal", true, "local");
+
+    // A Project bound to the dedicated device may still use it.
+    const bound = store.createProject({ title: "Bound to personal" });
+    store.createProjectDevice(bound.id, { daemonId: "device-holds-personal" });
+    const boundIssue = store.createIssue({ title: "Bound work", projectId: bound.id });
+    const boundSide = store.createIssueSession(boundIssue.id, { title: "Discussion", holdsWorkspace: false });
+    const boundTask = store.createTask({
+      agentId: agent.id,
+      issueId: boundIssue.id,
+      issueSessionId: boundSide.id,
+      prompt: "bound without workspace",
+    });
+    expect(store.getTask(boundTask.id)?.holdsWorkspace).toBe(false);
+    expect(store.claimTask(personal.id)?.id).toBe(boundTask.id);
+    store.startTask(boundTask.id);
+    store.completeTask(boundTask.id, { output: "done" });
+
+    // A Project bound to another device must be refused even without a lease.
+    const foreign = store.createProject({ title: "Bound to devbox" });
+    store.createProjectDevice(foreign.id, { daemonId: "device-holds-devbox" });
+    const foreignIssue = store.createIssue({ title: "Foreign work", projectId: foreign.id });
+    const foreignSide = store.createIssueSession(foreignIssue.id, { title: "Discussion", holdsWorkspace: false });
+    const foreignTask = store.createTask({
+      agentId: agent.id,
+      issueId: foreignIssue.id,
+      issueSessionId: foreignSide.id,
+      prompt: "foreign without workspace",
+    });
+    expect(store.getTask(foreignTask.id)?.holdsWorkspace).toBe(false);
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(devbox.id)?.id).toBe(foreignTask.id);
+    store.startTask(foreignTask.id);
+    store.completeTask(foreignTask.id, { output: "done" });
+
+    // A Project-less task has no binding, so a dedicated device is not allowed.
+    const projectless = store.createTask({ agentId: agent.id, prompt: "chat-like" });
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(devbox.id)?.id).toBe(projectless.id);
+  });
+
+  it("keeps unbound devices working for tasks without an Issue workspace", () => {
+    const store = createStore();
+    const pooled = store.registerRuntime({
+      id: "rt_holds_pooled",
+      name: "pooled",
+      provider: "codex",
+      daemonId: "device-holds-pooled",
+    });
+    const other = store.registerRuntime({
+      id: "rt_holds_other",
+      name: "other",
+      provider: "codex",
+      daemonId: "device-holds-other",
+    });
+    const agent = store.createAgent({ name: "Pooled agent", provider: "codex" });
+
+    const unbound = store.createProject({ title: "Unbound project" });
+    const unboundIssue = store.createIssue({ title: "Unbound work", projectId: unbound.id });
+    const unboundSide = store.createIssueSession(unboundIssue.id, { title: "Discussion", holdsWorkspace: false });
+    const unboundTask = store.createTask({
+      agentId: agent.id,
+      issueId: unboundIssue.id,
+      issueSessionId: unboundSide.id,
+      prompt: "unbound without workspace",
+    });
+    expect(store.claimTask(pooled.id)?.id).toBe(unboundTask.id);
+    store.startTask(unboundTask.id);
+    store.completeTask(unboundTask.id, { output: "done" });
+
+    const projectless = store.createTask({ agentId: agent.id, prompt: "chat-like" });
+    expect(store.claimTask(pooled.id)?.id).toBe(projectless.id);
+    store.startTask(projectless.id);
+    store.completeTask(projectless.id, { output: "done" });
+
+    const elsewhere = store.createProject({ title: "Elsewhere" });
+    store.createProjectDevice(elsewhere.id, { daemonId: "device-holds-other" });
+    const elsewhereIssue = store.createIssue({ title: "Elsewhere work", projectId: elsewhere.id });
+    const elsewhereSide = store.createIssueSession(elsewhereIssue.id, { title: "Discussion", holdsWorkspace: false });
+    const elsewhereTask = store.createTask({
+      agentId: agent.id,
+      issueId: elsewhereIssue.id,
+      issueSessionId: elsewhereSide.id,
+      prompt: "elsewhere without workspace",
+    });
+    expect(store.getTask(elsewhereTask.id)?.holdsWorkspace).toBe(false);
+    // Intentional change in MUL-449: a task bound to a Project that names
+    // another device no longer bypasses that binding by not holding a lease.
+    expect(store.claimTask(pooled.id)).toBeNull();
+    expect(store.claimTask(other.id)?.id).toBe(elsewhereTask.id);
+  });
+
+  it("routes the claim and the recheck identically across the device matrix", () => {
+    const store = createStore();
+    const personal = store.registerRuntime({
+      id: "rt_matrix_personal",
+      name: "personal",
+      provider: "codex",
+      daemonId: "device-matrix-personal",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_matrix_devbox",
+      name: "devbox",
+      provider: "codex",
+      daemonId: "device-matrix-devbox",
+    });
+    const agent = store.createAgent({ name: "Matrix agent", provider: "codex" });
+    const boundHere = store.createProject({ title: "Bound to devbox" });
+    store.createProjectDevice(boundHere.id, { daemonId: "device-matrix-devbox" });
+    const boundElsewhere = store.createProject({ title: "Bound to personal" });
+    store.createProjectDevice(boundElsewhere.id, { daemonId: "device-matrix-personal" });
+    const unbound = store.createProject({ title: "Unbound" });
+    store.updateDaemonDedicated("local", "device-matrix-personal", true, "local");
+
+    const projects = [
+      { label: "none", projectId: null },
+      { label: "unbound", projectId: unbound.id },
+      { label: "bound-here", projectId: boundHere.id },
+      { label: "bound-elsewhere", projectId: boundElsewhere.id },
+    ];
+    const runtimes = [
+      // A named binding excludes every other device; the dedicated device is
+      // additionally refused for project-less / unbound work.
+      { label: "dedicated/personal", runtime: personal, eligibleFor: new Set(["bound-elsewhere"]) },
+      { label: "free/devbox", runtime: devbox, eligibleFor: new Set(["unbound", "bound-here", "none"]) },
+    ];
+    let index = 0;
+    for (const project of projects) {
+      for (const holdsWorkspace of [true, false]) {
+        for (const runtime of runtimes) {
+          index += 1;
+          const issue = project.projectId
+            ? store.createIssue({ title: `${project.label} ${index}`, projectId: project.projectId })
+            : null;
+          const session = issue
+            ? store.createIssueSession(issue.id, {
+              title: `Session ${index}`,
+              holdsWorkspace,
+            })
+            : null;
+          const task = store.createTask({
+            agentId: agent.id,
+            issueId: issue?.id,
+            issueSessionId: session?.id,
+            prompt: `matrix ${project.label} holds=${holdsWorkspace}`,
+          });
+          // A Project-less task has no Session to opt out with: it always holds
+          // the workspace, and it can never reach a dedicated device.
+          expect(store.getTask(task.id)?.holdsWorkspace).toBe(issue ? holdsWorkspace : true);
+          const expected = runtime.eligibleFor.has(project.label);
+          const claimed = store.claimTask(runtime.runtime.id);
+          // Claim and the dispatch-recovery recheck must agree on every cell.
+          if (expected) {
+            expect(claimed?.id).toBe(task.id);
+            store.startTask(task.id);
+            store.completeTask(task.id, { output: "done" });
+          } else {
+            expect(claimed).toBeNull();
+            // The dispatch-recovery recheck must agree with the claim predicate:
+            // a stale dispatch on the same rejected runtime re-pools instead of
+            // being handed back.
+            db!.run(
+              "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?",
+              [runtime.runtime.id, "2000-01-01T00:00:00.000Z", task.id],
+            );
+            expect(store.claimTask(runtime.runtime.id)).toBeNull();
+            expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
+            store.cancelTask(task.id);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps resuming a chat session on a device its Project still allows", () => {
+    const store = createLocalStore();
+    const allowed = store.registerRuntime({
+      id: "rt_allowed_personal",
+      name: "allowed personal",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-allowed-personal",
+    });
+    const other = store.registerRuntime({
+      id: "rt_allowed_other",
+      name: "other",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-allowed-other",
+    });
+    const agent = store.createAgent({ name: "Allowed chat", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Stays on personal", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "device-allowed-personal" });
+    store.updateDaemonDedicated("local", "device-allowed-personal", true, "local");
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id, workspaceId: "local" });
+
+    const first = store.sendChatMessage(chat.id, { body: "first" }).task;
+    expect(store.claimTask(allowed.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_allowed_chat" });
+    expect(store.getChatSession(chat.id)?.sessionRuntimeId).toBe(allowed.id);
+
+    const second = store.sendChatMessage(chat.id, { body: "second" }).task;
+    // The dedicated device is still bound to this Project, so the resume is
+    // kept: the routing guard must not over-reject and strand the turn.
+    expect(second).toMatchObject({ runtimeId: allowed.id, sessionId: "sess_allowed_chat" });
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.claimTask(allowed.id)?.id).toBe(second.id);
+  });
+
+  it("re-pools a chat turn instead of pinning it to a device the Project rejects", () => {
+    const store = createLocalStore();
+    const personal = store.registerRuntime({
+      id: "rt_pin_personal",
+      name: "personal",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-pin-personal",
+    });
+    const devbox = store.registerRuntime({
+      id: "rt_pin_devbox",
+      name: "devbox",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "device-pin-devbox",
+    });
+    const agent = store.createAgent({ name: "Pinned chat", provider: "codex", workspaceId: "local" });
+    const issue = store.createIssue({
+      title: "Topic with a moving device",
+      workspaceId: "local",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const chat = prepareFeishuIssueTopic(store, {
+      runtimeId: personal.id,
+      agentId: agent.id,
+      issueId: issue.id,
+    });
+    const project = store.createProject({ title: "Moves later", workspaceId: "local" });
+    db!.run("UPDATE multiremi_issues SET project_id = ? WHERE id = ?", [project.id, issue.id]);
+    store.createProjectDevice(project.id, { daemonId: "device-pin-personal" });
+
+    // The first report runs on the allowed device and promotes its provider session.
+    const first = store.createTask({
+      agentId: agent.id, chatSessionId: chat.id, issueId: issue.id, holdsWorkspace: false, prompt: "first report",
+    });
+    expect(store.claimTask(personal.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_pinned_chat" });
+    expect(store.getChatSession(chat.id)?.sessionRuntimeId).toBe(personal.id);
+
+    // The Project moves to another device and the old one becomes dedicated
+    // to other work. The established session may no longer be resumed there.
+    store.deleteProjectDevice(project.id, "device-pin-personal");
+    store.createProjectDevice(project.id, { daemonId: "device-pin-devbox" });
+    store.updateDaemonDedicated("local", "device-pin-personal", true, "local");
+    const second = store.createTask({
+      agentId: agent.id, chatSessionId: chat.id, issueId: issue.id, holdsWorkspace: false, prompt: "second report",
+    });
+
+    // Without the device-routing guard the turn stays pinned to the rejected
+    // device and queues forever: neither runtime can claim it.
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(personal.id)).toBeNull();
+    expect(store.claimTask(devbox.id)?.id).toBe(second.id);
   });
 
   it("treats a missing daemon profile as non-dedicated", () => {

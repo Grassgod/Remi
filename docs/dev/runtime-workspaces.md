@@ -54,13 +54,19 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 ## 生命周期
 
 - 工作区归属 `(workspace_id, daemon_id)`。同一 daemon 上的 Claude / Codex Runtime 可使用同一工作区。
-- Chat、Issue、Task 保存引用；Task 创建时确定绑定。独立 Task 的基础设施重试和重新调度保留工作区。Issue 中不占用工作区的讨论/侧会话（`holds_workspace=false`）使用独立目录，不继承父 Issue 的本机目录或机器限制；重试和重新调度同样保持隔离。
-- 领取要求 Runtime 声明 `runtime_workspaces: 1`、匹配 daemon，并通过已有 provider、Agent、插件和 Project 设备路由检查。旧版或其他机器不能领取；会话重置不会解除机器约束。
+- Chat、Issue、Task 保存引用；Task 创建时确定绑定。独立 Task 的基础设施重试和重新调度保留工作区。Issue 中不占用工作区的讨论/侧会话（`holds_workspace=false`）使用独立目录，不继承父 Issue 的本机目录或机器限制；重试和重新调度同样保持隔离。工作区亲和不与设备解耦：Project 设备绑定和独享设备对**所有**任务生效，不管 `holds_workspace` 是多少（MUL-449）。会话亲和（`chat_sessions.session_runtime_id`）在重算时一并检查设备路由，被 Project 拒绝的机器不会被钉死排队。
+- 领取要求 Runtime 声明 `runtime_workspaces: 1`、匹配 daemon，并通过已有 provider、Agent、插件和 Project 设备路由检查；抢单 SQL 与派发回收的 eligibility 判定一致。旧版或其他机器不能领取；会话重置不会解除机器约束。
 - 主机离线、Runtime 行被清理或暂缺兼容 provider 时，任务等待。记录和文件保留，不回落到自动目录。「主机可用」表示主机协议状态；目录和上下文在任务启动时检查。
 - 服务端将同一工作区的任务串行领取。daemon 按真实 cwd 加进程间锁，覆盖目录别名及不同 provider 进程；锁记录位于外部本机状态目录，活进程不会因超时被抢锁。
 - 完成、取消、删除 Chat / Issue 不删除工作区。归档注册要求没有排队或执行中的任务，只阻止新运行，保留原目录。此接口不承担目录删除或迁移。
 
 未选择工作区时继续使用原有自动目录规则。独立 Task 的基础设施重试使用新的临时 provider home，不复用旧的原生会话 ID；工作区文件继续保留。
+
+## 任务私有 /tmp
+
+每个任务执行前，daemon 在本次执行的 provider home 下分配一个独占目录（`task-tmp/<task>-XXXXXX`，0700），执行结束后删除。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
+
+macOS 是有意降级（MUL-449）：内核没有 user / mount namespace，无法按任务替换字面 `/tmp`。darwin 上不套 `unshare`，改为把 `TMPDIR` / `TMP` / `TEMP` 指向该任务的私有目录，并接受字面 `/tmp` 与主机共享；`mapPrivateTmpPath` / `privateTmpVisiblePath` 在 darwin 上恒等，保证文件工具与 shell 解析同一路径（包括 antigravity 的 `--log-file`）。其他非 Linux 平台（win32 等）仍然报错。平台参数只为单测模拟 darwin，不影响 Linux 行为。
 
 ## 本地上下文
 

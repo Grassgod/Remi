@@ -129,9 +129,88 @@ rl.on("line", line => {
     expect(readFileSync(join(directory, "provider.txt"), "utf8")).toBe("from-provider");
   });
 
+  // MUL-449: macOS has no user/mount namespace. The execution keeps its own
+  // temp directory through TMPDIR/TMP/TEMP instead of a literal /tmp mount, and
+  // the path mappings must stay identity so shell and ACP file tools agree.
+  it("downgrades to TMPDIR redirection on darwin without unshare", () => {
+    const directory = privateDirectory("darwin");
+    const launch = isolateProcessTmp(
+      { executable: "/usr/local/bin/fake-agent", args: ["--flag", "value"] },
+      directory,
+      { PATH: "/usr/bin" },
+      "darwin",
+    );
+    expect(launch.executable).toBe("/usr/local/bin/fake-agent");
+    expect(launch.args).toEqual(["--flag", "value"]);
+    expect(launch.env).toEqual({ TMPDIR: directory, TMP: directory, TEMP: directory });
+    expect(launch.executable).not.toContain("unshare");
+
+    expect(mapPrivateTmpPath("/tmp/log.json", directory, "darwin")).toBe("/tmp/log.json");
+    expect(mapPrivateTmpPath("/tmp/nested/../result.txt", directory, "darwin")).toBe("/tmp/nested/../result.txt");
+    expect(privateTmpVisiblePath(join(directory, "run.log"), directory, "darwin")).toBe(join(directory, "run.log"));
+    expect(privateTmpVisiblePath("/tmp/log.json", directory, "darwin")).toBe("/tmp/log.json");
+  });
+
+  it("keeps failing closed on other non-Linux platforms and for invalid directories", () => {
+    const directory = privateDirectory("win32");
+    expect(() => isolateProcessTmp({ executable: "agent.exe", args: [] }, directory, {}, "win32"))
+      .toThrow("Linux mount namespaces are unavailable on win32");
+    // darwin must still reject a directory that is not the daemon's real one.
+    expect(() => isolateProcessTmp(
+      { executable: "agent", args: [] },
+      join(process.cwd(), "missing-private-tmp"),
+      {},
+      "darwin",
+    )).toThrow("private_tmp_isolation_unavailable");
+  });
+
+  it("does not leave a shared env object polluted across launches", () => {
+    const directory = privateDirectory("env-merge");
+    const shared = { PATH: "/usr/bin", TMPDIR: "/var/folders/host" };
+    const launch = isolateProcessTmp({ executable: "agent", args: [] }, directory, shared, "darwin");
+    expect(launch.env).toEqual({ TMPDIR: directory, TMP: directory, TEMP: directory });
+    expect(shared).toEqual({ PATH: "/usr/bin", TMPDIR: "/var/folders/host" });
+  });
+
   it("fails closed when the private directory is invalid", () => {
     expect(() => isolateProcessTmp({ executable: "true", args: [] }, join(process.cwd(), "missing-private-tmp")))
       .toThrow("private_tmp_isolation_unavailable");
+  });
+
+  it("hands the darwin TMPDIR to the spawned provider process", async () => {
+    const directory = privateDirectory("darwin-client");
+    const executable = join(directory, "fake-agent.cjs");
+    writeFileSync(executable, `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+rl.on("line", line => {
+  const msg = JSON.parse(line);
+  if (msg.method !== "initialize") return;
+  send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+  send({ jsonrpc: "2.0", method: "session/update", params: {
+    sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text",
+      text: JSON.stringify({ tmpdir: process.env.TMPDIR, tmp: process.env.TMP, temp: process.env.TEMP }) } },
+  } });
+});
+`);
+    chmodSync(executable, 0o755);
+    const updates: any[] = [];
+    const client = new AcpClient({
+      executable,
+      privateTmpDirectory: directory,
+      privateTmpPlatform: "darwin",
+      env: { TMPDIR: "/var/folders/host-tmp" },
+      onSessionUpdate: update => updates.push(update),
+    });
+    await client.start();
+    await client.initialize();
+    const deadline = Date.now() + 3_000;
+    while (!updates.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    await client.stop();
+    expect(JSON.parse(updates[0].update.content.text)).toEqual({
+      tmpdir: directory, tmp: directory, temp: directory,
+    });
   });
 
   it("preserves environment-referenced host files and Unix sockets inside private /tmp", async () => {

@@ -60,8 +60,13 @@ export interface AcpProviderOptions {
   allowedTools?: string[];
   /** Working directory. */
   cwd?: string;
-  /** Daemon-owned directory mounted as this task execution's literal /tmp. */
+  /**
+   * Daemon-owned directory bound to this task execution. Linux mounts it as the
+   * literal /tmp; macOS (MUL-449) exports it through TMPDIR/TMP/TEMP instead.
+   */
   privateTmpDirectory?: string;
+  /** Platform override for the private-/tmp contract (test injection). */
+  privateTmpPlatform?: NodeJS.Platform;
   /** Inject MCP servers at construction time (ACP wire shape — see {@link McpServerConfig}). */
   getMcpServers?: () => McpServerConfig[];
   /** Extra environment variables for the spawned ACP process. */
@@ -836,6 +841,7 @@ export class AcpProvider implements Provider {
       agentType: this._adapter.agentType,
       cwd,
       privateTmpDirectory: this._options.privateTmpDirectory,
+      privateTmpPlatform: this._options.privateTmpPlatform,
       env,
       onPermissionRequest: (params) => this._handlePermission(params),
       onElicitationRequest: (params) => this._handleElicitation(params),

@@ -4,6 +4,11 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 export interface ProcessLaunch {
   executable: string;
   args: string[];
+  /**
+   * Environment overrides the caller merges into its spawn environment.
+   * macOS returns them because it cannot mount a per-Task literal /tmp.
+   */
+  env?: Record<string, string>;
 }
 
 export class PrivateTmpIsolationUnavailableError extends Error {
@@ -43,17 +48,28 @@ exec "$@"
 
 /**
  * Put a provider process and all descendants in a mount namespace whose
- * literal /tmp is owned by one task execution. There is deliberately no
- * shared-/tmp fallback: callers receive a stable, observable error instead.
+ * literal /tmp is owned by one task execution. On Linux there is deliberately
+ * no shared-/tmp fallback: callers receive a stable, observable error instead.
+ * macOS is a documented exception, see the darwin branch below.
  */
 export function isolateProcessTmp(
   launch: ProcessLaunch,
   privateTmpDirectory: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): ProcessLaunch {
   if (!privateTmpDirectory) return launch;
-  if (process.platform !== "linux") {
-    throw new PrivateTmpIsolationUnavailableError(`Linux mount namespaces are unavailable on ${process.platform}`);
+  if (platform === "darwin") {
+    // Intentional downgrade (MUL-449): the macOS kernel has no user/mount
+    // namespace, so a per-Task literal /tmp is impossible. Point TMPDIR/TMP/TEMP
+    // at this execution's private directory and accept that the literal /tmp
+    // stays shared with the host. The daemon still deletes the directory when
+    // the execution ends, and every other platform keeps the Linux behavior.
+    const directory = privateTmpRealDirectory(privateTmpDirectory);
+    return { ...launch, env: { TMPDIR: directory, TMP: directory, TEMP: directory } };
+  }
+  if (platform !== "linux") {
+    throw new PrivateTmpIsolationUnavailableError(`Linux mount namespaces are unavailable on ${platform}`);
   }
   const unshare = Bun.which("unshare");
   const shell = Bun.which("sh");
@@ -85,7 +101,14 @@ export function isolateProcessTmp(
 }
 
 /** Map ACP file-tool requests into the same private /tmp seen by child tools. */
-export function mapPrivateTmpPath(path: string, privateTmpDirectory?: string): string {
+export function mapPrivateTmpPath(
+  path: string,
+  privateTmpDirectory?: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // macOS never redirects /tmp, so shell and file tools already agree on the
+  // host path. Rewriting it here would make them disagree (MUL-449).
+  if (platform === "darwin") return path;
   if (!privateTmpDirectory || !isAbsolute(path)) return path;
   const normalized = resolve(path);
   const relativePath = relative(resolve("/tmp"), normalized);
@@ -95,13 +118,33 @@ export function mapPrivateTmpPath(path: string, privateTmpDirectory?: string): s
 }
 
 /** Translate a host backing path into the path visible inside task /tmp. */
-export function privateTmpVisiblePath(path: string, privateTmpDirectory?: string): string {
+export function privateTmpVisiblePath(
+  path: string,
+  privateTmpDirectory?: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // macOS: the private directory is the host path the child already sees.
+  if (platform === "darwin") return path;
   if (!privateTmpDirectory) return path;
   const relativePath = relative(resolve(privateTmpDirectory), resolve(path));
   if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
     throw new PrivateTmpIsolationUnavailableError("task temporary path escapes its private directory");
   }
   return relativePath ? join("/tmp", relativePath) : "/tmp";
+}
+
+/** Resolve the daemon-owned task temp directory, or fail closed. */
+function privateTmpRealDirectory(privateTmpDirectory: string): string {
+  try {
+    const directory = realpathSync(privateTmpDirectory);
+    const info = lstatSync(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("not a real directory");
+    return directory;
+  } catch (error) {
+    throw new PrivateTmpIsolationUnavailableError(
+      `private directory is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 function assertNamespaceAvailable(unshare: string, shell: string, directory: string): void {
