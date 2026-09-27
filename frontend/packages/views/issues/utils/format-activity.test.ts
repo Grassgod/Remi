@@ -130,6 +130,9 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("delegation_return_triggered"), t)).toBe(
       "activity.delegation_return_triggered",
     );
+    expect(formatActivity(activity("delegation_return_triggered", {
+      details: { sourceIssueId: "child", sourceIssueKey: "MUL-456", returnIssueId: "parent" },
+    }), t)).toBe('activity.delegation_return_triggered_cross_issue {"key":"MUL-456"}');
     expect(
       formatActivity(
         activity("delegation_return_skipped", { details: { reason: "already_covered" } }),
@@ -142,6 +145,15 @@ describe("formatActivity", () => {
       "coalesced_into_pending_return",
       "covered_by_queued_task",
       "deferred_lane_busy",
+      "source_not_issue_task",
+      "source_side_session",
+      "source_not_squad_leader",
+      "target_not_squad_member",
+      "cross_issue_no_lineage",
+      "self_dispatch",
+      "covered_by_delegate_wakeup",
+      "delegator_issue_closed",
+      "delegator_session_missing",
     ]) {
       expect(
         formatActivity(activity("delegation_return_skipped", { details: { reason } }), t),

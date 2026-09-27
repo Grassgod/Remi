@@ -1476,6 +1476,11 @@ export interface MultiremiTask {
    *  Read at terminal time to explain the silence instead of dropping it. */
   delegationSkipReason: string | null;
   delegation_skip_reason?: string | null;
+  /** MUL-400 E2b server-owned origin of a notification round. `child_status`
+   *  marks the E2 parent wake-up, so the delegation-return de-duplication can
+   *  tell a server wake round apart from an agent's manual wake-up task. */
+  wakeSource: string | null;
+  wake_source?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This
@@ -1748,6 +1753,9 @@ export interface CreateTaskInput {
   delegated_from_issue_session_id?: string | null;
   delegationSkipReason?: string | null;
   delegation_skip_reason?: string | null;
+  /** Server-internal; the task-token route strips both spellings. */
+  wakeSource?: string | null;
+  wake_source?: string | null;
   /** Public dispatch hint. The API validates the referenced delegated task and
    * derives its lineage; callers cannot provide a delegation ID directly. */
   continueTaskId?: string | null;

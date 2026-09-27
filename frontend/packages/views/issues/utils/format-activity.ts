@@ -19,6 +19,24 @@ function delegationReturnReason(reason: string | undefined, t: IssuesT): string 
       return t(($) => $.activity.delegation_return_reason_covered_by_queued_task);
     case "deferred_lane_busy":
       return t(($) => $.activity.delegation_return_reason_deferred_lane_busy);
+    case "source_not_issue_task":
+      return t(($) => $.activity.delegation_return_reason_source_not_issue_task);
+    case "source_side_session":
+      return t(($) => $.activity.delegation_return_reason_source_side_session);
+    case "source_not_squad_leader":
+      return t(($) => $.activity.delegation_return_reason_source_not_squad_leader);
+    case "target_not_squad_member":
+      return t(($) => $.activity.delegation_return_reason_target_not_squad_member);
+    case "cross_issue_no_lineage":
+      return t(($) => $.activity.delegation_return_reason_cross_issue_no_lineage);
+    case "self_dispatch":
+      return t(($) => $.activity.delegation_return_reason_self_dispatch);
+    case "covered_by_delegate_wakeup":
+      return t(($) => $.activity.delegation_return_reason_covered_by_delegate_wakeup);
+    case "delegator_issue_closed":
+      return t(($) => $.activity.delegation_return_reason_delegator_issue_closed);
+    case "delegator_session_missing":
+      return t(($) => $.activity.delegation_return_reason_delegator_session_missing);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }
@@ -137,6 +155,9 @@ export function formatActivity(
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
     case "delegation_return_triggered":
+      if (details.sourceIssueKey && details.sourceIssueId !== details.returnIssueId) {
+        return t(($) => $.activity.delegation_return_triggered_cross_issue, { key: details.sourceIssueKey });
+      }
       return t(($) => $.activity.delegation_return_triggered);
     case "delegation_return_skipped":
       return t(($) => $.activity.delegation_return_skipped, {

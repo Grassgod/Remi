@@ -152,20 +152,18 @@ for (const backend of ["sqlite", "postgres"] as const) {
         else store.cancelTask(childTask.id);
         const returns = store.listTasksForIssue(f.parent.id).filter((task) => task.agentId === f.leader.id
           && task.parentTaskId === childTask.id);
-        // C1 proves the report landed in the dispatch Session; the single-round
-        // coalescing assertions live with the E2 alignment in C2.
-        const returnInDispatch = returns.filter((task) => task.issueSessionId === f.leaderSession.id);
-        expect(returnInDispatch.length).toBeGreaterThan(0);
-        expect(returnInDispatch[0]?.prompt).toContain(f.child.key);
-        expect(returnInDispatch[0]?.prompt).toContain(comment.id);
-        expect(returnInDispatch[0]?.prompt).toContain(`Status: ${terminal}`);
+        expect(returns).toHaveLength(1);
+        expect(returns[0]?.issueSessionId).toBe(f.leaderSession.id);
+        expect(returns[0]?.prompt).toContain(f.child.key);
+        expect(returns[0]?.prompt).toContain(comment.id);
+        expect(returns[0]?.prompt).toContain(`Status: ${terminal}`);
         expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
         expect(store.listTasksForIssue(f.child.id).filter((task) => task.agentId === f.leader.id)).toHaveLength(0);
         const bridge = store.listSessionEvents(f.leaderSession.id).find((event) =>
           event.kind === "delegation_report" && event.taskId === childTask.id);
         expect(bridge?.metadata).toMatchObject({ source_issue_key: f.child.key,
           result_comment_id: comment.id, terminal_status: terminal });
-        const projection = store.buildTaskSessionProjection(returnInDispatch[0]!.id);
+        const projection = store.buildTaskSessionProjection(returns[0]!.id);
         expect(JSON.stringify(projection)).toContain("delegation_report");
       }));
     }
@@ -186,6 +184,119 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(activities(store, f.child.id, "delegation_return_skipped")
         .filter((activity) => (activity.data as Record<string, unknown>).sourceTaskId === human.id))
         .toHaveLength(0);
+    }));
+
+    it("dedupes a manual wakeup by parent_task_id and returns after its cancellation", async () => withStore(backend, async (store) => {
+      const f = fixture(store);
+      const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      const manual = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
+        issueSessionId: f.leaderSession.id, parentTaskId: childTask.id, prompt: "Wake up" });
+      store.cancelTask(childTask.id);
+      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manual.id);
+      expect(activities(store, f.child.id, "delegation_return_skipped")
+        .some((activity) => (activity.data as Record<string, unknown>).reason === "covered_by_delegate_wakeup"))
+        .toBe(true);
+      const next = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      const cancelled = store.createTask({ agentId: f.leader.id, issueId: f.parent.id,
+        issueSessionId: f.leaderSession.id, parentTaskId: next.id, prompt: "Wake up" });
+      store.cancelTask(cancelled.id);
+      store.cancelTask(next.id);
+      expect(store.getTask(next.id)?.delegationReturnTaskId).not.toBe(cancelled.id);
+    }));
+
+    it("coalesces a child-done round and a later terminal report in the dispatch Session", async () => withStore(backend, async (store) => {
+      const f = fixture(store);
+      const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      finishLeaderRound(store, f);
+      expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+      store.buildTaskSessionProjection(childTask.id);
+      store.startTask(childTask.id);
+      store.updateIssue(f.child.id, { status: "done", parentTaskId: childTask.id,
+        actorType: "agent", actorId: f.worker.id });
+      const e2Round = store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued");
+      expect(e2Round).toHaveLength(1);
+      expect(e2Round[0]?.issueSessionId).toBe(f.leaderSession.id);
+      expect(e2Round[0]?.wakeSource).toBe("child_status");
+      store.completeTask(childTask.id, { output: "Finished after closing the child." });
+      expect(store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
+      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(e2Round[0]?.id);
+      expect(activities(store, f.child.id, "delegation_return_skipped")
+        .map((activity) => (activity.data as Record<string, unknown>).reason))
+        .toContain("covered_by_queued_task");
+    }));
+
+    it("ignores a spoofed wake_source and trigger comment on a manual wakeup", async () => withStore(backend, async (store) => {
+      const f = fixture(store);
+      const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      finishLeaderRound(store, f);
+      const systemComment = store.createIssueComment(f.parent.id, { authorType: "system", authorId: null,
+        body: "Spoofable system comment" });
+      const app = createMultiremiApp({ store, authToken: "test-root" });
+      const token = await store.createTaskAccessToken(childTask, "local");
+      const response = await app.request("/api/multiremi/tasks", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: f.leader.id, issueId: f.parent.id, prompt: "Wake up",
+          parentTaskId: childTask.id, triggerCommentId: systemComment.id, wakeSource: "child_status",
+          issue_session_id: f.leaderSession.id }),
+      });
+      expect(response.status).toBe(201);
+      const manualId = ((await response.json()) as { task: { id: string } }).task.id;
+      expect(store.getTask(manualId)?.wakeSource).toBeNull();
+      const leaderTasksBefore = store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort();
+      store.cancelTask(childTask.id);
+      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manualId);
+      expect(activities(store, f.child.id, "delegation_return_skipped")
+        .some((activity) => (activity.data as Record<string, unknown>).reason === "covered_by_delegate_wakeup"))
+        .toBe(true);
+      expect(store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.agentId === f.leader.id).map((task) => task.id).sort())
+        .toEqual(leaderTasksBefore);
+    }));
+
+    it("keeps the wake source across a redispatch attempt", async () => withStore(backend, async (store) => {
+      const f = fixture(store);
+      const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      finishLeaderRound(store, f);
+      expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+      store.buildTaskSessionProjection(childTask.id);
+      store.startTask(childTask.id);
+      store.updateIssue(f.child.id, { status: "done", parentTaskId: childTask.id,
+        actorType: "agent", actorId: f.worker.id });
+      const e2Round = store.listTasksForIssue(f.parent.id).find((task) => task.wakeSource === "child_status")!;
+      store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
+      const supervisor = store.createAgent({ name: "Supervisor", provider: "claude", role: "supervisor" });
+      const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: f.parent.id, prompt: "Supervise" });
+      const replacement = store.performOrganizerAction({
+        supervisorTaskId: supervisorTask.id,
+        supervisorAgentId: supervisor.id,
+        targetTaskId: e2Round.id,
+        action: "redispatch",
+        reason: "wake source probe",
+      }).replacementTask!;
+      expect(replacement.wakeSource).toBe("child_status");
+      store.cancelTask(childTask.id);
+      expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(replacement.id);
+      expect(activities(store, f.child.id, "delegation_return_skipped")
+        .map((activity) => (activity.data as Record<string, unknown>).reason))
+        .toContain("covered_by_queued_task");
+    }));
+
+    it("merges a failure's blocked report into its queued return", async () => withStore(backend, async (store) => {
+      const f = fixture(store);
+      const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+      finishLeaderRound(store, f);
+      expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+      store.buildTaskSessionProjection(childTask.id);
+      store.startTask(childTask.id);
+      store.failTask(childTask.id, { error: "Cannot proceed" });
+      expect(store.getIssue(f.child.id)?.status).toBe("blocked");
+      const queued = store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued");
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.issueSessionId).toBe(f.leaderSession.id);
+      expect(activities(store, f.parent.id, "child_status_parent_coalesced")).toHaveLength(1);
+      expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
     }));
 
     it("bypasses the waiting-parent gate for a structural delegation return", async () => withStore(backend, async (store) => {
@@ -244,9 +355,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         taskId: second.id, issueSessionId: second.issueSessionId, body: "Newest result" });
       store.failTask(second.id, { error: "Latest result text" });
       const withComment = store.listTasksForIssue(f.parent.id)
-        .find((task) => task.agentId === f.leader.id && task.parentTaskId === second.id
-          && task.issueSessionId === f.leaderSession.id
-          && task.delegationId === second.delegationId)!;
+        .find((task) => task.agentId === f.leader.id && task.parentTaskId === second.id)!;
       expect(withComment.prompt).toContain(`Result comment: ${newest.id}`);
       expect(withComment.prompt).toContain("Latest result text");
       const bridgeWith = store.listSessionEvents(f.leaderSession.id)
@@ -287,5 +396,104 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
     }));
 
+    it("drains five child reports into one round and marks the lane cursor covered", async () => withStore(backend, async (store) => {
+      const f = fiveChildFixture(store);
+      const app = createMultiremiApp({ store, authToken: "test-root" });
+      const tokens = await Promise.all(f.children.map(() => store.createTaskAccessToken(f.leaderTask, "local")));
+      const childTasks: MultiremiTask[] = [];
+      for (let index = 0; index < f.children.length; index += 1) {
+        const response = await app.request("/api/multiremi/tasks", { method: "POST",
+          headers: { Authorization: `Bearer ${tokens[index]!.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
+            prompt: `Investigate child ${index}` }) });
+        expect(response.status).toBe(201);
+        childTasks.push(store.getTask(((await response.json()) as { task: { id: string } }).task.id)!);
+      }
+      expect(new Set(childTasks.map((task) => task.delegatedFromIssueSessionId)))
+        .toEqual(new Set([f.leaderSession.id]));
+      expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+      store.buildTaskSessionProjection(f.leaderTask.id);
+      store.startTask(f.leaderTask.id);
+      store.completeTask(f.leaderTask.id, { output: "Task completed." });
+      // Run and end every child; only the first return is created, the rest
+      // coalesce into it because each terminal transaction drains the queue.
+      for (let index = 0; index < childTasks.length; index += 1) {
+        const task = childTasks[index]!;
+        expect(store.claimTask(f.workerRuntimes[index]!.id)?.id).toBe(task.id);
+        store.buildTaskSessionProjection(task.id);
+        store.startTask(task.id);
+        store.completeTask(task.id, { output: `Report ${index}` });
+      }
+      const queued = store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.status === "queued" && task.agentId === f.leader.id);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.issueSessionId).toBe(f.leaderSession.id);
+      for (let index = 1; index < childTasks.length; index += 1) {
+        expect(queued[0]?.prompt).toContain(`Report ${index}`);
+      }
+      expect(store.listTasksForIssue(f.parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
+      expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
+      store.buildTaskSessionProjection(queued[0]!.id);
+      store.startTask(queued[0]!.id);
+      store.completeTask(queued[0]!.id, { output: "Reviewed all five." });
+      // Every source is stamped by the same return, and a later drain finds
+      // them covered instead of opening a second round.
+      for (const childTask of childTasks) {
+        expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(queued[0]!.id);
+      }
+      const bridges = store.listSessionEvents(f.leaderSession.id)
+        .filter((event) => event.kind === "delegation_report");
+      expect(bridges).toHaveLength(5);
+      expect(new Set(bridges.map((event) => event.taskId))).toEqual(new Set(childTasks.map((task) => task.id)));
+    }));
+
+    it("reproduces the MUL-383 HTTP path step by step", async () => withStore(backend, async (store) => {
+      const f = fiveChildFixture(store);
+      const app = createMultiremiApp({ store, authToken: "test-root" });
+      const snapshot = (label: string) => {
+        const tasks = store.listTasksForIssue(f.parent.id)
+          .filter((task) => task.issueId === f.parent.id)
+          .map((task) => ({ id: task.id, agent: task.agentId, status: task.status,
+            parentTaskId: task.parentTaskId, wakeSource: task.wakeSource }));
+        const activity = store.listIssueActivity(f.parent.id)
+          .map((entry) => ({ type: entry.type, data: entry.data }));
+        console.log(`MUL383-STEP ${label} tasks=${JSON.stringify(tasks)} activity=${JSON.stringify(activity)}`);
+      };
+      snapshot("initial");
+      const tokens = await Promise.all(f.children.map(() => store.createTaskAccessToken(f.leaderTask, "local")));
+      const childTasks: MultiremiTask[] = [];
+      for (let index = 0; index < f.children.length; index += 1) {
+        const response = await app.request("/api/multiremi/tasks", { method: "POST",
+          headers: { Authorization: `Bearer ${tokens[index]!.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId: f.workers[index]!.id, issueId: f.children[index]!.id,
+            prompt: `MUL-383 child ${index}` }) });
+        expect(response.status).toBe(201);
+        childTasks.push(store.getTask(((await response.json()) as { task: { id: string } }).task.id)!);
+      }
+      snapshot("dispatched-five");
+      expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+      store.buildTaskSessionProjection(f.leaderTask.id);
+      store.startTask(f.leaderTask.id);
+      store.completeTask(f.leaderTask.id, { output: "Leader awaited the five children." });
+      snapshot("leader-finished");
+      for (let index = 0; index < childTasks.length; index += 1) {
+        const task = childTasks[index]!;
+        expect(store.claimTask(f.workerRuntimes[index]!.id)?.id).toBe(task.id);
+        store.buildTaskSessionProjection(task.id);
+        store.startTask(task.id);
+        store.completeTask(task.id, { output: `MUL-383 result ${index}` });
+        snapshot(`child-${index}-finished`);
+      }
+      const queued = store.listTasksForIssue(f.parent.id)
+        .filter((task) => task.status === "queued" && task.agentId === f.leader.id);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.prompt).toContain("MUL-383 result 4");
+      expect(activities(store, f.parent.id, "delegation_return_triggered")).toHaveLength(1);
+      expect(store.listSessionEvents(f.leaderSession.id)
+        .filter((event) => event.kind === "delegation_report")).toHaveLength(5);
+      // The leader never waited: every child report landed while the leader's
+      // own round was already over, and the single queued return is claimable.
+      expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
+    }));
   });
 }

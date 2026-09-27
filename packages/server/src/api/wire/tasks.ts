@@ -26,6 +26,8 @@ type InternalTaskField =
   | "delegated_from_issue_session_id"
   | "delegationSkipReason"
   | "delegation_skip_reason"
+  | "wakeSource"
+  | "wake_source"
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
@@ -59,6 +61,8 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
     delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
     delegationSkipReason: _delegationSkipReason,
     delegation_skip_reason: _delegationSkipReasonSnake,
+    wakeSource: _wakeSource,
+    wake_source: _wakeSourceSnake,
     issueCreationRestricted: _issueCreationRestricted,
     issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask

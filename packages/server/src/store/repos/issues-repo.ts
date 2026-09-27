@@ -2854,6 +2854,7 @@ export class IssuesRepo {
       childStatus: child.status,
       readinessLines,
     });
+    const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
     const comment = this.createSystemIssueCommentWithinTransaction(parent.id, body, {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -2861,7 +2862,7 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, deferredEvents);
+    }, deferredEvents, null, issueSessionId);
     return { tasks: this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId, nested, deferredEvents), comment };
   }
 
@@ -3121,7 +3122,7 @@ export class IssuesRepo {
     // Postgres, which has no savepoints.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+      const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
       const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
       if (queued) {
         const appended = appendChildStatusReport(queued.prompt, {
@@ -3168,6 +3169,7 @@ export class IssuesRepo {
         prompt: childDoneParentTaskPrompt(systemComment, outcome),
         parentTaskId,
         preserveIssueStatus: true,
+        wakeSource: "child_status",
       }, nested, deferredEvents);
       this.ctx.appendIssueActivity(parent.id, {
         actorType: "system",
@@ -3192,6 +3194,15 @@ export class IssuesRepo {
     })();
   }
 
+  private childDoneReturnSessionId(parentIssueId: string, triggeringTaskId: string | null): string {
+    const triggering = triggeringTaskId ? this.ctx.tasks().getTask(triggeringTaskId) : null;
+    const delegatedSessionId = triggering?.delegatedFromIssueSessionId;
+    const delegatedSession = delegatedSessionId
+      ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
+    return delegatedSession?.issueId === parentIssueId
+      ? delegatedSession.id
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
+  }
 
   private recordChildDoneParentSkipped(
     parent: MultiremiIssue,

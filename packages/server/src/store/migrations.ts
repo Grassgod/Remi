@@ -2199,6 +2199,7 @@ export function runMigrations(db: SqlDatabase): void {
       delegation_return_task_id TEXT,
       delegated_from_issue_session_id TEXT,
       delegation_skip_reason TEXT,
+      wake_source TEXT,
       assignment_event_id TEXT,
       assignment_source_event_id TEXT,
       projection_from_seq INTEGER,
@@ -2851,6 +2852,11 @@ export function runMigrations(db: SqlDatabase): void {
   // legacy "return to the task's own Session" behaviour for old tasks.
   addColumnIfMissing(db, "multiremi_tasks", "delegated_from_issue_session_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_skip_reason TEXT");
+  // MUL-400 E2b ruling: server-owned marker for notification rounds the server
+  // generated itself (E2 child-status rounds). NULL means "not a server wake
+  // round", so D4's manual-wakeup lookup can exclude it without trusting any
+  // request-body field. Add-only: existing rows read NULL.
+  addColumnIfMissing(db, "multiremi_tasks", "wake_source TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");

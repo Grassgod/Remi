@@ -180,6 +180,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
       delegationSkipReason: _delegationSkipReason,
       delegation_skip_reason: _delegationSkipReasonSnake,
+      wakeSource: _wakeSource,
+      wake_source: _wakeSourceSnake,
       continueTaskId: _continueTaskId,
       continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
@@ -259,6 +261,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
           delegatedByAgentId: continuedTask.delegatedByAgentId,
           delegatedFromIssueSessionId: continuedTask.delegatedFromIssueSessionId,
           delegationSkipReason: continuedTask.delegationSkipReason,
+          wakeSource: continuedTask.wakeSource,
         }
         : leaderDelegation?.ok
         ? {

@@ -960,6 +960,7 @@ export class TasksRepo {
       input.delegatedFromIssueSessionId ?? input.delegated_from_issue_session_id,
     );
     const delegationSkipReason = cleanOptionalString(input.delegationSkipReason ?? input.delegation_skip_reason);
+    const wakeSource = cleanOptionalString(input.wakeSource ?? input.wake_source);
     if (Boolean(delegationId) !== Boolean(delegatedByAgentId)) {
       throw new Error("delegation_id and delegated_by_agent_id must be set together");
     }
@@ -995,14 +996,14 @@ export class TasksRepo {
         trigger_comment_id, trigger_summary, requesting_user_name,
         requesting_user_profile_description, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, continued_from_task_id, issue_creation_restricted, delegation_id, delegated_by_agent_id,
-        delegated_from_issue_session_id, delegation_skip_reason,
+        delegated_from_issue_session_id, delegation_skip_reason, wake_source,
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at,
         execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?
       )`,
       [
@@ -1038,6 +1039,7 @@ export class TasksRepo {
         delegatedByAgentId,
         delegatedFromIssueSessionId,
         delegationSkipReason,
+        wakeSource,
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         cleanOptionalString(input.assignmentSourceEventId ?? input.assignment_source_event_id),
         projectionDegradeLevel,
@@ -3327,6 +3329,7 @@ export class TasksRepo {
       delegatedByAgentId: current.delegatedByAgentId,
       delegatedFromIssueSessionId: current.delegatedFromIssueSessionId,
       delegationSkipReason: current.delegationSkipReason,
+      wakeSource: current.wakeSource,
       assignmentSourceEventId: current.assignmentSourceEventId,
     }, childStatusChanges, deferredEvents);
     if (replacement.chatSessionId) {
@@ -3618,6 +3621,7 @@ export class TasksRepo {
       delegatedByAgentId: parent.delegatedByAgentId,
       delegatedFromIssueSessionId: parent.delegatedFromIssueSessionId,
       delegationSkipReason: parent.delegationSkipReason,
+      wakeSource: parent.wakeSource,
       assignmentSourceEventId: parent.assignmentSourceEventId,
     };
     const retry = workspaceLockHeld
@@ -3775,6 +3779,28 @@ export class TasksRepo {
         returnTaskId: source.delegationReturnTaskId,
       }, deferredEvents);
       return { task: returnTask, created: false, covered: true };
+    }
+
+    if (terminalStatus && returnSessionId && delegatedByAgentId) {
+      const manualRow = this.ctx.db.query(
+        `SELECT * FROM multiremi_tasks
+         WHERE parent_task_id = ? AND agent_id = ? AND issue_session_id = ?
+           AND status NOT IN ('failed', 'cancelled')
+           AND NOT (delegation_id IS NOT NULL AND delegated_by_agent_id = agent_id)
+           AND wake_source IS NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+      ).get(source.id, delegatedByAgentId, returnSessionId) as Row | null;
+      if (manualRow) {
+        const manual = toTask(manualRow);
+        this.ctx.db.run(
+          `UPDATE multiremi_tasks SET delegation_return_task_id = ?, updated_at = ?
+           WHERE id = ? AND delegation_return_task_id IS NULL`,
+          [manual.id, nowIso(), source.id],
+        );
+        this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
+          "covered_by_delegate_wakeup", { returnTaskId: manual.id }, deferredEvents);
+        return { task: manual, created: false, covered: true };
+      }
     }
 
     const delegator = this.ctx.agents().getAgent(delegatedByAgentId!);
@@ -5267,6 +5293,8 @@ function toTask(row: Row): MultiremiTask {
     delegated_from_issue_session_id: nullableString(row.delegated_from_issue_session_id),
     delegationSkipReason: nullableString(row.delegation_skip_reason),
     delegation_skip_reason: nullableString(row.delegation_skip_reason),
+    wakeSource: nullableString(row.wake_source),
+    wake_source: nullableString(row.wake_source),
     assignmentEventId: nullableString(row.assignment_event_id),
     assignment_event_id: nullableString(row.assignment_event_id),
     assignmentSourceEventId: nullableString(row.assignment_source_event_id),
