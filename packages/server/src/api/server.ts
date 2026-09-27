@@ -149,11 +149,6 @@ import {
   handleBrowserScopeSubscribe,
   handleBrowserScopeUnsubscribe,
   isWebSocketUpgrade,
-  notifyBrowserTaskEvent,
-  notifyBrowserTaskMessages,
-  notifyBrowserWorkspaceEvent,
-  notifyDaemonTaskAvailable,
-  notifyDaemonTaskEvent,
   parseDaemonWebSocketHeartbeat,
   parseDaemonWebSocketMessage,
   parseDaemonWebSocketRuntimeIds,
@@ -175,6 +170,14 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+import { createRealtimeFanout } from "./realtime-fanout.js";
+import {
+  createPeerChannel,
+  resolvePeerSecret,
+  resolvePeerUrl,
+  type PeerChannel,
+} from "./peer/peer-channel.js";
+import { registerPeerRoutes } from "./peer/peer-routes.js";
 
 let authDisabledWarningEmitted = false;
 
@@ -237,6 +240,11 @@ export interface MultiremiApiOptions {
   verifyScmConnection?: ScmConnectionVerifier;
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
+  /**
+   * Peer channel for the split API (MUL-462). Undefined builds one from
+   * `MULTIREMI_PEER_URL`; null explicitly disables it.
+   */
+  peerChannel?: PeerChannel | null;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -497,7 +505,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
+    // MUL-462: `role` arrives with S10-A (MUL-461); until then this process is
+    // always `all`, which is what the pre-split server was.
+    role: "all" as const,
+    // False when no peer is configured: "no channel" must not read as unhealthy.
+    peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
   }));
+  registerPeerRoutes(app, {
+    peer: options.peerChannel ?? null,
+    secret: resolvePeerSecret(),
+  });
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
   app.get("/api/multiremi/health", (c) => c.json({ ok: true }));
@@ -733,6 +750,16 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
   // could not simply wait for the next explicit action is repaired once, here.
   if (backgroundJobs) refreshPreNativeCodexSnapshots(store);
+  // MUL-462: the peer channel is off unless `MULTIREMI_PEER_URL` is set, so an
+  // unconfigured deployment keeps the single-process wiring byte for byte.
+  // `options.peerChannel` is the injection point the two-server tests use.
+  // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
+  // no sender, no subscriber, and the routes answer 503 instead of pretending to
+  // accept an event nobody can receive.
+  const peerUrl = resolvePeerUrl();
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: resolvePeerSecret() }) : null)
+    : options.peerChannel;
   const app = createMultiremiApp({
     ...options,
     store,
@@ -742,6 +769,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     messagingProviders,
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
+    peerChannel: peer,
   });
   // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
   // build apps with `createMultiremiApp` and must not inherit a timer.
@@ -752,21 +780,19 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
-  const unsubscribeTaskEnqueued = store.onTaskEnqueued((task) => {
-    notifyDaemonTaskAvailable(daemonWebSockets, store, task);
-    notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, "task:queued", task);
-  });
-  const unsubscribeTaskEvent = store.onTaskEvent((event) => {
-    if (event.type === "task:waiting_local_directory") {
-      notifyDaemonTaskEvent(daemonWebSockets, event.type, event.task);
-    }
-    notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
-  });
-  const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
-    notifyBrowserTaskMessages(store, browserWebSockets, browserScopeWebSockets, task, messages);
-  });
-  const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
-    notifyBrowserWorkspaceEvent(browserWebSockets, browserUserWebSockets, browserScopeWebSockets, event);
+  // MUL-462: one fanout owns the four store subscriptions. It delivers locally
+  // by role and forwards to the peer; today's single process is `all`, which is
+  // exactly the two deliveries that used to live inline here.
+  const realtimeFanout = createRealtimeFanout({
+    role: "all",
+    store,
+    peer,
+    registries: {
+      daemon: daemonWebSockets,
+      browser: browserWebSockets,
+      browserUser: browserUserWebSockets,
+      browserScope: browserScopeWebSockets,
+    },
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,
@@ -948,10 +974,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
-    unsubscribeTaskEnqueued();
-    unsubscribeTaskEvent();
-    unsubscribeTaskMessages();
-    unsubscribeWorkspaceEvent();
+    // Closes the four store subscriptions and the peer channel (queue flush +
+    // its timers), so a stopped server stops POSTing to its peer.
+    realtimeFanout.close();
     scheduler?.stop();
     scmPolling?.stop();
     messaging?.stop();

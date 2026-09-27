@@ -466,6 +466,9 @@ describe("MUL-367 request metrics — window aggregation", () => {
       db_queries: 0,
       event_loop_lag_max_ms: 0,
       routes: [],
+      // MUL-462: the peer block is always present; with no peer channel it is
+      // the zeroed heartbeat, so the summary shape does not depend on env.
+      peer: { sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 },
     });
   });
 

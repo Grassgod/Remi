@@ -73,6 +73,21 @@ export interface RouteSummary {
   sum_ms: number;
 }
 
+/**
+ * Peer-channel counters for one window (MUL-462).
+ *
+ * `sent`/`batches`/`rtt_p95_ms` are what the local process POSTed to its peer;
+ * `dropped` is queue overflow here; `failed` counts failed POST attempts. All
+ * zero when `MULTIREMI_PEER_URL` is unset — the summary shape does not change.
+ */
+export interface PeerSummary {
+  sent: number;
+  batches: number;
+  dropped: number;
+  failed: number;
+  rtt_p95_ms: number;
+}
+
 export interface MinuteSummary {
   event: "api_minute_summary";
   ts: string;
@@ -85,6 +100,7 @@ export interface MinuteSummary {
   db_queries: number;
   event_loop_lag_max_ms: number;
   routes: RouteSummary[];
+  peer: PeerSummary;
 }
 
 export interface RequestMetricsOptions {
@@ -117,6 +133,86 @@ const requestContext = new AsyncLocalStorage<RequestDbMetrics>();
  * the denominator of the DB-busy share.
  */
 const processDbCounters = { dbMs: 0, dbQueries: 0, dbBytes: 0 };
+
+/**
+ * Process-wide peer-channel counters, mirroring `processDbCounters` (MUL-462).
+ *
+ * They are deliberately process-wide rather than request-scoped: the events
+ * being forwarded were produced by a store write that has already returned, so
+ * there is no request context to attribute them to.
+ *
+ * Two sets are kept because they answer different questions. The `lifetime`
+ * totals back the health endpoint and never reset; the `window` counters are
+ * drained by every `api_minute_summary` so one window's burst is not smeared
+ * across the next one. `rttSamples` is bounded so a long-lived process cannot
+ * accumulate one number per batch forever.
+ */
+const lifetimePeerCounters = { sent: 0, batches: 0, dropped: 0, failed: 0 };
+const lifetimePeerRttSamples: number[] = [];
+const windowPeerCounters = { sent: 0, batches: 0, dropped: 0, failed: 0 };
+let windowPeerRttSamples: number[] = [];
+const PEER_RTT_SAMPLE_CAPACITY = 1024;
+
+/** One event could not be queued (overflow, or a payload that would not encode). */
+export function recordPeerDropped(count = 1): void {
+  const value = Math.max(0, Math.trunc(count));
+  if (value === 0) return;
+  lifetimePeerCounters.dropped += value;
+  windowPeerCounters.dropped += value;
+}
+
+/** One POST failed; the sender retries that batch with backoff. */
+export function recordPeerFailure(): void {
+  lifetimePeerCounters.failed += 1;
+  windowPeerCounters.failed += 1;
+}
+
+/** One POST succeeded and carried `events` events in `rttMs` milliseconds. */
+export function recordPeerBatch(input: { events: number; rttMs: number }): void {
+  const events = Math.max(0, Math.trunc(input.events));
+  lifetimePeerCounters.sent += events;
+  lifetimePeerCounters.batches += 1;
+  windowPeerCounters.sent += events;
+  windowPeerCounters.batches += 1;
+  if (Number.isFinite(input.rttMs) && input.rttMs >= 0) {
+    lifetimePeerRttSamples.push(input.rttMs);
+    if (lifetimePeerRttSamples.length > PEER_RTT_SAMPLE_CAPACITY) lifetimePeerRttSamples.shift();
+    windowPeerRttSamples.push(input.rttMs);
+  }
+}
+
+/**
+ * Read and clear the peer counters for the window that just ended.
+ *
+ * The summary owns the cadence: draining here is what makes `api_minute_summary`
+ * report this window rather than a running total.
+ */
+export function drainPeerWindowMetrics(): PeerSummary {
+  const summary: PeerSummary = {
+    sent: windowPeerCounters.sent,
+    batches: windowPeerCounters.batches,
+    dropped: windowPeerCounters.dropped,
+    failed: windowPeerCounters.failed,
+    rtt_p95_ms: round1(percentile(windowPeerRttSamples, 0.95)),
+  };
+  windowPeerCounters.sent = 0;
+  windowPeerCounters.batches = 0;
+  windowPeerCounters.dropped = 0;
+  windowPeerCounters.failed = 0;
+  windowPeerRttSamples = [];
+  return summary;
+}
+
+/** Lifetime peer counters, for `/health/realtime` and tests. */
+export function peerMetricsSnapshot(): PeerSummary {
+  return {
+    sent: lifetimePeerCounters.sent,
+    batches: lifetimePeerCounters.batches,
+    dropped: lifetimePeerCounters.dropped,
+    failed: lifetimePeerCounters.failed,
+    rtt_p95_ms: round1(percentile(lifetimePeerRttSamples, 0.95)),
+  };
+}
 
 /**
  * Module-level switch so the DB hook stays a single boolean test when metrics
@@ -408,6 +504,8 @@ export interface WindowSummaryInput {
   dbQueries: number;
   eventLoopLagMaxMs: number;
   topRoutes: number;
+  /** Peer-channel counters for this window. Omitted means a zeroed block. */
+  peer?: PeerSummary;
   /** Injectable clock so tests can pin `ts`. */
   now?: Date;
 }
@@ -455,6 +553,7 @@ export function summarizeWindow(input: WindowSummaryInput): MinuteSummary {
     db_queries: Math.max(0, Math.trunc(finite(input.dbQueries))),
     event_loop_lag_max_ms: round1(finite(input.eventLoopLagMaxMs)),
     routes: routes.slice(0, top),
+    peer: input.peer ?? { sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0 },
   };
 }
 
@@ -707,6 +806,7 @@ export function startRequestMetricsSummary(options: RequestMetricsOptions): Requ
     lastDbQueries = processDbCounters.dbQueries;
     const lag = lagMaxMs;
     lagMaxMs = 0;
+    const peer = drainPeerWindowMetrics();
     const summary = summarizeWindow({
       windowMs,
       samples,
@@ -715,6 +815,7 @@ export function startRequestMetricsSummary(options: RequestMetricsOptions): Requ
       dbQueries,
       eventLoopLagMaxMs: lag,
       topRoutes: options.summaryTopRoutes,
+      peer,
     });
     console.log(JSON.stringify(summary));
   };
@@ -752,6 +853,16 @@ export function resetRequestMetricsForTest(): void {
   processDbCounters.dbMs = 0;
   processDbCounters.dbQueries = 0;
   processDbCounters.dbBytes = 0;
+  lifetimePeerCounters.sent = 0;
+  lifetimePeerCounters.batches = 0;
+  lifetimePeerCounters.dropped = 0;
+  lifetimePeerCounters.failed = 0;
+  lifetimePeerRttSamples.length = 0;
+  windowPeerCounters.sent = 0;
+  windowPeerCounters.batches = 0;
+  windowPeerCounters.dropped = 0;
+  windowPeerCounters.failed = 0;
+  windowPeerRttSamples = [];
   requestMetricsEnabled = true;
   warnEmitted = false;
 }
