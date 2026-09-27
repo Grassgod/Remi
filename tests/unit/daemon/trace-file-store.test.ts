@@ -7,6 +7,7 @@ import { InMemoryTraceStore, traceEventBytes, type TraceStore } from "@multiremi
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
+import { describeTraceStoreContract } from "./trace-store-contract.js";
 
 const NOW = "2026-09-27T00:00:00.000Z";
 const roots: string[] = [];
@@ -27,6 +28,19 @@ function fixture(sessionId: string | null = "ises_one") {
 }
 
 function row(content: string): TraceEventInput { return { type: "text", content }; }
+
+describeTraceStoreContract("TraceFileStore", () => fixture().make(), () => {
+  const { path, make } = fixture();
+  const store = make();
+  store.append("tsk_one", [row("one"), row("ten"), row("twenty")]);
+  const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+  for (const [index, seq] of [[2, 10], [3, 20]] as const) {
+    const event = JSON.parse(lines[index]!);
+    lines[index] = JSON.stringify({ ...event, seq });
+  }
+  writeFileSync(path, `${lines.join("\n")}\n`);
+  return make();
+});
 
 describe("TraceFileStore", () => {
   it("writes framing without seq and keeps the in-memory contract across restart", () => {
@@ -152,5 +166,42 @@ describe("TraceFileStore", () => {
     expect(() => store.append("tsk_one", [row("second")])).toThrow();
     expect(() => store.read("tsk_one")).toThrow();
     expect(readFileSync(target, "utf8")).toBe("keep me");
+  });
+
+  for (const operation of ["append", "read", "close", "forget"] as const) {
+    it(`rejects ${operation} when the traces parent is replaced by a symlink`, () => {
+      const { root, path, make, warnings } = fixture();
+      const store = make();
+      store.append("tsk_one", [row("first")]);
+      const outside = mkdtempSync(join(tmpdir(), "trace-outside-"));
+      roots.push(outside);
+      const traces = join(root, ".runtime", "ises_one", "traces");
+      renameSync(traces, join(outside, "traces"));
+      symlinkSync(join(outside, "traces"), traces);
+      const outsideFile = join(outside, "traces", "tsk_one.jsonl");
+      const original = readFileSync(outsideFile, "utf8");
+      expect(() => {
+        if (operation === "append") store.append("tsk_one", [row("second")]);
+        else if (operation === "read") store.read("tsk_one");
+        else if (operation === "close") store.close("tsk_one", { status: "completed", ended_at: NOW });
+        else store.forget("tsk_one");
+      }).toThrow();
+      expect(readFileSync(outsideFile, "utf8")).toBe(original);
+      expect(warnings.some((warning) => warning.includes("real directory"))).toBe(operation === "forget");
+      expect(path).toBe(join(traces, "tsk_one.jsonl"));
+    });
+  }
+
+  it("recovers a completed trailer after restart", () => {
+    const { path, make } = fixture();
+    const store = make();
+    store.append("tsk_one", [row("done")]);
+    store.close("tsk_one", { status: "completed", ended_at: NOW });
+    const recovered = make();
+    expect(recovered.head("tsk_one")).toEqual({ head: 1, closed: true });
+    expect(recovered.read("tsk_one").events.map((event) => event.content)).toEqual(["done"]);
+    expect(JSON.parse(readFileSync(path, "utf8").trimEnd().split("\n").at(-1)!)).toEqual({
+      end: { status: "completed", head: 1, event_count: 1, ended_at: NOW },
+    });
   });
 });

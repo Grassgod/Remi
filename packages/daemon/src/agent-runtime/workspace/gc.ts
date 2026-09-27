@@ -12,6 +12,8 @@
 
 import {
   closeSync,
+  constants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -28,7 +30,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
-import { TRACE_END_STATUSES } from "@multiremi/contracts/trace-file.js";
+import { checkTraceFileLines } from "@multiremi/contracts/trace-file.js";
 import { createLogger } from "@shared/logger.js";
 import {
   OWNED_DIRECTORY_QUARANTINE,
@@ -786,17 +788,31 @@ export function hasUnclosedTrace(workspaceDir: string): boolean {
     if (!file.name.endsWith(".jsonl")) continue;
     const path = join(traces, file.name);
     const stat = safeLstat(path);
-    if (!stat?.isFile() || stat.isSymbolicLink()) return true;
+    if (!stat?.isFile() || stat.isSymbolicLink()) {
+      log.warn(`Keeping malformed trace during GC: ${path}: not a regular file`);
+      return true;
+    }
     try {
-      const bytes = readFileSync(path);
-      if (bytes.length === 0 || bytes[bytes.length - 1] !== 10) return true;
-      const previousNewline = bytes.lastIndexOf(10, bytes.length - 2);
-      const last = JSON.parse(bytes.subarray(previousNewline + 1, bytes.length - 1).toString("utf8")) as unknown;
-      const end = last && typeof last === "object" && "end" in last ? last.end as Record<string, unknown> : null;
-      if (!end || !TRACE_END_STATUSES.includes(end.status as typeof TRACE_END_STATUSES[number])
-        || !Number.isSafeInteger(end.head) || !Number.isSafeInteger(end.event_count)
-        || typeof end.ended_at !== "string") return true;
-    } catch {
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error("trace file changed during GC inspection");
+        bytes = readFileSync(fd);
+      } finally { closeSync(fd); }
+      const lastNewline = bytes.lastIndexOf(10);
+      const lines = lastNewline < 0 ? [] : bytes.subarray(0, lastNewline).toString("utf8").split("\n");
+      const checked = checkTraceFileLines(lines, {
+        taskId: file.name.slice(0, -6),
+        sessionId: basename(workspaceDir),
+        incompleteTail: lastNewline !== bytes.length - 1,
+      });
+      if (!checked.ok || !checked.value.closed) {
+        log.warn(`Keeping unclosed or malformed trace during GC: ${path}: ${checked.ok ? "incomplete or ambiguous framing" : checked.reason}`);
+        return true;
+      }
+    } catch (error) {
+      log.warn(`Keeping unreadable trace during GC: ${path}: ${error instanceof Error ? error.message : String(error)}`);
       return true;
     }
   }

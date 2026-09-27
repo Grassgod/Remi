@@ -76,7 +76,7 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
 
-daemon 的规范化过程记录按 task 写在 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；一次性 task 以 task id 代替 session id。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加；只有尾行存在才表示 closed。启动时扫描这些 daemon 管理目录重建索引。GC 删除 runtime 根前检查尾行，未关闭或损坏的 trace 使该根本轮保留。
+daemon 的规范化过程记录按 task 写在 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；一次性 task 以 task id 代替 session id。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加。启动时扫描这些 daemon 管理目录重建索引。文件索引与 GC 共用完整性判定：校验头行、事件 seq 顺序及尾行的状态、时间和计数；未封口文件中的重复 seq 取首条、末尾半行忽略以便恢复；带尾行但仍有这些歧义的文件不进入索引。GC 对无法确认完好且已封口的 trace 保留目录并记录路径。
 
 [GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
 

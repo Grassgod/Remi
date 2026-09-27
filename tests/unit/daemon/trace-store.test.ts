@@ -7,6 +7,7 @@ import {
 } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 import { TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
+import { describeTraceStoreContract } from "./trace-store-contract.js";
 
 /** A fixed clock so the `ts` the store assigns is assertable. */
 const NOW = "2026-09-27T00:00:00.000Z";
@@ -18,6 +19,15 @@ function store(): InMemoryTraceStore {
 function event(patch: Partial<TraceEventInput> = {}): TraceEventInput {
   return { type: "text", content: "hello", ...patch };
 }
+
+describeTraceStoreContract("InMemoryTraceStore", store, () => {
+  const sparse = store();
+  const events = sparse.append("tsk_one", [event(), event(), event()]).events;
+  const state = (sparse as unknown as { tasks: Map<string, { events: typeof events; head: number }> }).tasks.get("tsk_one")!;
+  state.events = events.map((row, index) => ({ ...row, seq: [1, 10, 20][index]! }));
+  state.head = 20;
+  return sparse;
+});
 
 describe("InMemoryTraceStore", () => {
   it("assigns dense per-task sequences starting at 1 and stamps ts", () => {

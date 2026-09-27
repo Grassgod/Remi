@@ -8,12 +8,13 @@
  * daemon; after archiving it lives only inside a session archive on the server
  * disk. `TraceRef` is what both the page read and the agent projects route on,
  * so the pointer states are part of the wire contract. The event schema itself
- * is `TraceEvent` in `./trace.js` (owned by MUL-401 / A-0); nothing here
- * references it, which keeps B and A independently buildable.
+ * is `TraceEvent` in `./trace.js` (owned by MUL-401 / A-0); the file validator
+ * uses that type without redefining its event fields.
  *
- * Type-only module plus the format constant. The writer lands in B3, the archive
- * container in B4, the read routes in B5.
+ * The writer lands in B3, the archive container in B4, the read routes in B5.
  */
+
+import type { TraceEvent } from "./trace.js";
 
 /** Format marker on the first line of a per-task trace file. */
 export const TRACE_FILE_FORMAT = "multiremi.trace.v1";
@@ -105,6 +106,97 @@ export interface TraceFileTrailer {
 export const TRACE_END_STATUSES = ["completed", "failed", "cancelled"] as const;
 
 export type TraceEndStatus = (typeof TRACE_END_STATUSES)[number];
+
+export interface TraceFileCheck {
+  head: number;
+  event_count: number;
+  /** A duplicate seq or incomplete final line is recoverable for reads, but never proves closure. */
+  closed: boolean;
+  duplicate_seqs: number[];
+}
+
+export type TraceFileCheckResult =
+  | { ok: true; value: TraceFileCheck }
+  | { ok: false; reason: string };
+
+function validTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-](\d\d):(\d\d))$/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match;
+  const calendar = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return calendar.getUTCFullYear() === Number(year) && calendar.getUTCMonth() + 1 === Number(month)
+    && calendar.getUTCDate() === Number(day) && Number(hour) < 24 && Number(minute) < 60
+    && Number(second) < 60 && (offsetHour === undefined || (Number(offsetHour) < 24 && Number(offsetMinute) < 60));
+}
+
+/** Validate the complete framing shape, independent of event counts. */
+export function isTraceFileTrailer(value: unknown): value is TraceFileTrailer {
+  if (!value || typeof value !== "object" || Array.isArray(value) || "seq" in value) return false;
+  const end = (value as { end?: unknown }).end;
+  if (!end || typeof end !== "object" || Array.isArray(end)) return false;
+  const row = end as Record<string, unknown>;
+  return TRACE_END_STATUSES.includes(row.status as TraceEndStatus)
+    && Number.isSafeInteger(row.head) && (row.head as number) >= 0
+    && Number.isSafeInteger(row.event_count) && (row.event_count as number) >= 0
+    && (row.head as number) >= (row.event_count as number)
+    && validTimestamp(row.ended_at);
+}
+
+export function isTraceFileEvent(value: unknown): value is TraceEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const event = value as Record<string, unknown>;
+  return Number.isSafeInteger(event.seq) && (event.seq as number) >= 1
+    && validTimestamp(event.ts) && typeof event.type === "string" && !!event.type;
+}
+
+/**
+ * Inspect complete JSONL lines without touching the filesystem. Duplicate seq
+ * keeps its first event; a half line is ignored for recovery. Neither condition
+ * can establish a closed trace for GC, even if a trailer is present.
+ */
+export function checkTraceFileLines(
+  lines: readonly string[],
+  options: { taskId?: string; sessionId?: string; incompleteTail?: boolean } = {},
+): TraceFileCheckResult {
+  if (lines.length === 0) return { ok: false, reason: "missing complete header" };
+  let header: unknown;
+  try { header = JSON.parse(lines[0]!); } catch { return { ok: false, reason: "invalid header JSON" }; }
+  if (!header || typeof header !== "object" || Array.isArray(header)) return { ok: false, reason: "invalid header" };
+  const first = header as Record<string, unknown>;
+  if (first.format !== TRACE_FILE_FORMAT || typeof first.task_id !== "string" || !first.task_id
+    || typeof first.session_id !== "string" || !first.session_id
+    || (options.taskId !== undefined && first.task_id !== options.taskId)
+    || (options.sessionId !== undefined && first.session_id !== options.sessionId)
+    || typeof first.agent_id !== "string" || !first.agent_id
+    || typeof first.provider !== "string" || !first.provider
+    || !validTimestamp(first.started_at) || "seq" in first) return { ok: false, reason: "invalid header" };
+
+  let head = 0;
+  let eventCount = 0;
+  let closed = false;
+  const seen = new Set<number>();
+  const duplicateSeqs: number[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    let row: unknown;
+    try { row = JSON.parse(lines[i]!); } catch { return { ok: false, reason: `invalid JSON at line ${i + 1}` }; }
+    if (isTraceFileTrailer(row)) {
+      if (i !== lines.length - 1) return { ok: false, reason: "trailer is not final line" };
+      if (row.end.head !== head || row.end.event_count !== eventCount) return { ok: false, reason: "trailer counts disagree with events" };
+      if (duplicateSeqs.length || options.incompleteTail) return { ok: false, reason: "ambiguous trailer after recovered events" };
+      closed = true;
+      continue;
+    }
+    if (!isTraceFileEvent(row)) return { ok: false, reason: `invalid event at line ${i + 1}` };
+    const seq = row.seq;
+    if (seen.has(seq)) { duplicateSeqs.push(seq); continue; }
+    if (seq < head) return { ok: false, reason: `out-of-order seq ${seq} at line ${i + 1}` };
+    seen.add(seq);
+    head = seq;
+    eventCount++;
+  }
+  return { ok: true, value: { head, event_count: eventCount, closed, duplicate_seqs: duplicateSeqs } };
+}
 
 /**
  * Wire shape of one `multiremi_session_archive_requests` row (ADR 0006 Decision 8).

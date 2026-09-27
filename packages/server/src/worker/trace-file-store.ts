@@ -1,12 +1,13 @@
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { TRACE_END_STATUSES, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { checkTraceFileLines, isTraceFileEvent, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import { assertRealDirectoryPath } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { createLogger } from "@shared/logger.js";
 import {
   sanitizeStoredEvent,
   traceEventBytes,
+  normalizeTraceReadArgs,
   TRACE_READ_DEFAULT_LIMIT,
-  TRACE_READ_MAX_LIMIT,
   type TraceAppendResult,
   type TraceClock,
   type TraceCloseInput,
@@ -34,6 +35,7 @@ export interface TraceFileStoreOptions {
 
 interface IndexedTrace {
   path: string;
+  directories: Array<{ path: string; info: Stats }>;
   dev: number;
   ino: number;
   head: number;
@@ -61,31 +63,7 @@ function ensureDirectory(path: string): void {
   if (!realDirectory(path)) mkdirSync(path, { mode: 0o700 });
 }
 
-function isHeader(value: unknown, taskId: string, sessionId: string): value is TraceFileHeader {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Partial<TraceFileHeader> & { seq?: unknown };
-  return row.format === TRACE_FILE_FORMAT && row.task_id === taskId && row.session_id === sessionId
-    && typeof row.agent_id === "string" && typeof row.provider === "string"
-    && typeof row.started_at === "string" && row.seq === undefined;
-}
-
-function isTrailer(value: unknown): value is TraceFileTrailer {
-  if (!value || typeof value !== "object" || "seq" in value) return false;
-  const end = (value as { end?: Partial<TraceFileTrailer["end"]> }).end;
-  return !!end && TRACE_END_STATUSES.includes(end.status as typeof TRACE_END_STATUSES[number])
-    && Number.isSafeInteger(end.head) && (end.head ?? -1) >= 0
-    && Number.isSafeInteger(end.event_count) && (end.event_count ?? -1) >= 0
-    && typeof end.ended_at === "string";
-}
-
-function isEvent(value: unknown): value is TraceEvent {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Partial<TraceEvent>;
-  return Number.isSafeInteger(row.seq) && (row.seq ?? 0) >= 1
-    && typeof row.ts === "string" && typeof row.type === "string";
-}
-
-function completeLines(path: string): { lines: string[]; completeBytes: number; dev: number; ino: number } {
+function completeLines(path: string): { lines: string[]; completeBytes: number; incompleteTail: boolean; dev: number; ino: number } {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   let buffer: Buffer;
   let stat: ReturnType<typeof fstatSync>;
@@ -95,10 +73,11 @@ function completeLines(path: string): { lines: string[]; completeBytes: number; 
     buffer = readFileSync(fd);
   } finally { closeSync(fd); }
   const lastNewline = buffer.lastIndexOf(10);
-  if (lastNewline < 0) return { lines: [], completeBytes: 0, dev: stat.dev, ino: stat.ino };
+  if (lastNewline < 0) return { lines: [], completeBytes: 0, incompleteTail: buffer.length > 0, dev: stat.dev, ino: stat.ino };
   return {
     lines: buffer.subarray(0, lastNewline).toString("utf8").split("\n"),
     completeBytes: lastNewline + 1,
+    incompleteTail: lastNewline !== buffer.length - 1,
     dev: stat.dev,
     ino: stat.ino,
   };
@@ -121,39 +100,42 @@ export class TraceFileStore implements TraceStore {
     log.warn(`Trace file skipped or damaged: ${path}: ${reason}`);
   }
 
+  private directoryChain(path: string): Array<{ path: string; info: Stats }> {
+    const traces = dirname(path);
+    const session = dirname(traces);
+    const runtime = dirname(session);
+    if (dirname(runtime) !== this.root || basename(runtime) !== ".runtime" || basename(traces) !== "traces") {
+      throw new Error(`Trace path is outside owned root: ${path}`);
+    }
+    return [this.root, runtime, session, traces].map((part) => {
+      const info = lstatSync(part);
+      assertRealDirectoryPath(part, info, "trace directory");
+      return { path: part, info };
+    });
+  }
+
+  private assertOwned(entry: IndexedTrace): void {
+    for (const directory of entry.directories) {
+      assertRealDirectoryPath(directory.path, directory.info, "trace directory");
+    }
+    const stat = lstatSync(entry.path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.dev !== entry.dev || stat.ino !== entry.ino) {
+      throw new Error(`trace file identity changed: ${entry.path}`);
+    }
+  }
+
   private inspect(path: string, taskId: string, sessionId: string): IndexedTrace {
+    const directories = this.directoryChain(path);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular trace file");
-    const { lines, completeBytes, dev, ino } = completeLines(path);
+    const { lines, completeBytes, incompleteTail, dev, ino } = completeLines(path);
     if (stat.dev !== dev || stat.ino !== ino) throw new Error("trace file changed during inspection");
-    if (!lines.length) throw new Error("missing complete header");
-    let header: unknown;
-    try { header = JSON.parse(lines[0]!); } catch { throw new Error("invalid header JSON"); }
-    if (!isHeader(header, taskId, sessionId)) throw new Error("invalid header");
-
-    let head = 0;
-    let eventCount = 0;
-    let closed = false;
-    const seen = new Set<number>();
-    for (let i = 1; i < lines.length; i++) {
-      let row: unknown;
-      try { row = JSON.parse(lines[i]!); } catch { throw new Error(`invalid JSON at line ${i + 1}`); }
-      if (isTrailer(row) && i === lines.length - 1) {
-        if (row.end.head !== head || row.end.event_count !== eventCount) throw new Error("trailer counts disagree with events");
-        closed = true;
-        continue;
-      }
-      if (!isEvent(row)) throw new Error(`invalid event at line ${i + 1}`);
-      if (seen.has(row.seq)) {
-        this.warn(path, `duplicate seq ${row.seq}; retaining first occurrence`);
-        continue;
-      }
-      if (row.seq < head) throw new Error(`out-of-order seq ${row.seq} at line ${i + 1}`);
-      seen.add(row.seq);
-      head = Math.max(head, row.seq);
-      eventCount++;
-    }
-    return { path, dev, ino, head, eventCount, closed, completeBytes };
+    const checked = checkTraceFileLines(lines, { taskId, sessionId, incompleteTail });
+    if (!checked.ok) throw new Error(checked.reason);
+    for (const directory of directories) assertRealDirectoryPath(directory.path, directory.info, "trace directory");
+    for (const seq of checked.value.duplicate_seqs) this.warn(path, `duplicate seq ${seq}; retaining first occurrence`);
+    return { path, directories, dev, ino, head: checked.value.head,
+      eventCount: checked.value.event_count, closed: checked.value.closed, completeBytes };
   }
 
   rebuildIndex(): void {
@@ -215,13 +197,15 @@ export class TraceFileStore implements TraceStore {
     const fd = openSync(path, "wx", 0o600);
     try { writeFileSync(fd, `${JSON.stringify(header)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
     const stat = lstatSync(path);
-    const entry: IndexedTrace = { path, dev: stat.dev, ino: stat.ino, head: 0, eventCount: 0, closed: false, completeBytes: stat.size };
+    const entry: IndexedTrace = { path, directories: this.directoryChain(path), dev: stat.dev, ino: stat.ino,
+      head: 0, eventCount: 0, closed: false, completeBytes: stat.size };
     this.index.set(taskId, entry);
     return entry;
   }
 
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult {
     const entry = this.index.get(taskId) ?? this.create(taskId);
+    this.assertOwned(entry);
     if (entry.closed || events.length === 0) return { head: entry.head, events: [] };
     const stored = events.map((event, offset): TraceEvent => ({
       ...sanitizeStoredEvent(event, event.ts ?? this.now()),
@@ -233,6 +217,7 @@ export class TraceFileStore implements TraceStore {
     try {
       const stat = fstatSync(fd);
       if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during append");
+      this.assertOwned(entry);
       ftruncateSync(fd, entry.completeBytes);
       writeFileSync(fd, stored.map((row) => `${JSON.stringify(row)}\n`).join(""));
       entry.completeBytes = fstatSync(fd).size;
@@ -243,29 +228,31 @@ export class TraceFileStore implements TraceStore {
     return { head: entry.head, events: stored };
   }
 
-  read(taskId: string, afterSeq = 0, limit = TRACE_READ_DEFAULT_LIMIT, maxBytes = Number.MAX_SAFE_INTEGER): TraceReadResult {
+  read(taskId: string, afterSeq = 0, limit = TRACE_READ_DEFAULT_LIMIT, maxBytes?: number): TraceReadResult {
     const entry = this.index.get(taskId);
     if (!entry) return { events: [], head: 0, eof: true };
-    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), TRACE_READ_MAX_LIMIT)) : TRACE_READ_DEFAULT_LIMIT;
+    const args = normalizeTraceReadArgs(afterSeq, limit, maxBytes);
     const events: TraceEvent[] = [];
     const seen = new Set<number>();
     let bytes = 0;
+    this.assertOwned(entry);
     const data = completeLines(entry.path);
+    this.assertOwned(entry);
     if (data.dev !== entry.dev || data.ino !== entry.ino) throw new Error("trace file changed during read");
     for (const line of data.lines.slice(1)) {
       let row: unknown;
       try { row = JSON.parse(line); } catch { this.warn(entry.path, "invalid JSON during read"); break; }
-      if (!isEvent(row)) continue;
+      if (!isTraceFileEvent(row)) continue;
       if (seen.has(row.seq)) { this.warn(entry.path, `duplicate seq ${row.seq}; retaining first occurrence`); continue; }
       seen.add(row.seq);
-      if (row.seq <= afterSeq) continue;
-      if (events.length >= boundedLimit) break;
+      if (row.seq <= args.afterSeq) continue;
+      if (events.length >= args.limit) break;
       const size = traceEventBytes(row);
-      if (events.length > 0 && bytes + size > maxBytes) break;
+      if (events.length > 0 && bytes + size > args.maxBytes) break;
       events.push(row);
       bytes += size;
     }
-    return { events, head: entry.head, eof: (events.at(-1)?.seq ?? afterSeq) >= entry.head };
+    return { events, head: entry.head, eof: (events.at(-1)?.seq ?? args.afterSeq) >= entry.head };
   }
 
   head(taskId: string): TraceStoreHead | null {
@@ -275,6 +262,7 @@ export class TraceFileStore implements TraceStore {
 
   close(taskId: string, end: TraceCloseInput): void {
     const entry = this.index.get(taskId) ?? this.create(taskId);
+    this.assertOwned(entry);
     if (entry.closed) return;
     const trailer: TraceFileTrailer = { end: {
       status: end.status,
@@ -286,6 +274,7 @@ export class TraceFileStore implements TraceStore {
     try {
       const stat = fstatSync(fd);
       if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during close");
+      this.assertOwned(entry);
       ftruncateSync(fd, entry.completeBytes);
       writeFileSync(fd, `${JSON.stringify(trailer)}\n`);
       fsyncSync(fd);
@@ -298,7 +287,28 @@ export class TraceFileStore implements TraceStore {
   forget(taskId: string): void {
     const entry = this.index.get(taskId);
     if (!entry) return;
-    rmSync(entry.path);
-    this.index.delete(taskId);
+    try {
+      this.assertOwned(entry);
+      const parentFd = openSync(dirname(entry.path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try {
+        const parent = fstatSync(parentFd);
+        const expected = entry.directories.at(-1)!.info;
+        if (parent.dev !== expected.dev || parent.ino !== expected.ino) throw new Error("trace parent directory changed");
+        const fd = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const stat = fstatSync(fd);
+          if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during forget");
+          this.assertOwned(entry);
+          const target = process.platform === "linux"
+            ? join(`/proc/self/fd/${parentFd}`, basename(entry.path))
+            : entry.path;
+          unlinkSync(target);
+          this.index.delete(taskId);
+        } finally { closeSync(fd); }
+      } finally { closeSync(parentFd); }
+    } catch (error) {
+      this.warn(entry.path, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 }
