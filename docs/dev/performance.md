@@ -303,6 +303,8 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 **当前 strict 实测**（MUL-390 分支，基线 `43d75571` 加本单改动，3 次/行）存于 [reports/performance/MUL-390-zero-jump-strict-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-strict-2026-09-27.json)：9 个 `key::mode` 行、27 轮全部 `jumps=0`、anchor 完整可见、骨架 0、`data-perf-state=ready`，没有任何 `ready-forced`。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「后」基线；本单合入 main 后它即 main 的 strict 基线。（报告里的 `commit` 记的是分支基线，改动随 MUL-390 一起入库。）
 
+同一分支的默认（清单）模式在本地与 CI 各跑一次，都是 9 行 × 3 轮 0 违例：本地 [reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json)，CI 的 `frontend-zero-jump` job 产物 [reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json)。
+
 **前基线**（`4248ef07`）仍存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。
 
 ## 优化不能破坏的约束
