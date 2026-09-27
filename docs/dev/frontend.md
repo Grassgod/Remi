@@ -61,7 +61,7 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 任务列表包含按状态分页的缓存结构；详情只需要已有列表中的某个对象时，使用 `findCachedIssue`，避免为查缓存额外挂载完整列表查询。列表、看板、我的单的「显示子单」偏好由各自的 view store 持久化，默认关闭；查询键与请求都包含服务端 `top_level_only` 过滤值，不能在客户端裁掉子单。父单进度从服务端 child-progress buckets 显示。工作台复用查询缓存区分待人工输入与待验收，不能只根据单个任务的完成状态自行推导整个 issue 的展示。
 
-收件箱页面使用 `useInfiniteQuery` 按游标每次读取 50 条；侧栏关注数与页内未读数来自独立的 `/api/inbox/summary`，摘要查询 `staleTime` 为 30 秒，不需要加载完整列表。筛选、日期分组、成功自动运行及同父单通知的折叠应用于已加载页；父单元数据由服务端投影提供，组内失败、卡住、待决定通知优先。链接指向尚未加载的通知时，页面继续加载后续页，读取失败不能当作通知不存在。读/归档 mutation 和 WS 更新同时维护旧列表缓存与分页缓存，并刷新摘要；具体分组和计数契约见[收件箱边界](../inbox-workbench-boundary.md)。
+收件箱页面使用 `useInfiniteQuery` 按游标每次读取 50 条；侧栏关注数与页内未读数来自独立的 `/api/inbox/summary`，摘要查询 `staleTime` 为 30 秒，不需要加载完整列表。筛选、日期分组、成功自动运行及同父单通知的折叠应用于已加载页；父单元数据由服务端投影提供，但只投影通知所属工作区内仍存在的父单，组内失败、卡住、待决定通知优先。父单分组头不提供整组归档，展开后逐条归档；行内操作始终保留固定宽度，悬停只改变可见性。链接指向尚未加载的通知时，页面继续加载后续页，读取失败不能当作通知不存在。读/归档 mutation 和 WS 更新同时维护旧列表缓存与分页缓存，并刷新摘要；具体分组和计数契约见[收件箱边界](../inbox-workbench-boundary.md)。
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 

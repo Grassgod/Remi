@@ -1553,6 +1553,58 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
   });
 
+  it("scopes parent projections and progress to the child's workspace (PG)", () => {
+    const workspaceA = freshWorkspace();
+    const workspaceB = freshWorkspace();
+    const reviewer = store.createWorkspaceMember({ name: "Scoped parent reviewer", workspaceId: workspaceA, role: "member" });
+    const author = store.createWorkspaceMember({ name: "Scoped parent author", workspaceId: workspaceA, role: "member" });
+    const parent = store.createIssue({ title: "Parent moved to B", workspaceId: workspaceA });
+    const child = store.createIssue({
+      title: "Child staying in A",
+      workspaceId: workspaceA,
+      parentIssueId: parent.id,
+      createdBy: reviewer.id,
+      status: "todo",
+    });
+    store.createIssueComment(child.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify before moving the parent",
+    });
+
+    store.updateIssue(parent.id, { workspaceId: workspaceB });
+
+    expect(store.listInboxItems(reviewer.id, workspaceA).find((item) => item.issueId === child.id)).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 0, active: 0 });
+    expect(store.listChildIssueProgress(workspaceA).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listChildIssueProgress(workspaceB).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listIssues({ workspaceId: workspaceA, topLevelOnly: true }).map((issue) => issue.id)).toContain(child.id);
+    expect(store.listIssues({ workspaceId: workspaceA, parentId: parent.id })).toHaveLength(0);
+
+    const deletedParent = store.createIssue({ title: "Parent deleted in A", workspaceId: workspaceA });
+    const orphan = store.createIssue({
+      title: "Child orphaned in A",
+      workspaceId: workspaceA,
+      parentIssueId: deletedParent.id,
+      createdBy: reviewer.id,
+    });
+    store.createIssueComment(orphan.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify before deleting the parent",
+    });
+    expect(store.deleteIssue(deletedParent.id)).toBe(true);
+    expect(store.listInboxItems(reviewer.id, workspaceA).find((item) => item.issueId === orphan.id)).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+  });
+
   it("filters issues by assignee via the IN (…) pushdown", () => {
     const ws = freshWorkspace();
     const member = store.createWorkspaceMember({ name: "Assignee", workspaceId: ws, role: "member" });

@@ -187,11 +187,11 @@ function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProg
  * subquery mirrors {@link IssuesRepo.listUnmetPrerequisites} for the whole
  * workspace in one statement instead of hydrating every child.
  */
-const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
-              SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
-              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
-              SUM(CASE WHEN status = 'backlog' AND id IN (
+const CHILD_PROGRESS_SELECT = `SELECT child.parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN child.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
+              SUM(CASE WHEN child.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+              SUM(CASE WHEN child.status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+              SUM(CASE WHEN child.status = 'backlog' AND child.id IN (
                     SELECT CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END
                     FROM multiremi_issue_dependencies d
                     JOIN multiremi_issues prereq ON prereq.id = CASE
@@ -200,8 +200,11 @@ const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
                     END
                     WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
                   ) THEN 1 ELSE 0 END) AS waiting,
-              SUM(CASE WHEN status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
-       FROM multiremi_issues`;
+              SUM(CASE WHEN child.status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
+       FROM multiremi_issues child
+       JOIN multiremi_issues parent
+         ON parent.id = child.parent_issue_id
+        AND parent.workspace_id = child.workspace_id`;
 
 /** `result` is stored JSON; "has a result" means non-empty output text. */
 function storedTaskResultHasOutput(value: unknown): boolean {
@@ -1109,9 +1112,9 @@ export class IssuesRepo {
   listChildIssueProgress(workspaceId = "local"): MultiremiIssueChildProgress[] {
     const rows = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE workspace_id = ? AND parent_issue_id IS NOT NULL
-       GROUP BY parent_issue_id
-       ORDER BY parent_issue_id ASC`,
+       WHERE child.workspace_id = ? AND child.parent_issue_id IS NOT NULL
+       GROUP BY child.parent_issue_id
+       ORDER BY child.parent_issue_id ASC`,
     ).all(workspaceId) as Row[];
     return rows.map(toChildIssueProgress);
   }
@@ -1119,8 +1122,8 @@ export class IssuesRepo {
   getChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
     const row = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE parent_issue_id = ?
-       GROUP BY parent_issue_id`,
+       WHERE child.parent_issue_id = ?
+       GROUP BY child.parent_issue_id`,
     ).get(parentIssueId) as Row | null;
     return row ? toChildIssueProgress(row) : emptyChildIssueProgress(parentIssueId);
   }
@@ -5006,36 +5009,59 @@ export class IssuesRepo {
   }
 
   private hydrateInboxRows(rows: Row[]): MultiremiInboxItem[] {
-    const issueIds = [...new Set(rows.map((row) => nullableString(row.issue_id)).filter((id): id is string => Boolean(id)))];
-    const issuesById = new Map<string, MultiremiIssue>();
+    const scopedKey = (workspaceId: string, issueId: string) => `${workspaceId}\0${issueId}`;
+    const issueIdsByWorkspace = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const issueId = nullableString(row.issue_id);
+      if (!issueId) continue;
+      const workspaceId = String(row.workspace_id ?? "local");
+      const ids = issueIdsByWorkspace.get(workspaceId) ?? new Set<string>();
+      ids.add(issueId);
+      issueIdsByWorkspace.set(workspaceId, ids);
+    }
+    const issuesByScope = new Map<string, MultiremiIssue>();
     // Keep below SQLite's default bind-variable limit. PostgreSQL benefits from the same bounded queries.
-    for (let offset = 0; offset < issueIds.length; offset += 400) {
-      const chunk = issueIds.slice(offset, offset + 400);
-      const placeholders = chunk.map(() => "?").join(", ");
-      const issueRows = this.ctx.db.query(
-        `SELECT * FROM multiremi_issues WHERE id IN (${placeholders})`,
-      ).all(...chunk) as Row[];
-      for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
-        issuesById.set(issue.id, issue);
+    for (const [workspaceId, issueIds] of issueIdsByWorkspace) {
+      const ids = [...issueIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const issueRows = this.ctx.db.query(
+          `SELECT * FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
+          issuesByScope.set(scopedKey(workspaceId, issue.id), issue);
+        }
       }
     }
-    const parentIds = [...new Set([...issuesById.values()].map((issue) => issue.parentIssueId).filter((id): id is string => Boolean(id)))];
-    const parentsById = new Map<string, Pick<MultiremiIssue, "id" | "key" | "title">>();
-    for (let offset = 0; offset < parentIds.length; offset += 400) {
-      const chunk = parentIds.slice(offset, offset + 400);
-      const placeholders = chunk.map(() => "?").join(", ");
-      const parentRows = this.ctx.db.query(
-        `SELECT id, issue_key, title FROM multiremi_issues WHERE id IN (${placeholders})`,
-      ).all(...chunk) as Row[];
-      for (const row of parentRows) {
-        parentsById.set(String(row.id), { id: String(row.id), key: String(row.issue_key), title: String(row.title) });
+    const parentIdsByWorkspace = new Map<string, Set<string>>();
+    for (const issue of issuesByScope.values()) {
+      if (!issue.parentIssueId) continue;
+      const ids = parentIdsByWorkspace.get(issue.workspaceId) ?? new Set<string>();
+      ids.add(issue.parentIssueId);
+      parentIdsByWorkspace.set(issue.workspaceId, ids);
+    }
+    const parentsByScope = new Map<string, Pick<MultiremiIssue, "id" | "key" | "title">>();
+    for (const [workspaceId, parentIds] of parentIdsByWorkspace) {
+      const ids = [...parentIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const parentRows = this.ctx.db.query(
+          `SELECT id, issue_key, title FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const row of parentRows) {
+          const id = String(row.id);
+          parentsByScope.set(scopedKey(workspaceId, id), { id, key: String(row.issue_key), title: String(row.title) });
+        }
       }
     }
     return rows.map((row) => {
+      const workspaceId = String(row.workspace_id ?? "local");
       const issueId = nullableString(row.issue_id);
-      const issue = issueId ? issuesById.get(issueId) ?? null : null;
+      const issue = issueId ? issuesByScope.get(scopedKey(workspaceId, issueId)) ?? null : null;
       const parent = issue?.parentIssueId
-        ? parentsById.get(issue.parentIssueId) ?? null
+        ? parentsByScope.get(scopedKey(workspaceId, issue.parentIssueId)) ?? null
         : (row.type === "child_issue_terminal" || row.type === "decision_requested") ? issue : null;
       return toInboxItem(row, issue, parent);
     });
@@ -5908,12 +5934,13 @@ function issueMatchesListFilter(
   if (projectIds.length && (!issue.projectId || !projectIds.includes(issue.projectId))) return false;
   if (input.includeNoProject && issue.projectId !== null) return false;
   if (input.topLevelOnly ?? input.top_level_only ?? false) {
-    if (issue.parentIssueId !== null) return false;
+    if (issue.parentIssueId !== null && (!parentResolver || parentResolver(issue.parentIssueId) !== null)) return false;
   } else {
     const parentId = input.parentId ?? input.parent_id;
     if (parentId) {
       const parent = parentResolver?.(parentId) ?? parentId;
       if (issue.parentIssueId !== parent) return false;
+      if (parentResolver && issue.parentIssueId && parentResolver(issue.parentIssueId) === null) return false;
     }
   }
   if (input.metadata) {
@@ -5971,11 +5998,19 @@ function buildIssueListWhere(input: ListIssuesInput): { where: string; params: u
   // MUL-400 E3: hierarchy filters. `top_level_only` wins over `parent_id` so a
   // caller can pass both without ambiguity.
   if (input.topLevelOnly ?? input.top_level_only ?? false) {
-    clauses.push("parent_issue_id IS NULL");
+    clauses.push(`(parent_issue_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM multiremi_issues parent
+      WHERE parent.id = multiremi_issues.parent_issue_id
+        AND parent.workspace_id = multiremi_issues.workspace_id
+    ))`);
   } else {
     const parentId = input.parentId ?? input.parent_id;
     if (parentId) {
-      clauses.push("parent_issue_id = ?");
+      clauses.push(`parent_issue_id = ? AND EXISTS (
+        SELECT 1 FROM multiremi_issues parent
+        WHERE parent.id = multiremi_issues.parent_issue_id
+          AND parent.workspace_id = multiremi_issues.workspace_id
+      )`);
       params.push(parentId);
     }
   }

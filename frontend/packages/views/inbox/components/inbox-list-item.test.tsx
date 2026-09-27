@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { InboxItem } from "@multiremi/core/types";
 import { describe, expect, it, vi } from "vitest";
@@ -60,6 +61,20 @@ function run(id: string, branch: string, seconds: number, createdAt: string): In
   };
 }
 
+function parentNotification(id: string, issueKey: string): InboxItem {
+  return {
+    ...run(id, "main", 5, "2026-08-27T10:00:00Z"),
+    type: "comment_created",
+    issue_id: id,
+    issue_parent_id: "parent-1",
+    issue_parent_key: "MUL-1",
+    issue_parent_title: "Parent issue",
+    title: `Child ${issueKey}`,
+    issue_status: "todo",
+    details: null,
+  };
+}
+
 describe("InboxListItem merged autopilot runs", () => {
   it("expands a collapsed row to show every trigger object and duration", () => {
     const latest = run("run-latest", "main", 5, "2026-08-27T10:00:00Z");
@@ -91,5 +106,68 @@ describe("InboxListItem merged autopilot runs", () => {
 
     fireEvent.click(screen.getByTitle("Archive"));
     expect(onArchive).toHaveBeenCalledTimes(1);
+    expect(onArchive).toHaveBeenCalledWith([latest, earlier]);
+  });
+});
+
+describe("InboxListItem parent notification groups", () => {
+  it("keeps the expand control stationary on hover and offers only per-item archive actions", async () => {
+    const first = parentNotification("child-1", "MUL-2");
+    const second = parentNotification("child-2", "MUL-3");
+    const onArchive = vi.fn();
+    render(
+      <I18nProvider locale="en" resources={{ en: { inbox: enInbox } }}>
+        <InboxListItem
+          item={first}
+          groupedItems={[first, second]}
+          isSelected={false}
+          onClick={vi.fn()}
+          onArchive={onArchive}
+        />
+      </I18nProvider>,
+    );
+
+    const expand = screen.getByRole("button", { name: "Expand notifications" });
+    const row = expand.closest("[data-perf-item]");
+    expect(row).not.toBeNull();
+    const before = expand.getBoundingClientRect();
+    fireEvent.mouseEnter(row!);
+    const after = expand.getBoundingClientRect();
+
+    expect(after.left).toBe(before.left);
+    expect(after.width).toBe(before.width);
+    expect(expand).toHaveClass("h-5", "w-5");
+    expect(screen.queryByTitle("Archive")).not.toBeInTheDocument();
+
+    await userEvent.click(expand);
+    const archiveButtons = screen.getAllByTitle("Archive");
+    expect(archiveButtons).toHaveLength(2);
+    await userEvent.click(archiveButtons[0]!);
+    expect(onArchive).toHaveBeenCalledWith([first]);
+  });
+
+  it("uses Enter on the focused expand button without opening the group", async () => {
+    const first = parentNotification("child-1", "MUL-2");
+    const second = parentNotification("child-2", "MUL-3");
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <I18nProvider locale="en" resources={{ en: { inbox: enInbox } }}>
+        <InboxListItem
+          item={first}
+          groupedItems={[first, second]}
+          isSelected={false}
+          onClick={onClick}
+          onArchive={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    const expand = screen.getByRole("button", { name: "Expand notifications" });
+    expand.focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByRole("button", { name: "Collapse notifications" })).toBeInTheDocument();
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

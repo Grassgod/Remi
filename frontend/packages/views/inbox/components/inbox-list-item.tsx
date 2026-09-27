@@ -39,7 +39,7 @@ export function InboxListItem({
   isSelected: boolean;
   onClick: () => void;
   onItemClick?: (item: InboxItem) => void;
-  onArchive: () => void;
+  onArchive: (items: InboxItem[]) => void;
 }) {
   const { t } = useT("inbox");
   const timeAgo = useTimeAgo();
@@ -54,6 +54,7 @@ export function InboxListItem({
     : inboxTitle(item, "row", groupedItems.length);
 
   const handleRowKeyDown = (event: React.KeyboardEvent) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onClick();
@@ -69,7 +70,7 @@ export function InboxListItem({
         data-perf-key={item.id}
         onClick={onClick}
         onKeyDown={handleRowKeyDown}
-        className={`group flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+        className={`group/row flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors ${
           isSelected ? "bg-accent" : "hover:bg-accent/50"
         }`}
       >
@@ -91,7 +92,7 @@ export function InboxListItem({
                 {displayTitle}
               </span>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1" data-testid="inbox-header-actions">
               {merged && (
                 <button
                   type="button"
@@ -101,24 +102,26 @@ export function InboxListItem({
                     event.stopPropagation();
                     setExpanded((value) => !value);
                   }}
-                  className="inline-flex rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   {expanded
                     ? <ChevronDown className="h-3.5 w-3.5" />
                     : <ChevronRight className="h-3.5 w-3.5" />}
                 </button>
               )}
-              <button
-                type="button"
-                title={t(($) => $.list.archive_tooltip)}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onArchive();
-                }}
-                className="hidden rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover:inline-flex"
-              >
-                <Archive className="h-3.5 w-3.5" />
-              </button>
+              {!parentGroup && (
+                <button
+                  type="button"
+                  title={t(($) => $.list.archive_tooltip)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onArchive(groupedItems);
+                  }}
+                  className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:visible focus-visible:visible"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                </button>
+              )}
               {item.issue_status ? (
                 <StatusIcon status={item.issue_status} className="h-3.5 w-3.5 shrink-0" />
               ) : isFeishuInboxType(item.type) ? (
@@ -148,20 +151,36 @@ export function InboxListItem({
               tabIndex={0}
               onClick={() => onItemClick?.(run)}
               onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   onItemClick?.(run);
                 }
               }}
-              className="cursor-pointer border-l px-3 py-2 hover:bg-accent/50"
+              className="group/child cursor-pointer border-l px-3 py-2 hover:bg-accent/50"
             >
               <div className="flex items-center justify-between gap-3">
                 <span className={`min-w-0 truncate text-xs ${run.read ? "text-muted-foreground" : "font-medium"}`}>
                   {inboxTitle(run, "row")}
                 </span>
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {timeAgo(run.created_at)}
-                </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  <span className="text-xs text-muted-foreground">
+                    {timeAgo(run.created_at)}
+                  </span>
+                  {parentGroup && (
+                    <button
+                      type="button"
+                      title={t(($) => $.list.archive_tooltip)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onArchive([run]);
+                      }}
+                      className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground group-hover/child:visible focus-visible:visible"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
                 <InboxDetailLabel item={run} />

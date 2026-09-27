@@ -1320,7 +1320,7 @@ export function toInboxItem(
     workspace_id: workspaceId,
     issueId,
     issue_id: issueId,
-    issue_parent_id: parent?.id ?? issue?.parentIssueId ?? null,
+    issue_parent_id: parent?.id ?? null,
     issue_parent_key: parent?.key ?? null,
     issue_parent_title: parent?.title ?? null,
     memberId,

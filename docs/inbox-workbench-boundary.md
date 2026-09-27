@@ -128,8 +128,12 @@ Display transformations apply to the loaded pages:
   runs of the same autopilot within a date group collapse into one display entry;
   failures remain separate. R1/R2 action notifications retain the latest row per issue;
 - notifications for children of the same parent collapse after deduplication within a date
-  group. The server supplies the parent id, key, and title; failed or blocked child terminal
-  events and `decision_requested` rank ahead of ordinary entries in that date group;
+  group. The server supplies the parent id, key, and title only while that parent still
+  exists in the notification's workspace; missing, deleted, and cross-workspace parents
+  project all three fields as `null`. Failed or blocked child terminal events and
+  `decision_requested` rank ahead of ordinary entries in that date group;
+- a parent-group header has no whole-group archive action. Expanding it exposes per-event
+  archive actions; action slots keep fixed dimensions and hover changes visibility only;
 - every row shows a one-line self-contained summary from `details`, so a sweep down the
   list is enough to know what happened.
 
