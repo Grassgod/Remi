@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ApiError } from "@multiremi/core/api";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enInbox from "../../locales/en/inbox.json";
@@ -8,6 +9,7 @@ import enInbox from "../../locales/en/inbox.json";
 const TEST_RESOURCES = { en: { common: enCommon, inbox: enInbox } };
 
 const listInbox = vi.hoisted(() => vi.fn());
+const markReadRequests = vi.hoisted(() => vi.fn());
 const markItemsRead = vi.hoisted(() => vi.fn());
 const archiveItems = vi.hoisted(() => vi.fn());
 const navigationState = vi.hoisted(() => ({
@@ -17,6 +19,16 @@ const navigationState = vi.hoisted(() => ({
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
+
+// The shared bounded retry calls `api.markInboxRead`; stub it so a test can
+// script 500/404 without a network.
+vi.mock("@multiremi/core/api", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@multiremi/core/api")>();
+  return {
+    ...original,
+    api: { markInboxRead: markReadRequests },
+  };
+});
 
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
@@ -63,6 +75,24 @@ vi.mock("@multiremi/core/inbox/queries", async (importOriginal) => ({
 vi.mock("@multiremi/core/inbox/mutations", async (importOriginal) => {
   const original = await importOriginal<typeof import("@multiremi/core/inbox/mutations")>();
   const noopMutation = () => ({ mutate: vi.fn(), isPending: false });
+  // The auto mark-read path is exercised for real (MUL-472 d): the mutation is
+  // the shared bounded implementation with the retry delay shortened to keep
+  // the suite fast. `markItemsRead` records the call so the other tests can
+  // keep asserting on the invocation shape.
+  const recorder = () => ({
+    mutate: (ids: string[], options?: { onError?: (error: unknown) => void }) => {
+      markItemsRead(ids, options);
+      return original
+        .markInboxItemsReadBounded(ids, { delayMs: 5 })
+        .then((result) => {
+          if (result.failed.length > 0) {
+            options?.onError?.(new original.MarkInboxItemsReadError(result));
+          }
+          return result;
+        });
+    },
+    isPending: false,
+  });
   return {
     ...original,
     useMarkInboxRead: noopMutation,
@@ -72,7 +102,7 @@ vi.mock("@multiremi/core/inbox/mutations", async (importOriginal) => {
     useArchiveAllInbox: noopMutation,
     useArchiveAllReadInbox: noopMutation,
     useArchiveCompletedInbox: noopMutation,
-    useMarkInboxItemsRead: () => ({ mutate: markItemsRead, isPending: false }),
+    useMarkInboxItemsRead: recorder,
   };
 });
 
@@ -183,6 +213,7 @@ function renderInbox() {
 beforeEach(() => {
   vi.clearAllMocks();
   navigationState.searchParams = new URLSearchParams();
+  markReadRequests.mockReset();
 });
 
 describe("InboxPage", () => {
@@ -472,14 +503,62 @@ describe("InboxPage", () => {
     expect(markItemsRead).toHaveBeenCalledTimes(callsAfterFailure);
   });
 
+  it("keeps the auto mark-read bounded when the endpoint keeps returning 500 (MUL-472 d)", async () => {
+    // This one drives the real `useMarkInboxItemsRead` against a failing
+    // `POST /api/inbox/:id/read` (the suite default is 1 retry delay of 5 s,
+    // injected down to 5 ms) and asserts the *request* count, which is what the
+    // MUL-367 loop blew up to 992.
+    const now = new Date().toISOString();
+    markReadRequests.mockRejectedValue(new ApiError("server exploded", 500, "Internal Server Error"));
+    listInbox.mockResolvedValue([
+      { id: "bounded-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+      { id: "bounded-2", type: "comment_mention", issue_id: null, title: "Two", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "bounded-1" }));
+
+    await waitFor(() => expect(markReadRequests).toHaveBeenCalledTimes(3), { timeout: 5_000 });
+    expect(markReadRequests.mock.calls.map(([id]) => id)).toEqual([
+      "bounded-1",
+      "bounded-1",
+      "bounded-1",
+    ]);
+
+    // Selection changes and refetches must not restart the budget for an id the
+    // retry already gave up on.
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "bounded-2" }));
+    fireEvent.click(screen.getByRole("button", { name: "bounded-1" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(markReadRequests.mock.calls.filter(([id]) => id === "bounded-1")).toHaveLength(3);
+  }, 20_000);
+
+  it("does not retry a 404 and reports it once (MUL-472 d)", async () => {
+    const now = new Date().toISOString();
+    markReadRequests.mockRejectedValue(new ApiError("gone", 404, "Not Found"));
+    listInbox.mockResolvedValue([
+      { id: "gone-1", type: "comment_mention", issue_id: null, title: "One", read: false, archived: false, created_at: now },
+    ]);
+    renderInbox();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gone-1" }));
+
+    await waitFor(() => expect(markReadRequests).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(markReadRequests).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
   it("marks the list column with data-perf-scroll only after this request resolved (MUL-472 item 5)", async () => {
     const now = new Date().toISOString();
-    let release: (() => void) | null = null;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     listInbox.mockImplementation(
       async () => {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        await gate;
         return [
           { id: "marker-1", type: "comment_mention", issue_id: null, title: "One", read: true, archived: false, created_at: now },
         ];
@@ -489,10 +568,10 @@ describe("InboxPage", () => {
 
     // In flight: the marker the probe keys `--selectors auto` on is absent, so a
     // fast round cannot claim a skeleton-free list as "ready with new data".
-    await waitFor(() => expect(release).not.toBeNull());
+    await waitFor(() => expect(listInbox).toHaveBeenCalled());
     expect(container.querySelector('[data-perf-scroll="list"]')).toBeNull();
 
-    release?.();
+    release();
     // The mocked row renders its id; the marker must follow the resolved rows.
     await screen.findByRole("button", { name: "marker-1" });
     await waitFor(() =>

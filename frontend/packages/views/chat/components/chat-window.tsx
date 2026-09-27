@@ -147,9 +147,17 @@ export function ChatWindow({
   // Only `enabled` gates are added; the window structure is untouched so the
   // MUL-403 branch can keep merging main. The chat *page* is always visible.
   const chatVisible = isPage || isOpen;
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  const { data: agents = [] } = useQuery(
+    agentListOptions(wsId, { enabled: chatVisible }),
+  );
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: chatVisible,
+  });
+  const { data: projects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: chatVisible,
+  });
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -254,7 +262,7 @@ export function ChatWindow({
   // disable) so the input doesn't flash a fake "no agent" state in the
   // few hundred ms before the agent list query resolves. Only `"none"`
   // (server confirmed: zero usable agents) drives the disabled UI.
-  const agentAvailability = useWorkspaceAgentAvailability();
+  const agentAvailability = useWorkspaceAgentAvailability(chatVisible);
   const noAgent =
     agentAvailability === "none" ||
     (!!currentSession &&

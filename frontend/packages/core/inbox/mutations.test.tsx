@@ -188,6 +188,26 @@ describe("markInboxItemsReadBounded (MUL-472 d)", () => {
     expect(waits).toEqual([MARK_READ_RETRY_DELAY_MS, MARK_READ_RETRY_DELAY_MS]);
   }, 30_000);
 
+  it("spaces the retries at least 5 s apart, measured on the clock", async () => {
+    // The exported floor is asserted in the test above; this one proves the
+    // helper actually waits it out rather than only computing it. Uses a short
+    // injected delay so the suite stays fast, then re-checks the production
+    // constant separately.
+    const stamps: number[] = [];
+    markInboxRead.mockImplementation(async () => {
+      stamps.push(Date.now());
+      throw new ApiError("server exploded", 500, "Internal Server Error");
+    });
+
+    await markInboxItemsReadBounded(["item-1"], { delayMs: 40 });
+
+    expect(stamps).toHaveLength(1 + MARK_READ_MAX_RETRIES);
+    for (let i = 1; i < stamps.length; i++) {
+      expect((stamps[i] ?? 0) - (stamps[i - 1] ?? 0)).toBeGreaterThanOrEqual(35);
+    }
+    expect(MARK_READ_RETRY_DELAY_MS).toBeGreaterThanOrEqual(5_000);
+  });
+
   it("does not retry a 404", async () => {
     markInboxRead.mockRejectedValue(new ApiError("gone", 404, "Not Found"));
     const result = await markInboxItemsReadBounded(["item-1"], { delayMs: 1 });

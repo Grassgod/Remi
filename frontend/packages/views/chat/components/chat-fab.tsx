@@ -12,6 +12,8 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
@@ -21,8 +23,20 @@ export function ChatFab() {
   const wsId = useWorkspaceId();
   const isOpen = useChatStore((s) => s.isOpen);
   const toggle = useChatStore((s) => s.toggle);
-  const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
-  const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
+  // MUL-472 b: the FAB is the minimised chat's only surface, and both of its
+  // inputs are shell-wide roll-ups: the session list (for the unread badge) and
+  // the pending task aggregate (for the running pulse). They wait for the
+  // route's first screen, so a page that never opens chat pays nothing for
+  // them up front. `pendingChatTasksOptions` keeps polling only while a task is
+  // actually in flight, so an idle workspace still costs zero requests.
+  const { pathname } = useNavigation();
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const { data: sessions = [] } = useQuery(
+    chatSessionsOptions(wsId, "all", { enabled: afterFirstScreen }),
+  );
+  const { data: pending } = useQuery(
+    pendingChatTasksOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   if (isOpen) return null;
 

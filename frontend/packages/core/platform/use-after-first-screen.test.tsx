@@ -123,3 +123,40 @@ describe("scheduleAfterFirstIdle", () => {
     expect(cancelIdleCallback).toHaveBeenCalledWith(7);
   });
 });
+
+describe("gated query factories (MUL-472 b)", () => {
+  it("every deferred shell query carries an enable switch the sidebar can hold closed", async () => {
+    const { pinListOptions } = await import("../pins/queries");
+    const { agentListOptions, myInvitationListOptions, squadListOptions } = await import("../workspace/queries");
+    const { latestCliVersionOptions } = await import("../runtimes/queries");
+    const { agentTaskSnapshotOptions } = await import("../agents/queries");
+    const { childIssueProgressOptions } = await import("../issues/queries");
+    const { workbenchPendingCountOptions } = await import("../issues/workbench");
+
+    const gated = {
+      pins: pinListOptions("ws-1", "user-1", { enabled: false }),
+      agents: agentListOptions("ws-1", { enabled: false }),
+      squads: squadListOptions("ws-1", { enabled: false }),
+      myInvitations: myInvitationListOptions({ enabled: false }),
+      latestCliVersion: latestCliVersionOptions({ enabled: false }),
+      agentTaskSnapshot: agentTaskSnapshotOptions("ws-1", { enabled: false }),
+      childProgress: childIssueProgressOptions("ws-1", { enabled: false }),
+      workbenchPendingCount: workbenchPendingCountOptions("ws-1", { enabled: false }),
+    };
+
+    for (const [name, options] of Object.entries(gated)) {
+      // `enabled` may be an option or a value; TanStack resolves both before it
+      // fetches, so asserting on the option object is the same gate the app uses.
+      const enabled = typeof options.enabled === "function" ? options.enabled({} as never) : options.enabled;
+      expect(enabled, `${name} must be gated`).toBe(false);
+    }
+
+    // And the default stays open: these factories are shared with callers that
+    // are already on screen (the runtimes page, the workbench page itself).
+    expect(pinListOptions("ws-1", "user-1").enabled).toBe(true);
+    expect(agentListOptions("ws-1").enabled).toBe(true);
+    expect(latestCliVersionOptions().enabled).toBe(true);
+    expect(agentTaskSnapshotOptions("ws-1").enabled).toBe(true);
+    expect(childIssueProgressOptions("ws-1").enabled).toBe(true);
+  });
+});
