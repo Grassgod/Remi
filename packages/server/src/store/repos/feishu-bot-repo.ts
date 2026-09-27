@@ -798,7 +798,7 @@ export class FeishuBotRepo {
         && Boolean(chatId)
         && topicConfig?.enabled === true
         && topicConfig.chatId === chatId;
-      const createGroupIssue = () => this.ctx.issues().createIssue({
+      const createGroupIssue = () => this.ctx.issues().createIssueWithinTransaction({
         title: issueTitleFromFeishuMessage(text),
         description: text,
         status: "in_progress",
@@ -813,7 +813,7 @@ export class FeishuBotRepo {
           chat_id: chatId,
           thread_id: cleanOptionalString(input.threadId) ?? externalMessageId,
         }],
-      });
+      }, submitEvents);
       const duplicate = this.ctx.db.query(
         `SELECT d.task_id, b.chat_session_id, b.agent_id, a.name AS agent_name, t.status
            FROM multiremi_feishu_bot_deliveries d

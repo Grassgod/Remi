@@ -1395,13 +1395,13 @@ export class AutopilotsRepo {
       let issue: MultiremiIssue | null = null;
       let issueSessionId: string | null = null;
       if (autopilot.executionMode === "create_issue") {
-        issue = this.ctx.issues().createIssue({
+        issue = this.ctx.issues().createIssueWithinTransaction({
           title: prompt,
           description: autopilot.description,
           workspaceId: autopilot.workspaceId,
           projectId: autopilot.projectId,
           createdBy: autopilot.id,
-        });
+        }, autopilotEvents);
       } else if (autopilot.executionMode === "trigger_issue") {
         if (!triggerIssueId) throw new Error("trigger_issue runs require trigger_issue_id");
         issue = this.ctx.issues().getIssue(triggerIssueId);
