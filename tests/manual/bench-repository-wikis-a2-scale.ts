@@ -429,7 +429,7 @@ async function runScenario(
   const publicationProbe = statementBytes((sql) => /^SELECT r\.repository_id, r\.schedule_target, r\.task_id, r\.dedupe_key,/.test(sql));
   const docsStatement = statementBytes((sql) => /^SELECT id, repository_id, workspace_id, path, title, summary, tags, refs,/.test(sql));
   const getRunById = statementBytes((sql) => /^SELECT \* FROM multiremi_autopilot_runs WHERE id = \?$/.test(sql));
-  const compilations = statementBytes((sql) => /^SELECT r\.\*, MAX\(o\.created_at\) AS publication_at FROM multiremi_knowledge_compilation_runs r/.test(sql));
+  const compilations = statementBytes((sql) => /FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o/.test(sql) && /MAX\(o\.created_at\) AS publication_at/.test(sql));
   const taskById = statementBytes((sql) => /^SELECT \* FROM multiremi_tasks WHERE id = \?$/.test(sql));
   const autopilotById = statementBytes((sql) => /^SELECT \* FROM multiremi_autopilots WHERE id = \?$/.test(sql));
   const publishedProbe = statementBytes((sql) => /^SELECT 1 AS published FROM multiremi_repository_wiki_docs doc/.test(sql));
