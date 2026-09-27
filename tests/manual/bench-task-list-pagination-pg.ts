@@ -75,7 +75,11 @@ class MeteredDb implements SqlDatabase {
   sqlMs = 0;
   bridgeBytes = 0;
   bridgeRows = 0;
-  constructor(private readonly inner: SqlDatabase) {}
+  /** Forwarded so migrations resolve the backend from the handle (MUL-407). */
+  readonly dialect: SqlDatabase["dialect"];
+  constructor(private readonly inner: SqlDatabase) {
+    this.dialect = inner.dialect;
+  }
   reset(): void {
     this.statements = 0;
     this.sqlMs = 0;

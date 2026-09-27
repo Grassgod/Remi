@@ -186,6 +186,11 @@ bun run frontend/scripts/perf/page-speed.ts \
 
 2026-09-27 的低峰基线（`reports/performance/` 与 `.mul383-evidence/perf/MUL-383-baseline-offpeak-2026-09-27.json`，`schema: 2`）里 **15 行 warm 数据无效**：`readyMs`、首屏请求数与串行深度都从**入口页文档**开始累计，没有减点击时刻 `navStartMs`，量的是「从一个还在加载的页面切走」。**cold 行有效**，两边都以文档 origin 起算。原始 JSON/MD/HTML 保持原样不改写，读取时按 `meta.schema` 判断。修正后的口径从 `schema: 3` 开始，warm 数字由 QA 低峰重跑 n=5 产出。
 
+S9-0.1（2026-09-28）之前的两处同样按「旧报告照原样保留、读取时按版本判断」处理，**不升 `meta.schema`**：
+
+- **`dbq` 一栏不可用。** 采集器把浏览器解析过的 Server-Timing 拼回字符串时，对只有 `desc` 的指标也写上了浏览器合成的 `dur=0.0`，`dbq`/`dbb` 于是全部读成 0。**`total`/`dbms`/`dbp` 不受影响**（它们本来就走 `dur`）。S9-2 的验收看 `dbq`，所以该修正之前（含 2026-09-28 凌晨那份上线前参照 `cmt_wahkjyxosv33`）的报告里 `dbq`/`dbb` 一律当作缺失，不要与修正后的数字比较。
+- **`page-issues::warm` 一行不作数。** 它从 issues 列表进入再点侧栏的 issues 链接，是同页点击，量的是它已经打开的那一页。修正后该行改为从 inbox 进入；其余十个 `page-*::warm` 行入口不变，可继续配对。
+
 ## 内容到最终位置的口径（MUL-384 / MUL-383 S1）
 
 MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内容先出现、随后被顶开的过程。[frontend/scripts/perf/page-speed.ts](../../frontend/scripts/perf/page-speed.ts) 现在按父单（MUL-383）口径重写：终点是**内容停在最终位置**，跳动单独计数。MUL-367 的 profile（11 个页面）保留为同一脚本里的列表场景。
@@ -335,7 +340,7 @@ schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两�
 
 ### 已知失败清单与判定规则
 
-main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
+曾经必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
 
 1. 行不在清单，出现任何违例 → 失败。
 2. 行在清单，出现该行没列出的类型 → 失败（「已经过的部分」由此立刻受保护）。
@@ -348,6 +353,8 @@ main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failur
 - 要**新增**行或类型，必须在同批提交里附上新的 strict 报告（`reports/performance/MUL-394-zero-jump-strict-main-<日期>.json`），并更新 `tests/unit/scripts/zero-jump-verdict.test.ts` 里引用的基线路径。否则棘轮会拦住它。
 
 「与当轮运行是否一致」由检查本体在每次 CI 运行时判定（规则 a–c，`judgeZeroJumpRun`）；单测只防清单超出基线，不重复前者。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+
+**清单现在是空的**（MUL-390，2026-09-27）。`useAnchoredReveal` 接入详情页后，9 行在 strict 下全部 0 违例，于是按规则 3 删掉整份清单，删空的记录留在 `tests/integration/zero-jump-known-failures.json` 的 `empty` 字段里。此后任何一行出现任何违例都会按规则 1 直接让 job 变红；新增行必须同批附新的 strict 基线报告。`rows` 为空是清单的终态，`tests/unit/scripts/zero-jump-verdict.test.ts` 里对应两处「行数必须为正」的断言因此删除（MUL-390 执行方案 2/3 的 R1）。
 
 「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
 
@@ -363,7 +370,11 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 `--skip-build` 复用已有 `.next`；`--api-port` / `--web-port` 固定端口（注意上面的构建期烘焙）；`--out` 指定报告路径。报告是记录器 JSON，含每轮 `jumps` / `anchorRectAtReady` / `skeleton` 数与清单判定结论。
 
-**当前 main 的 strict 实测**（`4248ef07`，3 次/行）存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 个 `key::mode` 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「前」基线。
+**当前 strict 实测**（MUL-390 分支：`43d75571` + MUL-450 合入 main 后的 `3b2406e4`，3 次/行）存于 [reports/performance/MUL-390-zero-jump-strict-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-strict-2026-09-27.json)：9 个 `key::mode` 行、27 轮全部 `jumps=0`、anchor 完整可见、骨架 0、`data-perf-state=ready`，没有任何 `ready-forced`。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「后」基线；本单合入 main 后它即 main 的 strict 基线。（报告里的 `commit` 是记录它时分支的 head。）
+
+同一分支的默认（清单）模式在本地与 CI 各跑一次，都是 9 行 × 3 轮 0 违例：本地 [reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json)，CI 的 `frontend-zero-jump` job 产物 [reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json)。
+
+**前基线**（`4248ef07`）仍存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。
 
 ## 优化不能破坏的约束
 

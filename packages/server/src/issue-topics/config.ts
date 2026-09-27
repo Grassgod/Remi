@@ -43,6 +43,43 @@ export function readWorkspaceIssueTopics(settings: Record<string, unknown>): Iss
     : parseIssueTopicConfig(settings.issueTopics);
 }
 
+/**
+ * The same read, for delivery paths that must never throw (MUL-407).
+ *
+ * `parseIssueTopicConfig` validates writes, and it is right to reject an
+ * unusable `person` target there. A database written before that validation
+ * existed (or edited around it) can still hold one, though — and a delivery
+ * path that throws on it produces a human request with no delivery at all, so
+ * nobody the task asked ever hears about it. An unusable target is treated as
+ * "there is no recipient", which the decision lane already knows how to degrade
+ * to text.
+ */
+export function readWorkspaceIssueTopicsForDelivery(settings: Record<string, unknown>): IssueTopicConfig {
+  try {
+    return readWorkspaceIssueTopics(settings);
+  } catch (error) {
+    if (!(error instanceof IssueTopicConfigError)) throw error;
+    const raw = settings.issueTopics;
+    if (!isRecord(raw)) return { enabled: false, chatId: "" };
+    // Every field is read defensively: the whole point of this reader is that a
+    // stored config cannot abort a delivery, so a second malformed field must not
+    // throw here either.
+    let projectIds: string[] | undefined;
+    try { projectIds = parseProjectIds(raw.projectIds); } catch { projectIds = undefined; }
+    return {
+      enabled: raw.enabled === true,
+      chatId: cleanString(raw.chatId) ?? "",
+      ...(projectIds ? { projectIds } : {}),
+      // An unrecognised mode falls back to the documented default rather than
+      // inventing `person`, which would send the request looking for a target
+      // that was never configured.
+      notifyMode: raw.notifyMode === "none" ? "none"
+        : raw.notifyMode === "person" ? "person" : "group_owner",
+      ...(isFeishuOpenId(raw.notifyOpenId) ? { notifyOpenId: raw.notifyOpenId } : {}),
+    };
+  }
+}
+
 function parseProjectIds(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) {

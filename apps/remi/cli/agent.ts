@@ -45,6 +45,8 @@ export interface FeishuChannelCredentials {
 
 /** A running Feishu channel that can be stopped. */
 export interface FeishuChannelHandle {
+  /** The bot application this channel speaks for; scopes card action keys. */
+  appId: string;
   resolveProactiveMention: (chatId: string, mention: import("@multiremi/contracts/types.js").FeishuBotOutboundMention,
     signal?: AbortSignal) => Promise<string | null>;
   streamProactiveTask: (chatId: string, sessionKey: string, stream: AsyncIterable<TaskStreamEvent>, meta: TaskStreamMeta,
@@ -60,6 +62,9 @@ export interface FeishuChannelHandle {
   }) => Promise<{ messageId: string }>;
   uploadImage: (image: Buffer) => Promise<{ imageKey: string }>;
   sendProactiveAttachment: FeishuConnector["sendProactiveAttachment"];
+  /** MUL-407: server-built decision cards, sent and rewritten in place. */
+  sendProactiveCard: FeishuConnector["sendProactiveCard"];
+  updateProactiveCard: FeishuConnector["updateProactiveCard"];
 }
 
 export async function waitForFeishuConnectorStart(
@@ -108,6 +113,7 @@ export async function bootFeishuChannel(
   const start = connector.startTask(options.taskHandler);
   await waitForFeishuConnectorStart(connector, start);
   return {
+    appId: config.feishu.appId,
     start,
     stop: () => connector.stop(),
     publishBotMenu: (menu, dryRun) => menuSyncer.syncAll(menu, { dryRun }),
@@ -116,5 +122,7 @@ export async function bootFeishuChannel(
     resolveProactiveMention: (...args) => connector.resolveProactiveMention(...args),
     uploadImage: (image) => connector.uploadImage(image),
     sendProactiveAttachment: input => connector.sendProactiveAttachment(input),
+    sendProactiveCard: input => connector.sendProactiveCard(input),
+    updateProactiveCard: (messageId, card) => connector.updateProactiveCard(messageId, card),
   };
 }

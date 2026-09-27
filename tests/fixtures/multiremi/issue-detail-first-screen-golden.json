@@ -1,7 +1,7 @@
 {
   "name": "MUL-385 issue detail first-screen responses",
   "capturedAt": "<timestamp>",
-  "source": "pre-optimization implementation (parent commit of agent/MUL-385)",
+  "source": "pre-optimization implementation (parent commit of agent/MUL-385), plus MUL-457 grant fields",
   "fixture": {
     "issueId": "iss_mul385_long",
     "issueKey": "MUL-1",
@@ -35,6 +35,10 @@
     "creator_type": "member",
     "creator_id": "local",
     "parent_issue_id": null,
+    "parent_done_grant_at": null,
+    "parent_done_grant_by": null,
+    "parent_done_grant_agent_id": null,
+    "parent_done_grant": null,
     "issue_kind": "execution",
     "source_issue_id": null,
     "project_id": null,
@@ -47,6 +51,7 @@
     "created_at": "<timestamp>",
     "updated_at": "<timestamp>",
     "metadata": {},
+    "pending_decision_count": 0,
     "labels": [
       {
         "id": "lbl_mul385_2",

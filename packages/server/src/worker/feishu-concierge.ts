@@ -24,6 +24,7 @@
 
 import type {
   FeishuBotErrorCode,
+  FeishuDecisionDegradeReason,
   FeishuPresentationCheckpoint,
   FeishuBotRuntimeState,
   MultiremiFeishuBotDirective,
@@ -56,6 +57,16 @@ export interface FeishuOutboundOptions {
   onStarted: (messageId: string) => Promise<void>;
   onCheckpoint?: (presentation: FeishuPresentationCheckpoint) => Promise<void>;
   prepareMention?: (openId: string | null) => Promise<string | null>;
+  /**
+   * Decision lanes only (MUL-407). Records what the host actually sent: the
+   * recipient it addressed and, when a card had to degrade, why. The outbox
+   * result endpoint already carries both fields.
+   */
+  onDecisionSent?: (receipt: {
+    messageId: string;
+    interactionOpenId?: string | null;
+    degraded?: FeishuDecisionDegradeReason | null;
+  }) => Promise<void>;
 }
 
 /**
