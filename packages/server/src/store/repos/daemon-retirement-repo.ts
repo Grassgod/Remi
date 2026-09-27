@@ -306,8 +306,19 @@ export class DaemonRetirementRepo {
     );
   }
 
-  /** Must be called inside a database transaction. Updating the row is the cross-database lock. */
+  /**
+   * Must be called inside a database transaction. Updating the row is the
+   * cross-database lock.
+   *
+   * MUL-405: the workspace lifecycle row lock (W) comes first. This row is a
+   * domain lock (D), and every caller here also needs W for its plan read or
+   * its Runtime/Agent writes, so taking W at the top of this helper keeps the
+   * whole set on one order — W -> N -> D — instead of each call site being
+   * free to take D first. Re-taking W in the caller is free inside the same
+   * transaction, so callers that already do so are unaffected.
+   */
   lockLifecycle(workspaceId: string, daemonId: string): void {
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_daemon_lifecycle_locks (workspace_id, daemon_id, updated_at)

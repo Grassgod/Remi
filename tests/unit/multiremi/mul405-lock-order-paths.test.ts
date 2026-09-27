@@ -31,17 +31,16 @@ type LockClass = "W" | "N" | "D";
 /** `UPDATE multiremi_workspaces SET updated_at = updated_at ...` — the W lock. */
 const WORKSPACE_ROW_LOCK = /UPDATE\s+multiremi_workspaces\s+SET\s+updated_at\s*=\s*updated_at/i;
 /**
- * Domain row locks this suite cares about: the no-op UPDATE/UPSERT whose only
- * purpose is to serialize two writers of the same row. Ordinary writes are not
- * locks and are recorded as D only when they are the known lock statements.
+ * D is any non-read write inside the transaction, which is also the rule the
+ * whole-suite sentinel uses (`packages/server/src/store/lock-order-sentinel.ts`).
+ *
+ * Broad on purpose: PostgreSQL takes a row lock for an INSERT or an UPDATE, so
+ * every domain write is a D acquisition regardless of whether it was written to
+ * be a lock. Narrowing this to the known no-op lock statements is exactly how
+ * the earlier version missed `archiveAgent` writing `UPDATE multiremi_agents`
+ * before the audit number lock.
  */
-const DOMAIN_LOCK_PATTERNS: RegExp[] = [
-  /UPDATE\s+multiremi_message_messages\s+SET\s+processed_at\s*=\s*processed_at/i,
-  /UPDATE\s+multiremi_feishu_messages\s+SET\s+processed_at\s*=\s*processed_at/i,
-  /UPDATE\s+multiremi_autopilots\s+SET\s+updated_at\s*=\s*updated_at/i,
-  /UPDATE\s+multiremi_feishu_bot_senders\s+SET\s+allowed/i,
-  /INSERT\s+INTO\s+multiremi_feishu_bot_senders/i,
-];
+const READ_ONLY_STATEMENT = /^\s*(?:SELECT|PRAGMA|EXPLAIN|WITH\s+[\s\S]*?SELECT)\b/i;
 
 class LockRecordingDatabase implements SqlDatabase {
   readonly trace: Array<{ cls: LockClass; key: string }> = [];
@@ -52,13 +51,12 @@ class LockRecordingDatabase implements SqlDatabase {
   }
 
   private classify(sql: string, kind: "read" | "write"): void {
-    if (WORKSPACE_ROW_LOCK.test(sql)) this.record("W", "workspace-lifecycle");
-    else if (DOMAIN_LOCK_PATTERNS.some((pattern) => pattern.test(sql))) {
-      this.record("D", sql.replace(/\s+/g, " ").slice(0, 60));
-    } else if (kind === "write") {
-      // Non-locking writes are domain operations too, but they are not the D
-      // locks this contract is about; recording them would drown the signal.
+    if (WORKSPACE_ROW_LOCK.test(sql)) {
+      this.record("W", "workspace-lifecycle");
+      return;
     }
+    if (READ_ONLY_STATEMENT.test(sql)) return;
+    if (kind === "write") this.record("D", sql.replace(/\s+/g, " ").slice(0, 80));
   }
 
   query(sql: string): SqlStatement {
@@ -162,6 +160,34 @@ function firstAcquisitions(trace: LockRecordingDatabase["trace"]): LockRecording
   return first;
 }
 
+/**
+ * Assert one path's lock discipline: the classes it MUST take are all present,
+ * and the first acquisition of each is monotonic W -> N -> D.
+ *
+ * `required` is the whole point of naming it per path: QA round 3 deleted the W
+ * from `recordAuditWithinTransaction` and the eleven cases stayed green, because
+ * `recordAudit standalone` only checked monotonicity and an empty trace is
+ * trivially monotonic. A path that must take W now fails when W disappears.
+ */
+function assertPath(
+  label: string,
+  trace: LockRecordingDatabase["trace"],
+  required: readonly LockClass[],
+): void {
+  const present = new Set(trace.map((entry) => entry.cls));
+  const missing = required.filter((cls) => !present.has(cls));
+  if (missing.length > 0) {
+    const detail = trace.length
+      ? trace.map((e) => `${e.cls} ${e.key}`).join("\n  ")
+      : "(no locks recorded)";
+    throw new Error(
+      `${label} is missing required lock(s) ${missing.join(", ")}; ` +
+        `recorded: ${[...present].join(", ") || "(none)"}\n  ${detail}`,
+    );
+  }
+  assertMonotonic(label, trace);
+}
+
 function assertMonotonic(label: string, trace: LockRecordingDatabase["trace"]): void {
   const first = firstAcquisitions(trace);
   let highest = -1;
@@ -245,23 +271,26 @@ function seedFeishuIngest(store: MultiremiStore): { messageId: string } {
   return { messageId };
 }
 
+/** A store with one agent, for the paths that need an assignable owner. */
+function freshStoreWithAgent(): { store: MultiremiStore; recorder: LockRecordingDatabase; agentId: string } {
+  const { store, recorder } = freshStore();
+  const agent = store.createAgent({ name: "Lock paths owner", provider: "codex", workspaceId: "local" });
+  return { store, recorder, agentId: agent.id };
+}
+
 describe("MUL-405 per-path lock order", () => {
   it("direct createIssue: W -> N", () => {
     const { store, recorder } = freshStore();
     clear(recorder);
     store.createIssue({ title: "direct", workspaceId: "local" });
-    assertMonotonic("direct createIssue", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
+    assertPath("direct createIssue", recorder.trace, ["W", "N"]);
   });
 
   it("quick-create: W -> N", () => {
     const { store, recorder, agentId } = scaffold();
     clear(recorder);
     store.quickCreateIssue({ prompt: "quick create path", workspaceId: "local", agentId });
-    assertMonotonic("quickCreateIssue", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
+    assertPath("quickCreateIssue", recorder.trace, ["W", "N"]);
   });
 
   it("Feishu bot message: W -> N -> sender row", () => {
@@ -280,10 +309,7 @@ describe("MUL-405 per-path lock order", () => {
       senderOpenId: "ou_lock_paths",
       text: "register the sender",
     });
-    assertMonotonic("submitFeishuBotMessage", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("submitFeishuBotMessage", recorder.trace, ["W", "N", "D"]);
   });
 
   it("Autopilot create_issue: W -> N -> autopilot row", () => {
@@ -297,10 +323,7 @@ describe("MUL-405 per-path lock order", () => {
     });
     clear(recorder);
     store.runAutopilot(autopilot.id);
-    assertMonotonic("runAutopilot(create_issue)", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("runAutopilot(create_issue)", recorder.trace, ["W", "N", "D"]);
   });
 
   it("setSenderAllowed: W -> N -> sender row -> audit", () => {
@@ -318,15 +341,16 @@ describe("MUL-405 per-path lock order", () => {
     const sender = store.listFeishuBotSenders("local")[0]!;
     clear(recorder);
     store.setFeishuBotSenderAllowed("local", sender.id, true, "local");
-    assertMonotonic("setSenderAllowed", recorder.trace);
-    expect(recorder.trace.filter((entry) => entry.cls === "N").length).toBeGreaterThan(0);
+    assertPath("setSenderAllowed", recorder.trace, ["W", "N", "D"]);
   });
 
   it("recordAudit standalone: W -> N", () => {
     const { store, recorder } = scaffold();
     clear(recorder);
     store.recordFeishuBotAudit("local", "updated", { actorId: "local", details: { probe: true } });
-    assertMonotonic("recordFeishuBotAudit", recorder.trace);
+    // QA round 3: this case used to assert monotonicity only, so deleting the W
+    // from recordAuditWithinTransaction left all eleven cases green.
+    assertPath("recordFeishuBotAudit", recorder.trace, ["W", "N", "D"]);
   });
 
   it("createPinnedItem: W -> N", () => {
@@ -339,9 +363,7 @@ describe("MUL-405 per-path lock order", () => {
       itemType: "issue",
       itemId: issue.id,
     });
-    assertMonotonic("createPinnedItem", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
+    assertPath("createPinnedItem", recorder.trace, ["W", "N", "D"]);
   });
 
   it("messaging outcomes createIssue: W -> N -> message row", () => {
@@ -350,10 +372,7 @@ describe("MUL-405 per-path lock order", () => {
     seedMessaging(store, ref);
     clear(recorder);
     store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Outcome Issue" });
-    assertMonotonic("messagingOutcomes.createIssue", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("messagingOutcomes.createIssue", recorder.trace, ["W", "N", "D"]);
   });
 
   it("messaging outcomes approveProposal: W -> N -> message row", () => {
@@ -369,10 +388,7 @@ describe("MUL-405 per-path lock order", () => {
     store.messagingOutcomes.approveProposal(proposal.proposal!.id, {
       workspaceId: "local", approvedBy: member.id,
     });
-    assertMonotonic("messagingOutcomes.approveProposal", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("messagingOutcomes.approveProposal", recorder.trace, ["W", "N", "D"]);
   });
 
   it("Feishu ingest createIssueOutcome: W -> N -> message row", () => {
@@ -380,10 +396,7 @@ describe("MUL-405 per-path lock order", () => {
     const { messageId } = seedFeishuIngest(store);
     clear(recorder);
     store.createFeishuIssueOutcome(messageId, { workspaceId: "local", title: "Ingest Issue" });
-    assertMonotonic("createFeishuIssueOutcome", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("createFeishuIssueOutcome", recorder.trace, ["W", "N", "D"]);
   });
 
   it("Feishu ingest approveIssueProposal: W -> N -> message row", () => {
@@ -398,9 +411,74 @@ describe("MUL-405 per-path lock order", () => {
     store.approveFeishuIssueProposal(proposal.proposal!.id, {
       workspaceId: "local", approvedBy: member.id,
     });
-    assertMonotonic("approveFeishuIssueProposal", recorder.trace);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(true);
-    expect(recorder.trace.some((entry) => entry.cls === "D")).toBe(true);
+    assertPath("approveFeishuIssueProposal", recorder.trace, ["W", "N", "D"]);
+  });
+
+  it("archiveAgent: W -> N -> agent row -> Feishu audit", () => {
+    const { store, recorder, agentId } = scaffold();
+    // The cascade reaches the Feishu audit writer, so this path takes N too
+    // (QA round 3 found it running W -> D -> N).
+    clear(recorder);
+    store.archiveAgent(agentId);
+    assertPath("archiveAgent", recorder.trace, ["W", "N", "D"]);
+  });
+
+  it("Runtime cascade delete: W -> N -> config row -> Feishu audit", () => {
+    const { store, recorder, runtimeId } = scaffold();
+    // The "last managed daemon Runtime" guard refuses to delete the only one, so
+    // plant a spare: QA's probe was blocked by that guard and could not reach the
+    // audit. The spare must belong to a different daemon id.
+    store.registerRuntime({
+      id: "rt_lock_paths_spare", name: "Spare host", provider: "codex",
+      workspaceId: "local", daemonId: "lock-paths-host",
+    });
+    clear(recorder);
+    const result = store.deleteRuntimeWithArchivedAgentCleanup(runtimeId);
+    expect(result.status).toBe("deleted");
+    assertPath("deleteRuntimeWithArchivedAgentCleanup", recorder.trace, ["W", "N", "D"]);
+  });
+
+  it("updateIssueWithinTransaction: W -> issue row, and it takes no number lock", () => {
+    const { store, recorder } = freshStore();
+    const issue = store.createIssue({ title: "MUL-457 write path", workspaceId: "local" });
+    clear(recorder);
+    // Moves the Issue into a project, which is the branch that takes the
+    // workspace lifecycle lock before the Issue row lock. The path never creates
+    // a child Issue or writes the audit trail, so N must NOT appear.
+    const project = store.createProject({ title: "Lock paths project", workspaceId: "local" });
+    clear(recorder);
+    store.updateIssue(issue.id, { projectId: project.id });
+    assertPath("updateIssue(projectId)", recorder.trace, ["W", "D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+  });
+
+  it("grantParentDone: W (via the issue lock) then issue row, no number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const issue = store.createIssue({
+      title: "Parent-done target", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+    });
+    clear(recorder);
+    store.grantParentDone(issue.id, "local");
+    // The `UPDATE ... SET id = id` row lock is the first acquisition; this path
+    // does not write the Feishu audit trail or create a child Issue, so N must
+    // not appear.
+    assertPath("grantParentDone", recorder.trace, ["D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
+  });
+
+  it("revokeParentDone: issue row lock only, no number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const issue = store.createIssue({
+      title: "Parent-done revoke target", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+    });
+    store.grantParentDone(issue.id, "local");
+    clear(recorder);
+    store.revokeParentDone(issue.id, "local");
+    assertPath("revokeParentDone", recorder.trace, ["D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
   });
 });

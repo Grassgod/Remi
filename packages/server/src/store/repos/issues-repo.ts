@@ -2174,7 +2174,11 @@ export class IssuesRepo {
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) {
         const closedQueue = createCommitEventQueue();
-        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue))();
+        this.ctx.db.transaction(() => {
+          // MUL-405: W before the audit activity/comment this branch writes.
+          this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+          this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue);
+        })();
         this.ctx.emitCommitEvents(closedQueue);
       }
       return;
@@ -2200,6 +2204,12 @@ export class IssuesRepo {
     const staged: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W comes before this hook's first domain
+      // write. `notifyParentOfChildOutcome` writes the parent's notification
+      // comment before `enqueueChildDoneParentTask` takes W, which classified as
+      // D -> W; taking W here covers both branches (comment-only, queued round)
+      // and is free for the branches that take it again.
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       if (outcome) {
         const reported = this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, staged, deferredEvents);
         enqueued.push(...reported.tasks);

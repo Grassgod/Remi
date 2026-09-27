@@ -2,6 +2,8 @@ import { createLogger } from "@shared/logger.js";
 import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
@@ -616,6 +618,7 @@ export class RuntimesRepo {
     return this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) return false;
@@ -638,6 +641,11 @@ export class RuntimesRepo {
     if (this.hasInFlightTasksForRuntime(id) || this.hasUnrepoolableQueuedTasksForRuntime(id)) return false;
     const now = nowIso();
     if (options.repoolQueuedTasks !== false) this.repoolQueuedTasksForRuntime(id);
+    // Global lock order (MUL-405): the Feishu cascade below writes the bot
+    // config (D) and then appends an audit row whose seq is allocated under the
+    // audit number lock (N), so N must already be held when that cascade runs.
+    // Every caller takes W and then N for this workspace at the top of its own
+    // transaction (see `lockRuntimeCascadeOrder`), before its first D write.
     // A concierge whose host machine is going away must not stay enabled: an
     // admin has to pick a new Runtime deliberately rather than have the bot
     // silently reappear somewhere else.
@@ -745,6 +753,7 @@ export class RuntimesRepo {
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) return { status: "not_found" as const };
@@ -782,6 +791,7 @@ export class RuntimesRepo {
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) throw new Error(`Runtime not found: ${id}`);
@@ -814,6 +824,27 @@ export class RuntimesRepo {
     })();
     this.publishClearedProjectDefaults(clearedProjects);
     return result;
+  }
+
+  /**
+   * MUL-405 lock order for the Runtime cascade: W then N, both before the
+   * caller's first domain write.
+   *
+   * The cascade reaches `deleteRuntimeWithinTransaction`, which disables the
+   * workspace's Feishu bot config (D) and appends an audit row whose seq is
+   * allocated under the audit number lock (N). The number lock must therefore
+   * be held from the top of the caller's transaction, not taken inside the
+   * cascade — otherwise the path runs W -> D -> N while every other audit
+   * writer runs W -> N -> D.
+   *
+   * Unconditional, for the same reason as `archiveAgent`: a conditional lock
+   * would need a race-free "does a config reference this Runtime" read, and
+   * config creation (`upsertConfig`, `replaceRoutes`) takes W too, so such a
+   * read cannot be proven stable. One per-workspace lock on a low-frequency
+   * admin path is the cheaper, provable choice.
+   */
+  private lockRuntimeCascadeOrder(workspaceId: string): void {
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
   }
 
   private listArchivedAgentIdsByRuntime(runtimeId: string): string[] {
@@ -968,6 +999,7 @@ export class RuntimesRepo {
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(oldRuntime.workspaceId ?? "local");
+      this.lockRuntimeCascadeOrder(oldRuntime.workspaceId ?? "local");
       this.ctx.agentPlugins().lockAgentPluginWorkspace(oldRuntime.workspaceId ?? "local");
       const lockedOldRuntime = this.getRuntime(oldRuntimeId);
       const lockedNewRuntime = this.getRuntime(newRuntimeId);

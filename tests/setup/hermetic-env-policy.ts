@@ -77,12 +77,22 @@ export const SCRUBBED_ENV_KEYS = [
  * duplicated from the source constant rather than imported, so this preload stays
  * dependency-free; `tests/arch/hermetic-test-env.test.ts` asserts the two agree.
  *
+ * `MULTIREMI_TEST_LOCK_ORDER_SENTINEL` is set here rather than left to the caller
+ * because it must be ON for the whole suite by default; a developer can still
+ * turn it off explicitly with `MULTIREMI_TEST_LOCK_ORDER_SENTINEL=0`, since
+ * `MULTIREMI_TEST_*` names survive the scrub.
+ *
  * The guard exempts only these exact keys-with-values. Everything else under the
  * scrubbed prefixes must still be absent, so this cannot become a general escape
  * hatch for host configuration.
  */
 export const HERMETIC_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   MULTIREMI_PG_REPLY_MAX_BYTES: String(8 * 1_048_576),
+  // MUL-405 whole-suite lock-order sentinel. On by default in tests (it is a
+  // check, not a fixture), refused under NODE_ENV=production inside the module,
+  // and a single cached boolean when off. See
+  // `packages/server/src/store/lock-order-sentinel.ts`.
+  MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "1",
 };
 
 /** True when `name` is one of the variables the preload removes. */

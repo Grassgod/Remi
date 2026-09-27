@@ -17,6 +17,12 @@ import {
   recordDbQuery,
   resolveDbReplyMaxBytes,
 } from "../../observability/request-metrics.js";
+import {
+  lockOrderSentinelNoteNumberLock,
+  lockOrderSentinelNoteStatement,
+  lockOrderSentinelTransactionBegin,
+  lockOrderSentinelTransactionEnd,
+} from "@multiremi/store/lock-order-sentinel.js";
 
 export interface SqlStatement {
   get(...params: unknown[]): any;
@@ -421,6 +427,34 @@ class PgStatement implements SqlStatement {
   }
 }
 
+/**
+ * `PgStatement` that feeds the MUL-405 whole-suite sentinel on every execution.
+ *
+ * Classification happens here, not at construction: a statement prepared
+ * outside a transaction can be executed inside one.
+ */
+class SentinelPgStatement extends PgStatement {
+  constructor(bridge: PgBridge, sql: string, private readonly sourceSql: string) {
+    super(bridge, sql);
+  }
+  get(...params: unknown[]): any {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.get(...params);
+  }
+  all(...params: unknown[]): any[] {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.all(...params);
+  }
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.run(...params);
+  }
+  values(...params: unknown[]): any[][] {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.values(...params);
+  }
+}
+
 export class PostgresSyncDatabase implements SqlDatabase {
   /**
    * Explicit dialect marker. Migrations must not infer the backend from a
@@ -475,18 +509,23 @@ export class PostgresSyncDatabase implements SqlDatabase {
     }
   }
   query(sql: string): SqlStatement {
-    return new PgStatement(this.bridge, translateSqliteToPg(sql));
+    // MUL-405 whole-suite sentinel: a statement runs later, so classify at each
+    // execution rather than at construction.
+    return new SentinelPgStatement(this.bridge, translateSqliteToPg(sql), sql);
   }
   prepare(sql: string): SqlStatement {
     return this.query(sql);
   }
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    lockOrderSentinelNoteStatement(sql);
     return { changes: this.bridge.exec(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   exec(sql: string): void {
     for (const stmt of splitStatements(sql)) {
       const translated = translateSqliteToPg(stmt);
-      if (translated.trim()) this.bridge.exec(translated, []);
+      if (!translated.trim()) continue;
+      lockOrderSentinelNoteStatement(stmt);
+      this.bridge.exec(translated, []);
     }
   }
   /**
@@ -511,6 +550,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
       if (outermost) this.bridge.exec("BEGIN", []);
       else this.bridge.exec(`SAVEPOINT ${savepoint}`, []);
       this.transactionDepth += 1;
+      if (outermost) lockOrderSentinelTransactionBegin();
       this.afterCommitFrames.push([]);
       let committed = false;
       try {
@@ -534,6 +574,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
           if (outermost) runAfterCommitCallbacks(frame);
           else this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
         }
+        if (outermost) lockOrderSentinelTransactionEnd();
       }
     };
   }
@@ -568,6 +609,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
     if (this.transactionDepth === 0) {
       throw new Error("advisoryXactLock must be called inside a transaction");
     }
+    lockOrderSentinelNoteNumberLock(key);
     this.bridge.exec("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
   }
   close(): void {
