@@ -62,6 +62,13 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 
 未选择工作区时继续使用原有自动目录规则。独立 Task 的基础设施重试使用新的临时 provider home，不复用旧的原生会话 ID；工作区文件继续保留。
 
+## 亲和与设备路由
+
+Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。亲和分两类，规则不同（MUL-449）：
+
+- **软亲和**＝ provider 会话血统：Chat 的 `chat_sessions.session_id / session_runtime_id`，Issue 的 `session_agent_lanes.provider_session_id / runtime_id`。钉住的机器过不了设备路由时放弃血统、任务回池冷启动（`inheritChatSession=false`，Issue lane 走 `resetSessionAgentLane`，重置原因记为 `device_routing_rejected`）。建单时（`createTaskWithinWorkspaceLock`）和领取前（`refreshQueuedIssueLaneAffinity` / `refreshQueuedChatAffinity`）都重算，所以改绑后已排队和存量的这类任务会自愈，不需要数据迁移。
+- **硬亲和**＝数据或配置只在那台机器：`with_code` 代码快照、`holds_workspace=1` 的 Issue 工作区、项目 `local_directory`、显式 `runtime_workspace_id`、Agent 绑定的 Runtime。回池会让任务在没有数据的机器上运行，所以不回池、不报错、不迁移；任务继续排队，由 60 秒观察者 `refreshQueuedCapabilityWaitReasons` 写 `wait_reason`，文本以 `等待项目设备：` 开头，说明钉在哪台机器、为什么（代码快照 / Issue 工作区 / 本机目录 / 显式 Runtime 工作区 / Agent 绑定 / 会话）以及解法（调整项目设备绑定，或 `remi task redispatch` 冷启动）。设备路由的原因优先于模型能力的原因，路由恢复后自动清空。冻结重试（`attempt>1` 且带 `execution_fingerprint`）按既有契约不重算，只获得同样的可见等待。
+
 ## 任务私有 /tmp
 
 每个任务执行前，daemon 在本次执行的 provider home 下分配一个独占目录（`task-tmp/<task>-XXXXXX`，0700），执行结束后删除。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。

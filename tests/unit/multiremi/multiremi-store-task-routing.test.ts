@@ -263,6 +263,14 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
           // Claim and the dispatch-recovery recheck must agree on every cell.
           if (expected) {
             expect(claimed?.id).toBe(task.id);
+            // The allowed cells must also satisfy the JS eligibility recheck
+            // that guards dispatch recovery, not just the SQL claim predicate:
+            // a stale dispatch on the same machine is handed back, never pooled.
+            db!.run(
+              "UPDATE multiremi_tasks SET status = 'dispatched', dispatched_at = ? WHERE id = ?",
+              ["2000-01-01T00:00:00.000Z", task.id],
+            );
+            expect(store.claimTask(runtime.runtime.id)?.id).toBe(task.id);
             store.startTask(task.id);
             store.completeTask(task.id, { output: "done" });
           } else {
@@ -444,6 +452,108 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.getTask(next.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
     expect(store.claimTask(personal.id)).toBeNull();
     expect(store.claimTask(pooled.id)?.id).toBe(next.id);
+  });
+
+  it("re-pools a queued Issue turn whose lane the Project now refuses", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_queued_lane_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-queued-lane-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_queued_lane_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-queued-lane-b",
+    });
+    const agent = store.createAgent({ name: "Queued lane", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Moves while queued", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-queued-lane-a" });
+    const issue = store.createIssue({ title: "Queued issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_queued_lane" });
+
+    // The next turn is queued while A is still allowed, so it inherits A.
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(store.getTask(second.id)).toMatchObject({
+      runtimeId: a.id, sessionId: "sess_queued_lane", status: "queued",
+    });
+    store.deleteProjectDevice(project.id, "dev-queued-lane-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-queued-lane-b" });
+
+    // The claim-time refresh re-pools it before the candidate scan, so the
+    // rejected machine cannot park it forever.
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("leaves a queued Issue turn alone while its Project still allows the device", () => {
+    const store = createLocalStore();
+    const allowed = store.registerRuntime({
+      id: "rt_queued_kept", name: "Allowed", provider: "codex", workspaceId: "local", daemonId: "dev-queued-kept",
+    });
+    const other = store.registerRuntime({
+      id: "rt_queued_kept_other", name: "Other", provider: "codex", workspaceId: "local", daemonId: "dev-queued-kept-other",
+    });
+    const agent = store.createAgent({ name: "Queued kept", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Stays allowed", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-queued-kept" });
+    const issue = store.createIssue({ title: "Kept queued", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(allowed.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_queued_kept" });
+    const laneBefore = store.getSessionAgentLane(session.id, agent.id)!;
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+
+    // Another machine's claim runs the refresh first; it must not disturb a
+    // lane whose routing is still valid, so the pin, session and generation stay.
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({
+      runtimeId: allowed.id, sessionId: "sess_queued_kept", status: "queued",
+    });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      runtimeId: allowed.id, providerSessionId: "sess_queued_kept", generation: laneBefore.generation,
+    });
+    expect(store.claimTask(allowed.id)?.id).toBe(second.id);
+  });
+
+  it("does not re-pool a queued turn whose machine holds the Issue workspace", () => {
+    const store = createLocalStore();
+    const devbox = store.registerRuntime({
+      id: "rt_ws_a", name: "devbox", provider: "codex", workspaceId: "local", daemonId: "dev-ws-a",
+    });
+    const other = store.registerRuntime({
+      id: "rt_ws_b", name: "other", provider: "codex", workspaceId: "local", daemonId: "dev-ws-b",
+    });
+    const agent = store.createAgent({ name: "Workspace holder", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Moves", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-ws-a" });
+    const issue = store.createIssue({ title: "Workspace issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "hold",
+    });
+    expect(store.claimTask(devbox.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET status = 'queued', runtime_id = ? WHERE id = ?", [devbox.id, task.id]);
+
+    store.deleteProjectDevice(project.id, "dev-ws-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-ws-b" });
+    // The workspace lives on the devbox, so re-pooling would run it elsewhere
+    // without the data. It keeps queuing instead of being silently stranded.
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({ runtimeId: devbox.id, status: "queued" });
   });
 
   it("keeps resuming an Issue lane while the Project still allows its device", () => {

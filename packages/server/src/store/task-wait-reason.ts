@@ -9,8 +9,32 @@ const CAPABILITY_WAIT_PREFIX = "等待模型能力恢复：";
 // every sweep and defeat persisted transition-based notification deduplication.
 const CAPABILITY_ALERT_SUFFIX = "；任务创建已达 15 分钟，请检查 Runtime 模型能力";
 
+// A hard-affinity task waits for an administrator to restore its Project device
+// binding. Same ownership contract as the prefix above: only this observer may
+// write or clear it (MUL-449).
+export const DEVICE_ROUTING_WAIT_PREFIX = "等待项目设备：";
+
+/** Every reason this observer owns, capability or device routing. */
+export function isQueuedObserverWaitReason(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  return reason.startsWith(CAPABILITY_WAIT_PREFIX) || reason.startsWith(DEVICE_ROUTING_WAIT_PREFIX);
+}
+
 export function isQueuedCapabilityWaitReason(reason: string | null | undefined): boolean {
   return reason?.startsWith(CAPABILITY_WAIT_PREFIX) ?? false;
+}
+
+/**
+ * A task pinned to a machine that cannot reach it explains why instead of
+ * rendering as an unexplained queue. Only hard affinities use this: soft
+ * affinities re-pool instead.
+ */
+export function deviceRoutingWaitReason(input: {
+  runtimeName: string;
+  affinity: string;
+}): string {
+  return `${DEVICE_ROUTING_WAIT_PREFIX}任务钉在 ${input.runtimeName}（${input.affinity}），`
+    + "该机器不在项目的设备绑定里或为独享设备；请调整项目设备绑定，或运行 remi task redispatch 冷启动";
 }
 
 export function isQueuedCapabilityAlert(reason: string | null | undefined): boolean {

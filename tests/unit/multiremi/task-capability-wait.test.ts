@@ -250,6 +250,168 @@ describe("queued task model capability waits", () => {
     expect(counters[0]?.value).toBe(1);
   });
 
+  // MUL-449: a hard-affinity task pinned behind a Project device binding is
+  // visible instead of silently queued, and device routing outranks model
+  // capability because placement is refused before capability matters.
+  function deviceFixture() {
+    const store = createLocalStore();
+    const devbox = store.registerRuntime({
+      id: "rt_device_a", name: "devbox-a", provider: "codex", workspaceId: "local", daemonId: "device-routing-a",
+    });
+    const other = store.registerRuntime({
+      id: "rt_device_b", name: "devbox-b", provider: "codex", workspaceId: "local", daemonId: "device-routing-b",
+    });
+    const agent = store.createAgent({ name: "Device waiter", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Bound then moved", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "device-routing-a" });
+    const issue = store.createIssue({ title: "Device issue", projectId: project.id, workspaceId: "local" });
+    const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
+    const seed = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "seed" });
+    store.claimTask(devbox.id);
+    store.startTask(seed.id);
+    store.completeTask(seed.id, { output: "ok", sessionId: "sess_device" });
+    const move = () => {
+      store.deleteProjectDevice(project.id, "device-routing-a");
+      store.createProjectDevice(project.id, { daemonId: "device-routing-b" });
+    };
+    return { store, devbox, other, agent, project, issue, parent, move };
+  }
+
+  it("explains a hard-affinity task pinned behind a Project device binding", () => {
+    const { store, devbox, other, agent, issue, parent, move } = deviceFixture();
+    const side = store.createIssueSession(issue.id, {
+      title: "Code side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "snapshot work",
+    });
+    move();
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toMatchObject({ updated: 1 });
+    const waiting = store.getTask(task.id)!;
+    expect(waiting.status).toBe("queued");
+    expect(waiting.waitReason).toContain("等待项目设备：");
+    expect(waiting.waitReason).toContain("devbox-a");
+    expect(waiting.waitReason).toContain("代码快照");
+    expect(waiting.waitReason).toContain("remi task redispatch");
+    // A snapshot exists only on A, so neither machine may take the turn — and
+    // the reason must survive that refusal instead of being recomputed away.
+    expect(store.claimTask(devbox.id)).toBeNull();
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+  });
+
+  it("clears the device wait reason once the Project binding admits the machine again", () => {
+    const { store, devbox, project, agent, issue, parent, move } = deviceFixture();
+    const side = store.createIssueSession(issue.id, {
+      title: "Code side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "snapshot work",
+    });
+    move();
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toContain("等待项目设备：");
+
+    store.deleteProjectDevice(project.id, "device-routing-b");
+    store.createProjectDevice(project.id, { daemonId: "device-routing-a" });
+    expect(store.refreshQueuedCapabilityWaitReasons(now + GRACE_MS)).toMatchObject({ updated: 1 });
+    expect(store.getTask(task.id)?.waitReason).toBeNull();
+    expect(store.claimTask(devbox.id)?.id).toBe(task.id);
+  });
+
+  it("prefers the device-routing reason over a model-capability reason and back", () => {
+    const { store, devbox, agent, issue, parent, move } = deviceFixture();
+    // Make the pinned runtime model-incapable too, so both reasons would apply.
+    store.updateRuntimeModels(devbox.id, [{
+      id: MODEL, label: "DeepSeek", provider: "openai", default: true,
+      thinking: { status: "error", supportedLevels: [], error: "catalog HTTP 503 (fixture)" },
+    }]);
+    store.updateAgent(agent.id, { model: MODEL, thinkingLevel: "high" });
+    const side = store.createIssueSession(issue.id, {
+      title: "Code side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "both wait",
+    });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+
+    // Placement is refused first: device routing owns the text.
+    move();
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toContain("等待项目设备：");
+
+    // Binding restored, but the pinned machine still cannot run the model: the
+    // observer falls back to the capability reason it also owns.
+    store.deleteProjectDevice(issue.projectId!, "device-routing-b");
+    store.createProjectDevice(issue.projectId!, { daemonId: "device-routing-a" });
+    expect(store.refreshQueuedCapabilityWaitReasons(now + GRACE_MS).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toContain("等待模型能力恢复：");
+
+    // And back again, so neither reason can strand the other.
+    store.deleteProjectDevice(issue.projectId!, "device-routing-a");
+    store.createProjectDevice(issue.projectId!, { daemonId: "device-routing-b" });
+    expect(store.refreshQueuedCapabilityWaitReasons(now + 2 * GRACE_MS).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toContain("等待项目设备：");
+  });
+
+  it("explains a held Issue workspace pinned behind a moved device binding", () => {
+    const { store, devbox, other, agent, issue, parent, move } = deviceFixture();
+    // The Issue workspace is a real row on the devbox, so its data pins the
+    // turn there independently of the lane.
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: devbox.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "ready",
+      repos: [],
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "workspace work",
+    });
+    expect(task.holdsWorkspace).toBe(true);
+    expect(task.runtimeId).toBe(devbox.id);
+    move();
+
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toBe(
+      "等待项目设备：任务钉在 devbox-a（Issue 工作区），该机器不在项目的设备绑定里或为独享设备；"
+      + "请调整项目设备绑定，或运行 remi task redispatch 冷启动",
+    );
+    // The workspace data only exists on the devbox: keep waiting, don't move it.
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({ runtimeId: devbox.id, status: "queued" });
+  });
+
+  it("explains a frozen retry that is never re-pooled", () => {
+    const { store, devbox, agent, issue, parent, move } = deviceFixture();
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: parent.id, prompt: "frozen retry",
+    });
+    db!.run(
+      `UPDATE multiremi_tasks SET runtime_id = ?, session_id = 'sess_frozen', work_dir = '/work/frozen',
+         attempt = 2, execution_fingerprint = 'frozen-fingerprint' WHERE id = ?`,
+      [devbox.id, task.id],
+    );
+    move();
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    expect(store.getTask(task.id)?.waitReason).toContain("等待项目设备：");
+
+    // A frozen retry keeps its pin and its session; only the reason is added.
+    expect(store.getTask(task.id)).toMatchObject({
+      runtimeId: devbox.id, sessionId: "sess_frozen", workDir: "/work/frozen", attempt: 2,
+    });
+  });
+
   it("does not overwrite unrelated reasons or nonqueued task state", () => {
     const { store, agent, task, now, fail } = fixture();
     const directory = store.createTask({ agentId: agent.id, prompt: "Directory lock" });
