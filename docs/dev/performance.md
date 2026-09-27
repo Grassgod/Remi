@@ -77,16 +77,35 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 - `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
 - `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）。
+**PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有两条独立规则：
+
+- 单次回包 `len > 1 MB` 时输出一行 `api_large_db_reply`，只带路由模式、方法与字节数：
+
+```json
+{"event":"api_large_db_reply","ts":"2026-09-26T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257}
+```
+
+- 单次回包超过硬上限时在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出一行 `api_db_reply_rejected`（字段同上，另加 `max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。
+- **默认关闭**（MUL-386 裁决）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置、空串、非数字或负数都解析为 `0`，即不设上限；`8388608`（8 MiB）是 MUL-398 落地后的目标值，不是当前默认。现有兜底是桥自身的 64 MB 共享缓冲（`postgres.ts` 的 `RESULT_BUFFER_BYTES`，超限由 worker 直接回错）。
+- 测试套件反向配置：`bun test` 的 preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）在剥离宿主 `MULTIREMI_*` 之后固定设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`，让护栏在 CI 里继续抓无界读——它已经抓到过 `/tasks/pending` 读整张任务表。生产默认与测试默认是分开的两件事，改动其一时 [hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 的 `HERMETIC_ENV_DEFAULTS` 与架构守卫会一起失败。
+- 两条日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
+- 硬上限的错误消息会向上冒泡，可能进入 HTTP 响应体，因此 `PgBridge.exec` 不为它拼接 SQL 片段（其它错误仍会追加 SQL 前 400 字符用于排查）。
+- 翻转默认的条件（MUL-398 验收）：A 类 repository-wikis 两条 `SELECT r.*` 改列投影、B 类 task messages 改有界读并各自发版后，观测一周 `api_large_db_reply` 中 `bytes > 8388608` 的路由集合为空，再把默认值改为 `8388608` 并同步本文与 env 示例。
+
+**已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
+
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
 
 **观测与验证入口**：
 
 ```bash
-# 生产容器里的两类日志（209 上的 API 容器）
+# 生产容器里的四类日志（209 上的 API 容器）
 docker logs multiremi-platform-app-api-1 | grep api_minute_summary
 docker logs multiremi-platform-app-api-1 | grep api_slow_request
+docker logs multiremi-platform-app-api-1 | grep api_large_db_reply
+docker logs multiremi-platform-app-api-1 | grep api_db_reply_rejected
 
-# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器
+# 单元测试：并发归属、Server-Timing 格式、慢请求日志脱敏、汇总器、桥回包护栏
 bun test tests/unit/multiremi/request-metrics.test.ts
 
 # 真实 HTTP 冒烟：起一个本地实例，读 Server-Timing + 两类日志
@@ -160,7 +179,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### DOM 契约：五个属性
 
-应用侧只加属性、不改行为。前四个由本单打标，第五个由 S2 的 `useAnchoredReveal` 写入：
+应用侧只加属性、不改行为。前四个由 S1 打标，后两个由共享 hook `useAnchoredReveal` 写入：
 
 | 属性 | 宿主 | 取值 | 写入方 |
 | --- | --- | --- | --- |
@@ -168,9 +187,15 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
-| `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | **S2 的 `useAnchoredReveal`**，S1 不写 |
+| `data-perf-state` | `data-tab-scroll-root` | `pending` \| `ready` \| `ready-forced` | `useAnchoredReveal`（[frontend/packages/views/common/use-anchored-reveal.ts](../../frontend/packages/views/common/use-anchored-reveal.ts)），S1 与 `useStickToBottom` 不写 |
+| `data-perf-fresh` | 同上 | `0` \| `1` | 同上；消费方传 `fresh`（`undefined` 时不写并移除该属性） |
 
-`data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。S2 无权改名、改宿主或改取值。
+`data-perf-state` 是**只读**契约：S1 应用侧不写它（没有 hook 就写死 `ready` 是假数据，会让 S7 的断言空过）。记录器在浏览器内用 `MutationObserver` 抓它的变化时间戳，不从 Node 侧轮询；属性不存在时 `appReadyMs` 为 `null`，且**永远不作为终点**。写入方无权改名、改宿主或改取值。
+
+`data-perf-fresh` 是**新鲜度**位，只有 `useAnchoredReveal` 写它，消费方传 `fresh`；`undefined` 时不写并移除该属性（今天 main 上还没有任何消费方传它）。记录器按「属性在不在」分两套口径：
+
+- **属性存在**时，只有 `data-perf-state = ready` **且** `data-perf-fresh = 1` 的帧才算加载完成；`ready` 但 `fresh = 0` 不算，`ready-forced` 也不算通过，但会在报告里**单独列出**（`appReadyForced`）。
+- **属性不存在**时，维持原逻辑（只看 `data-perf-state`），所以 MUL-443 上线前后同一份清单都可用。
 
 ### 判定口径
 
@@ -253,6 +278,47 @@ JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自�
 基线产物放 `reports/performance/`，HTML 用 `remi comment add --attachment` 同时挂到本单和父单。
 
 本地端到端（不需要生产凭证）用 [tests/manual/mul384-perf-harness.ts](../../tests/manual/mul384-perf-harness.ts)：起内存 SQLite 的 API + 本地 web，铸造本地 PAT 注入 `MULTIREMI_QA_WEB_TOKEN`，跑完全部场景并 grep 产物确认 0 个 token 泄漏。**不要把生产凭证用于本地。** 它跑的是 `next dev`：首个访问的路由要现场编译（实测 `/[slug]/inbox` 首次 17.6 s），会撞 20 s 的单轮超时，所以 harness 传 `--warmup`，先对每个场景各访问一次再开始测量。**`--warmup` 只是本地 dev 服务器的让步**：209 跑的是构建产物，没有现场编译，生产基线的数字不含这一步。
+
+## CI 零跳动检查（MUL-394 / MUL-383 S7）
+
+[tests/integration/zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 把上面这套口径搬进 CI：内存 SQLite 起 API（`startMultiremiServer`，fixture 见 [tests/integration/zero-jump-fixture.ts](../../tests/integration/zero-jump-fixture.ts)：短 issue 3 条评论、长 issue 250 条含 20 个代码块与 5 张图片并分 3 个 session、一个带消息的 running task、一条指向长 issue 第 40 条评论的 inbox 深链），`next build` + `next start` 起 web，Playwright + Chromium 驱动同一个浏览器侧记录器，每行跑 3 次。**只断言结构量**（`jumps = 0`、anchor 完整可见、骨架为 0、就绪状态合格），不断言毫秒数。
+
+两条容易踩的实现事实：
+
+- **`REMOTE_API_URL` 是构建期烘焙的。** Next 把 `/api/*` 的 rewrite 目标写进 `.next/routes-manifest.json`，`next start` 时再设 env 不会改变它。所以检查必须**先固定 API 端口、再 build、最后 start**（写完第一版后才实测到：`next start` 带着新 `REMOTE_API_URL` 仍代理到 build 时的端口，所有 API 都是 500）。
+- **深链冷启动的 URL 是 `/{slug}/inbox?issue=…&session=…`**，不是 `/issues/:id`。`highlightCommentId` 只在 inbox 面板里被传给 `IssueDetail`（`inbox-page.tsx`），因此 `target-comment` 这个 anchor 只在深链 URL 上存在；改成 issue 详情路由会让该 anchor 永远找不到。
+
+### 已知失败清单与判定规则
+
+main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
+
+1. 行不在清单，出现任何违例 → 失败。
+2. 行在清单，出现该行没列出的类型 → 失败（「已经过的部分」由此立刻受保护）。
+3. 行在清单，某个列出的类型 3 次都没出现 → 失败，提示从该行删掉这个类型、类型删空就删整行。只出现 2/3 次不触发。
+4. `--strict` 忽略清单，所有行都按规则 1 判。
+
+**清单对冻结基线的方向是单向的：只能收紧，不能放宽。** `allowlistWithinBaseline()`（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)）逐行检查：清单里的 `key::mode` 必须出现在 strict 基线报告里，且该行的 `violations` 必须是基线中该行类型的**子集**；少行、少类型都允许。反向（新增一行、给已有行加一个基线里没有的类型）会失败。
+
+- 收紧（修好一个类型就删掉它、类型删空就删整行）**不需要**改基线报告，单测保持绿——这正是规则 3 要推动的动作，由「清理者」在修复合入的 PR 里顺手做掉。
+- 要**新增**行或类型，必须在同批提交里附上新的 strict 报告（`reports/performance/MUL-394-zero-jump-strict-main-<日期>.json`），并更新 `tests/unit/scripts/zero-jump-verdict.test.ts` 里引用的基线路径。否则棘轮会拦住它。
+
+「与当轮运行是否一致」由检查本体在每次 CI 运行时判定（规则 a–c，`judgeZeroJumpRun`）；单测只防清单超出基线，不重复前者。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+
+「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
+
+**这一轮只跑 cold，不跑 warm。** 侧栏宽度是在整页加载时从 `localStorage` 恢复的；warm 轮先进的是列表页，那时侧栏已经按非默认宽度恢复好了，进入详情页不再发生宽度变化，因此 warm 轮等价于 `detail-long::warm`，测不到这个机制。QA 另起探针按同一记录器口径实测 3 次 warm（`sidebar_width=360`，真实点击进入长 issue）：`jumps = 0/0/0`、骨架 0、宽度三轮都保持 360（MUL-394 `cmt_48kfa37phg9x`）。结论一致，故不把 warm 加进矩阵。
+
+### 运行方式
+
+```text
+bun run tests/integration/zero-jump-check.ts                      # 默认：清单模式，CI 门禁用
+bun run tests/integration/zero-jump-check.ts --strict             # 忽略清单：证明「未修复代码上会失败」
+bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # 单场景排查
+```
+
+`--skip-build` 复用已有 `.next`；`--api-port` / `--web-port` 固定端口（注意上面的构建期烘焙）；`--out` 指定报告路径。报告是记录器 JSON，含每轮 `jumps` / `anchorRectAtReady` / `skeleton` 数与清单判定结论。
+
+**当前 main 的 strict 实测**（`4248ef07`，3 次/行）存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 个 `key::mode` 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「前」基线。
 
 ## 优化不能破坏的约束
 

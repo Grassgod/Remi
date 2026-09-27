@@ -33,12 +33,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, MiddlewareHandler } from "hono";
 
-/** Per-request accumulator. One instance per request, never shared. */
+/**
+ * Per-request accumulator. One instance per request, never shared.
+ *
+ * `method`/`route` are the Hono route PATTERN and verb, resolved once when the
+ * request enters the middleware. The PG bridge reads them through
+ * `currentDbReplyOrigin()` so a bridge-level log (`api_large_db_reply`,
+ * `api_db_reply_rejected`) can name the route without ever touching the real
+ * path — the same privacy rule `api_slow_request` follows.
+ */
 interface RequestDbMetrics {
   dbMs: number;
   dbQueries: number;
   dbBytes: number;
   dbParseMs: number;
+  method: string;
+  route: string;
 }
 
 /** One finished request, as stored in the window buffer. */
@@ -166,6 +176,104 @@ export function recordDbParse(parseMs: number): void {
   if (!requestMetricsEnabled) return;
   const request = requestContext.getStore();
   if (request) request.dbParseMs += finite(parseMs);
+}
+
+// ────────────────────────── PG bridge reply guardrails ──────────────────────────
+
+/**
+ * Replying with more than this many bytes earns a log line (MUL-386 C.1).
+ *
+ * The bridge is synchronous: a 12–15 MB reply blocks the main thread twice, once
+ * waiting on the worker's `JSON.stringify` into the 64 MB shared buffer and once
+ * on `TextDecoder` + `JSON.parse` here. Production showed those replies lining up
+ * with `event_loop_lag_max_ms` peaks, so the size is worth a line well before it
+ * reaches the hard limit below.
+ */
+export const DB_REPLY_WARN_BYTES = 1_048_576;
+
+/**
+ * Default value of the hard limit: 0, i.e. disabled.
+ *
+ * A size limit only forces pagination when every path that can trip it already
+ * has a pagination or projection exit. Production still has paths whose single
+ * reply exceeds 8 MB with no such exit (repository-wikis and un-bounded task
+ * messages — MUL-398), so default-on would convert them from slow into failing
+ * rather than into paginated. The bridge keeps its 64 MB `RESULT_BUFFER_BYTES`
+ * ceiling, and the 1 MB warning line provides visibility in the meantime.
+ */
+export const DEFAULT_DB_REPLY_MAX_BYTES = 0;
+
+/**
+ * The limit production moves to once MUL-398 lands and one week of
+ * `api_large_db_reply` shows no route above it.
+ *
+ * The test suite enables this value (see `tests/setup/hermetic-env.ts`) so the
+ * guardrail keeps catching unbounded reads in CI — it already caught
+ * `/tasks/pending` reading the whole task table.
+ */
+export const RECOMMENDED_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+
+/**
+ * Resolve the hard limit. Unset, empty, non-numeric and negative all mean "off"
+ * (0) rather than falling back to 8 MB: the disabled default is deliberate, and
+ * a typo in the env var must not silently arm a limit in production.
+ */
+export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
+  if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
+  return parsed;
+}
+
+/**
+ * Where the reply that is being measured came from.
+ *
+ * Background work (schedulers, migrations) has no request context by
+ * construction, and the Issue fixes its label as `<background>`.
+ */
+export function currentDbReplyOrigin(): { method: string; route: string } {
+  const request = requestContext.getStore();
+  if (!request) return { method: "<background>", route: "<background>" };
+  return { method: request.method, route: request.route };
+}
+
+/**
+ * One line per oversized bridge reply. Never includes SQL text, parameters, the
+ * real path, or the query string — only the route pattern, the verb, and a size.
+ */
+export function emitLargeDbReply(bytes: number): void {
+  if (!(bytes > DB_REPLY_WARN_BYTES)) return;
+  const { method, route } = currentDbReplyOrigin();
+  emitJsonLine({
+    event: "api_large_db_reply",
+    ts: new Date().toISOString(),
+    method,
+    route,
+    bytes,
+  });
+}
+
+/** The line emitted when a reply is refused before decode/parse. */
+export function emitDbReplyRejected(bytes: number, maxBytes: number): void {
+  const { method, route } = currentDbReplyOrigin();
+  emitJsonLine({
+    event: "api_db_reply_rejected",
+    ts: new Date().toISOString(),
+    method,
+    route,
+    bytes,
+    max_bytes: maxBytes,
+  });
+}
+
+/** Shared writer so every guardrail line is one JSON object on stdout. */
+function emitJsonLine(line: Record<string, unknown>): void {
+  try {
+    console.log(JSON.stringify(line));
+  } catch (error) {
+    warnOnce("could not write a bridge guardrail line", error);
+  }
 }
 
 // ────────────────────────────── window buffer ──────────────────────────────
@@ -459,11 +567,7 @@ export function resolveRoutePattern(c: Context): string {
 // ────────────────────────────── middleware ──────────────────────────────
 
 function emitSlowRequest(line: Record<string, unknown>): void {
-  try {
-    console.log(JSON.stringify(line));
-  } catch (error) {
-    warnOnce("could not write the slow-request line", error);
-  }
+  emitJsonLine(line);
 }
 
 /**
@@ -480,7 +584,18 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
   return async (c, next) => {
     if (!options.enabled) return next();
 
-    const state: RequestDbMetrics = { dbMs: 0, dbQueries: 0, dbBytes: 0, dbParseMs: 0 };
+    // Hono has already matched the full handler chain by the time a middleware
+    // runs, so the pattern is available here — before any handler queries the
+    // database. `resolveRoutePattern` skips the `ALL` middleware entries, which
+    // is exactly what keeps a bridge log from reporting `/*`.
+    const state: RequestDbMetrics = {
+      dbMs: 0,
+      dbQueries: 0,
+      dbBytes: 0,
+      dbParseMs: 0,
+      method: String(c.req.method ?? "GET").toUpperCase(),
+      route: resolveRoutePattern(c),
+    };
     const startedAt = performance.now();
     let thrown = false;
     try {
@@ -495,6 +610,8 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
       try {
         const totalMs = finite(performance.now() - startedAt);
         const status = thrown ? 500 : (c.finalized ? c.res.status : 500);
+        // Re-resolve for the sample: a handler that answers before routing is
+        // already past, and the entry-time value is the fallback.
         const route = resolveRoutePattern(c);
         const method = String(c.req.method ?? "GET").toUpperCase();
         const slow = totalMs > options.slowRequestMs;
