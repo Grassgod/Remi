@@ -34,7 +34,7 @@ import { useT } from "../../i18n";
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { StatusIcon } from ".";
 
-/** "Sub-issue of TES-1 …" line with the parent's own completion progress. */
+/** "Sub-issue of TES-1 …" line within a reserved-height slot. */
 function ParentIssueLink({ parentIssue }: { parentIssue: Issue }) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();

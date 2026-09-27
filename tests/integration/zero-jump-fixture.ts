@@ -36,6 +36,7 @@ export interface ZeroJumpFixture {
   userId: string;
   shortIssueId: string;
   parentIssueId: string;
+  waitingChildIssueId: string;
   longIssueId: string;
   longDefaultSessionId: string;
   longSessionIds: string[];
@@ -117,6 +118,13 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     title: "Parent issue with four sub-issues",
     description: "The child list belongs in the sidebar while this document stays still.",
     status: "in_progress",
+  });
+  const parentSession = store.getOrCreateDefaultIssueSession(parentIssue.id, user.id);
+  store.createIssueComment(parentIssue.id, {
+    issueSessionId: parentSession.id,
+    authorType: "member",
+    authorId: user.id,
+    body: "The parent issue has a message anchor for the zero-jump measurement.",
   });
   store.createIssue({ title: "Blocked child", status: "blocked", parentIssueId: parentIssue.id });
   const waitingChild = store.createIssue({ title: "Waiting child", status: "backlog", parentIssueId: parentIssue.id });
@@ -285,6 +293,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     userId: user.id,
     shortIssueId: shortIssue.id,
     parentIssueId: parentIssue.id,
+    waitingChildIssueId: waitingChild.id,
     longIssueId: longIssue.id,
     longDefaultSessionId: defaultSession.id,
     longSessionIds,

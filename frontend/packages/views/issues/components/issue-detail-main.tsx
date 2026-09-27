@@ -136,7 +136,7 @@ export function IssueDetailMain({
         {issue.status === "backlog" && waitingOn.length > 0 && (
           <div className="flex min-w-0 w-full items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
             <Clock3 className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{t(($) => $.detail.waiting_on, { keys: waitingOn.join("、") })}</span>
+            <span className="min-w-0 flex-1 truncate">{t(($) => $.detail.waiting_on, { keys: waitingOn.join(", ") })}</span>
             {canForceStart && (
               <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1" onClick={() => setForceStartOpen(true)}>
                 <Play className="size-3.5" />{t(($) => $.detail.force_start_action)}
@@ -151,7 +151,7 @@ export function IssueDetailMain({
           <AlertDialogHeader>
             <AlertDialogTitle>{t(($) => $.detail.force_start_title)}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t(($) => $.detail.force_start_body, { key: issue.identifier, keys: waitingOn.join("、") })}
+              {t(($) => $.detail.force_start_body, { key: issue.identifier, keys: waitingOn.join(", ") })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {forceStartError && <p role="alert" className="text-sm text-destructive">{forceStartError}</p>}

@@ -108,7 +108,7 @@ export function IssueSubIssuesSummary({
                   <span className="truncate">{child.assignee_type && child.assignee_id ? getActorName(child.assignee_type, child.assignee_id) : "—"}</span>
                   {!!child.blocked_by?.length && (
                     <span className="shrink-0 truncate rounded bg-amber-100 px-1 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                      {t(($) => $.detail.waiting_chip, { key: child.blocked_by.join("、") })}
+                      {t(($) => $.detail.waiting_chip, { key: child.blocked_by.join(", ") })}
                     </span>
                   )}
                 </span>

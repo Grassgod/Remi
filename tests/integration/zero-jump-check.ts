@@ -101,6 +101,7 @@ interface Options {
   apiPort: number | null;
   webPort: number | null;
   keep: boolean;
+  captureDir: string | null;
 }
 
 function parseArgs(argv: string[]): Options {
@@ -114,6 +115,7 @@ function parseArgs(argv: string[]): Options {
     apiPort: null,
     webPort: null,
     keep: false,
+    captureDir: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -132,6 +134,7 @@ function parseArgs(argv: string[]): Options {
     else if (arg === "--api-port") options.apiPort = Number(next());
     else if (arg === "--web-port") options.webPort = Number(next());
     else if (arg === "--keep") options.keep = true;
+    else if (arg === "--capture-dir") options.captureDir = next();
     else if (arg === "--help" || arg === "-h") {
       process.stdout.write([
         "usage: bun run tests/integration/zero-jump-check.ts [options]",
@@ -722,6 +725,10 @@ async function main(): Promise<void> {
     }
   }
 
+  if (options.captureDir) {
+    await captureIssueScreenshots(browser, token, webOrigin, fixture, store, options.captureDir);
+  }
+
   // ── verdict ──────────────────────────────────────────────────────────────
   const grouped = groupResults(rounds);
   const allowlistRaw = JSON.parse(readFileSync(options.allowlist, "utf8")) as ZeroJumpAllowlist;
@@ -763,6 +770,96 @@ async function main(): Promise<void> {
   }
 
   process.exitCode = verdict.ok && allowlistProblems.length === 0 ? 0 : 1;
+}
+
+async function captureIssueScreenshots(
+  browser: Browser,
+  token: string,
+  webOrigin: string,
+  fixture: ZeroJumpFixture,
+  store: MultiremiStore,
+  dir: string,
+): Promise<void> {
+  ensureDir(dir);
+  const context = await mktContext(browser, token, [], webOrigin);
+  const page = await context.newPage();
+  const parentUrl = `${webOrigin}/${fixture.workspaceSlug}/issues/${fixture.parentIssueId}`;
+  const childUrl = `${webOrigin}/${fixture.workspaceSlug}/issues/${fixture.waitingChildIssueId}`;
+  await page.goto(parentUrl);
+  await page.getByText("Parent issue with four sub-issues", { exact: true }).first().waitFor();
+  await page.getByText("Blocked child", { exact: true }).waitFor();
+  const minimize = page.locator("button:has(svg.lucide-minus)").last();
+  if (await minimize.count()) await minimize.click();
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(dir, "parent-desktop.png") });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: join(dir, "parent-mobile.png") });
+  await page.locator("button:has(svg.lucide-panel-right)").last().click();
+  await page.getByText("Blocked child", { exact: true }).waitFor();
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(dir, "parent-mobile-sidebar.png") });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(parentUrl);
+  await page.getByRole("button", { name: "Add sub-issues" }).click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(dir, "create-child.png") });
+  await page.getByRole("button", { name: "Prerequisite", exact: true }).click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(dir, "create-child-prerequisite.png") });
+  await page.getByPlaceholder("Search issues...").fill("Active child");
+  await page.getByRole("option", { name: /Active child/ }).click();
+  await page.getByText("After MUL-5").waitFor();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(dir, "create-child-prerequisite-selected.png") });
+  await page.keyboard.press("Escape");
+  await page.goto(childUrl);
+  await page.getByText(/Waiting for .* to finish/).waitFor();
+  await page.screenshot({ path: join(dir, "child-waiting.png") });
+  await page.getByRole("button", { name: "Add prerequisite" }).click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(dir, "edit-child-prerequisite.png") });
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /Start anyway/i }).click();
+  await page.getByRole("alertdialog").waitFor();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(dir, "member-force-start.png") });
+  await page.getByRole("alertdialog").getByRole("button", { name: /Start anyway/i }).click();
+  await page.getByRole("alertdialog").waitFor({ state: "hidden" });
+  await page.screenshot({ path: join(dir, "member-force-start-result.png") });
+
+  await page.goto(parentUrl);
+  await page.getByText("Blocked child", { exact: true }).waitFor();
+  await page.getByText("In Progress", { exact: true }).first().click();
+  await page.getByText("Done", { exact: true }).last().click();
+  await page.getByRole("alertdialog").waitFor();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(dir, "member-force-status.png") });
+  await context.close();
+
+  const task = store.getTask(fixture.runningTaskId);
+  if (!task) throw new Error("agent screenshot fixture task missing");
+  const agentToken = await store.createTaskAccessToken(task, fixture.userId);
+  const agentContext = await mktContext(browser, agentToken.token, [], webOrigin);
+  const agentPage = await agentContext.newPage();
+  await agentPage.goto(parentUrl);
+  const denied = await agentPage.evaluate(async (issueId) => {
+    const token = window.localStorage.getItem("multimira_token");
+    const response = await fetch(`/api/issues/${issueId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done", force: true }),
+    });
+    const body = await response.json() as { code?: string; error?: string };
+    return { status: response.status, code: body.code ?? "", error: body.error ?? "" };
+  }, fixture.parentIssueId);
+  if (denied.status !== 403) throw new Error(`agent force status expected 403, received ${denied.status}`);
+  await agentPage.goto("about:blank");
+  await agentPage.setViewportSize({ width: 720, height: 320 });
+  await agentPage.setContent(`<main style="font:16px system-ui;padding:32px"><h1>Agent status override denied</h1><p>PATCH /api/issues/${fixture.parentIssueId}</p><pre>HTTP ${denied.status}\n${denied.code}\n${denied.error}</pre></main>`);
+  await agentPage.screenshot({ path: join(dir, "agent-force-denied.png") });
+  await agentContext.close();
+  log(`acceptance screenshots: ${dir}`);
 }
 
 /** Canonical ordering, so the JSON reads like the verdict does. */
