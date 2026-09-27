@@ -24,17 +24,32 @@ export function isQueuedCapabilityWaitReason(reason: string | null | undefined):
   return reason?.startsWith(CAPABILITY_WAIT_PREFIX) ?? false;
 }
 
+/** The hard affinities that can strand a Task on one machine (MUL-449). */
+export type DeviceRoutingAffinity =
+  | "Agent 绑定" | "代码快照" | "显式 Runtime 工作区" | "Issue 工作区" | "本机目录"
+  // A retry whose frozen execution must resume where it was frozen. The
+  // claim-time refreshes exclude it (see their `execution_fingerprint IS NULL
+  // AND attempt = 1` filters), so its pin is visible rather than re-pooled.
+  | "冻结重试";
+
 /**
  * A task pinned to a machine that cannot reach it explains why instead of
  * rendering as an unexplained queue. Only hard affinities use this: soft
  * affinities re-pool instead.
+ *
+ * The remedy must actually clear the pin. `remi task redispatch` is NOT one:
+ * it replaces the task with another one that re-derives the same hard
+ * affinity, so it would produce an equally stuck task.
  */
 export function deviceRoutingWaitReason(input: {
   runtimeName: string;
-  affinity: string;
+  affinity: DeviceRoutingAffinity;
 }): string {
+  const remedy = input.affinity === "Agent 绑定"
+    ? "请调整该 Agent 的 Runtime 绑定"
+    : "请把该机器加回项目的设备绑定，或取消它的独享设置";
   return `${DEVICE_ROUTING_WAIT_PREFIX}任务钉在 ${input.runtimeName}（${input.affinity}），`
-    + "该机器不在项目的设备绑定里或为独享设备；请调整项目设备绑定，或运行 remi task redispatch 冷启动";
+    + `该机器不在项目的设备绑定里或为独享设备；${remedy}`;
 }
 
 export function isQueuedCapabilityAlert(reason: string | null | undefined): boolean {

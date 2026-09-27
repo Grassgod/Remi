@@ -294,7 +294,10 @@ describe("queued task model capability waits", () => {
     expect(waiting.waitReason).toContain("等待项目设备：");
     expect(waiting.waitReason).toContain("devbox-a");
     expect(waiting.waitReason).toContain("代码快照");
-    expect(waiting.waitReason).toContain("remi task redispatch");
+    // The remedy must actually clear the pin: `remi task redispatch` would
+    // mint another task carrying the same hard affinity.
+    expect(waiting.waitReason).not.toContain("redispatch");
+    expect(waiting.waitReason).toContain("设备绑定");
     // A snapshot exists only on A, so neither machine may take the turn — and
     // the reason must survive that refusal instead of being recomputed away.
     expect(store.claimTask(devbox.id)).toBeNull();
@@ -383,7 +386,7 @@ describe("queued task model capability waits", () => {
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
     expect(store.getTask(task.id)?.waitReason).toBe(
       "等待项目设备：任务钉在 devbox-a（Issue 工作区），该机器不在项目的设备绑定里或为独享设备；"
-      + "请调整项目设备绑定，或运行 remi task redispatch 冷启动",
+      + "请把该机器加回项目的设备绑定，或取消它的独享设置",
     );
     // The workspace data only exists on the devbox: keep waiting, don't move it.
     expect(store.claimTask(other.id)).toBeNull();
@@ -410,6 +413,129 @@ describe("queued task model capability waits", () => {
     expect(store.getTask(task.id)).toMatchObject({
       runtimeId: devbox.id, sessionId: "sess_frozen", workDir: "/work/frozen", attempt: 2,
     });
+  });
+
+  // MUL-449 QA round 2, blocker 2: a hard affinity can name a daemon whose
+  // Runtime row does not exist yet. The daemon-scoped routing probe must still
+  // resolve the Project, or one such task aborts the whole sweep.
+  it("survives a hard affinity pinned to an unregistered Runtime", () => {
+    const store = createLocalStore();
+    const registered = store.registerRuntime({
+      id: "rt_unreg_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-unreg-b",
+    });
+    const agent = store.createAgent({ name: "Unregistered pin", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({
+      title: "Awaiting machine", workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/unreg", daemon_id: "dev-unreg-missing" } }],
+    });
+    store.createProjectDevice(project.id, { daemonId: "dev-unreg-b" });
+    const issue = store.createIssue({ title: "Unregistered issue", projectId: project.id, workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "wait for its machine" });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_unregistered_daemon", task.id]);
+
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(() => store.refreshQueuedCapabilityWaitReasons(now)).not.toThrow();
+    const waiting = store.getTask(task.id)!;
+    expect(waiting.waitReason).toContain("等待项目设备：");
+    expect(waiting.waitReason).toContain("dev-unreg-missing");
+    expect(waiting.waitReason).toContain("本机目录");
+    // The registered-but-forbidden machine still cannot take it.
+    expect(store.claimTask(registered.id)).toBeNull();
+  });
+
+  it("keeps a no-Project task with an unregistered pin scanable", () => {
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "Projectless pin", provider: "codex", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, prompt: "project-less" });
+    db!.run(
+      `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'frozen'
+        WHERE id = ?`,
+      ["rt_projectless_missing", task.id],
+    );
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(() => store.refreshQueuedCapabilityWaitReasons(now)).not.toThrow();
+    // No Project means no device binding to violate, so nothing is written.
+    expect(store.getTask(task.id)?.waitReason).toBeNull();
+  });
+
+  // MUL-449 QA round 2, blocker 3: the label described the wrong pin, and the
+  // suggested remedy could not clear a hard affinity.
+  it("labels a Chat directory pin as the local directory, not an Issue workspace", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_label_dir_a", name: "Directory host", provider: "codex", workspaceId: "local", daemonId: "dev-label-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_label_dir_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-label-b",
+    });
+    const agent = store.createAgent({ name: "Chat directory", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({
+      title: "Chat directory project", workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/label-a", daemon_id: "dev-label-a" } }],
+    });
+    store.createProjectDevice(project.id, { daemonId: "dev-label-a" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id, workspaceId: "local" });
+    const first = store.sendChatMessage(chat.id, { body: "first" }).task;
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_label", workDir: "/abs/label-a" });
+    const second = store.sendChatMessage(chat.id, { body: "second" }).task;
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [a.id, second.id]);
+
+    store.deleteProjectDevice(project.id, "dev-label-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-label-b" });
+    const now = Date.now();
+    ageTask(second.id, GRACE_MS, now);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    const reason = store.getTask(second.id)!.waitReason!;
+    expect(reason).toContain("本机目录");
+    expect(reason).not.toContain("Issue 工作区");
+    // `redispatch` mints another task with the same hard affinity, so the text
+    // must not recommend it.
+    expect(reason).not.toContain("redispatch");
+    expect(store.claimTask(b.id)).toBeNull();
+  });
+
+  it("does not label a lease-free Issue task as holding a workspace", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_label_issue_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-label-issue-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_label_issue_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-label-issue-b",
+    });
+    const agent = store.createAgent({ name: "Lease-free issue", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({ title: "Lease-free project", workspaceId: "local" });
+    store.createProjectDevice(project.id, { daemonId: "dev-label-issue-a" });
+    const issue = store.createIssue({ title: "Lease-free issue", projectId: project.id, workspaceId: "local" });
+    // `holds_workspace = 1` (the Issue default) but no workspace row exists yet,
+    // so the pin is provider lineage rather than a lease on one machine.
+    const session = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_lease_free" });
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(second).toMatchObject({ holdsWorkspace: true, runtimeId: a.id });
+    expect(store.getIssueWorkspace(issue.id)).toBeNull();
+    store.deleteProjectDevice(project.id, "dev-label-issue-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-label-issue-b" });
+
+    const now = Date.now();
+    ageTask(second.id, GRACE_MS, now);
+    // Soft affinity: the observer writes nothing and the claim re-pools it.
+    expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
+    expect(store.getTask(second.id)?.waitReason).toBeNull();
+    expect(store.claimTask(a.id)).toBeNull();
+    // Re-pooling clears any text the observer owned before the pin moved.
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, waitReason: null });
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
   });
 
   it("does not overwrite unrelated reasons or nonqueued task state", () => {

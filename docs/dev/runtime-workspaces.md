@@ -64,10 +64,10 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 
 ## 亲和与设备路由
 
-Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。亲和分两类，规则不同（MUL-449）：
+Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。以下规则由同一个硬亲和分类函数驱动，`refreshQueuedIssueLaneAffinity` 的跳过集合与 `wait_reason` 的文案不会分叉。亲和分两类，规则不同（MUL-449）：
 
 - **软亲和**＝ provider 会话血统：Chat 的 `chat_sessions.session_id / session_runtime_id`，Issue 的 `session_agent_lanes.provider_session_id / runtime_id`。钉住的机器过不了设备路由时放弃血统、任务回池冷启动（`inheritChatSession=false`，Issue lane 走 `resetSessionAgentLane`，重置原因记为 `device_routing_rejected`）。建单时（`createTaskWithinWorkspaceLock`）和领取前（`refreshQueuedIssueLaneAffinity` / `refreshQueuedChatAffinity`）都重算，所以改绑后已排队和存量的这类任务会自愈，不需要数据迁移。
-- **硬亲和**＝数据或配置只在那台机器：`with_code` 代码快照、`holds_workspace=1` 的 Issue 工作区、项目 `local_directory`、显式 `runtime_workspace_id`、Agent 绑定的 Runtime。回池会让任务在没有数据的机器上运行，所以不回池、不报错、不迁移；任务继续排队，由 60 秒观察者 `refreshQueuedCapabilityWaitReasons` 写 `wait_reason`，文本以 `等待项目设备：` 开头，说明钉在哪台机器、为什么（代码快照 / Issue 工作区 / 本机目录 / 显式 Runtime 工作区 / Agent 绑定 / 会话）以及解法（调整项目设备绑定，或 `remi task redispatch` 冷启动）。设备路由的原因优先于模型能力的原因，路由恢复后自动清空。冻结重试（`attempt>1` 且带 `execution_fingerprint`）按既有契约不重算，只获得同样的可见等待。
+- **硬亲和**＝数据或配置只在那台机器：`with_code` 代码快照、真正持有 Issue 工作区的任务（`holds_workspace=1` 且存在未 cleaned 的工作区记录）、项目 `local_directory`、显式 `runtime_workspace_id`、Agent 绑定的 Runtime，以及按既有契约不重算的冻结重试（`attempt>1` 且带 `execution_fingerprint`）。回池会让任务在没有数据的机器上运行，所以不回池、不报错、不迁移；任务继续排队，由 60 秒观察者 `refreshQueuedCapabilityWaitReasons` 写 `wait_reason`，文本以 `等待项目设备：` 开头，说明钉在哪台机器、为什么（代码快照 / Issue 工作区 / 本机目录 / 显式 Runtime 工作区 / Agent 绑定 / 冻结重试）以及真正能解除等待的操作：把该机器加回项目设备绑定、取消它的独享设置，或（Agent 绑定）调整该 Agent 的 Runtime 绑定。`remi task redispatch` 不在建议里：它会重新推导出同一硬亲和，只会得到另一个同样排队的新任务。设备路由的原因优先于模型能力的原因，路由恢复后自动清空。跳过集合与文案标签共用同一个分类函数，不会各说各话；`holds_workspace=1` 但没有工作区记录的讨论/无项目任务仍按软亲和回池。
 
 ## 任务私有 /tmp
 

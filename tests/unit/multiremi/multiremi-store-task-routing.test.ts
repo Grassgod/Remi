@@ -529,6 +529,82 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(allowed.id)?.id).toBe(second.id);
   });
 
+  // MUL-449 QA round 2, blocker 1: a Project holding a local_directory does
+  // not lend that directory to a discussion session. Treating it as a hard
+  // affinity stranded `holds_workspace=false` turns on the directory machine
+  // once device routing rejected it.
+  it("re-pools a discussion turn of a directory-backed Project after a rebinding", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_dir_disc_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-dir-disc-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_dir_disc_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-dir-disc-b",
+    });
+    const agent = store.createAgent({ name: "Directory discussion", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({
+      title: "Directory project", workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/dir-a", daemon_id: "dev-dir-disc-a" } }],
+    });
+    store.createProjectDevice(project.id, { daemonId: "dev-dir-disc-a" });
+    const issue = store.createIssue({ title: "Directory issue", projectId: project.id, workspaceId: "local" });
+    const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+
+    const first = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
+    });
+    // A discussion task never inherits the Project directory.
+    expect(first).toMatchObject({ holdsWorkspace: false, runtimeId: null });
+    expect(store.claimTask(a.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_dir_disc" });
+
+    // Queue the next turn while A is still allowed, then move the binding.
+    const second = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
+    });
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: a.id, sessionId: "sess_dir_disc" });
+    store.deleteProjectDevice(project.id, "dev-dir-disc-a");
+    store.createProjectDevice(project.id, { daemonId: "dev-dir-disc-b" });
+
+    expect(store.claimTask(a.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null, status: "queued" });
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
+  });
+
+  it("does not treat a discussion turn as a directory pin in the base retirement path", () => {
+    const store = createLocalStore();
+    const a = store.registerRuntime({
+      id: "rt_dir_retire_a", name: "A", provider: "codex", workspaceId: "local", daemonId: "dev-dir-retire-a",
+    });
+    const b = store.registerRuntime({
+      id: "rt_dir_retire_b", name: "B", provider: "codex", workspaceId: "local", daemonId: "dev-dir-retire-b",
+    });
+    const agent = store.createAgent({ name: "Retiring directory", provider: "codex", workspaceId: "local" });
+    const project = store.createProject({
+      title: "Retiring directory project", workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/retire-a", daemon_id: "dev-dir-retire-a" } }],
+    });
+    store.createProjectDevice(project.id, { daemonId: "dev-dir-retire-a" });
+    const issue = store.createIssue({ title: "Retiring issue", projectId: project.id, workspaceId: "local" });
+    const discussion = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
+    const holding = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
+    const discussionTask = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: discussion.id, prompt: "discuss",
+    });
+    const holdingTask = store.createTask({
+      agentId: agent.id, issueId: issue.id, issueSessionId: holding.id, prompt: "work",
+    });
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id IN (?, ?)", [a.id, discussionTask.id, holdingTask.id]);
+
+    // The base re-pool path reads the same helper: the discussion turn must be
+    // released, while the workspace-holding turn keeps its directory pin.
+    (store as unknown as { runtimes: { repoolQueuedTasksForRuntime(id: string): void } })
+      .runtimes.repoolQueuedTasksForRuntime(a.id);
+    expect(store.getTask(discussionTask.id)?.runtimeId).toBeNull();
+    expect(store.getTask(holdingTask.id)?.runtimeId).toBe(a.id);
+  });
+
   it("does not re-pool a queued turn whose machine holds the Issue workspace", () => {
     const store = createLocalStore();
     const devbox = store.registerRuntime({

@@ -30,6 +30,8 @@ import {
 import { chatWorkspaceLineageCurrent, parseChatWorkspaceFingerprint, resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
 import { EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, type StoreContext } from "@multiremi/store/context.js";
 import {
+  type DeviceRoutingAffinity,
+  DEVICE_ROUTING_WAIT_PREFIX,
   deviceRoutingWaitReason,
   isQueuedCapabilityAlert,
   isQueuedObserverWaitReason,
@@ -272,6 +274,16 @@ const projectDeviceRoutingEligibilitySql = (projectExpression: string) => `(
 
 const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySql(TASK_ROUTING_PROJECT_SQL);
 
+/**
+ * The row shape every device-routing probe reads. `TASK_ROUTING_PROJECT_SQL`
+ * resolves the Project from `project_issue` / `project_chat`, so any statement
+ * embedding the eligibility template must join both — including the
+ * daemon-scoped variant used when a hard affinity outlives its Runtime row.
+ */
+const TASK_DEVICE_ROUTING_FROM_SQL = `FROM multiremi_tasks t
+       LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
+       LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id`;
+
 interface DelegationWakeupInput {
   sourceTaskId: string;
   requiredEventSeq: number;
@@ -406,24 +418,61 @@ function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
 }
 
 /**
- * Why a queued task cannot simply be moved to another machine. Only hard
- * affinities reach the device-routing wait reason; the order here mirrors
- * `localDirectoryDaemonForTask` plus the Agent configuration pin (MUL-449).
+ * The single hard-affinity classifier (MUL-449). It answers both "may this
+ * queued turn be re-pooled?" and "what do we tell the user?", so the skip set
+ * and the label can never disagree. `null` means soft affinity: the pin is a
+ * provider session lineage, which is abandoned and re-pooled instead of shown.
+ *
+ * Order matters. `Agent 绑定` is configuration, not lineage: clearing the
+ * session would not let another machine take the task. `Issue 工作区` requires
+ * a real workspace row — a plain Chat task defaults to `holds_workspace = 1`
+ * but has no Issue workspace, and an Issue task may have no lease either.
  */
-function queuedDeviceRoutingAffinity(
+export interface HardTaskAffinity {
+  kind: DeviceRoutingAffinity;
+  /** The machine the affinity resolves to, when it is known without a claim. */
+  daemonId: string | null;
+}
+
+function hardTaskAffinity(
   ctx: StoreContext,
   row: Row,
   agentRuntimeId: string | null | undefined,
-): string {
-  const pinnedRuntimeId = nullableString(row.runtime_id);
-  if (pinnedRuntimeId && agentRuntimeId && pinnedRuntimeId === agentRuntimeId) return "Agent 绑定";
-  const sessionId = nullableString(row.issue_session_id);
+): HardTaskAffinity | null {
+  const pinnedRuntimeId = nullableString(row.runtime_id ?? row.runtimeId);
+  if (pinnedRuntimeId && agentRuntimeId && pinnedRuntimeId === agentRuntimeId) {
+    return { kind: "Agent 绑定", daemonId: null };
+  }
+  const sessionId = nullableString(row.issue_session_id ?? row.issueSessionId);
   const session = sessionId ? ctx.issueSessions().getIssueSession(sessionId) : null;
-  if (session?.withCode) return "代码快照";
-  if (nullableString(row.runtime_workspace_id)) return "显式 Runtime 工作区";
-  if (Number(row.holds_workspace ?? 1) === 1) return "Issue 工作区";
-  if (ctx.localDirectoryDaemonForTask(row)) return "本机目录";
-  return "会话";
+  const directoryDaemonId = ctx.localDirectoryDaemonForTask(row);
+  if (session?.withCode) return { kind: "代码快照", daemonId: directoryDaemonId };
+  if (nullableString(row.runtime_workspace_id ?? row.runtimeWorkspaceId)) {
+    return { kind: "显式 Runtime 工作区", daemonId: null };
+  }
+  const issueId = nullableString(row.issue_id ?? row.issueId);
+  const holdsWorkspace = Number(row.holds_workspace ?? row.holdsWorkspace ?? 1) === 1;
+  if (issueId && holdsWorkspace) {
+    // The claim SQL pins these through the workspace row, not `runtime_id`, so
+    // resolve the machine here or the wait would stay invisible.
+    const workspace = ctx.db.query(
+      `SELECT runtime_id FROM multiremi_issue_workspaces
+        WHERE issue_id = ? AND status <> 'cleaned' AND runtime_id IS NOT NULL
+        ORDER BY created_at ASC LIMIT 1`,
+    ).get(issueId) as { runtime_id?: unknown } | null;
+    const workspaceRuntimeId = nullableString(workspace?.runtime_id);
+    if (workspaceRuntimeId) {
+      const runtime = ctx.runtimes().getRuntime(workspaceRuntimeId);
+      return { kind: "Issue 工作区", daemonId: runtime?.daemonId ?? workspaceRuntimeId };
+    }
+  }
+  if (directoryDaemonId) return { kind: "本机目录", daemonId: directoryDaemonId };
+  // Neither affinity class above, but the pin still cannot be re-pooled: the
+  // claim-time refreshes skip frozen retries, so it must explain itself here.
+  const frozen = nullableString(row.execution_fingerprint ?? row.executionFingerprint) !== null
+    || Number(row.attempt ?? 1) > 1;
+  if (frozen) return { kind: "冻结重试", daemonId: null };
+  return null;
 }
 
 function sessionLaneResetReason(input: {
@@ -455,6 +504,7 @@ export class TasksRepo {
     const rows = this.ctx.db.query(
       `SELECT id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
               runtime_workspace_id, holds_workspace, workspace_id, created_at, wait_reason,
+              attempt, execution_fingerprint,
               execution_model, execution_thinking_level
          FROM multiremi_tasks
         WHERE status = 'queued' AND created_at <= ?`,
@@ -464,6 +514,7 @@ export class TasksRepo {
       runtime_workspace_id: string | null; holds_workspace: unknown;
       workspace_id: string | null;
       created_at: string; wait_reason: string | null;
+      attempt: unknown; execution_fingerprint: string | null;
       execution_model: string | null; execution_thinking_level: string | null;
     }>;
     const result = { updated: 0, alerted: 0 };
@@ -478,20 +529,20 @@ export class TasksRepo {
       // A hard-affinity task pinned behind a Project device binding explains
       // that first: model capability is irrelevant while placement is refused.
       // Restoring the binding clears the reason on the next sweep (MUL-449).
+      // Only hard affinities explain themselves; soft affinity belongs to the
+      // claim-time refresh, which re-pools the turn instead.
+      const routingAgent = this.ctx.agents().getAgentLite(row.agent_id);
+      const affinity = hardTaskAffinity(this.ctx, row, routingAgent?.runtimeId);
       const pinnedRuntime = row.runtime_id ? runtimesRepo.getRuntime(row.runtime_id) : null;
-      const pinnedDaemonId = pinnedRuntime ? null : this.ctx.localDirectoryDaemonForTask(row);
-      const routingRefused = pinnedRuntime != null
+      const pinnedDaemonId = pinnedRuntime ? null : affinity?.daemonId ?? null;
+      const routingRefused = affinity !== null && (pinnedRuntime != null
         ? !this.runtimePassesProjectDeviceRouting(pinnedRuntime, row.id)
-        : pinnedDaemonId != null && !this.deviceRoutingAllowsDaemon(pinnedDaemonId, row);
+        : pinnedDaemonId != null && !this.deviceRoutingAllowsDaemon(pinnedDaemonId, row));
       if (routingRefused) {
         const runtimeName = pinnedRuntime
           ? pinnedRuntime.daemonDisplayName ?? pinnedRuntime.name
-          : pinnedDaemonId!;
-        const routingAgent = this.ctx.agents().getAgentLite(row.agent_id);
-        const reason = deviceRoutingWaitReason({
-          runtimeName,
-          affinity: queuedDeviceRoutingAffinity(this.ctx, row, routingAgent?.runtimeId),
-        });
+          : this.daemonDisplayName(pinnedDaemonId!);
+        const reason = deviceRoutingWaitReason({ runtimeName, affinity: affinity.kind });
         if (reason === row.wait_reason) continue;
         const updatedRow = this.ctx.db.query(
           `UPDATE multiremi_tasks SET wait_reason = ?, updated_at = ?
@@ -2186,19 +2237,30 @@ export class TasksRepo {
     const dedicated = Number(profile?.dedicated ?? 0) === 1;
     const rowQuery = this.ctx.db.query(
       `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
-       FROM multiremi_tasks t
+       ${TASK_DEVICE_ROUTING_FROM_SQL}
        WHERE t.id = ?`,
     ).get(daemonId, dedicated ? 1 : 0, daemonId, String(row.id)) as { eligible?: unknown } | null;
     return Number(rowQuery?.eligible ?? 0) === 1;
+  }
+
+  /** Human-readable machine name for a daemon, registered or not. */
+  private daemonDisplayName(daemonId: string): string {
+    const row = this.ctx.db.query(
+      `SELECT display_name FROM multiremi_daemon_profiles
+        WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get("local", daemonId) as { display_name?: unknown } | null;
+    const name = nullableString(row?.display_name);
+    if (name) return name;
+    const runtime = this.ctx.runtimes().listRuntimes()
+      .find((candidate) => candidate.daemonId === daemonId || candidate.legacyDaemonId === daemonId);
+    return runtime?.daemonDisplayName ?? runtime?.name ?? daemonId;
   }
 
   private runtimePassesProjectDeviceRouting(runtime: MultiremiRuntime, taskId: string): boolean {
     const routing = this.runtimeDeviceRoutingContext(runtime);
     const row = this.ctx.db.query(
       `SELECT CASE WHEN ${PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS eligible
-       FROM multiremi_tasks t
-       LEFT JOIN multiremi_issues project_issue ON project_issue.id = t.issue_id
-       LEFT JOIN multiremi_chat_sessions project_chat ON project_chat.id = t.chat_session_id
+       ${TASK_DEVICE_ROUTING_FROM_SQL}
        WHERE t.id = ?`,
     ).get(...routing.params, taskId) as { eligible?: unknown } | null;
     return Number(row?.eligible ?? 0) === 1;
@@ -2359,31 +2421,29 @@ export class TasksRepo {
       if (!session) continue;
       const fullRow = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(task.id) as Row | null;
       if (!fullRow) continue;
-      // Hard affinities: never re-pool.
-      if (session.withCode) continue;
-      if (task.runtimeWorkspaceId) continue;
-      if (task.holdsWorkspace && this.ctx.db.query(
-        `SELECT 1 FROM multiremi_issue_workspaces
-          WHERE issue_id = ? AND status <> 'cleaned' LIMIT 1`,
-      ).get(session.issueId)) continue;
-      if (this.ctx.localDirectoryDaemonForTask(fullRow)) continue;
-      // An Agent-bound Runtime is configuration, not lineage: clearing the
-      // session would not let another machine take the task.
-      if (agent.runtimeId && agent.runtimeId === task.runtimeId) continue;
+      // The same classifier the observer uses decides what may be re-pooled:
+      // anything it calls a hard affinity keeps its pin and waits visibly.
+      if (hardTaskAffinity(this.ctx, fullRow, agent.runtimeId)) continue;
       const runtime = this.ctx.runtimes().getRuntime(task.runtimeId);
       const issue = session.issueId ? this.ctx.issues().getIssue(session.issueId) : null;
       const routingProjectId = this.deviceRoutingProject(
         agent, issue?.projectId, null, task.runtimeWorkspaceId,
       );
-      const refused = runtime == null
-        || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)
-        || !this.projectPassesProjectDeviceRouting(runtime, routingProjectId);
-      if (!refused) continue;
+      // Distinguish the two reasons the pin is abandoned: a refused placement
+      // is a routing decision, while a Runtime that cannot run this Agent (or
+      // is gone) matches the Chat refresh's capability drift.
+      const routingRefused = runtime != null
+        && !this.projectPassesProjectDeviceRouting(runtime, routingProjectId);
+      const runtimeUnusable = runtime == null
+        || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agent);
+      if (!routingRefused && !runtimeUnusable) continue;
       const updated = this.ctx.db.run(
         `UPDATE multiremi_tasks
-         SET runtime_id = ?, session_id = NULL, work_dir = NULL, updated_at = ?
+         SET runtime_id = ?, session_id = NULL, work_dir = NULL,
+             wait_reason = CASE WHEN wait_reason LIKE ? THEN NULL ELSE wait_reason END,
+             updated_at = ?
          WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
-        [agent.runtimeId ?? null, nowIso(), task.id],
+        [agent.runtimeId ?? null, `${DEVICE_ROUTING_WAIT_PREFIX}%`, nowIso(), task.id],
       );
       if (updated.changes === 0) continue;
       const lane = this.ctx.issueSessions().getSessionAgentLane(
@@ -2391,7 +2451,7 @@ export class TasksRepo {
       );
       if (lane?.runtimeId === task.runtimeId) {
         this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
-          reason: "device_routing_rejected",
+          reason: routingRefused ? "device_routing_rejected" : "runtime_incompatible",
           taskId: task.id,
         });
       }
@@ -2439,9 +2499,14 @@ export class TasksRepo {
         }
       }
       if (task.runtimeId === runtimeId && task.sessionId === (inherit ? chat.sessionId : null) && task.workDir === (inherit ? chat.workDir : null)) continue;
-      this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?
+      // Re-pooling abandons the lineage, so any device-routing text the
+      // observer had written about the old pin is stale immediately rather
+      // than only after the next sweep (MUL-449).
+      this.ctx.db.run(`UPDATE multiremi_tasks SET runtime_id = ?, session_id = ?, work_dir = ?,
+          wait_reason = CASE WHEN wait_reason LIKE ? THEN NULL ELSE wait_reason END
         WHERE id = ? AND status = 'queued' AND execution_fingerprint IS NULL`,
-        [runtimeId, inherit ? chat.sessionId : null, inherit ? chat.workDir : null, task.id]);
+        [runtimeId, inherit ? chat.sessionId : null, inherit ? chat.workDir : null,
+          `${DEVICE_ROUTING_WAIT_PREFIX}%`, task.id]);
     }
   }
 
