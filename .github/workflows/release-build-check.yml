@@ -146,6 +146,11 @@ jobs:
         # intended target is in the workflow, not in a coincidence.
         env:
           MULTIREMI_TEST_POSTGRES_URL: postgres://multimira:multimira@localhost:5432/postgres
+          # MUL-405 whole-suite lock-order sentinel. The bun test preload turns it
+          # on by default; declared here so the gate is visible in the workflow
+          # rather than only inside the preload. It reads the first lock class of
+          # every outermost transaction and fails any W -> N -> D inversion.
+          MULTIREMI_TEST_LOCK_ORDER_SENTINEL: "1"
         run: bun test
 
       # This workflow path-filters on `frontend/**` but used to build only the

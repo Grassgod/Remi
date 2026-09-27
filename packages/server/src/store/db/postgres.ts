@@ -148,6 +148,19 @@ export function advisoryXactLock(db: SqlDatabase, key: string): void {
  * makes "publish only after COMMIT" true at every nesting depth. A database that
  * cannot queue (a raw \`bun:sqlite\` handle passed straight to a repo by a test)
  * runs the callback immediately: outside a transaction the two are the same.
+ *
+ * Error semantics differ by when the callback runs, and that is intentional:
+ *
+ *   - outside a transaction it runs inline, so a throw propagates to the caller.
+ *     Nothing is pending at that point - the writes already autocommitted - so
+ *     the caller has to hear about the failure;
+ *   - inside a transaction it is queued, and the queue is drained best-effort
+ *     after COMMIT: a throwing callback is swallowed (see
+ *     `runAfterCommitCallbacks`) so one bad listener cannot roll back a
+ *     committed write or suppress the callbacks behind it.
+ *
+ * Realtime publication is best-effort by contract. `afterCommit` orders a push
+ * after the commit; it does not promise delivery.
  */
 export function afterCommit(db: SqlDatabase, fn: () => void): void {
   if (typeof db.afterCommit === "function") db.afterCommit(fn);
