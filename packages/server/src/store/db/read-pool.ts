@@ -216,7 +216,8 @@ const READ_HEADS = new Set(["SELECT", "VALUES", "TABLE", "WITH", "EXPLAIN", "SHO
  *
  * The list is grouped by purpose and is intentionally small: the pool serves
  * the conversation-log window, the SSR first paint and the Live Hub warm-up,
- * not arbitrary analytics.
+ * not arbitrary analytics. It currently holds 189 names; the parity test pins
+ * the size so the documented number cannot drift from the code.
  */
 export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
   // ── aggregates ──
@@ -272,7 +273,6 @@ export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
   "jsonb_object_keys",
   "json_object_keys",
   "jsonb_pretty",
-  "jsonb_build_object",
   // ── strings ──
   "lower",
   "upper",

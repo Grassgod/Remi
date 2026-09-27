@@ -333,7 +333,7 @@ describe("read pool: the function gate is a whitelist, not a denylist", () => {
     }
   });
 
-  it("keeps the whitelist free of the functions the previous gates missed", () => {
+  it("keeps the whitelist free of the functions the previous gates missed", async () => {
     // A guard on the list itself: if any of these were ever added, the pool
     // would be back to allowing a known side effect.
     for (const name of [
@@ -366,7 +366,18 @@ describe("read pool: the function gate is a whitelist, not a denylist", () => {
     }
     // And it is not empty in a way that would pass the check above vacuously.
     expect(READ_FUNCTION_WHITELIST.has("count")).toBe(true);
-    expect(READ_FUNCTION_WHITELIST.size).toBeGreaterThan(100);
+    // Pinned exactly, so the number in the module comment and the PR
+    // description cannot drift from the code. Adding a function is a deliberate
+    // edit here as well as there — which is the point, since every entry is a
+    // claim that the function has no side effect.
+    expect(READ_FUNCTION_WHITELIST.size).toBe(189);
+    // No duplicates: a name listed twice would mean the count overstates the
+    // whitelist's coverage.
+    const source = await Bun.file(
+      new URL("../../../packages/server/src/store/db/read-pool.ts", import.meta.url),
+    ).text();
+    const listed = source.match(/^\s{2}"[a-z0-9_]+",$/gmu) ?? [];
+    expect(new Set(listed).size).toBe(listed.length);
   });
 });
 
