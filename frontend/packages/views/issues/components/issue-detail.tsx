@@ -305,6 +305,7 @@ export function IssueDetail({
       issueSessions={sessions.list}
       usage={usage}
       canManageArchives={canModerateComments}
+      onCreateSubIssue={actions.openCreateSubIssue}
     />
   );
 
@@ -333,6 +334,7 @@ export function IssueDetail({
       onShowKeyResults={handleShowKeyResults}
       onScrollContainerRef={setScrollContainerEl}
       scrollContainerEl={scrollContainerEl}
+      canForceStart={!!user?.id}
     />
   );
 

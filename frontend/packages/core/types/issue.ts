@@ -47,6 +47,8 @@ export interface Issue {
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;
+  /** Unmet prerequisite keys on child-list responses. */
+  blocked_by?: string[];
   issue_kind?: "execution" | "intake";
   source_issue_id?: string | null;
   project_id: string | null;
@@ -63,6 +65,16 @@ export interface Issue {
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface IssueDependency {
+  id: string;
+  issue_id: string;
+  depends_on_issue_id: string;
+  direction: "blocked_by" | "blocks" | null;
+  issue: Issue | null;
+  depends_on_issue: Issue | null;
+  created_at: string;
 }
 
 export type IssueWorkspaceStatus = "preparing" | "ready" | "in_use" | "dirty" | "runtime_offline" | "cleaned" | "error";

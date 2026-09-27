@@ -35,6 +35,7 @@ export interface ZeroJumpFixture {
   memberId: string;
   userId: string;
   shortIssueId: string;
+  parentIssueId: string;
   longIssueId: string;
   longDefaultSessionId: string;
   longSessionIds: string[];
@@ -110,6 +111,18 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       body: `short comment ${i}`,
     });
   }
+
+  const parentIssue = store.createIssue({
+    id: "iss_zerojump_parent",
+    title: "Parent issue with four sub-issues",
+    description: "The child list belongs in the sidebar while this document stays still.",
+    status: "in_progress",
+  });
+  store.createIssue({ title: "Blocked child", status: "blocked", parentIssueId: parentIssue.id });
+  const waitingChild = store.createIssue({ title: "Waiting child", status: "backlog", parentIssueId: parentIssue.id });
+  const activeChild = store.createIssue({ title: "Active child", status: "in_progress", parentIssueId: parentIssue.id });
+  store.createIssue({ title: "Completed child", status: "done", parentIssueId: parentIssue.id });
+  store.createIssueDependency(waitingChild.id, { dependsOnIssueId: activeChild.id, type: "blocked_by" });
 
   // ── long issue: 250 comments over three sessions ──────────────────────────
   // Agents give the sessions distinct participants; the store joins comment
@@ -271,6 +284,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     memberId: member.id,
     userId: user.id,
     shortIssueId: shortIssue.id,
+    parentIssueId: parentIssue.id,
     longIssueId: longIssue.id,
     longDefaultSessionId: defaultSession.id,
     longSessionIds,

@@ -75,6 +75,8 @@ export const issueKeys = {
     [...issueKeys.workspacesAll(), issueId] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
+  dependencies: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "dependencies", id] as const,
   /** Prefix for invalidating all batched-children queries in a workspace. */
   childrenByParentsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "children-by-parents"] as const,
@@ -532,6 +534,13 @@ export function childIssuesOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.children(wsId, id),
     queryFn: () => api.listChildIssues(id).then((r) => r.issues),
+  });
+}
+
+export function issueDependenciesOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.dependencies(wsId, id),
+    queryFn: () => api.listIssueDependencies(id),
   });
 }
 

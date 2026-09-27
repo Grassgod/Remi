@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import {
   generatedIssuesOptions,
+  childIssuesOptions,
+  issueDependenciesOptions,
   issueDetailOptions,
   issueKeys,
 } from "@multiremi/core/issues/queries";
@@ -43,6 +45,7 @@ import { ChangeRequestList } from "./change-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
+import { IssueDependencyEditor } from "./issue-dependency-editor";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -62,6 +65,7 @@ interface IssueDetailSidebarProps {
   issueSessions: IssueSession[];
   usage: IssueUsageSummary | undefined;
   canManageArchives: boolean;
+  onCreateSubIssue: () => void;
 }
 
 /**
@@ -83,10 +87,15 @@ export function IssueDetailSidebar({
   issueSessions,
   usage,
   canManageArchives,
+  onCreateSubIssue,
 }: IssueDetailSidebarProps) {
   const { t } = useT("issues");
   const { t: tRuntime } = useT("runtimes");
   const paths = useWorkspacePaths();
+  const { data: childIssues = [] } = useQuery(childIssuesOptions(issue.workspace_id, issueId));
+  const openChildren = childIssues.filter((child) => child.status !== "done" && child.status !== "cancelled").length;
+  const { data: dependencies = [] } = useQuery(issueDependenciesOptions(issue.workspace_id, issueId));
+  const unmetPrerequisites = dependencies.filter((dependency) => dependency.direction === "blocked_by" && dependency.depends_on_issue?.status !== "done").length;
   const propertiesOpen = sections.isOpen("properties");
   const parentIssueOpen = sections.isOpen("parentIssue");
   const codeChangesOpen = sections.isOpen("codeChanges");
@@ -144,9 +153,21 @@ export function IssueDetailSidebar({
               )}
             </div>
           </PropRow>
+          <div className="col-start-2 h-[18px] truncate text-[11px] leading-[18px] text-muted-foreground" aria-live="polite">
+            {openChildren > 0
+              ? t(($) => $.detail.open_children, { count: openChildren })
+              : unmetPrerequisites > 0 && issue.status === "backlog"
+                ? t(($) => $.detail.unmet_prerequisites, { count: unmetPrerequisites })
+                : null}
+          </div>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={onUpdateField} align="start" />
           </PropRow>
+          {issue.parent_issue_id && (
+            <PropRow label={t(($) => $.detail.blocked_by)}>
+              <IssueDependencyEditor issue={issue} />
+            </PropRow>
+          )}
           <PropRow label={tRuntime($ => $.location.label)} interactive={tasks.length === 0}>
             <WorkLocationPicker wsId={issue.workspace_id} projectId={issue.project_id}
               value={issue.runtime_workspace_id ?? null} onChange={onUpdateField} disabled={tasks.length > 0} />
@@ -274,7 +295,7 @@ export function IssueDetailSidebar({
         </div>
       )}
 
-      <IssueSubIssuesSummary issueId={issueId} sections={sections} />
+      <IssueSubIssuesSummary issueId={issueId} sections={sections} onCreateSubIssue={onCreateSubIssue} getActorName={getActorName} />
 
       <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
 

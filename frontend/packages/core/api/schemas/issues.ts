@@ -26,6 +26,7 @@ export const IssueSchema = z.object({
   creator_type: z.string(),
   creator_id: z.string(),
   parent_issue_id: z.string().nullable(),
+  blocked_by: z.array(z.string()).optional(),
   issue_kind: z.enum(["execution", "intake"]).default("execution"),
   source_issue_id: z.string().nullable().default(null),
   project_id: z.string().nullable(),
@@ -79,6 +80,30 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
+}).loose();
+
+export const IssueDependencySchema = z.object({
+  id: z.string(),
+  issue_id: z.string(),
+  depends_on_issue_id: z.string(),
+  direction: z.enum(["blocked_by", "blocks"]).nullable(),
+  issue: IssueSchema.nullable(),
+  depends_on_issue: IssueSchema.nullable(),
+  created_at: z.string(),
+}).loose();
+
+export const IssueDependenciesResponseSchema = z.object({
+  dependencies: z.array(IssueDependencySchema),
+}).loose();
+
+export const IssueDependencyMutationSchema = z.object({
+  dependency: IssueDependencySchema,
+}).loose();
+
+export const IssueStatusHeldErrorSchema = z.object({
+  code: z.literal("issue_status_held"),
+  reason: z.enum(["children_open", "final_summary_missing"]),
+  open_children: z.number().int().nonnegative(),
 }).loose();
 
 const IssueWorkspaceRepoSchema = z.object({

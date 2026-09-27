@@ -2,6 +2,7 @@ import type {
   CreateIssueRequest,
   GroupedIssuesResponse,
   Issue,
+  IssueDependency,
   IssueRetitleResponse,
   IssueWorkspace,
   ListGroupedIssuesParams,
@@ -15,6 +16,8 @@ import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse, parseWithFallback } from "../schema";
 import {
   ChildIssuesResponseSchema,
+  IssueDependenciesResponseSchema,
+  IssueDependencyMutationSchema,
   EMPTY_ISSUE_RETITLE_RESPONSE,
   EMPTY_ISSUE_WORKSPACE_RESPONSE,
   EMPTY_GROUPED_ISSUES_RESPONSE,
@@ -201,6 +204,27 @@ export class IssuesEndpoints {
     return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
       endpoint: "GET /api/issues/:id/children",
     });
+  }
+
+  async listIssueDependencies(id: string): Promise<IssueDependency[]> {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/dependencies`);
+    return parseWithFallback(raw, IssueDependenciesResponseSchema, { dependencies: [] }, {
+      endpoint: "GET /api/issues/:id/dependencies",
+    }).dependencies;
+  }
+
+  async addIssueDependency(id: string, dependsOnIssueId: string): Promise<IssueDependency> {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/dependencies`, {
+      method: "POST",
+      body: JSON.stringify({ depends_on_issue_id: dependsOnIssueId, type: "blocked_by" }),
+    });
+    return parseStrictResponse<{ dependency: IssueDependency }>(raw, IssueDependencyMutationSchema, {
+      endpoint: "POST /api/issues/:id/dependencies",
+    }).dependency;
+  }
+
+  async removeIssueDependency(id: string, dependencyId: string): Promise<void> {
+    await this.http.fetch(`/api/issues/${id}/dependencies/${dependencyId}`, { method: "DELETE" });
   }
 
   /** Batched variant — returns children for multiple parents in one request.

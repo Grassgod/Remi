@@ -211,6 +211,7 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options): Scenario[] 
     },
   ];
   const scenarios: Scenario[] = [
+    ...(options.only.includes("detail-parent") ? detail("detail-parent", fixture.parentIssueId) : []),
     ...detail("detail-short", fixture.shortIssueId),
     ...detail("detail-long", fixture.longIssueId),
     ...detail("detail-running", fixture.runningIssueId),

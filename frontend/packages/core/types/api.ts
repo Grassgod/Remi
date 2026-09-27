@@ -17,6 +17,7 @@ export interface CreateIssueRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   parent_issue_id?: string;
+  blocked_by?: string[];
   project_id?: string | null;
   start_date?: string;
   due_date?: string;
@@ -28,6 +29,7 @@ export interface UpdateIssueRequest {
   title?: string;
   description?: string;
   status?: IssueStatus;
+  force?: boolean;
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;

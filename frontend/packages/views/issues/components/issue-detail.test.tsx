@@ -1409,7 +1409,7 @@ describe("IssueDetail (shared)", () => {
     expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe("issue-key-results");
   });
 
-  it("gives sub-issue selection localized, design-system checkboxes", async () => {
+  it("keeps the child list in the sidebar and out of the document scroll region", async () => {
     const child: Issue = {
       ...mockIssue,
       id: "issue-2",
@@ -1423,19 +1423,10 @@ describe("IssueDetail (shared)", () => {
     useIssueSelectionStore.getState().clear();
     renderIssueDetail();
 
-    // aria-labels route through t(), so a zh/ja/ko user doesn't get English
-    // accessible names, and both controls are the shadcn Checkbox.
-    const rowBox = await screen.findByRole("checkbox", { name: "Select TES-2" });
-    expect(screen.getByLabelText("Select all sub-issues")).toBeInTheDocument();
-    expect(rowBox).toHaveAttribute("data-slot", "checkbox");
-    expect(rowBox).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(rowBox);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("checkbox", { name: "Select TES-2" }),
-      ).toHaveAttribute("aria-checked", "true");
-    });
+    const childLink = (await screen.findByText("Add refresh tokens")).closest("a");
+    expect(childLink).toHaveAttribute("href", "/test/issues/issue-2");
+    expect(childLink!.closest("[data-tab-scroll-root]")).toBeNull();
+    expect(screen.getByText("0/1")).toBeInTheDocument();
     useIssueSelectionStore.getState().clear();
   });
 
