@@ -303,46 +303,51 @@ export class IssuesRepo {
    * The transaction is entered through `db.transaction`, so a caller that is
    * already inside one (Feishu ingest, messaging outcomes) keeps its own
    * transaction and the lock lives until that outer commit.
+   *
+   * MUL-400 S1: the realtime pushes this write produces are queued and published
+   * only after the OUTERMOST transaction commits (the queue rides the database's
+   * after-commit hook, see `emitCommitEvents`). The E1 parent re-derivation is
+   * replayed here rather than inside the transaction, for the same reason main
+   * keeps it out of the transaction: its replay opens transactions of its own.
    */
   createIssue(input: CreateIssueInput): MultiremiIssue {
-    // MUL-400 S1: the realtime pushes this write produces are queued and only
-    // published after COMMIT, the same way updateIssue does it. The insert and
-    // the number allocation must share one transaction (that is what the number
-    // lock protects), but a browser must never see an Issue that a later
-    // ROLLBACK can still erase.
     const deferredEvents = createCommitEventQueue();
-    const created = this.ctx.db.transaction(() =>
-      this.createIssueWithinTransaction(input, deferredEvents))();
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const issue = this.ctx.db.transaction(() =>
+      this.createIssueWithEvents(input, deferredEvents, childStatusChanges))();
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.tasks().runCollectedChildStatusChanges(created.childStatusChanges);
-    return created.issue;
+    return issue;
   }
 
   /**
-   * Caller owns the transaction that takes the number lock.
+   * Caller already holds the transaction (and, per the MUL-405 lock order, the
+   * workspace lifecycle row lock and this workspace's number lock).
    *
-   * Everything this returns must be published by the caller after COMMIT: the
-   * realtime events ride on `deferredEvents`, and the E1 parent re-derivation
-   * hops on `childStatusChanges` (its replay opens its own transactions, which
-   * must not start inside this one).
+   * Parented creation is refused here: the E1 re-derivation it triggers must be
+   * replayed after the caller commits, and the caller owns that boundary.
    */
-  private createIssueWithinTransaction(
+  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue {
+    if (input.parentIssueId ?? input.parent_issue_id) {
+      throw new Error("Parented issue creation requires post-commit status replay");
+    }
+    return this.createIssueWithEvents(input, deferredEvents, null);
+  }
+
+  private createIssueWithEvents(
     input: CreateIssueInput,
-    deferredEvents: CommitEventQueue,
-  ): { issue: MultiremiIssue; childStatusChanges: ChildStatusChangeCollector } {
-    const childStatusChanges: ChildStatusChangeCollector = [];
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges: ChildStatusChangeCollector | null = null,
+  ): MultiremiIssue {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
-    // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
-    // lifecycle row lock always precedes a number-allocation lock. Callers that
-    // already hold it (Feishu ingest, messaging outcomes, Autopilot create_issue)
-    // re-lock the same row in the same transaction, which is free; callers that
-    // do not (the plain API path) get the lock here instead of leaving the
-    // number lock first in the chain.
+    // Global lock order (MUL-405, see store/advisory-locks.ts): W then N, before
+    // any domain row lock. Callers that already took them (Feishu ingest,
+    // messaging outcomes, Autopilot create_issue) re-take the same locks for
+    // free inside their transaction; callers that did not (the plain API path)
+    // get them here. N is taken before the MAX(issue_number) read below.
     this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-    // Taken before any read this method depends on, so the maximum the INSERT
-    // uses cannot have been read by a peer that then inserts over it.
     advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
@@ -443,7 +448,10 @@ export class IssuesRepo {
     // replayed right away, once the insert above is committed.
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
-      if (parent) {
+      // The hops this produces are replayed by the owner of the transaction
+      // after it commits (see `createIssue`); running them here would open a
+      // nested transaction whose work a rollback could still erase.
+      if (parent && childStatusChanges) {
         this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
@@ -464,7 +472,7 @@ export class IssuesRepo {
       }
     }
     this.ctx.issueSessions().getOrCreateDefaultIssueSession(id, createdBy);
-    return { issue: this.getIssue(id)!, childStatusChanges };
+    return this.getIssue(id)!;
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -735,7 +743,8 @@ export class IssuesRepo {
   deleteIssue(id: string): boolean {
     const issue = this.getIssue(id);
     if (!issue) return false;
-    return this.ctx.db.transaction(() => {
+    const deferredEvents = createCommitEventQueue();
+    const deleted = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
       this.ctx.lockIssueArchiveLifecycle(id);
       const current = this.getIssue(id);
@@ -745,8 +754,10 @@ export class IssuesRepo {
         "UPDATE multiremi_issues SET lifecycle_state = 'deleting' WHERE id = ?",
         [id],
       );
-      return this.deleteIssueRowsWithinLifecycleLock(current);
+      return this.deleteIssueRowsWithinLifecycleLock(current, deferredEvents);
     })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return deleted;
   }
 
   /** Delete every fenced Issue in one control-plane transaction. */
@@ -756,7 +767,8 @@ export class IssuesRepo {
     const initial = uniqueIds
       .map((id) => this.getIssue(id))
       .filter((issue): issue is MultiremiIssue => Boolean(issue));
-    return this.ctx.db.transaction(() => {
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => {
       for (const workspaceId of [...new Set(initial.map((issue) => issue.workspaceId))].sort()) {
         this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       }
@@ -778,15 +790,17 @@ export class IssuesRepo {
       }
       let deleted = 0;
       for (const issue of current) {
-        if (this.deleteIssueRowsWithinLifecycleLock(issue)) deleted++;
+        if (this.deleteIssueRowsWithinLifecycleLock(issue, deferredEvents)) deleted++;
       }
       return { deleted };
     })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return result;
   }
 
-  private deleteIssueRowsWithinLifecycleLock(issue: MultiremiIssue): boolean {
+  private deleteIssueRowsWithinLifecycleLock(issue: MultiremiIssue, deferredEvents: CommitEventQueue): boolean {
     const id = issue.id;
-    this.cancelActiveIssueTasks(id, "issue_deleted");
+    this.cancelActiveIssueTasks(id, "issue_deleted", deferredEvents);
     this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'failed', completed_at = ?, failure_reason = ? WHERE issue_id = ? AND completed_at IS NULL", [
       nowIso(),
       "issue deleted",
@@ -1239,6 +1253,7 @@ export class IssuesRepo {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
+    const transactionEvents = createCommitEventQueue();
     const updated = this.ctx.db.transaction(() => {
       if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
         const initial = this.getIssue(id);
@@ -1328,7 +1343,7 @@ export class IssuesRepo {
       // skipped entirely, so nothing about the Issue moves.
       const holdParentStatus = options.holdParentStatus === true;
       if (holdParentStatus) {
-        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null);
+        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, transactionEvents);
       } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
         this.assertParentStatusAllowed(id, current, nextStatus, input);
       }
@@ -1392,7 +1407,7 @@ export class IssuesRepo {
           actorType: input.actorType ?? "system",
           actorId: input.actorId ?? null,
           parentTaskId: input.parentTaskId ?? input.parent_task_id,
-        });
+        }, transactionEvents);
       }
       const next = this.getIssue(id)!;
       this.linkReferencedAttachmentsToIssue(id, next.description);
@@ -1405,6 +1420,7 @@ export class IssuesRepo {
       });
       return next;
     })();
+    this.ctx.emitCommitEvents(transactionEvents);
     if (updated === previous) return { issue: updated, cancelledTasks };
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
@@ -1687,6 +1703,7 @@ export class IssuesRepo {
     issueId: string,
     requested: string,
     extra: Record<string, unknown> | null,
+    deferredEvents: CommitEventQueue,
   ): void {
     const openChildren = this.countOpenChildIssues(issueId);
     this.ctx.appendIssueActivity(issueId, {
@@ -1701,7 +1718,7 @@ export class IssuesRepo {
         status: "in_progress",
         ...(extra ?? {}),
       },
-    });
+    }, deferredEvents);
   }
 
   /**
@@ -2210,8 +2227,8 @@ export class IssuesRepo {
     actorType: string;
     actorId: string | null;
     parentTaskId?: string | null;
-  }): number {
-    const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned");
+  }, deferredEvents: CommitEventQueue): number {
+    const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned", deferredEvents);
     this.ctx.db.run(
       "UPDATE multiremi_issues SET assignee_type = NULL, assignee_id = NULL, updated_at = ? WHERE id = ?",
       [nowIso(), id],
@@ -2222,7 +2239,7 @@ export class IssuesRepo {
       type: "issue_unassigned",
       body: null,
       data: { cancelled, ...sourceTaskActivityData(input.parentTaskId) },
-    });
+    }, deferredEvents);
     return cancelled;
   }
 
@@ -2239,11 +2256,13 @@ export class IssuesRepo {
       throw new Error("Assignee id is required when assignee type is provided");
     }
     if (!requestedAssigneeType && !requestedAssigneeId) {
+      const deferredEvents = createCommitEventQueue();
       const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
         parentTaskId: input.parentTaskId ?? input.parent_task_id,
-      }))();
+      }, deferredEvents))();
+      this.ctx.emitCommitEvents(deferredEvents);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
     }
 
@@ -2257,7 +2276,9 @@ export class IssuesRepo {
     if (assigneeType !== "member" && !taskAgent) {
       throw new Error(`No runnable agent for ${assigneeType}: ${assigneeId}`);
     }
-    const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned");
+    const deferredEvents = createCommitEventQueue();
+    const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
+    this.ctx.emitCommitEvents(deferredEvents);
     this.ctx.db.run(
       `UPDATE multiremi_issues
        SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
@@ -3801,7 +3822,7 @@ export class IssuesRepo {
     }
   }
 
-  private cancelActiveIssueTasks(issueId: string, reason: string): number {
+  private cancelActiveIssueTasks(issueId: string, reason: string, deferredEvents: CommitEventQueue): number {
     const active = this.ctx.db.query(
       "SELECT * FROM multiremi_tasks WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
     ).all(issueId) as Row[];
@@ -3820,7 +3841,7 @@ export class IssuesRepo {
         type: "task_cancelled",
         body: reason,
         data: { taskId: String(row.id), agentId: nullableString(row.agent_id) },
-      });
+      }, deferredEvents);
     }
     return active.length;
   }
