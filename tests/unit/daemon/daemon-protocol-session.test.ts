@@ -27,6 +27,7 @@ import { ManualDaemonProtocolClock } from "../../../packages/server/src/api/daem
 import {
   DaemonProtocolSession,
   type DaemonProtocolSocket,
+  type DaemonSessionHeartbeat,
   type DaemonSessionRuntimeAuthorization,
 } from "../../../packages/server/src/api/daemon-protocol/session.js";
 import type { WsFrameSample } from "../../../packages/server/src/api/daemon-protocol/metrics.js";
@@ -100,7 +101,7 @@ function harness(options: {
     serverVersion: "0.2.83",
     clock,
     authorizeRuntime: async (daemonId, runtimeId) =>
-      options.authorize?.(daemonId, runtimeId) ?? { runtimeId, ok: true },
+      options.authorize?.(daemonId, runtimeId) ?? { runtimeId, ok: true, scope: "daemon" },
     traceHeads: options.traceHeads,
     onFrame: (sample) => frames.push(sample),
     onRpc: (frame) => {
@@ -226,6 +227,7 @@ describe("MUL-417 daemon protocol session — terminal authorization failures", 
       authorize: (daemonId, runtimeId) => ({
         runtimeId,
         ok: false,
+        scope: "daemon",
         status: 401,
         code: "authority_revoked",
         message: "credential revoked",
@@ -242,6 +244,7 @@ describe("MUL-417 daemon protocol session — terminal authorization failures", 
       authorize: (daemonId, runtimeId) => ({
         runtimeId,
         ok: false,
+        scope: "daemon",
         status: 403,
         code: "daemon_identity_forbidden",
         message: "daemon token may only serve its own runtimes",
@@ -256,6 +259,7 @@ describe("MUL-417 daemon protocol session — terminal authorization failures", 
       authorize: (daemonId, runtimeId) => ({
         runtimeId,
         ok: false,
+        scope: "daemon",
         status: 410,
         code: "daemon_retired",
         message: "daemon has been retired",
@@ -267,7 +271,7 @@ describe("MUL-417 daemon protocol session — terminal authorization failures", 
 
   it("does not leak negotiated limits to a credential it is about to refuse", async () => {
     const h = harness({
-      authorize: (daemonId, runtimeId) => ({ runtimeId, ok: false, status: 403, code: "x" }),
+      authorize: (daemonId, runtimeId) => ({ runtimeId, ok: false, scope: "daemon", status: 403, code: "x" }),
     });
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload() }));
     expect(h.socket.sent.map((frame) => frame.t)).toEqual([]);
@@ -499,7 +503,7 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
       registry: first.registry,
       serverVersion: "0.2.83",
       clock: second.clock,
-      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true }),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
     });
     await session2.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload() }));
 
@@ -520,7 +524,7 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
       registry: first.registry,
       serverVersion: "0.2.83",
       clock: second.clock,
-      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true }),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
     });
     await session2.handleMessage(JSON.stringify({
       v: 2,
@@ -545,7 +549,7 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
       registry,
       serverVersion: "0.2.83",
       clock: second.clock,
-      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true }),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
     });
     await session2.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload() }));
 
@@ -566,7 +570,7 @@ describe("MUL-417 daemon protocol session — registry replacement", () => {
 
 describe("MUL-417 daemon protocol session — heartbeat and serialization", () => {
   it("reports every advertised runtime on hb and records the drain ack", async () => {
-    const heartbeats: Array<{ daemonId: string; runtimeIds: string[]; payload: Record<string, unknown> }> = [];
+    const heartbeats: Array<DaemonSessionHeartbeat> = [];
     const socket = new FakeDaemonSocket();
     const registry = new DaemonSessionRegistry();
     const clock = new ManualDaemonProtocolClock();
@@ -576,7 +580,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       registry,
       serverVersion: "0.2.83",
       clock,
-      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true }),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
       onHeartbeat: (heartbeat) => heartbeats.push(heartbeat),
     });
     await session.handleMessage(JSON.stringify({
@@ -601,6 +605,8 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
     expect(heartbeats).toEqual([{
       daemonId: "dmn_test",
       runtimeIds: ["rt_one", "rt_two"],
+      unavailableRuntimeIds: [],
+      advertisedRuntimeIds: ["rt_one", "rt_two"],
       payload: { active_task_count: 1, drain_ack_generation: 3 },
     }]);
   });
@@ -616,7 +622,7 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
       registry,
       serverVersion: "0.2.83",
       clock,
-      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true }),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
       onRpc: async (frame) => {
         // The first frame yields for longer than the second; serialization is
         // what keeps them from interleaving.

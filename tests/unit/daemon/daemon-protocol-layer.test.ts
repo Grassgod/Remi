@@ -17,7 +17,10 @@ import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { DAEMON_PROTOCOL_CLOSE_CODES } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolLayer } from "../../../packages/server/src/api/daemon-protocol/index.js";
-import { DaemonProtocolSession } from "../../../packages/server/src/api/daemon-protocol/session.js";
+import {
+  DaemonProtocolSession,
+  type DaemonSessionHeartbeat,
+} from "../../../packages/server/src/api/daemon-protocol/session.js";
 import { DaemonSessionRegistry } from "../../../packages/server/src/api/daemon-protocol/session-registry.js";
 import { ManualDaemonProtocolClock } from "../../../packages/server/src/api/daemon-protocol/clock.js";
 import type { DaemonProtocolSocket } from "../../../packages/server/src/api/daemon-protocol/session.js";
@@ -78,6 +81,7 @@ async function runHello(
     ownerAccessToken: hello.accessToken as never,
     authorizeRuntime: (daemonId, runtimeId) =>
       layer.authorizeRuntimeForTest({ accessToken: hello.accessToken as never, masterToken: hello.masterToken ?? false }, daemonId, runtimeId),
+    onHeartbeat: (heartbeat) => layer.handleHeartbeatForTest(heartbeat),
   });
   await session.handleMessage(JSON.stringify({
     v: 2,
@@ -98,6 +102,25 @@ async function runHello(
     },
   }));
   return { socket, session };
+}
+
+/**
+ * Build the heartbeat hook's argument the way a live session does: `runtimeIds`
+ * is what the session serves, `advertisedRuntimeIds` is everything the `hello`
+ * named. A case that cares about split lists passes `unavailable`.
+ */
+function heartbeat(
+  served: string[],
+  options: { unavailable?: string[]; payload: DaemonSessionHeartbeat["payload"] },
+): DaemonSessionHeartbeat {
+  const unavailable = options.unavailable ?? [];
+  return {
+    daemonId: "dmn_a",
+    runtimeIds: served,
+    unavailableRuntimeIds: unavailable,
+    advertisedRuntimeIds: [...served, ...unavailable],
+    payload: options.payload,
+  };
 }
 
 describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
@@ -127,13 +150,35 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
     expect(layer.registry.size).toBe(0);
   });
 
-  it("closes 4403 when the daemon advertises a runtime nobody registered", async () => {
+  it("does not close the socket when the daemon advertises a runtime nobody registered", async () => {
     const { store } = fixture();
     const token = await store.createAccessToken({
       name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
     });
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
-    const { socket } = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_missing"], accessToken: token });
+    const { socket, session } = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_missing"], accessToken: token });
+    // A stale id in the hello (a runtime row deleted while the daemon was
+    // disconnected) must not be terminal: the daemon's recovery is to register it
+    // again, and closing would stop that forever.
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(socket.closed).toEqual([]);
+    expect(session.runtimeIds).toEqual([]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_missing"]);
+  });
+
+  it("closes 4403 when the daemon advertises a runtime in another workspace", async () => {
+    const { store } = fixture();
+    store.createWorkspace({ id: "ws_other", name: "Other", slug: "other" });
+    store.registerRuntime({ id: "rt_elsewhere", name: "elsewhere", provider: "codex", daemonId: "dmn_a", workspaceId: "ws_other" });
+    const token = await store.createAccessToken({
+      name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
+    });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const { socket } = await runHello(layer, { daemonId: "dmn_a", runtimeIds: ["rt_elsewhere"], accessToken: token });
+    // A workspace mismatch is a daemon-level fact: the credential is scoped to a
+    // workspace this runtime is not in, so no reconnect changes the answer.
+    expect(socket.lastOfType("welcome")).toBeNull();
     expect(socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.forbidden);
   });
 
@@ -207,6 +252,140 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
   });
 });
 
+describe("MUL-417 daemon protocol layer — handshake excludes a runtime without closing", () => {
+  /**
+   * The exact scenario from the review: a daemon was disconnected while a runtime
+   * row was deleted (a deploy, a cleanup). It reconnects advertising the old id.
+   * v1 answered 404 and the daemon registered it again; a v2 close code would be
+   * terminal and would strand every other runtime on the machine.
+   */
+  it("welcomes [rt_ok, rt_missing], keeps serving rt_ok, and reports rt_missing as runtime_gone", async () => {
+    const { store } = fixture();
+    store.registerRuntime({ id: "rt_ok", name: "ok", provider: "codex", daemonId: "dmn_a", workspaceId: "local" });
+    const token = await store.createAccessToken({
+      name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
+    });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const socket = new RecordingSocket();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_mixed",
+      socket,
+      registry: layer.registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      ownerAccessToken: token,
+      authorizeRuntime: (daemonId, runtimeId) =>
+        layer.authorizeRuntimeForTest({ accessToken: token, masterToken: false }, daemonId, runtimeId),
+      onHeartbeat: (heartbeat) => layer.handleHeartbeatForTest(heartbeat),
+    });
+    await session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1,
+      p: {
+        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        runtimes: [
+          { runtime_id: "rt_ok", provider: "codex", max_concurrency: 1, active_task_ids: [] },
+          { runtime_id: "rt_missing", provider: "codex", max_concurrency: 1, active_task_ids: [] },
+        ],
+        caps: [],
+      },
+    }));
+
+    // 1. `welcome` arrived and nothing was closed.
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(socket.closed).toEqual([]);
+    // Only the served runtime is registered; the missing one is never indexed.
+    expect(session.runtimeIds).toEqual(["rt_ok"]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_missing"]);
+    expect(layer.registry.daemonIdForRuntime("rt_ok")).toBe("dmn_a");
+    expect(layer.registry.daemonIdForRuntime("rt_missing")).toBeNull();
+
+    // 2. rt_ok still receives offers and can be acknowledged.
+    const seq = session.sendEvent({ t: "task.offer", rt: "rt_ok", p: { task_id: "t1" } });
+    expect(seq).toBe(1);
+    await session.handleMessage(JSON.stringify({ v: 2, t: "ack", ts: 2, p: { ack: 1 } }));
+    expect(session.unacknowledgedFrameCount).toBe(0);
+
+    // 3. the first heartbeat reports rt_missing as runtime_gone, in hello order.
+    await session.handleMessage(JSON.stringify({ v: 2, t: "hb", id: "hb-1", ts: 3, p: { active_task_count: 0 } }));
+    const reply = socket.lastOfType("res")!;
+    const acks = (reply.p as { runtime_acks: Array<Record<string, unknown>> }).runtime_acks;
+    expect(acks.map((ack) => ack.runtime_id)).toEqual(["rt_ok", "rt_missing"]);
+    expect(acks[0]).toMatchObject({ status: "ok" });
+    expect(acks[1]).toMatchObject({ status: "runtime_gone", runtime_gone: true });
+    expect(session.isClosed).toBe(false);
+  });
+
+  it("welcomes a hello whose every runtime is unavailable without closing", async () => {
+    const { store } = fixture();
+    const token = await store.createAccessToken({
+      name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
+    });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const { socket, session } = await runHello(layer, {
+      daemonId: "dmn_a",
+      runtimeIds: ["rt_missing_one", "rt_missing_two"],
+      accessToken: token,
+    });
+    // Even with nothing to serve, the connection stays up: the daemon needs it to
+    // hear that its runtimes are gone and to register them again (A-2).
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(socket.closed).toEqual([]);
+    expect(session.runtimeIds).toEqual([]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_missing_one", "rt_missing_two"]);
+    expect(layer.registry.get("dmn_a")).toBe(session);
+  });
+
+  it("reports a runtime owned by another daemon as runtime_gone and leaves its row untouched", async () => {
+    const { store } = fixture();
+    // A runtime that belongs to daemon B, registered in the same workspace.
+    store.registerRuntime({ id: "rt_b", name: "B's runtime", provider: "codex", daemonId: "dmn_b", workspaceId: "local" });
+    const before = store.getRuntime("rt_b")!.lastHeartbeatAt;
+    const token = await store.createAccessToken({
+      name: "daemon a", type: "daemon", workspaceId: "local", daemonId: "dmn_a", userId: "owner-1",
+    });
+    const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
+    const socket = new RecordingSocket();
+    const session = new DaemonProtocolSession({
+      sessionId: "dws_foreign",
+      socket,
+      registry: layer.registry,
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      ownerAccessToken: token,
+      authorizeRuntime: (daemonId, runtimeId) =>
+        layer.authorizeRuntimeForTest({ accessToken: token, masterToken: false }, daemonId, runtimeId),
+      onHeartbeat: (heartbeat) => layer.handleHeartbeatForTest(heartbeat),
+    });
+    await session.handleMessage(JSON.stringify({
+      v: 2, t: "hello", ts: 1,
+      p: {
+        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        runtimes: [{ runtime_id: "rt_b", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
+        caps: [],
+      },
+    }));
+
+    // "Not allowed" is reported as "does not exist", matching the v1 upgrade's
+    // hideForbiddenAsNotFound, so a daemon cannot probe other machines' runtimes.
+    expect(socket.lastOfType("welcome")).not.toBeNull();
+    expect(session.isClosed).toBe(false);
+    expect(session.runtimeIds).toEqual([]);
+    expect(session.unavailableRuntimeIds).toEqual(["rt_b"]);
+
+    await session.handleMessage(JSON.stringify({ v: 2, t: "hb", id: "hb-1", ts: 2, p: { active_task_count: 0 } }));
+    const acks = (socket.lastOfType("res")!.p as { runtime_acks: Array<Record<string, unknown>> }).runtime_acks;
+    expect(acks).toEqual([{ runtime_id: "rt_b", status: "runtime_gone", runtime_gone: true }]);
+
+    // The other daemon's row is not stamped by this heartbeat: daemon A must not
+    // be able to make daemon B's runtime look alive.
+    expect(store.getRuntime("rt_b")!.lastHeartbeatAt).toBe(before);
+    // And the registry still does not route rt_b to this session.
+    expect(layer.registry.daemonIdForRuntime("rt_b")).toBeNull();
+  });
+});
+
 describe("MUL-417 daemon protocol layer — heartbeat effects", () => {
   it("stamps every advertised runtime and records the drain acknowledgement", async () => {
     const { store } = fixture();
@@ -214,11 +393,9 @@ describe("MUL-417 daemon protocol layer — heartbeat effects", () => {
     store.registerRuntime({ id: "rt_two", name: "two", provider: "claude", daemonId: "dmn_a", workspaceId: "local" });
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
 
-    layer.handleHeartbeatForTest({
-      daemonId: "dmn_a",
-      runtimeIds: ["rt_one", "rt_two"],
+    layer.handleHeartbeatForTest(heartbeat(["rt_one", "rt_two"], {
       payload: { active_task_count: 3, drain_ack_generation: 4 },
-    });
+    }));
 
     expect(store.getRuntime("rt_one")?.lastHeartbeatAt).not.toBeNull();
     expect(store.getRuntime("rt_two")?.lastHeartbeatAt).not.toBeNull();
@@ -233,18 +410,16 @@ describe("MUL-417 daemon protocol layer — heartbeat effects", () => {
     const { store } = fixture();
     store.registerRuntime({ id: "rt_one", name: "one", provider: "codex", daemonId: "dmn_a", workspaceId: "local" });
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
-    layer.handleHeartbeatForTest({ daemonId: "dmn_a", runtimeIds: ["rt_one"], payload: { active_task_count: 0 } });
+    layer.handleHeartbeatForTest(heartbeat(["rt_one"], { payload: { active_task_count: 0 } }));
     expect(store.getRuntime("rt_one")?.lastHeartbeatAt).not.toBeNull();
   });
 
   it("reports a runtime that vanished as runtime_gone instead of throwing", () => {
     const { store } = fixture();
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
-    const reply = layer.handleHeartbeatForTest({
-      daemonId: "dmn_a",
-      runtimeIds: ["rt_gone"],
+    const reply = layer.handleHeartbeatForTest(heartbeat(["rt_gone"], {
       payload: { active_task_count: 0, drain_ack_generation: 1 },
-    });
+    }));
     expect(reply.runtime_acks).toEqual([{
       runtime_id: "rt_gone",
       status: "runtime_gone",
@@ -257,11 +432,9 @@ describe("MUL-417 daemon protocol layer — heartbeat effects", () => {
     store.registerRuntime({ id: "rt_one", name: "one", provider: "codex", daemonId: "dmn_a", workspaceId: "local" });
     store.registerRuntime({ id: "rt_three", name: "three", provider: "codex", daemonId: "dmn_a", workspaceId: "local" });
     const layer = new DaemonProtocolLayer({ store, serverVersion: "0.2.83" });
-    const reply = layer.handleHeartbeatForTest({
-      daemonId: "dmn_a",
-      runtimeIds: ["rt_one", "rt_two", "rt_three"],
+    const reply = layer.handleHeartbeatForTest(heartbeat(["rt_one", "rt_two", "rt_three"], {
       payload: { active_task_count: 0 },
-    });
+    }));
     // One ack per advertised runtime, in the advertised order: the daemon pairs
     // them positionally as well as by id.
     expect(reply.runtime_acks.map((ack) => ack.runtime_id)).toEqual(["rt_one", "rt_two", "rt_three"]);

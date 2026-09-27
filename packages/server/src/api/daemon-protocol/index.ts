@@ -253,11 +253,20 @@ export class DaemonProtocolLayer {
    * Per-runtime authorization, reusing the rules `authorizeDaemonWebSocketRequest`
    * applies to a v1 socket's runtime list.
    *
-   * Order matters and mirrors the HTTP guard: identity (is this a daemon token
-   * bound to this daemon?) before workspace before membership. That order is what
-   * makes the close code meaningful - 4403 means "this credential never had the
-   * scope", 4401 means "it had it and no longer does", 4410 means "the machine is
-   * retired".
+   * Two kinds of answer come out of here, and the difference is the important
+   * part:
+   *
+   *   - **daemon-level** (`scope: "daemon"`): retired, bad credential, wrong
+   *     workspace, owner no longer a member. The session closes with the terminal
+   *     code the HTTP path would have answered with.
+   *   - **runtime-level** (`scope: "runtime"`): the runtime's row is gone, or it
+   *     belongs to another daemon. v1 answered 404 for both (`runtime not found`),
+   *     and 404 is not terminal - the session keeps serving the daemon's other
+   *     runtimes and reports this one as `runtime_gone` on the next heartbeat.
+   *
+   * The daemon-level checks run first and key on the credential's workspace, not
+   * the runtime's: retirement and membership are facts about the daemon named by
+   * the token, so a runtime hint must not be able to redirect them.
    */
   private async authorizeRuntime(
     identity: DaemonProtocolIdentity,
@@ -268,25 +277,74 @@ export class DaemonProtocolLayer {
     const token = identity.accessToken;
     const runtime = this.store.getRuntimeLite(runtimeId);
 
+    // ── daemon-level facts: the connection itself is not usable ──────────────
     // A retired daemon must stop reconnecting, whatever else is true about it.
-    const workspaceId = runtime?.workspaceId ?? token?.workspaceId ?? "local";
-    if (sessionDaemonId && this.store.isDaemonRetired(workspaceId, sessionDaemonId)) {
+    const daemonWorkspaceId = token?.workspaceId ?? runtime?.workspaceId ?? "local";
+    if (sessionDaemonId && this.store.isDaemonRetired(daemonWorkspaceId, sessionDaemonId)) {
       return {
         runtimeId,
         ok: false,
+        scope: "daemon",
         status: 410,
         code: "daemon_retired",
         message: "daemon has been retired",
       };
     }
 
+    if (token?.type === "daemon") {
+      // The `hello` must claim the identity the credential actually holds. Without
+      // this, a token for daemon B could open a session claiming daemon A, evict
+      // A's live connection through the registry's replacement rule, and hold the
+      // slot while being unable to serve any of A's runtimes.
+      const claimedDaemonId = sessionDaemonId?.trim();
+      const tokenDaemonId = token.daemonId?.trim();
+      if (!claimedDaemonId || !tokenDaemonId || claimedDaemonId !== tokenDaemonId) {
+        return {
+          runtimeId,
+          ok: false,
+          scope: "daemon",
+          status: 403,
+          code: "daemon_identity_forbidden",
+          message: "hello daemon_id does not match the credential's daemon identity",
+        };
+      }
+      // Membership is re-read rather than trusted from the upgrade: a credential
+      // can survive its owner's removal from the workspace, and the terminal close
+      // code exists so the daemon stops reconnecting instead of retrying forever.
+      if (!isOwnerStillMember(this.store, token)) {
+        return {
+          runtimeId,
+          ok: false,
+          scope: "daemon",
+          status: 401,
+          code: "daemon_owner_membership_required",
+          message: "daemon owner is no longer a workspace member",
+        };
+      }
+      // The credential is scoped to one workspace. A runtime in another is not
+      // this daemon's runtime, and no reconnect will change that.
+      if (runtime && (runtime.workspaceId ?? "local") !== token.workspaceId) {
+        return {
+          runtimeId,
+          ok: false,
+          scope: "daemon",
+          status: 403,
+          code: "daemon_token_required",
+          message: "forbidden for daemon token workspace",
+        };
+      }
+    }
+
+    // ── runtime-level facts: exclude this runtime, keep the socket ────────────
     if (!runtime) {
-      // A daemon advertising a runtime nobody registered is a scope problem, not
-      // an authority problem: retrying with the same credential cannot help.
+      // A daemon reconnecting after its runtime row was deleted still advertises
+      // the old id. The daemon's recovery is to register it again, which it
+      // cannot do if the socket is closed terminally.
       return {
         runtimeId,
         ok: false,
-        status: 403,
+        scope: "runtime",
+        status: 404,
         code: "runtime_not_found",
         message: `runtime ${runtimeId} is not registered`,
       };
@@ -296,46 +354,31 @@ export class DaemonProtocolLayer {
       const tokenDaemonId = token.daemonId?.trim();
       const runtimeDaemonId = runtime.daemonId?.trim();
       if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
+        // "Not allowed" is reported as "does not exist", matching the v1 upgrade's
+        // `hideForbiddenAsNotFound`. A daemon must not be able to probe which
+        // runtime ids exist on other machines, and the answer it needs is the same
+        // either way: this runtime is not mine, stop serving it.
         return {
           runtimeId,
           ok: false,
-          status: 403,
-          code: "daemon_identity_forbidden",
-          message: "daemon token may only serve its own runtimes",
+          scope: "runtime",
+          status: 404,
+          code: "runtime_not_found",
+          message: `runtime ${runtimeId} is not registered`,
         };
       }
-      if ((runtime.workspaceId ?? "local") !== token.workspaceId) {
-        return {
-          runtimeId,
-          ok: false,
-          status: 403,
-          code: "daemon_token_required",
-          message: "forbidden for daemon token workspace",
-        };
-      }
-      // Membership is re-read here rather than trusted from the upgrade: a
-      // credential can survive its owner's removal from the workspace, and the
-      // terminal close code exists exactly so the daemon stops reconnecting.
-      if (!isOwnerStillMember(this.store, token)) {
-        return {
-          runtimeId,
-          ok: false,
-          status: 403,
-          code: "daemon_owner_membership_required",
-          message: "daemon owner is no longer a workspace member",
-        };
-      }
-      return { runtimeId, ok: true };
+      return { runtimeId, ok: true, scope: "runtime" };
     }
 
     // Master credential or auth-disabled open mode: the historical daemon
     // credential, kept working exactly as the HTTP path keeps it.
-    if (identity.masterToken || !token) return { runtimeId, ok: true };
+    if (identity.masterToken || !token) return { runtimeId, ok: true, scope: "daemon" };
     // Unreachable through `resolveIdentity` (it refuses non-daemon tokens), kept
     // as the fail-closed default so a future caller cannot widen the surface.
     return {
       runtimeId,
       ok: false,
+      scope: "daemon",
       status: 403,
       code: "daemon_token_required",
       message: "daemon token required",
@@ -345,9 +388,13 @@ export class DaemonProtocolLayer {
   /**
    * `hb`: liveness plus the drain acknowledgement, and nothing else.
    *
-   * A live process-level socket proves every runtime it advertises is reachable,
-   * so the heartbeat stamps all of them; the drain acknowledgement is recorded
-   * per runtime because the drain gate scores runtimes, not daemons.
+   * A live process-level socket proves every runtime it serves is reachable, so
+   * every *served* runtime is stamped; the drain acknowledgement is recorded per
+   * runtime because the drain gate scores runtimes, not daemons.
+   *
+   * Runtimes the handshake excluded are reported - and only reported. Their rows
+   * are never written: one of them may belong to a different daemon, and stamping
+   * it would make this machine look alive for a runtime it does not own.
    */
   private handleHeartbeat(heartbeat: DaemonSessionHeartbeat): DaemonHeartbeatReplyPayload {
     // Membership is re-checked here, not only at the handshake: a credential can
@@ -362,27 +409,41 @@ export class DaemonProtocolLayer {
 
     const ackGeneration = readNonNegativeInteger(heartbeat.payload.drain_ack_generation);
     const activeTaskCount = readNonNegativeInteger(heartbeat.payload.active_task_count);
-    const runtimeAcks: MultiremiDaemonHeartbeatAck[] = [];
+
+    // Keyed by runtime id so the reply can be assembled in the order the `hello`
+    // advertised, which is the order the daemon reads it in.
+    const acksByRuntime = new Map<string, MultiremiDaemonHeartbeatAck>();
     for (const runtimeId of heartbeat.runtimeIds) {
-      // One live process-level socket proves every runtime it advertises is
-      // reachable, so the heartbeat stamps all of them. `claimPending: false`
-      // because the v2 server does not sweep the pending families on a heartbeat
-      // (MUL-389's merged poll): those become pushes in A-4.
+      // `claimPending: false` because the v2 server does not sweep the pending
+      // families on a heartbeat (MUL-389's merged poll): those become pushes in A-4.
       const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false });
-      // A runtime whose row is gone is reported, not acted on. The socket serves
-      // the whole process, so closing it over one runtime would strand the others;
-      // 4410 would stop the daemon reconnecting forever and 4001 would loop.
-      // `runtime_gone` is the daemon's existing signal to register again.
       if (ack.status === "runtime_gone") {
-        runtimeAcks.push(ack);
+        // The row vanished between the handshake and now. Same report as a
+        // handshake-time exclusion: tell the daemon, do not close the socket, and
+        // do not resurrect the row - the daemon registers it again, or does not.
+        acksByRuntime.set(runtimeId, ack);
         continue;
       }
       if (ackGeneration !== null) {
         this.store.recordRuntimeDrainAck(runtimeId, ackGeneration, activeTaskCount);
       }
-      runtimeAcks.push(ack);
+      acksByRuntime.set(runtimeId, ack);
     }
-    return { runtime_acks: runtimeAcks };
+
+    // Runtimes the handshake excluded are answered `runtime_gone` from here, with
+    // no store write at all. The shape is A-0's `MultiremiDaemonHeartbeatAck`
+    // unchanged - membership in this list is the only difference from a served
+    // runtime, and a new status value would have changed the v1/v2 shared type.
+    for (const runtimeId of heartbeat.unavailableRuntimeIds) {
+      acksByRuntime.set(runtimeId, { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true });
+    }
+
+    const advertised = heartbeat.advertisedRuntimeIds.length
+      ? heartbeat.advertisedRuntimeIds
+      : [...heartbeat.runtimeIds, ...heartbeat.unavailableRuntimeIds];
+    return { runtime_acks: advertised.map((runtimeId) => (
+      acksByRuntime.get(runtimeId) ?? { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true }
+    )) };
   }
 
   /**

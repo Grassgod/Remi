@@ -194,6 +194,63 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
     }
   });
 
+  it("welcomes [rt_ok, rt_missing] over a real socket and reports the missing one as runtime_gone", async () => {
+    // The end-to-end form of the review's case: the handshake path in `server.ts`
+    // must not have a second place that turns a runtime-level fact into a close.
+    const { store, token } = await daemonFixture();
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
+      { headers: { Authorization: `Bearer ${token.token}` } } as never,
+    );
+    try {
+      await waitWebSocketOpen(socket);
+      socket.send(JSON.stringify({
+        v: DAEMON_PROTOCOL_VERSION,
+        t: "hello",
+        ts: Date.now(),
+        p: {
+          protocol: DAEMON_PROTOCOL_VERSION,
+          daemon_id: "dmn_v2",
+          cli_version: "0.2.83",
+          launched_by: null,
+          runtimes: [
+            { runtime_id: "rt_v2", provider: "codex", max_concurrency: 1, active_task_ids: [] },
+            { runtime_id: "rt_deleted_while_offline", provider: "codex", max_concurrency: 1, active_task_ids: [] },
+          ],
+          caps: [],
+        },
+      }));
+
+      expect(await nextWebSocketMessage(socket)).toMatchObject({ t: "welcome" });
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+
+      socket.send(JSON.stringify({
+        v: DAEMON_PROTOCOL_VERSION,
+        t: "hb",
+        id: "hb-1",
+        ts: Date.now(),
+        p: { active_task_count: 0, drain_ack_generation: 0 },
+      }));
+      const reply = await nextWebSocketMessage(socket);
+      expect(reply).toMatchObject({
+        t: "res",
+        re: "hb-1",
+        p: {
+          runtime_acks: [
+            { runtime_id: "rt_v2", status: "ok" },
+            { runtime_id: "rt_deleted_while_offline", status: "runtime_gone", runtime_gone: true },
+          ],
+        },
+      });
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+      expect(store.getRuntime("rt_v2")?.lastHeartbeatAt).not.toBeNull();
+    } finally {
+      socket.close();
+      server.stop(true);
+    }
+  });
+
   it("closes 4410 when a retired daemon completes a hello", async () => {
     // Retirement revokes that daemon's tokens, so the credential route answers
     // 401 before `hello` is ever read. The deployment master credential survives

@@ -85,10 +85,26 @@ export interface DaemonProtocolSocket {
   readonly bufferedAmount?: number;
 }
 
-/** Per-runtime authorization, produced by the caller before `welcome` is sent. */
+/**
+ * Per-runtime authorization, produced by the caller before `welcome` is sent.
+ *
+ * `scope` is what decides the consequence, and it is required rather than
+ * inferred from the status so every branch has to state its intent:
+ *
+ *   - `"daemon"` - a fact about the whole connection (retired, invalid
+ *     credential, wrong workspace, owner no longer a member). The session closes.
+ *   - `"runtime"` - a fact about one runtime out of the many this socket serves
+ *     (its row is gone, or it belongs to another daemon). The session keeps the
+ *     connection, drops that runtime from what it serves, and reports it as
+ *     `runtime_gone` on the next heartbeat so the daemon can register it again.
+ *
+ * The distinction is the whole reason a daemon-level socket can be safe: closing
+ * on a runtime-level fact would strand every healthy runtime on the machine.
+ */
 export interface DaemonSessionRuntimeAuthorization {
   runtimeId: string;
   ok: boolean;
+  scope: "daemon" | "runtime";
   /** HTTP-shaped status the guard answered with; drives the terminal close code. */
   status?: number;
   code?: string | null;
@@ -110,7 +126,20 @@ export interface DaemonSessionHello {
 
 export interface DaemonSessionHeartbeat {
   daemonId: string;
+  /** Runtimes this session serves. Only these may be dispatched to or stamped. */
   runtimeIds: string[];
+  /**
+   * Runtimes the `hello` advertised that this session does NOT serve, in the
+   * order they were advertised. Reported back as `runtime_gone`; the session must
+   * never touch their rows, because one of them may belong to another daemon.
+   */
+  unavailableRuntimeIds: string[];
+  /**
+   * Every runtime the `hello` advertised, in advertised order. The heartbeat reply
+   * is built from this so the daemon still gets one ack per runtime it named,
+   * whether or not this session serves it.
+   */
+  advertisedRuntimeIds: string[];
   payload: Record<string, unknown>;
 }
 
@@ -178,7 +207,12 @@ export class DaemonProtocolSession {
   /** The credential this connection authenticated with; read by the heartbeat guard. */
   readonly ownerAccessToken: MultiremiAccessToken | null;
 
+  /** Runtimes this session serves. Registered, dispatched to, and stamped by `hb`. */
   private runtimeIdList: string[] = [];
+  /** Advertised but not served: reported `runtime_gone` on `hb`, never touched. */
+  private unavailableRuntimeIdList: string[] = [];
+  /** Every advertised runtime, in advertised order. */
+  private advertisedRuntimeIdList: string[] = [];
   private handshakeComplete = false;
   private closed = false;
   private registered = false;
@@ -215,6 +249,11 @@ export class DaemonProtocolSession {
 
   get runtimeIds(): readonly string[] {
     return this.runtimeIdList;
+  }
+
+  /** Advertised but not served, in advertised order. */
+  get unavailableRuntimeIds(): readonly string[] {
+    return this.unavailableRuntimeIdList;
   }
 
   get isClosed(): boolean {
@@ -474,20 +513,36 @@ export class DaemonProtocolSession {
     // Authorization runs before registration and before `welcome`, so a session
     // that fails never appears in the registry and no limits leak to a
     // credential that is about to be refused.
+    //
+    // Only a daemon-level failure closes the connection. A runtime-level failure
+    // excludes that one runtime: the daemon's other runtimes keep working, and the
+    // next heartbeat tells the daemon `runtime_gone` so it can register the
+    // runtime again. Closing here would be terminal (4403) and would take the whole
+    // machine down with one stale id - exactly the scenario of a daemon
+    // reconnecting after its runtime row was deleted.
+    const serving: string[] = [];
+    const unavailable: string[] = [];
     for (const runtime of parsed.hello.runtimes) {
       const authorization = await this.options.authorizeRuntime(
         parsed.hello.daemon_id,
         runtime.runtime_id,
       );
-      if (!authorization.ok) {
+      if (authorization.ok) {
+        serving.push(runtime.runtime_id);
+        continue;
+      }
+      if (authorization.scope === "daemon") {
         const code = daemonAuthorizationCloseCode(authorization.status, authorization.code);
         this.close(code, authorization.message ?? "runtime authorization failed");
         return authorization.code ?? "authority_revoked";
       }
+      unavailable.push(runtime.runtime_id);
     }
 
     this.daemonId = parsed.hello.daemon_id;
-    this.runtimeIdList = parsed.hello.runtimes.map((runtime) => runtime.runtime_id);
+    this.advertisedRuntimeIdList = parsed.hello.runtimes.map((runtime) => runtime.runtime_id);
+    this.runtimeIdList = serving;
+    this.unavailableRuntimeIdList = unavailable;
     this.handshakeComplete = true;
     this.registered = true;
     this.registry.register(this);
@@ -534,6 +589,8 @@ export class DaemonProtocolSession {
       const reply = this.options.onHeartbeat?.({
         daemonId: this.daemonId,
         runtimeIds: [...this.runtimeIdList],
+        unavailableRuntimeIds: [...this.unavailableRuntimeIdList],
+        advertisedRuntimeIds: [...this.advertisedRuntimeIdList],
         payload: frame.payload,
       });
       this.sendReply(frame.id ?? "", reply ?? { ok: true });
@@ -735,7 +792,12 @@ function readDbCounters(): { dbMs: number; dbQueries: number } {
   }
 }
 
-/** Map a per-runtime authorization failure onto its terminal close code. */
+/**
+ * Map a daemon-level authorization failure onto its terminal close code.
+ *
+ * Only daemon-level failures reach this function; a runtime-level one is handled
+ * by dropping that runtime instead (see `DaemonSessionRuntimeAuthorization.scope`).
+ */
 export function daemonAuthorizationCloseCode(
   status: number | undefined,
   code: string | null | undefined,

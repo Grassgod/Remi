@@ -33,6 +33,27 @@ daemon 以 Bearer daemon token 连接 `GET /api/daemon/ws`，**每个 daemon 进
 由 `hello` 帧列出本进程的全部 runtime。服务端按 runtime 逐个复核归属、workspace 与成员资格，
 与今天的 `authorizeDaemonWebSocketRequest` 同一套判定。
 
+**URL 形状：v2 客户端必须带 `?protocol=2`。**
+
+```
+GET /api/daemon/ws?protocol=2
+Authorization: Bearer <daemon token>
+```
+
+v1 客户端把 runtime 写在查询串里（`?runtime_ids=<id>`），v2 客户端一条 socket 承载全部 runtime，
+所以两者靠 URL 形状区分，判定规则是：
+
+| 请求 | 判定 |
+|---|---|
+| 带 `runtime_id` / `runtime_ids` / `runtimeId` | v1，走既有路径（本单不改它的行为） |
+| 不带上述参数、带 `?protocol=2` | v2 |
+| 不带上述参数、带 daemon token 或部署 master 凭据，且无标记 | v2（本单过渡期兼容，见下） |
+| 都不带 | 400 `runtime_ids required`（与今天一致） |
+
+`?protocol=2` 是**规范要求的形状**，A-2 的客户端按它实现；不带标记的那一行只是 A-1 与 v1 并存
+期间的过渡兼容，A-2 删除 v1 路径时，连同 `hasRuntimeParameters` / `requestsDaemonProtocolV2` /
+`isV2Upgrade` 这三个判定函数一起删除，此后只有 `?protocol=2` 一条路。
+
 选单 socket 而不是每 runtime 一条，因为升级、drain 与 CLI 更新锁（`MultiremiCliUpdateCoordinator`）
 都是进程级动作：两条 socket 会让同一台机器的两个 lane 看到顺序不一致的指令，也会让 `seq`
 需要两个作用域。
@@ -136,9 +157,9 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 
 | code | 含义 | 是否重连 |
 |---|---|---|
-| 4401 | 凭证被吊销 | **否**，终态 |
-| 4403 | token 缺少该 socket 的权限 | **否**，终态 |
-| 4410 | daemon 已退役 | **否**，终态 |
+| 4401 | 凭证被吊销，或 owner 已不是成员 | **否**，终态（daemon 级） |
+| 4403 | 凭证的 daemon 身份 / workspace 与 `hello` 不符 | **否**，终态（daemon 级） |
+| 4410 | daemon 已退役 | **否**，终态（daemon 级） |
 | 4426 | 需要协议 v2 | **否**（进 `upgrade_wait`，改走升级通道） |
 | 4000 | `ack_timeout`：15 s 内未确认 | 是，走退避 |
 | 4001 | 服务端正常关闭（发布、重启） | 是，走退避 |
@@ -151,6 +172,23 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 判定函数 `daemonCloseCodeIsRetryable`）。这个方向是刻意的：断网与被杀时 daemon 实际拿到的就是
 **1006**（异常关闭，由客户端栈产生，对端根本不会发这个码），如果写成「默认终态、只列出可重连」，
 A-2 照字面实现就会永不重连，那台机器只能靠 SSH 救回来。默认重连的代价只是某个没预料到的码多退避几次。
+
+**只有 daemon 级的事实才用 close code；runtime 级的事实不关连接。** 这条是 1.1 的直接后果：
+一条 socket 承载这台 daemon 的全部 runtime，所以
+
+| 事实 | 级别 | 处理 |
+|---|---|---|
+| daemon 已退役 | daemon | close 4410 |
+| 凭证无效、owner 已不是成员 | daemon | close 4401 |
+| `hello` 的 `daemon_id` 与凭证不符、workspace 不符 | daemon | close 4403 |
+| 握手时 `hello` 报的 runtime 行不存在 | runtime | 照常 `welcome`，该 runtime 不进注册索引，不派活；第一次 `hb` 回复里报 `runtime_gone` |
+| runtime 属于别的 daemon | runtime | 同上。沿用 v1 的 `hideForbiddenAsNotFound`：把「无权访问」当作「不存在」，返回 `runtime_gone`，且**不刷新**对方那一行 |
+| 连接后某个 runtime 行被删 | runtime | `hb` 回复里报 `runtime_gone`，socket 保持打开 |
+
+把 runtime 级事实当 daemon 级处理是不行的：4403/4410 是终态，会让同一台机器上其它正常 runtime
+一起永久断供；换成 4001 则 daemon 退避重连后又遇到同一个 runtime，形成循环。daemon 收到
+`runtime_gone` 后按既有路径重新注册（`worker/daemon.ts` 的 `handleHeartbeatAck` 分支），
+再回收孤儿任务；怎么接上归 A-2，A-1 只负责把这个信号原样送到。
 
 4426 虽然也在终态列表里，但它不是死路：`daemonCloseCodeRequiresUpgrade(code)` 单独把它标出来，
 A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外三个终态码没有这样的后续动作。
@@ -278,6 +316,17 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 的行没了」只关系到那个 runtime。运行时行不存在时返回 `status: "runtime_gone"` /
 `runtime_gone: true`，socket 保持打开、daemon 的其它 runtime 照常收派活与 ack，daemon 按既有
 恢复路径（重新注册 + 回收孤儿任务）自行处理。
+
+**握手阶段适用同一条规则。** `hello` 里某个 runtime 的行不存在，或那个 runtime 属于别的 daemon，
+服务端都照常回 `welcome`、保持 socket、把该 runtime 排除在注册索引之外（不派活、不打心跳），
+并在第一次 `hb` 的 `runtime_acks` 里把它报成 `runtime_gone`。即使 `hello` 报的**全部** runtime
+都是这种情况也不关连接——daemon 需要这条连接才能听到「你的 runtime 没了」并重新注册。
+
+「属于别的 daemon」按 v1 WS 升级的 `hideForbiddenAsNotFound` 口径报成 `runtime_gone` 而不是
+403：既让 daemon 得到它需要的同一个答案，也不泄漏别的机器上有哪些 runtime id。这类 runtime 的
+行**绝不写**，否则会替对方 daemon 把那一行刷成在线。
+
+只有 daemon 级事实才用终态码关连接，边界见 §1.6。
 
 不能用 close code 代替，三种都不行：
 
