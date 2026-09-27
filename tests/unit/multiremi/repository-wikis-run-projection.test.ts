@@ -495,6 +495,31 @@ describe("repository-wikis A2: the remaining per-repository reads", () => {
   });
 
   it("ranks runs in SQL so only the latest row per repository crosses the bridge", async () => {
+    const { store, sql, raw } = createRecordingStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspaceRepositories("local", [
+      { id: REPOSITORY_ID, name: "Projection", url: "https://github.com/acme/projection.git", source: "github" },
+    ]);
+    const { autopilot } = configureRepositoryWikiAutomation(store);
+    insertRun({
+      id: "run_a2_one", autopilotId: autopilot.id,
+      dedupeKey: `${REPOSITORY_ID}:incremental_update:one`,
+      payload: { data: { merge_sha: "one" } }, createdAt: "2026-09-20T00:00:00.000Z",
+    }, raw);
+    sql.length = 0;
+    store.listLatestRepositoryAutopilotRuns("local");
+
+    // Shape guard: the ranking has to happen in SQL. Dropping it still returns
+    // the right rows on a one-repository fixture, but it ships every run row
+    // across the bridge again, which is the cost this change exists to remove.
+    const listStatement = sql.map((entry) => entry.replace(/\s+/g, " ").trim())
+      .find((entry) => /repository_rank|CASE WHEN r\.dedupe_key IS NULL/.test(entry) && /THEN r\.payload ELSE NULL END AS payload/.test(entry));
+    expect(listStatement, `no build-state statement in: ${sql.join(" | ")}`).toBeDefined();
+    expect(listStatement).toMatch(/ROW_NUMBER\(\) OVER \(\s*PARTITION BY COALESCE\(r\.repository_id, r\.schedule_target\)/);
+    expect(listStatement).toMatch(/WHERE r\.repository_rank = 1/);
+  });
+
+  it("keeps the latest run per repository when several rows compete", async () => {
     const { store, autopilot } = fixture();
     // Two runs for one repository: only the newer one may come back, and the
     // statement must not return both for TypeScript to discard.
