@@ -3,6 +3,7 @@ import { nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 
 type Row = Record<string, unknown>;
+export type TaskTraceQuery = (sql: string, params: readonly unknown[]) => Row | null;
 
 /** One archive member that carries a task trace. */
 export interface TaskTraceArchivePointer {
@@ -48,13 +49,49 @@ function hydrate(row: Row): MultiremiTaskTrace {
  * older pointers, matching the "one owner at a time" rule.
  */
 export class TaskTracesRepo {
-  constructor(private readonly ctx: StoreContext) {}
+  constructor(
+    private readonly ctx: StoreContext,
+    private readonly query: TaskTraceQuery = (sql, params) =>
+      this.ctx.db.query(sql).get(...params) as Row | null,
+  ) {}
 
   get(taskId: string): MultiremiTaskTrace | null {
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_task_traces WHERE task_id = ?",
-    ).get(taskId) as Row | null;
+    const row = this.query("SELECT * FROM multiremi_task_traces WHERE task_id = ?", [taskId]);
     return row ? hydrate(row) : null;
+  }
+
+  /** A claim transfers a still-hot trace to the runtime that accepted the task. */
+  markDaemon(taskId: string, runtimeId: string): void {
+    this.ctx.db.run(
+      `INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at)
+       VALUES (?, 'daemon', ?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET
+         location = 'daemon', runtime_id = excluded.runtime_id,
+         updated_at = excluded.updated_at
+       WHERE multiremi_task_traces.location IN ('daemon', 'none', 'backfilling')`,
+      [taskId, runtimeId, nowIso()],
+    );
+  }
+
+  /** Only an explicitly empty terminal trace may replace a hot pointer. */
+  markNone(taskId: string): void {
+    this.ctx.db.run(
+      `INSERT INTO multiremi_task_traces (task_id, location, updated_at)
+       VALUES (?, 'none', ?)
+       ON CONFLICT(task_id) DO UPDATE SET
+         location = 'none', runtime_id = NULL, updated_at = excluded.updated_at
+       WHERE multiremi_task_traces.location = 'daemon'`,
+      [taskId, nowIso()],
+    );
+  }
+
+  /** B6 calls this when a retirement is abandoned, never for archived traces. */
+  markLost(taskId: string): void {
+    this.ctx.db.run(
+      `UPDATE multiremi_task_traces SET location = 'lost', runtime_id = NULL,
+         updated_at = ? WHERE task_id = ? AND location = 'daemon'`,
+      [nowIso(), taskId],
+    );
   }
 
   listForArchive(archiveId: string): MultiremiTaskTrace[] {
