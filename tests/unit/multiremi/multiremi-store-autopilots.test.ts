@@ -8,11 +8,46 @@ import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { configureRepositoryWikiAutomation, createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — autopilots, schedules, and webhooks", () => {
+  for (const rollback of [false, true]) {
+    it(`publishes create-issue autopilot activity ${rollback ? "never on rollback" : "after commit"}`, () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const agent = store.createAgent({ name: "Create issue owner", provider: "claude" });
+      const autopilot = store.createAutopilot({
+        title: "Queued audit run", assigneeId: agent.id, executionMode: "create_issue",
+      });
+      const events: boolean[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "issue_created") {
+          events.push(db!.inTransaction);
+        }
+      });
+      const original = StoreContext.prototype.appendIssueActivity;
+      if (rollback) StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+        original.call(this, issueId, input, queue);
+        if (input.type === "issue_created") throw new Error("autopilot rollback injection");
+      };
+      try {
+        if (rollback) expect(() => store.runAutopilot(autopilot.id)).toThrow("autopilot rollback injection");
+        else {
+          const run = store.runAutopilot(autopilot.id);
+          expect(store.listIssueActivity(run.issueId!).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+        }
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+      expect(events).toEqual(rollback ? [] : [false]);
+      if (rollback) expect(store.listIssues().filter((issue) => issue.title === "Queued audit run")).toHaveLength(0);
+    });
+  }
+
   it("does not create status_changed events when the issue archive sweep runs", () => {
     const store = createStore();
     store.ensureLocalWorkspace();

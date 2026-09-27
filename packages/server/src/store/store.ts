@@ -169,6 +169,7 @@ export type {
 import {
   StoreContext,
   createCommitEventQueue,
+  type CommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
   type TaskMessagesListener,
@@ -1888,6 +1889,17 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessTask(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueTaskHumanRequest(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
+  }
+
+  listFeishuBotLiveDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): ReturnType<FeishuBotRepo["listLiveDecisionCards"]> {
+    return this.feishuBot.listLiveDecisionCards(workspaceId, runtimeId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -3073,6 +3085,7 @@ runMigrations(this.db);
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
+    supportsDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -3082,6 +3095,20 @@ runMigrations(this.db);
     deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiIssue {
     return this.issues.createIssue(input, transaction);
+  }
+
+  /**
+   * MUL-400 E3: issue creation for a caller that already holds a transaction.
+   * Both a child-status collector and a commit-event queue are required — the
+   * caller replays the collector and drains the queue after its COMMIT (see
+   * IssuesRepo.createIssueWithinTransaction).
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue {
+    return this.issues.createIssueWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -4504,7 +4531,11 @@ runMigrations(this.db);
   }
 
   resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
-    return this.tasks.resetSessionAgentLane(sessionId, agentId, executionScope);
+    const deferredEvents = createCommitEventQueue();
+    const lane = this.db.transaction(() =>
+      this.tasks.resetSessionAgentLane(sessionId, agentId, executionScope, undefined, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return lane;
   }
 
   /**
@@ -4634,11 +4665,15 @@ runMigrations(this.db);
     requestId: string,
     input: { response: Record<string, unknown>; respondedBy?: string | null },
   ): MultiremiTaskHumanRequest | null {
-    return this.tasks.respondTaskHumanRequest(requestId, input);
+    const request = this.tasks.respondTaskHumanRequest(requestId, input);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
-    return this.tasks.expireTaskHumanRequest(requestId, status);
+    const request = this.tasks.expireTaskHumanRequest(requestId, status);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {

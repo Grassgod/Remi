@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -248,6 +249,75 @@ describe("messaging outcomes", () => {
     expect(() => store.messagingOutcomes.createIssue(REF, { workspaceId: "local", title: "  " }))
       .toThrow("title is required");
   });
+
+  for (const path of ["direct", "approved proposal"] as const) {
+    function setup() {
+      const { store, ownerId } = seed();
+      const proposalId = path === "approved proposal"
+        ? store.messagingOutcomes.proposeIssue(REF, {
+          workspaceId: "local",
+          recipientId: ownerId,
+          actorType: "member",
+          actorId: ownerId,
+          title: "Queued message issue",
+        }).outcome.id
+        : null;
+      const run = () => proposalId
+        ? store.messagingOutcomes.approveProposal(proposalId, { workspaceId: "local", approvedBy: ownerId })
+        : store.messagingOutcomes.createIssue(REF, {
+          workspaceId: "local",
+          title: "Queued message issue",
+          createdBy: ownerId,
+        });
+      return { store, proposalId, run };
+    }
+
+    it(`${path} emits issue_created only after commit`, () => {
+      const { store, run } = setup();
+      const events: boolean[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string }).action === "issue_created") {
+          events.push(db!.inTransaction);
+        }
+      });
+      let issueId: string;
+      try {
+        issueId = run().issue!.id;
+      } finally {
+        unsubscribe();
+      }
+      expect(store.listIssueActivity(issueId).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+      expect(events).toEqual([false]);
+    });
+
+    it(`${path} drops issue_created when the transaction rolls back`, () => {
+      const { store, proposalId, run } = setup();
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string }).action === "issue_created") {
+          events.push(event.type);
+        }
+      });
+      const original = StoreContext.prototype.appendIssueActivity;
+      StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+        original.call(this, issueId, input, queue);
+        if (input.type === "issue_created") {
+          expect(db!.inTransaction).toBe(true);
+          throw new Error("message issue rollback injection");
+        }
+      };
+      try {
+        expect(run).toThrow("message issue rollback injection");
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+      expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issues WHERE title = 'Queued message issue'").get()).toEqual({ count: 0 });
+      expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issue_activity WHERE type = 'issue_created'").get()).toEqual({ count: 0 });
+      if (proposalId) expect(store.messaging.getOutcome(proposalId)?.proposalStatus).toBe("pending");
+      expect(events).toEqual([]);
+    });
+  }
 
   it("refuses a task id that belongs to another workspace", () => {
     const { store } = seed();

@@ -784,6 +784,18 @@ function taskCommandSpecs(): CommandSpec[] {
       { name: "force-answer", type: "boolean", description: "Ask the agent to wrap up and deliver its best conclusion now" },
       { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
     ], async (invocation) => {
+      // MUL-468: `task steer <task>` is the only write path that is also a
+      // command prefix (`task steer list`). A bare invocation used to POST an
+      // empty steer; fail here instead, before any request leaves the CLI.
+      const hasSteerInput = ["content", "content-file", "content-stdin", "force-answer"]
+        .some((name) => invocation.options[name] !== undefined);
+      if (!hasSteerInput) {
+        throw new CliError(
+          "usage",
+          "remi task steer requires --content, --content-file, --content-stdin, or --force-answer; "
+            + "use remi task steer list <task> to read the directives already sent",
+        );
+      }
       await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, {
         content: await contentOption(invocation),
         ...(invocation.options["force-answer"] === true ? { force_answer: true } : {}),

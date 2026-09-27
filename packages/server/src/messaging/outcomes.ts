@@ -514,7 +514,7 @@ export class MessagingOutcomeService {
       }
       return { message, outcome: existing, issue, created: false };
     }
-    const issue = this.ctx.issues().createIssue({
+    const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
       priority: input.priority ?? undefined,
@@ -531,7 +531,7 @@ export class MessagingOutcomeService {
         message_url: message.url,
       }],
       createdBy: input.createdBy,
-    }, { childStatusChanges, deferredEvents });
+    }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.repo.recordOutcome({
       workspaceId: input.workspaceId,

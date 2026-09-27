@@ -222,6 +222,16 @@ export interface IssuesSurface {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
   }): MultiremiIssue;
+  /**
+   * MUL-400 E3: creation for a caller that already holds a transaction. The
+   * child-status collector and the commit-event queue are both required, with no
+   * defaults, so nothing this creation derives or queues can be dropped.
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -479,6 +489,8 @@ export interface TasksSurface {
   /** Full rows for the ids a page kept, in the caller's order. */
   hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
+  /** Read one human request without going through the facade (MUL-407). */
+  getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,

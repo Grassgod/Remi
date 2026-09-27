@@ -1197,7 +1197,7 @@ export class FeishuIngestRepo {
       }
       return { message: this.getMessage(messageId)!, outcome, issue, created: false };
     }
-    const issue = this.ctx.issues().createIssue({
+    const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
       priority: input.priority,
@@ -1213,7 +1213,7 @@ export class FeishuIngestRepo {
         message_app_link: message.messageAppLink,
       }],
       createdBy: cleanOptionalString(input.createdBy),
-    }, { childStatusChanges, deferredEvents });
+    }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.insertOutcome({
       workspaceId: input.workspaceId,
