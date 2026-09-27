@@ -149,13 +149,26 @@ export interface FakeResizeObserver {
   restore(): void;
 }
 
-/** `ResizeObserver` with an explicit `trigger()`, so compensation is asserted, not raced. */
-export function installFakeResizeObserver(): FakeResizeObserver {
+/**
+ * `ResizeObserver` with an explicit `trigger()`, so compensation is asserted
+ * rather than raced. `onCallback` runs inside each observed callback, which is
+ * where "the position is already corrected before the frame paints" has to be
+ * checked.
+ */
+export function installFakeResizeObserver(onCallback?: () => void): FakeResizeObserver {
   const instances: Array<{ callback: ResizeObserverCallback; targets: Element[] }> = [];
   class Observer implements ResizeObserver {
     private readonly state: { callback: ResizeObserverCallback; targets: Element[] };
     constructor(callback: ResizeObserverCallback) {
-      this.state = { callback, targets: [] };
+      this.state = {
+        // The assertion hook runs inside the same callback delivery the hook
+        // just handled, so a test can check the position before it returns.
+        callback: (entries, observer) => {
+          callback(entries, observer);
+          onCallback?.();
+        },
+        targets: [],
+      };
       instances.push(this.state);
     }
     observe(target: Element): void {

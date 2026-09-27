@@ -185,7 +185,7 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
     runRef.current += 1;
     dataReadyAtRef.current = null;
 
-    if (!enabled || !scrollEl || !contentEl) {
+    if (!enabled) {
       // Pass-through: leave the content visible and clear whatever a previous
       // activation may have written.
       contentEl?.style.removeProperty("visibility");
@@ -195,11 +195,15 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
       setState("ready");
       return;
     }
-
-    contentEl.style.visibility = "hidden";
+    // Pending is published as soon as the scroll root is there: the recorder has
+    // to see the hidden phase, and a missing content wrapper must not degrade
+    // into "no attribute at all".
     stateRef.current = "pending";
     setState("pending");
     writeState("pending");
+    if (!contentEl) return;
+
+    contentEl.style.visibility = "hidden";
   }, [resetKey, enabled, scrollEl, contentEl, writeState]);
 
   // The first aim happens before the frame is painted, and it is also where gate

@@ -17,10 +17,13 @@ import { useStickToBottom, type UseStickToBottomOptions } from "./use-stick-to-b
 describe("useStickToBottom", () => {
   let resize: FakeResizeObserver;
   let fixture: ScrollFixture;
+  /** Scroll positions read from inside each resize callback delivery. */
+  let scrollTopInCallback: number[];
 
   beforeEach(() => {
-    resize = installFakeResizeObserver();
     fixture = createScrollFixture();
+    scrollTopInCallback = [];
+    resize = installFakeResizeObserver(() => scrollTopInCallback.push(fixture.root.scrollTop));
   });
 
   afterEach(() => {
@@ -51,26 +54,26 @@ describe("useStickToBottom", () => {
   };
 
   it("starts pinned and compensates inside the resize callback, in the same frame", () => {
+    // The assertion runs inside the fake ResizeObserver callback itself: the
+    // corrected scrollTop has to be there before the callback that the browser
+    // delivers between layout and paint returns.
     fixture.userScroll(600);
     const { result } = renderStick(baseProps());
     fire(() => {});
     expect(result.current.state).toBe("pinned");
     expect(resize.countFor(fixture.content)).toBe(1);
 
-    // Content lands above the viewport. The callback sees the new height and has
-    // to have written the corrected scrollTop before it returns — nothing the
-    // browser paints in between may show the old position.
+    // Content lands above the viewport, so the page has to move down by exactly
+    // that much, inside the callback and before anything paints.
     fixture.setScrollHeight(1300);
-    let scrollTopInsideCallback: number | null = null;
     fire(() => {
       resize.trigger();
-      // Read inside the same synchronous turn the callback ran in.
-      scrollTopInsideCallback = fixture.root.scrollTop;
     });
 
-    expect(scrollTopInsideCallback).toBe(900);
+    expect(scrollTopInCallback).toEqual([900]);
     expect(fixture.root.scrollTop).toBe(900);
     expect(result.current.state).toBe("pinned");
+    expect(fixture.root.scrollHeight - fixture.root.scrollTop - fixture.root.clientHeight).toBe(0);
   });
 
   it("preserves the distance to the bottom when the page was not exactly at the bottom", () => {
@@ -201,21 +204,25 @@ describe("useStickToBottom", () => {
   });
 
   it("keeps element mode pinned across its own compensation too", () => {
+    fixture.setScrollHeight(2000);
     const row = fixture.addRow({ id: "comment-42", offset: 700, height: 100 });
     const { result } = renderStick(baseProps({ mode: { kind: "element", id: "comment-42" } }));
     expect(result.current.state).toBe("pinned");
 
-    // The row moves 200px down, so the hook scrolls 200px to hold its offset.
+    // The row moves 200px down, so the hook scrolls 200px to hold its offset —
+    // inside the callback, before the frame paints.
     const moved = { offset: 900 };
     row.getBoundingClientRect = () => {
       const top = moved.offset - fixture.root.scrollTop;
       return { ...fixture.root.getBoundingClientRect(), top, bottom: top + 100, height: 100, y: top } as DOMRect;
     };
+    scrollTopInCallback.length = 0;
 
     fire(() => {
       resize.trigger();
       fixture.root.dispatchEvent(new Event("scroll"));
     });
+    expect(scrollTopInCallback).toEqual([200]);
     expect(fixture.root.scrollTop).toBe(200);
     expect(result.current.state).toBe("pinned");
   });

@@ -299,6 +299,46 @@ describe("useAnchoredReveal", () => {
     expect(fixture.root.scrollTop).toBe(600);
   });
 
+  it("stays pending, without touching the DOM, until its elements exist", () => {
+    const content = document.createElement("div");
+    const { result, rerender } = renderHook(
+      (current: UseAnchoredRevealOptions) => useAnchoredReveal(current),
+      {
+        initialProps: {
+          scrollEl: null,
+          contentEl: null,
+          resetKey: "issue:1:latest",
+          dataReady: true,
+          anchor: { kind: "bottom" },
+        } as UseAnchoredRevealOptions,
+      },
+    );
+    expect(result.current).toEqual({ state: "pending", revealed: false });
+    expect(raf.pending()).toBe(0);
+    expect(content.style.visibility).toBe("");
+
+    // With a scroll root but no content wrapper, the attribute still reports the
+    // hidden phase rather than disappearing.
+    rerender({
+      scrollEl: fixture.root,
+      contentEl: null,
+      resetKey: "issue:1:latest",
+      dataReady: true,
+      anchor: { kind: "bottom" },
+    });
+    expect(fixture.root.getAttribute("data-perf-state")).toBe("pending");
+    expect(raf.pending()).toBe(0);
+
+    // The consumer mounts its scroll root on a later render.
+    rerender(baseProps({ dataReady: true }));
+    expect(result.current.state).toBe("pending");
+    expect(fixture.content.style.visibility).toBe("hidden");
+    expect(fixture.root.getAttribute("data-perf-state")).toBe("pending");
+
+    runFrames(2);
+    expect(result.current.state).toBe("ready");
+  });
+
   it("centres an element anchor and aligns a taller-than-viewport row to its top", () => {
     const row = fixture.addRow({ id: "comment-42", offset: 500, height: 100 });
     const props = baseProps({
