@@ -166,7 +166,7 @@ bun run frontend/scripts/perf/page-speed.ts \
 | 加载方式 | 每轮一个全新 browser context，逐页 `page.goto` 整页加载；每轮第一页（issues）含 app shell 冷启动，同轮后续页面复用该 shell |
 | LCP | 由 `addInitScript` 里预装的 `PerformanceObserver` 采集（不在导航前注册就取不到条目） |
 | 字节 | `encodedBodySize`（压缩后）、`decodedBodySize`（解压后 JSON）、`transferSize`（含响应头） |
-| path 脱敏 | 去掉 query；ID 形状的段换成 `:id`；已知的 workspace id / slug / member id 按值掩码，否则 `local`、`remi` 这种没有形状特征的标识会漏出去 |
+| path 脱敏 | 去掉 query；ID 形状的段换成 `:id`；已知的 workspace id / slug / member id 按值掩码，否则 `local`、`remi` 这种没有形状特征的标识会漏出去。`<前缀>_` 规则接受后缀里的**字母、数字、下划线**（`iss_zerojump_short`、`iss_local_long` 这类手写 fixture id 与生成 id 归一方式一致）；下划线不是静态路由段的字符——`scripts/api-routes.golden.json` 的 307 个静态段无一含下划线，所以宽化后的规则不会吞掉真实路由 |
 | 环境参照 | 运行前后各采 7 次 `/api/config`，记中位耗时。生产是共享环境，复跑对比前先核对这个参照 |
 
 今天的生产基线是 [reports/performance/MUL-367-page-speed-baseline-2026-09-24.json](../../reports/performance/MUL-367-page-speed-baseline-2026-09-24.json)（原始数据）、同名 `.md`（表格）与同名 `.html`（自包含单文件，可直接挂到 Issue 评论）。运行机器、Chromium、API 版本与护栏自检结果都写在报告的 `meta` 里。**明天复跑必须在同一台机器上**，否则机器差异会混进前后对比。
@@ -178,7 +178,7 @@ bun run frontend/scripts/perf/page-speed.ts \
 | 项 | 决定 | 落点 |
 | --- | --- | --- |
 | A1 入口页安静 | **默认开启**：warm 轮点击前等入口页 500 ms 内没有新的 `/api/**` 请求开始，上限 5 s，超时照点并记 `entrySettled=false`；同时记录点击时在途数 `entryInflightAtClick`。`--entry-quiet-ms` 保留，默认 500，传 0 关闭；上限是常量 `ENTRY_QUIET_CAP_MS` | `lib/options.ts`、`page-speed.ts`；`meta.entryQuietMs/CapMs` |
-| A2 09-27 基线 warm 行 | **作废**（时基错误），cold 行保留。不改原始报告文件；本 PR 合入后由 QA 低峰重跑 n=5 | 见下节「基线有效性」 |
+| A2 09-27 基线 warm 行 | **作废**（时基错误），cold 行保留。不改原始报告文件；本 PR 合入后由 QA 低峰重跑 n=5。`--compare` 对 schema 2 的 warm 行**只警告、不配对**：`comparable: false`、数值全 null、表格显示「不可比（schema 2 warm 已作废）」 | 见下节「基线有效性」与「输出与复核方式」 |
 | A3 长样本 | 前后对比固定 MUL-70（`--issue-long` 默认值不变）；「长（≥200）」语义由 MUL-454（`iss_o2skonppbq2u`）承担，新增 `detail-xlong` 场景并把该单加进 running 目标的排除名单 | `lib/options.ts`、`page-speed.ts` |
 | B4 高峰验收窗口 | **只看 13–14 点**，不要求 20–21 点 | 本页与父单验收口径 |
 
@@ -308,7 +308,16 @@ JSON 用 `schema: 3`（MUL-395 S9-0 起）。相对 schema 2 的字段变化：
 
 `apiFirstScreen` 计数保留，与 `apiFirstScreenEntries.length` 应相等，可交叉核对。MD 与 HTML 每个场景多一张「首屏 API 表」（按 path 聚合），HTML 另把逐请求表按场景折叠；`--compare` 除原有的按 `key::mode` 配对表外，多一张按 `key::mode::path` 配对的差值表（只在单侧出现的 path 也列出，右列为空——「请求消失了」正是 S9-1 要证明的结果）。
 
-JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identifier` 不同、`targetSelection` 不同、`timelineRequests` 不同都会警告，但都不阻断配对。**schema 2 基线的 warm 行另加一条「时基不同」警告**：它从入口页文档起算，schema 3 从 click 起算，`readyMs`/首屏数/串行深度不是同一个量；schema 2 的 cold 行两边都以文档 origin 起算，照常配对。
+JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identifier` 不同、`targetSelection` 不同、`timelineRequests` 不同都会警告，但都不阻断配对。
+
+**唯一阻断数字的是 warm 时基不匹配。** 基线 `meta.schema < 3` 时，它的 warm 行从入口页文档起算，而 schema 3 从 click 起算：`readyMs`、首屏数、串行深度、逐 path 的 `total`/`gap` 全都不是同一个量。这类配对：
+
+- `compare.rows[]` 里 `comparable: false`，`notComparableReason` 写明原因，**所有数值字段为 null**——不是「渲染时藏起来」，读 JSON 的下游同样拿不到可减的数；
+- `compare.pathRows[]` 里这些 `key::mode` 的每一行同样 `comparable: false` 且数值全为 null（`n` 计数保留：跑了多少次不是时基问题，而且「请求消失了」正是要看的）；
+- MD/HTML 的表格里这类行显示 `不可比（schema 2 warm 已作废）`，**不出现任何数字或差值**；
+- 只保留一条「已作废、不可比」的警告，不再报选择器/目标之类的次级差异（无数字可解释）。
+
+schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两侧都是 schema 3 时 warm 行也照常配对。这条规则由单测固定，并用「临时恢复 warm 配对」的变异验证过会失败。
 
 基线产物放 `reports/performance/`，HTML 用 `remi comment add --attachment` 同时挂到本单和父单。
 

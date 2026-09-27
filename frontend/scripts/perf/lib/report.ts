@@ -576,6 +576,15 @@ ${body}
         const cls = diff > 0 ? "bad" : diff < 0 ? "good" : "muted";
         return `<span class="${cls}">${diff > 0 ? "+" : ""}${diff.toFixed(1)}</span>`;
       };
+      // Withheld pairing: the same phrase the Markdown uses, and no numeric cell.
+      if (!row.comparable) {
+        return `<tr class="withheld">
+      <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
+      <td><code>${esc(row.path)}</code></td>
+      <td class="num">${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}</td>
+      <td class="muted" colspan="7">不可比（schema 2 warm 已作废）</td>
+    </tr>`;
+      }
       return `<tr>
       <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
       <td><code>${esc(row.path)}</code></td>
@@ -595,6 +604,13 @@ ${body}
         const cls = diff > 0 ? "bad" : diff < 0 ? "good" : "muted";
         return `<span class="${cls}">${diff > 0 ? "+" : ""}${diff.toFixed(1)}</span>`;
       };
+      if (!row.comparable) {
+        return `<tr class="withheld">
+      <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
+      <td>${esc(row.beforeMode ?? "-")} → ${esc(row.afterMode ?? "-")}</td>
+      <td class="muted" colspan="7">不可比（schema 2 warm 已作废）</td>
+    </tr>`;
+      }
       return `<tr>
       <td class="key">${esc(row.key)}</td><td>${esc(row.mode)}</td>
       <td>${esc(row.beforeMode ?? "-")} → ${esc(row.afterMode ?? "-")}</td>
@@ -623,6 +639,7 @@ ${body}
   .warn { color: #b45309; }
   .bad { color: #b91c1c; font-weight: 600; }
   .good { color: #15803d; }
+  tr.withheld td { color: #71717a; font-style: italic; }
   .meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 12px 0 0; }
   .meta dt { color: #71717a; }
   .meta dd { margin: 0; }
@@ -686,6 +703,16 @@ ${compareRows ? `<h2>与基线对比</h2>\n<div class="tablewrap"><table>\n<thea
 export interface CompareRow {
   key: string;
   mode: string;
+  /**
+   * False when the two sides are not the same quantity and must not be
+   * subtracted. Only one case exists today: a schema 2 baseline's warm row
+   * measured from the entry page's document origin, against a schema 3 warm row
+   * measured from the click. Every numeric field is null on such a row, so no
+   * renderer can print a delta even by accident.
+   */
+  comparable: boolean;
+  /** Why the row is not comparable; null when `comparable` is true. */
+  notComparableReason: string | null;
   beforeMode: string | null;
   afterMode: string | null;
   beforeReadyP75: number | null;
@@ -726,6 +753,13 @@ export interface ComparePathRow {
   mode: string;
   path: string;
   method: string;
+  /**
+   * False when this scenario::mode pairing was withheld upstream (see
+   * {@link CompareRow.comparable}). Always explicit rather than inferred from
+   * null values, so a genuinely absent `Server-Timing` is never mistaken for an
+   * incomparable pairing.
+   */
+  comparable: boolean;
   beforeCount: number | null;
   afterCount: number | null;
   beforeTotalP50: number | null;
@@ -750,8 +784,8 @@ export interface ComparePathRow {
  * a request.
  */
 export function buildCompareByPath(
-  baseline: { scenarios: ReportScenario[] },
-  current: { scenarios: ReportScenario[] },
+  baseline: { scenarios: ReportScenario[]; meta?: { schema?: number } },
+  current: { scenarios: ReportScenario[]; meta?: { schema?: number } },
 ): ComparePathRow[] {
   const bucket = (scenarios: ReportScenario[]): Map<string, PerfApiPathStats> => {
     const out = new Map<string, PerfApiPathStats>();
@@ -771,23 +805,28 @@ export function buildCompareByPath(
     const [scenarioKey = "", mode = "", path = "", method = ""] = key.split("::");
     const a = before.get(key) ?? null;
     const b = after.get(key) ?? null;
+    // A withheld scenario::mode carries through to every one of its paths: the
+    // endpoints were collected under the same broken time base, so their p95s are
+    // no more subtractable than the round's readyMs.
+    const withhold = compareIncomparability(baseline, mode) !== null;
     return {
       key: scenarioKey,
       mode,
       path,
       method: a?.method ?? b?.method ?? method,
+      comparable: !withhold,
       beforeCount: a?.count ?? null,
       afterCount: b?.count ?? null,
-      beforeTotalP50: a?.totalP50 ?? null,
-      afterTotalP50: b?.totalP50 ?? null,
-      beforeTotalP95: a?.totalP95 ?? null,
-      afterTotalP95: b?.totalP95 ?? null,
-      beforeGapP50: a?.gapP50 ?? null,
-      afterGapP50: b?.gapP50 ?? null,
-      beforeDbqMax: a?.dbqMax ?? null,
-      afterDbqMax: b?.dbqMax ?? null,
-      beforeDbbMax: a?.dbbMax ?? null,
-      afterDbbMax: b?.dbbMax ?? null,
+      beforeTotalP50: withhold ? null : a?.totalP50 ?? null,
+      afterTotalP50: withhold ? null : b?.totalP50 ?? null,
+      beforeTotalP95: withhold ? null : a?.totalP95 ?? null,
+      afterTotalP95: withhold ? null : b?.totalP95 ?? null,
+      beforeGapP50: withhold ? null : a?.gapP50 ?? null,
+      afterGapP50: withhold ? null : b?.gapP50 ?? null,
+      beforeDbqMax: withhold ? null : a?.dbqMax ?? null,
+      afterDbqMax: withhold ? null : b?.dbqMax ?? null,
+      beforeDbbMax: withhold ? null : a?.dbbMax ?? null,
+      afterDbbMax: withhold ? null : b?.dbbMax ?? null,
     };
   });
   return rows.sort((left, right) =>
@@ -798,9 +837,38 @@ export function buildCompareByPath(
 }
 
 /**
+ * The reason a comparison is impossible, or null when the two sides measure the
+ * same quantity.
+ *
+ * A schema 2 warm row was collected from the entry page's *document* origin
+ * (MUL-395 §1, A2): its `readyMs`, first-screen count and serial depth are not the
+ * quantities a schema 3 warm row reports from the click. Subtracting them
+ * produces a number that looks like an improvement and means nothing — the
+ * review found exactly that in a 4000ms → 500ms sample, printed as `-3500.0`.
+ * Cold rows share the document origin on both sides, so they stay comparable.
+ */
+export function compareIncomparability(
+  baseline: { meta?: { schema?: number } },
+  mode: string,
+): string | null {
+  if (mode !== "warm") return null;
+  const baselineSchema = baseline.meta?.schema;
+  if (baselineSchema === undefined) return null;
+  if (baselineSchema >= 3) return null;
+  if (baselineSchema === 2) {
+    return "schema 2 的 warm 行从入口页文档起算，schema 3 从 click 起算：09-27 基线的 warm 行已作废，不可与任何 schema 3 warm 行相减";
+  }
+  // Schema 1 (MUL-367) predates the warm round and this report shape entirely;
+  // its warm rows are not this quantity at all.
+  return `schema ${baselineSchema} 的 warm 行不是本轮口径，不可与 schema 3 warm 行相减`;
+}
+
+/**
  * `--compare` pairing and its warnings. Pairing is by `key + mode`; a differing
  * `selectorMode` or inbox target is reported but never blocks the comparison,
- * because the two runs legitimately differ while the contract rolls out.
+ * because the two runs legitimately differ while the contract rolls out. The one
+ * thing that *does* block numbers is the warm time-base mismatch above: those
+ * rows are emitted without values and only warn.
  */
 export function buildCompare(
   baseline: { scenarios: ReportScenario[]; meta?: { schema?: number } },
@@ -818,50 +886,51 @@ export function buildCompare(
     const [scenarioKey = "", mode = ""] = key.split("::");
     const a = before.get(key) ?? null;
     const b = after.get(key) ?? null;
+    const incomparableReason = a && b ? compareIncomparability(baseline, mode) : null;
+    // Withheld means *every* number is null, not "the renderer remembers to hide
+    // it": a later consumer reading `batch.rows` from the JSON gets nothing to
+    // subtract either.
+    const withhold = incomparableReason !== null;
     rows.push({
       key: scenarioKey,
       mode,
+      comparable: !withhold,
+      notComparableReason: incomparableReason,
       beforeMode: a?.selectorMode ?? null,
       afterMode: b?.selectorMode ?? null,
-      beforeReadyP75: a?.stats.readyP75 ?? null,
-      afterReadyP75: b?.stats.readyP75 ?? null,
-      beforeReadyP95: a?.stats.readyP95 ?? null,
-      afterReadyP95: b?.stats.readyP95 ?? null,
-      beforeJumpsMax: a?.stats.jumpsMax ?? null,
-      afterJumpsMax: b?.stats.jumpsMax ?? null,
-      beforeSerialDepthMax: a?.stats.serialDepthMax ?? null,
-      afterSerialDepthMax: b?.stats.serialDepthMax ?? null,
-      beforeApiFirstScreenP50: a?.stats.apiFirstScreenP50 ?? null,
-      afterApiFirstScreenP50: b?.stats.apiFirstScreenP50 ?? null,
-      beforeTimelineRequests: deepestTargetDepth(a)?.timelineRequests ?? null,
-      afterTimelineRequests: deepestTargetDepth(b)?.timelineRequests ?? null,
+      beforeReadyP75: withhold ? null : a?.stats.readyP75 ?? null,
+      afterReadyP75: withhold ? null : b?.stats.readyP75 ?? null,
+      beforeReadyP95: withhold ? null : a?.stats.readyP95 ?? null,
+      afterReadyP95: withhold ? null : b?.stats.readyP95 ?? null,
+      beforeJumpsMax: withhold ? null : a?.stats.jumpsMax ?? null,
+      afterJumpsMax: withhold ? null : b?.stats.jumpsMax ?? null,
+      beforeSerialDepthMax: withhold ? null : a?.stats.serialDepthMax ?? null,
+      afterSerialDepthMax: withhold ? null : b?.stats.serialDepthMax ?? null,
+      beforeApiFirstScreenP50: withhold ? null : a?.stats.apiFirstScreenP50 ?? null,
+      afterApiFirstScreenP50: withhold ? null : b?.stats.apiFirstScreenP50 ?? null,
+      beforeTimelineRequests: withhold ? null : deepestTargetDepth(a)?.timelineRequests ?? null,
+      afterTimelineRequests: withhold ? null : deepestTargetDepth(b)?.timelineRequests ?? null,
     });
-    // A schema 2 warm row measured from the entry page's document origin: its
-    // readyMs, first-screen count and serial depth are not the same quantity as a
-    // schema 3 warm row. Cold rows are unaffected (both use the document origin),
-    // so only the warm side warns and nothing is withheld.
-    if (a && b && baseline.meta?.schema !== undefined && baseline.meta.schema < 3 && mode === "warm") {
-      warnings.push({
-        key: scenarioKey,
-        mode,
-        message: "时基不同：基线的 warm 行从入口页文档起算（schema 2），本轮的 warm 行从 click 起算；readyMs/首屏数/串行深度不可直接比较，只有 cold 行可配对",
-      });
+    if (incomparableReason !== null) {
+      warnings.push({ key: scenarioKey, mode, message: incomparableReason });
     }
-    if (a && b && a.selectorMode !== b.selectorMode) {
+    // The remaining comparisons are advisory only, and a withheld row has nothing
+    // left to warn about beyond the reason itself.
+    if (!withhold && a && b && a.selectorMode !== b.selectorMode) {
       warnings.push({
         key: scenarioKey,
         mode,
         message: `选择器模式不同（${a.selectorMode} → ${b.selectorMode}）：数字不可直接比较`,
       });
     }
-    if (a && b && a.target.identifier !== b.target.identifier) {
+    if (!withhold && a && b && a.target.identifier !== b.target.identifier) {
       warnings.push({
         key: scenarioKey,
         mode,
         message: `目标不同（${a.target.identifier} → ${b.target.identifier}）`,
       });
     }
-    if (a && b && a.targetSelection !== b.targetSelection) {
+    if (!withhold && a && b && a.targetSelection !== b.targetSelection) {
       warnings.push({
         key: scenarioKey,
         mode,
@@ -870,7 +939,7 @@ export function buildCompare(
     }
     const beforeDepth = deepestTargetDepth(a);
     const afterDepth = deepestTargetDepth(b);
-    if (beforeDepth && afterDepth && beforeDepth.timelineRequests !== afterDepth.timelineRequests) {
+    if (!withhold && beforeDepth && afterDepth && beforeDepth.timelineRequests !== afterDepth.timelineRequests) {
       warnings.push({
         key: scenarioKey,
         mode,
@@ -883,6 +952,15 @@ export function buildCompare(
   lines.push("| 场景 | 模式 | 选择器 | ready p75 | 差值 | ready p95 | 差值 | jumps max | 串行深度 | 首屏 API p50 |");
   lines.push("| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |");
   for (const row of rows) {
+    // A withheld row renders as one phrase across its numeric columns. There is no
+    // "-3500.0" to misread: the row's values are null upstream, and this branch
+    // never formats a number for it.
+    if (!row.comparable) {
+      lines.push(
+        `| ${row.key} | ${row.mode} | ${row.beforeMode ?? "-"} → ${row.afterMode ?? "-"} | 不可比（schema 2 warm 已作废） | - | 不可比（schema 2 warm 已作废） | - | - | - | - |`,
+      );
+      continue;
+    }
     const delta = (beforeValue: number | null, afterValue: number | null): string =>
       beforeValue === null || afterValue === null ? "-" : `${afterValue - beforeValue > 0 ? "+" : ""}${(afterValue - beforeValue).toFixed(1)}`;
     lines.push(
@@ -907,11 +985,20 @@ export function buildCompare(
     );
     lines.push("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |");
     for (const row of pathRows) {
-      const delta = (before: number | null, after: number | null): string =>
-        before === null || after === null ? "-" : `${after - before > 0 ? "+" : ""}${(after - before).toFixed(1)}`;
+      // Same rule as the scenario table: no deltas for a withheld pairing, and
+      // "every number is null" is what makes that true rather than the formatting.
+      const withheld = !row.comparable;
       const count = row.beforeCount === null || row.afterCount === null
         ? `${row.beforeCount ?? "-"} → ${row.afterCount ?? "-"}`
         : `${row.beforeCount} → ${row.afterCount}`;
+      if (withheld) {
+        lines.push(
+          `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | ${count} | 不可比（schema 2 warm 已作废） | - | - | - | - | - |`,
+        );
+        continue;
+      }
+      const delta = (before: number | null, after: number | null): string =>
+        before === null || after === null ? "-" : `${after - before > 0 ? "+" : ""}${(after - before).toFixed(1)}`;
       lines.push(
         `| ${row.key} | ${row.mode} | \`${row.path}\` | ${row.method} | ${count} | ${fmtMs(row.beforeTotalP50)} → ${fmtMs(row.afterTotalP50)} | ${fmtMs(row.beforeTotalP95)} → ${fmtMs(row.afterTotalP95)} | ${delta(row.beforeTotalP95, row.afterTotalP95)} | ${fmtMs(row.beforeGapP50)} → ${fmtMs(row.afterGapP50)} | ${delta(row.beforeGapP50, row.afterGapP50)} | ${row.beforeDbqMax ?? "-"} → ${row.afterDbqMax ?? "-"} |`,
       );
@@ -920,7 +1007,7 @@ export function buildCompare(
   lines.push("");
   lines.push(
     "> 差值只在同一台机器、同一网络位置、同一 rounds 下可比；schema 1（MUL-367）与新口径不可比。"
-      + "schema 2 的 warm 行与 schema 3 不可比（时基不同）：读取时把 baseline meta.schema 一并记录。",
+      + "schema 2 的 warm 行整行不可比（时基从入口页文档起算），只列警告、不出数字；cold 行照常配对。",
   );
   return { rows, pathRows, warnings, markdown: lines.join("\n") };
 }

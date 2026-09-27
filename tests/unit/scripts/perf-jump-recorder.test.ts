@@ -3,6 +3,8 @@
 // into a single jump, the 1px threshold, the 500ms ready window, censored
 // rounds, wave tolerance, `data-perf-state` timing and `--compare` pairing.
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   anchorSatisfied,
   computeAppReadyMs,
@@ -49,6 +51,7 @@ import {
 } from "../../../frontend/scripts/perf/lib/round-measurement";
 import type { ResourceEntry } from "../../../frontend/scripts/perf/lib/harness";
 import { computeApiPathStats } from "../../../frontend/scripts/perf/lib/jump-recorder";
+import { sanitizePath } from "../../../frontend/scripts/perf/lib/harness";
 import {
   collectExcludedRunningIssueIds,
   DEFAULT_ENTRY_QUIET_MS,
@@ -1484,7 +1487,17 @@ describe("report schema and per-path output", () => {
 });
 
 describe("buildCompare schema handling", () => {
-  const scenario = (key: string, mode: "cold" | "warm", schema: number): Record<string, unknown> => ({
+  /**
+   * `readyMs` is the field the review used to expose the defect (a schema 2 warm
+   * row at 4000ms against a schema 3 warm row at 500ms printed `-3500.0`), so it
+   * is a parameter here rather than a constant.
+   */
+  const scenario = (
+    key: string,
+    mode: "cold" | "warm",
+    schema: number,
+    readyMs = 100,
+  ): Record<string, unknown> => ({
     key,
     mode,
     target: { identifier: "MUL-67" },
@@ -1494,7 +1507,7 @@ describe("buildCompare schema handling", () => {
     hoverLeadMs: mode === "warm" ? 150 : null,
     rounds: [],
     stats: {
-      n: 1, timeouts: 0, readyP50: 100, readyP75: 100, readyP95: 100, readyMax: 100,
+      n: 1, timeouts: 0, readyP50: readyMs, readyP75: readyMs, readyP95: readyMs, readyMax: readyMs,
       firstRealP50: 90, jumpsMax: 0, jumpPxMax: 0, serialDepthMax: 3,
       apiFirstScreenP50: 5, slowestServerTotalP50: 12,
       apiByPath: computeApiPathStats([{ apiFirstScreenEntries: [entry("/api/inbox/summary", 10, { total: 300, dbq: 6, dbb: 5_200_000 })] }]),
@@ -1502,38 +1515,154 @@ describe("buildCompare schema handling", () => {
     meta: { schema },
   });
 
-  it("warns only on the warm rows of a schema 2 baseline", () => {
+  it("pairs cold rows but withholds every number on the warm row of a schema 2 baseline", () => {
+    // A2: the 09-27 baseline's warm rows measured from the entry page's document
+    // origin, so their readyMs is not the quantity a schema 3 warm row reports.
     const baseline = {
       meta: { schema: 2 },
-      scenarios: [scenario("detail-short", "cold", 2), scenario("detail-short", "warm", 2)],
+      scenarios: [scenario("detail-short", "cold", 2, 1000), scenario("detail-short", "warm", 2, 4000)],
     };
     const current = {
       meta: { schema: 3 },
-      scenarios: [scenario("detail-short", "cold", 3), scenario("detail-short", "warm", 3)],
+      scenarios: [scenario("detail-short", "cold", 3, 900), scenario("detail-short", "warm", 3, 500)],
     };
     const compare = buildCompare(baseline as never, current as never);
-    // Both rows still pair — the warning is advisory, never a refusal.
-    expect(compare.rows.map((row) => row.mode)).toEqual(["cold", "warm"]);
-    const timeBaseWarnings = compare.warnings.filter((warning) => warning.message.includes("时基不同"));
-    expect(timeBaseWarnings).toHaveLength(1);
-    expect(timeBaseWarnings[0]!.mode).toBe("warm");
-    expect(timeBaseWarnings[0]!.message).toContain("只有 cold 行可配对");
-    expect(compare.markdown).toContain("时基不同");
+
+    const cold = compare.rows.find((row) => row.mode === "cold")!;
+    expect(cold.comparable).toBe(true);
+    expect(cold.beforeReadyP75).toBe(1000);
+    expect(cold.afterReadyP75).toBe(900);
+
+    const warm = compare.rows.find((row) => row.mode === "warm")!;
+    expect(warm.comparable).toBe(false);
+    expect(warm.notComparableReason).toContain("作废");
+    // Every numeric field is null, so no consumer — Markdown, HTML or a script
+    // reading compare.rows out of the JSON — has a delta to compute.
+    for (const value of [
+      warm.beforeReadyP75, warm.afterReadyP75, warm.beforeReadyP95, warm.afterReadyP95,
+      warm.beforeJumpsMax, warm.afterJumpsMax, warm.beforeSerialDepthMax, warm.afterSerialDepthMax,
+      warm.beforeApiFirstScreenP50, warm.afterApiFirstScreenP50,
+      warm.beforeTimelineRequests, warm.afterTimelineRequests,
+    ]) {
+      expect(value).toBeNull();
+    }
+
+    // One warning, naming the invalidation; nothing else is reported for the row.
+    const warmWarnings = compare.warnings.filter((warning) => warning.mode === "warm");
+    expect(warmWarnings).toHaveLength(1);
+    expect(warmWarnings[0]!.message).toContain("作废");
+    expect(compare.warnings.filter((warning) => warning.mode === "cold")).toHaveLength(0);
   });
 
-  it("stays silent for a schema 3 baseline and for schema 2 cold rows alone", () => {
-    const sameSchema = buildCompare(
-      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3)] } as never,
-      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3)] } as never,
-    );
-    expect(sameSchema.warnings.filter((warning) => warning.message.includes("时基不同"))).toHaveLength(0);
+  it("withholds every per-path number of a schema 2 warm pairing", () => {
+    const baseline = {
+      meta: { schema: 2 },
+      scenarios: [scenario("detail-short", "cold", 2, 1000), scenario("detail-short", "warm", 2, 4000)],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "cold", 3, 900), scenario("detail-short", "warm", 3, 500)],
+    };
+    const pathRows = buildCompareByPath(baseline as never, current as never);
+    const warmRows = pathRows.filter((row) => row.mode === "warm");
+    expect(warmRows.length).toBeGreaterThan(0);
+    for (const row of warmRows) {
+      expect(row.comparable).toBe(false);
+      expect(row.beforeTotalP95).toBeNull();
+      expect(row.afterTotalP95).toBeNull();
+      expect(row.beforeGapP50).toBeNull();
+      expect(row.afterGapP50).toBeNull();
+      expect(row.beforeDbqMax).toBeNull();
+      expect(row.afterDbqMax).toBeNull();
+    }
+    // The counts survive: "how many times did it run" is not a time-base question,
+    // and it is what shows a request disappearing.
+    const coldRows = pathRows.filter((row) => row.mode === "cold");
+    expect(coldRows.every((row) => row.comparable)).toBe(true);
+    expect(coldRows.some((row) => row.beforeTotalP95 !== null)).toBe(true);
+  });
 
+  it("prints no warm delta anywhere in the Markdown of a schema 2 comparison", () => {
+    const baseline = {
+      meta: { schema: 2 },
+      scenarios: [scenario("detail-short", "cold", 2, 1000), scenario("detail-short", "warm", 2, 4000)],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "cold", 3, 900), scenario("detail-short", "warm", 3, 500)],
+    };
+    const compare = buildCompare(baseline as never, current as never);
+
+    // The exact number the review caught.
+    expect(compare.markdown).not.toContain("-3500.0");
+    // Nor any delta at all on a warm line.
+    const warmLines = compare.markdown.split("\n").filter((line) => line.includes("| warm |"));
+    expect(warmLines.length).toBeGreaterThan(0);
+    for (const line of warmLines) {
+      expect(line).toContain("不可比（schema 2 warm 已作废）");
+      // No "100.0 → 200.0" pairs and no signed delta anywhere on the line.
+      expect(line).not.toMatch(/\d+\.\d+\s*→\s*\d+\.\d+/);
+      expect(line).not.toMatch(/[+-]\d+\.\d/);
+    }
+    // The cold row still carries its numbers.
+    const coldLine = compare.markdown.split("\n").find((line) => line.includes("| cold |"))!;
+    expect(coldLine).toContain("1000.0 → 900.0");
+    expect(coldLine).toContain("-100.0");
+    // And the warning explains why the warm row is blank.
+    expect(compare.markdown).toContain("作废");
+  });
+
+  it("keeps both rows comparable when both sides are schema 3", () => {
+    const baseline = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "cold", 3, 1000), scenario("detail-short", "warm", 3, 4000)],
+    };
+    const current = {
+      meta: { schema: 3 },
+      scenarios: [scenario("detail-short", "cold", 3, 900), scenario("detail-short", "warm", 3, 500)],
+    };
+    const compare = buildCompare(baseline as never, current as never);
+    expect(compare.rows.every((row) => row.comparable)).toBe(true);
+    expect(compare.rows.every((row) => row.notComparableReason === null)).toBe(true);
+    const warm = compare.rows.find((row) => row.mode === "warm")!;
+    expect(warm.beforeReadyP75).toBe(4000);
+    expect(warm.afterReadyP75).toBe(500);
+    expect(compare.warnings.filter((warning) => warning.message.includes("作废"))).toHaveLength(0);
+    // The warm delta is the whole point of a same-schema comparison.
+    const warmLine = compare.markdown.split("\n").find((line) => line.includes("| warm |"))!;
+    expect(warmLine).toContain("-3500.0");
+  });
+
+  it("still pairs a schema 2 cold row and warns about nothing", () => {
     const coldOnly = buildCompare(
-      { meta: { schema: 2 }, scenarios: [scenario("detail-short", "cold", 2)] } as never,
-      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "cold", 3)] } as never,
+      { meta: { schema: 2 }, scenarios: [scenario("detail-short", "cold", 2, 1000)] } as never,
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "cold", 3, 900)] } as never,
     );
-    expect(coldOnly.warnings.filter((warning) => warning.message.includes("时基不同"))).toHaveLength(0);
+    expect(coldOnly.warnings).toHaveLength(0);
     expect(coldOnly.rows).toHaveLength(1);
+    expect(coldOnly.rows[0]!.comparable).toBe(true);
+    expect(coldOnly.rows[0]!.beforeReadyP75).toBe(1000);
+  });
+
+  it("treats a missing baseline meta.schema as comparable, and a schema 1 as not", () => {
+    // No schema at all: nothing says the time base differs, so rows pair. (Schema 1
+    // is reported as incomparable below; an absent field predates the flag and is
+    // the more conservative reading only for cold, so warm falls back to pairing —
+    // the plan's rule names schema 2 specifically.)
+    const missing = buildCompare(
+      { scenarios: [scenario("detail-short", "warm", 3, 4000)] } as never,
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3, 500)] } as never,
+    );
+    expect(missing.rows[0]!.comparable).toBe(true);
+
+    // Schema 1 (MUL-367) predates the warm round entirely; its warm rows are not
+    // this quantity either, so the same rule applies.
+    const schema1 = buildCompare(
+      { meta: { schema: 1 }, scenarios: [scenario("detail-short", "warm", 1, 4000)] } as never,
+      { meta: { schema: 3 }, scenarios: [scenario("detail-short", "warm", 3, 500)] } as never,
+    );
+    expect(schema1.rows[0]!.comparable).toBe(false);
+    expect(schema1.warnings[0]!.message).toContain("schema 1");
   });
 
   it("pairs per-path deltas on key::mode::path and reports vanished paths", () => {
@@ -1591,6 +1720,7 @@ describe("buildCompare schema handling", () => {
         mode: "warm",
         path: "/api/inbox/summary",
         method: "GET",
+        comparable: true,
         beforeCount: 5,
         afterCount: 1,
         beforeTotalP50: 120,
@@ -1608,6 +1738,65 @@ describe("buildCompare schema handling", () => {
     expect(html).toContain("与基线对比：按 path");
     expect(html).toContain("/api/inbox/summary");
     expect(html).toContain("-270.0");
+  });
+
+  it("renders a withheld comparison row without any numbers in HTML", () => {
+    // The HTML side of A2: the phrase appears, and the numeric cells are gone
+    // (the row spans them with one cell) so no delta can be read off.
+    const html = buildHtml({
+      meta: {},
+      scenarios: [scenarioFixtureForCompare()] as never,
+      blockedWrites: [],
+      compareTable: [{
+        key: "detail-short",
+        mode: "warm",
+        comparable: false,
+        notComparableReason: "schema 2 的 warm 行已作废",
+        beforeMode: "legacy",
+        afterMode: "contract",
+        beforeReadyP75: null,
+        afterReadyP75: null,
+        beforeReadyP95: null,
+        afterReadyP95: null,
+        beforeJumpsMax: null,
+        afterJumpsMax: null,
+        beforeSerialDepthMax: null,
+        afterSerialDepthMax: null,
+        beforeApiFirstScreenP50: null,
+        afterApiFirstScreenP50: null,
+        beforeTimelineRequests: null,
+        afterTimelineRequests: null,
+      }],
+      comparePathTable: [{
+        key: "detail-short",
+        mode: "warm",
+        path: "/api/inbox/summary",
+        method: "GET",
+        comparable: false,
+        beforeCount: 5,
+        afterCount: 5,
+        beforeTotalP50: null,
+        afterTotalP50: null,
+        beforeTotalP95: null,
+        afterTotalP95: null,
+        beforeGapP50: null,
+        afterGapP50: null,
+        beforeDbqMax: null,
+        afterDbqMax: null,
+        beforeDbbMax: null,
+        afterDbbMax: null,
+      }],
+    });
+    expect(html).toContain("不可比（schema 2 warm 已作废）");
+    expect(html).toContain('class="withheld"');
+    // Two withheld rows, and neither carries a numeric delta cell.
+    const withheld = html.split('class="withheld"').slice(1);
+    expect(withheld).toHaveLength(2);
+    for (const fragment of withheld) {
+      const row = fragment.slice(0, fragment.indexOf("</tr>"));
+      expect(row).not.toMatch(/[+-]\d+\.\d/);
+      expect(row).toContain("不可比（schema 2 warm 已作废）");
+    }
   });
 
   function scenarioFixtureForCompare(): Record<string, unknown> {
@@ -1709,5 +1898,89 @@ describe("running-issue exclusions", () => {
     expect(excluded.has("iss_child_a")).toBe(true);
     expect(excluded.has("iss_child_b")).toBe(true);
     expect(excluded.size).toBe(4);
+  });
+});
+
+// ── MUL-395 review `cmt_tf79501ls2zg` §4: fixtures write ids by hand
+//    (`iss_zerojump_short`), and those have to normalize like generated ones.
+
+describe("sanitizePath", () => {
+  it("normalizes fixture ids whose suffix contains underscores", () => {
+    // The local end-to-end report still showed `/api/issues/iss_zerojump_short`
+    // because the suffix pattern stopped at `[A-Za-z0-9]+`.
+    expect(sanitizePath("http://host/api/issues/iss_zerojump_short", "http://host", [])).toBe("/api/issues/:id");
+    expect(sanitizePath("http://host/api/issues/iss_o2skonppbq2u/timeline", "http://host", [])).toBe("/api/issues/:id/timeline");
+    expect(sanitizePath("/api/issues/iss_local_long", "http://host", [])).toBe("/api/issues/:id");
+    expect(sanitizePath("http://host/api/inbox/inb_page2_ledger_17", "http://host", [])).toBe("/api/inbox/:id");
+    // The rule the plan asks for is letters, digits and underscores after the
+    // prefix. A hyphen is deliberately not part of it: no id in the repository
+    // uses one, and widening it would start matching static segments such as
+    // `agent-task-snapshot`.
+    expect(sanitizePath("http://host/api/tasks/tsk_running_issue_1", "http://host", [])).toBe("/api/tasks/:id");
+  });
+
+  it("does not treat a hyphenated static-looking segment as an id", () => {
+    // The boundary the wider underscore rule must not cross.
+    expect(sanitizePath("/api/multiremi/agent-task-snapshot", "http://host", [])).toBe("/api/multiremi/agent-task-snapshot");
+    expect(sanitizePath("/api/chat/pending-tasks", "http://host", [])).toBe("/api/chat/pending-tasks");
+  });
+
+  it("still normalizes generated ids and masks known identifiers by value", () => {
+    expect(sanitizePath("http://host/api/issues/iss_abc123XYZ", "http://host", [])).toBe("/api/issues/:id");
+    expect(sanitizePath("http://host/api/attachments/att_0f464c58dc2a/content", "http://host", [])).toBe("/api/attachments/:id/content");
+    // `iss_in41j1x1dq66` is a real MUL-67 id, and the workspace slug has no shape
+    // of its own, so both rely on the value list.
+    expect(sanitizePath("http://host/api/issues/iss_in41j1x1dq66", "http://host", [])).toBe("/api/issues/:id");
+    expect(sanitizePath("http://host/local/api/issues", "http://host", ["local"])).toBe("/:id/api/issues");
+    // A key in `KEY-123` form (the issue identifier) is also id-like.
+    expect(sanitizePath("http://host/api/issues/MUL-395", "http://host", [])).toBe("/api/issues/:id");
+  });
+
+  it("never writes the query string into the path", () => {
+    // The token/secret carrier on every S1 request is the query string, so it must
+    // not survive normalization.
+    const path = sanitizePath(
+      "http://host/api/issues/iss_zerojump_short?token=super-secret&cursor=abc123&x=1",
+      "http://host",
+      [],
+    );
+    expect(path).toBe("/api/issues/:id");
+    expect(path).not.toContain("super-secret");
+    expect(path).not.toContain("cursor");
+    expect(path).not.toContain("?");
+  });
+
+  it("leaves static route segments alone", () => {
+    // Two real static segments that carry a separator or a prefix-like shape.
+    expect(sanitizePath("http://host/api/chat/pending-tasks", "http://host", [])).toBe("/api/chat/pending-tasks");
+    expect(sanitizePath("http://host/api/multiremi/agent-task-snapshot", "http://host", [])).toBe("/api/multiremi/agent-task-snapshot");
+    // Multi-segment static paths stay intact end to end.
+    expect(sanitizePath("http://host/api/inbox/unread-count", "http://host", [])).toBe("/api/inbox/unread-count");
+    expect(sanitizePath("http://host/api/issues/grouped", "http://host", [])).toBe("/api/issues/grouped");
+  });
+
+  it("cannot swallow any static segment of the real route table", () => {
+    // The wider `<prefix>_...` rule was checked against the generated route table:
+    // no static segment contains an underscore at all, so the rule can only ever
+    // match an id. This test re-does that check from the repository's own snapshot
+    // rather than trusting the earlier manual scan.
+    const golden = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../../scripts/api-routes.golden.json"), "utf8"),
+    ) as { routes: string[] } | string[];
+    const routeList = Array.isArray(golden) ? golden : golden.routes;
+    const segments = new Set<string>();
+    for (const route of routeList) {
+      const path = route.split(" ").pop() ?? "";
+      for (const part of path.split("/")) {
+        if (part && !part.startsWith(":")) segments.add(part);
+      }
+    }
+    expect(segments.size).toBeGreaterThan(100);
+    const swallowed = [...segments].filter((segment) => sanitizePath(`/api/${segment}`, "http://host", []) === "/api/:id");
+    expect(swallowed).toEqual([]);
+    // And every static segment survives unchanged, not merely "not an id".
+    for (const segment of [...segments].slice(0, 200)) {
+      expect(sanitizePath(`/api/${segment}`, "http://host", [])).toBe(`/api/${segment}`);
+    }
   });
 });
