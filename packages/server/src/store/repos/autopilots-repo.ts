@@ -3,6 +3,7 @@
 import { computeScheduleNextRun } from "@multiremi/store/schedule.js";
 import { availableScheduleTargets, normalizeScheduleTargets } from "@multiremi/store/schedule-targets.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import {
   cleanOptionalString,
   isRecord,
@@ -12,7 +13,7 @@ import {
   parseJson,
   toJson,
 } from "@multiremi/store/helpers.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
@@ -445,6 +446,8 @@ export class AutopilotsRepo {
     ).all() as Array<{ autopilot_id: string }>;
     for (const { autopilot_id: autopilotId } of autopilots) {
       for (;;) {
+        const scheduledChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+        const scheduledEvents = createCommitEventQueue();
         const task = this.ctx.db.transaction(() => {
           this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
           const autopilot = this.getAutopilot(autopilotId);
@@ -489,7 +492,7 @@ export class AutopilotsRepo {
               parentTaskId: parent?.id ?? null,
               issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
               assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
-            });
+            }, scheduledChanges, scheduledEvents);
             this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
             return created;
           }
@@ -497,6 +500,8 @@ export class AutopilotsRepo {
         })();
         if (!task) break;
         this.ctx.notifyTaskEnqueued(task);
+        this.ctx.tasks().runCollectedChildStatusChanges(scheduledChanges);
+        this.ctx.emitCommitEvents(scheduledEvents);
       }
     }
   }
@@ -1238,6 +1243,8 @@ export class AutopilotsRepo {
     let taskToNotify: MultiremiTask | null = null;
     let createdRun = false;
     let startedAutopilot: MultiremiAutopilot | null = null;
+    const autopilotChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const autopilotEvents = createCommitEventQueue();
     const run = this.ctx.db.transaction(() => {
       this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
       const autopilot = this.getAutopilot(autopilotId);
@@ -1407,18 +1414,34 @@ export class AutopilotsRepo {
         issueSessionId = issueSession.id;
       }
 
-      const task = this.ctx.tasks().createTaskWithinTransaction({
-        agentId: agent.id,
-        issueId: issue?.id ?? null,
-        issueSessionId,
-        workspaceId: autopilot.workspaceId,
-        prompt,
-        assignmentAuthorType: "system",
-        assignmentAuthorId: autopilot.id,
-        assignmentSourceEventId: eventId,
-        parentTaskId: sourceTaskId,
-        issueCreationRestricted,
-      });
+      let task: MultiremiTask;
+      try {
+        // MUL-400 E3 gate 3: a `trigger_issue` autopilot on a waiting issue must
+        // not start it. The run settles as skipped carrying the reason instead of
+        // failing, mirroring the "no runnable agent" skip above, so the operator
+        // sees why nothing ran.
+        task = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: agent.id,
+          issueId: issue?.id ?? null,
+          issueSessionId,
+          workspaceId: autopilot.workspaceId,
+          prompt,
+          assignmentAuthorType: "system",
+          assignmentAuthorId: autopilot.id,
+          assignmentSourceEventId: eventId,
+          parentTaskId: sourceTaskId,
+          issueCreationRestricted,
+        }, autopilotChanges, autopilotEvents);
+      } catch (err) {
+        if (!(err instanceof IssueDependencyError) || err.code !== "dependencies_unmet") throw err;
+        this.ctx.db.run(
+          `UPDATE multiremi_autopilot_runs
+           SET status = 'skipped', completed_at = ?, failure_reason = ?
+           WHERE id = ?`,
+          [nowIso(), "dependencies_unmet", runId],
+        );
+        return this.getAutopilotRun(runId)!;
+      }
       taskToNotify = task;
       issueSessionId = task.issueSessionId ?? issueSessionId;
       this.ctx.db.run(
@@ -1438,6 +1461,8 @@ export class AutopilotsRepo {
     })();
 
     if (taskToNotify) this.ctx.notifyTaskEnqueued(taskToNotify);
+    this.ctx.tasks().runCollectedChildStatusChanges(autopilotChanges);
+    this.ctx.emitCommitEvents(autopilotEvents);
     if (createdRun && startedAutopilot && run.status === "running") {
       this.ctx.analytics().recordAutopilotRunStartedAnalytics(startedAutopilot, run);
     }

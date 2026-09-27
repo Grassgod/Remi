@@ -161,11 +161,12 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("child_done_parent_triggered"), t)).toBe(
       "activity.child_done_parent_triggered",
     );
+    // MUL-400 E2 retired `active_task_exists`: a busy owner coalesces the report
+    // into its queued round instead of skipping the wakeup.
     const reasons = {
       no_assignee: "no_assignee",
       agent_unavailable: "agent_unavailable",
       squad_leader_unavailable: "squad_leader_unavailable",
-      active_task_exists: "active_task_exists",
     };
     for (const [reason, key] of Object.entries(reasons)) {
       expect(
@@ -180,6 +181,37 @@ describe("formatActivity", () => {
         t,
       ),
     ).toBe('activity.child_done_parent_skipped {"reason":"future_reason"}');
+
+    // MUL-400 E1/E2 activities the parent and child pages now render.
+    expect(formatActivity(activity("child_status_parent_coalesced"), t)).toBe(
+      "activity.child_status_parent_coalesced",
+    );
+    expect(formatActivity(activity("parent_status_derived"), t)).toBe(
+      "activity.parent_status_derived",
+    );
+    expect(
+      formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
+    ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(
+      formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
+    ).toBe('activity.issue_status_forced {"status":"status.done"}');
+    // A child that ends after its parent was closed: activity only, and the
+    // copy names both the child and its outcome.
+    expect(
+      formatActivity(
+        activity("child_status_after_parent_closed", {
+          details: { childIssueKey: "MUL-2", outcome: "failed" },
+        }),
+        t,
+      ),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"MUL-2","outcome":"activity.child_outcome_failed"}',
+    );
+    expect(
+      formatActivity(activity("child_status_after_parent_closed", { details: { outcome: "done" } }), t),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"?","outcome":"activity.child_outcome_done"}',
+    );
   });
 
   it("explains why an agent comment mention was skipped", () => {
@@ -243,5 +275,84 @@ describe("formatActivity", () => {
   it("echoes an unknown action instead of rendering a missing key", () => {
     expect(formatActivity(activity("teleported"), t)).toBe("teleported");
     expect(formatActivity(activity(undefined as unknown as string), t)).toBe("");
+  });
+});
+
+/**
+ * MUL-400 E3 (MUL-409): the dependency gate and automatic start introduced
+ * these activity types. Each one has to map to its own locale key with the
+ * right interpolation — a missing case would fall through to the raw action.
+ */
+describe("formatActivity — dependency activities", () => {
+  it("renders an automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_started", { details: { satisfiedByKey: "MUL-7" } }), t),
+    ).toBe('activity.dependency_auto_started {"key":"MUL-7"}');
+  });
+
+  it("renders a readiness report with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_satisfied", { details: { satisfied_by_key: "MUL-8" } }), t),
+    ).toBe('activity.dependency_satisfied {"key":"MUL-8"}');
+  });
+
+  it("renders a skipped automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_start_skipped", { details: { satisfied_by_key: "MUL-9" } }), t),
+    ).toBe('activity.dependency_auto_start_skipped {"key":"MUL-9"}');
+  });
+
+  /**
+   * MUL-409 fix round 4 (QA round 3, suggestion 4): the record an operator sees
+   * after a failed automatic start has to say what to DO. Fixing the owner and
+   * assigning the issue again is the whole recovery — no forced start — and the
+   * copy has to name that.
+   */
+  it("tells the operator how to recover from a skipped automatic start", async () => {
+    const bundle = (await import("../../locales/zh-Hans/issues.json")).default as {
+      activity: Record<string, string>;
+    };
+    const copy = bundle.activity.dependency_auto_start_skipped ?? "";
+    expect(copy.startsWith("{{key}}")).toBe(true);
+    expect(copy).toContain("负责人");
+    expect(copy).toContain("指派");
+    expect(copy).toContain("不需要强制开工");
+  });
+
+  it("renders a failed prerequisite with the dead prerequisite's key", () => {
+    expect(
+      formatActivity(activity("dependency_prerequisite_failed", { details: { prerequisite_key: "MUL-10" } }), t),
+    ).toBe('activity.dependency_prerequisite_failed {"key":"MUL-10"}');
+  });
+
+  it("renders the waiting marker of a creation that parked in backlog", () => {
+    expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
+  });
+
+  it("renders a member forced start", () => {
+    expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+  });
+
+  it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {
+    expect(
+      formatActivity(activity("dispatch_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe("activity.dependency_gate_reason_dependencies_unmet");
+  });
+
+  it("renders a readiness report folded into an already-queued round", () => {
+    expect(formatActivity(activity("dependency_satisfied_coalesced"), t))
+      .toBe("activity.dependency_satisfied_coalesced");
+  });
+
+  it("renders the dependency hold for a mention that could not dispatch", () => {
+    // The outer copy names the skip; the reason resolves to the dependency hold
+    // rather than leaking the raw "dependencies_unmet" string.
+    expect(
+      formatActivity(activity("comment_mention_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe('activity.comment_mention_skipped {"reason":"activity.dependency_gate_reason_dependencies_unmet"}');
+  });
+
+  it("falls back to ? when the satisfying key is missing", () => {
+    expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
   });
 });

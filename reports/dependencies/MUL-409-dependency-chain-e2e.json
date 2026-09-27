@@ -1,0 +1,634 @@
+{
+  "issue": "MUL-409",
+  "acceptance": "MUL-400 E3 acceptance 2 — parent + 3 serially dependent children, real PostgreSQL",
+  "database": "throwaway PG database, dropped after the run",
+  "serverCode": "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
+  "testDoubles": "execution agent and worker only (no provider is run)",
+  "ranAt": "2026-09-27T12:29:59.404Z",
+  "steps": [
+    {
+      "step": "create parent",
+      "status": "ok",
+      "detail": {
+        "key": "MUL-1",
+        "status": "in_progress"
+      }
+    },
+    {
+      "step": "create chain C1 <- C2 <- C3",
+      "status": "ok",
+      "detail": {
+        "c1": "iss_e8fnxvp0e1do",
+        "c2": "iss_vb60hlzf0ive",
+        "c3": "iss_d1nhh421swjm"
+      }
+    },
+    {
+      "step": "C1 created as todo",
+      "status": "ok",
+      "detail": {
+        "status": "todo"
+      }
+    },
+    {
+      "step": "C1 dispatched",
+      "status": "ok",
+      "detail": {
+        "reason": null
+      }
+    },
+    {
+      "step": "C2 parked at backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "C2 reports dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "reason": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "C3 parked at backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "C3 reports dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "reason": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "only C1 has a task",
+      "status": "ok",
+      "detail": {
+        "c1": 1,
+        "c2": 0,
+        "c3": 0
+      }
+    },
+    {
+      "step": "child-progress counts the two waiting children",
+      "status": "ok",
+      "detail": {
+        "progress": {
+          "parentIssueId": "iss_6ri5k2x25gap",
+          "total": 3,
+          "done": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "waiting": 2,
+          "active": 1
+        }
+      }
+    },
+    {
+      "step": "C3 detail lists its unmet prerequisite",
+      "status": "ok",
+      "detail": {
+        "waitingOn": {
+          "unmet": [
+            {
+              "issueId": "iss_d1nhh421swjm",
+              "dependsOnIssueId": "iss_vb60hlzf0ive",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "backlog",
+              "dependencyId": "dep_hztpbfe1zcl4"
+            }
+          ],
+          "prerequisites": [
+            {
+              "issueId": "iss_d1nhh421swjm",
+              "dependsOnIssueId": "iss_vb60hlzf0ive",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "backlog",
+              "dependencyId": "dep_hztpbfe1zcl4"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "children rows carry the prerequisite keys",
+      "status": "ok",
+      "detail": {
+        "c1": [],
+        "c2": [
+          "MUL-2"
+        ],
+        "c3": [
+          "MUL-3"
+        ]
+      }
+    },
+    {
+      "step": "parent in_review held while children are open",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "issue_status_held",
+        "reason": "children_open"
+      }
+    },
+    {
+      "step": "C1: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_et26zx9x0l11"
+      }
+    },
+    {
+      "step": "C1 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "C2 auto-started after C1 finished",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C2 reports dependency_auto_started",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "C2 published issue:updated as todo",
+      "status": "ok",
+      "detail": {
+        "events": [
+          {
+            "issueId": "iss_vb60hlzf0ive",
+            "status": "todo",
+            "prevStatus": "backlog"
+          }
+        ]
+      }
+    },
+    {
+      "step": "C3 still waiting after C1",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "parent still held after C1",
+      "status": "ok",
+      "detail": {
+        "step": 2,
+        "c1": "done",
+        "c2": "todo",
+        "c3": "backlog",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C2: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_a02jfdg78fmu"
+      }
+    },
+    {
+      "step": "C2 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "C3 auto-started after C2 finished",
+      "status": "ok",
+      "detail": {
+        "step": 3,
+        "c1": "done",
+        "c2": "done",
+        "c3": "todo",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C3 reports dependency_auto_started",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "C3 published issue:updated as todo",
+      "status": "ok",
+      "detail": {
+        "events": [
+          {
+            "issueId": "iss_d1nhh421swjm",
+            "status": "todo",
+            "prevStatus": "backlog"
+          }
+        ]
+      }
+    },
+    {
+      "step": "parent still held after C2",
+      "status": "ok",
+      "detail": {
+        "step": 3,
+        "c1": "done",
+        "c2": "done",
+        "c3": "todo",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "C3: round completed",
+      "status": "ok",
+      "detail": {
+        "taskId": "tsk_ber6gzsuel23"
+      }
+    },
+    {
+      "step": "C3 reviewed to done",
+      "status": "ok",
+      "detail": {
+        "status": "done",
+        "http": 200
+      }
+    },
+    {
+      "step": "every child reached done",
+      "status": "ok",
+      "detail": {
+        "step": 4,
+        "c1": "done",
+        "c2": "done",
+        "c3": "done",
+        "parent": "in_progress"
+      }
+    },
+    {
+      "step": "parent reaches in_review only after the last child",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "C3 detail has no unmet prerequisites after running",
+      "status": "ok",
+      "detail": {
+        "waitingOn": {
+          "unmet": [],
+          "prerequisites": [
+            {
+              "issueId": "iss_d1nhh421swjm",
+              "dependsOnIssueId": "iss_vb60hlzf0ive",
+              "key": "MUL-3",
+              "title": "C2",
+              "status": "done",
+              "dependencyId": "dep_hztpbfe1zcl4"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "children rows carry blocked_by",
+      "status": "ok",
+      "detail": {
+        "blockedBy": [
+          [],
+          [],
+          []
+        ]
+      }
+    },
+    {
+      "step": "child-progress reports the parent",
+      "status": "ok",
+      "detail": {
+        "progress": {
+          "parentIssueId": "iss_6ri5k2x25gap",
+          "total": 3,
+          "done": 3,
+          "cancelled": 0,
+          "blocked": 0,
+          "waiting": 0,
+          "active": 0
+        }
+      }
+    },
+    {
+      "step": "replaying done does not create a second round",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "replaying done leaves the dependent done",
+      "status": "ok",
+      "detail": {
+        "c2": "done"
+      }
+    },
+    {
+      "step": "forced child starts parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "member override is accepted",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "forced child owns exactly one round",
+      "status": "ok",
+      "detail": {
+        "rounds": 1
+      }
+    },
+    {
+      "step": "forced child status is todo",
+      "status": "ok",
+      "detail": {
+        "status": "todo"
+      }
+    },
+    {
+      "step": "forced child keeps its dependency row",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "forced start is audited",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the forced round is claimable",
+      "status": "ok",
+      "detail": {
+        "claimed": "tsk_uzgxj3s277hp",
+        "expected": "tsk_uzgxj3s277hp"
+      }
+    },
+    {
+      "step": "a finished prerequisite adds no second round to a forced child",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "depending on an ancestor is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependency_on_ancestor"
+      }
+    },
+    {
+      "step": "the rejected creation leaves no orphan issue",
+      "status": "ok",
+      "detail": {
+        "before": 6,
+        "after": 6
+      }
+    },
+    {
+      "step": "the rejected creation leaves no child row",
+      "status": "ok",
+      "detail": {
+        "before": 4,
+        "after": 4
+      }
+    },
+    {
+      "step": "the rejected creation consumes no issue number",
+      "status": "ok",
+      "detail": {
+        "expected": "MUL-7",
+        "actual": "MUL-7"
+      }
+    },
+    {
+      "step": "issue creation stays a single transaction on Postgres",
+      "status": "ok",
+      "detail": {
+        "maxTransactionDepth": 1
+      }
+    },
+    {
+      "step": "a shared-parent readiness report adds no extra round",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    },
+    {
+      "step": "exactly one round is queued on the shared parent",
+      "status": "ok",
+      "detail": {
+        "rounds": 1
+      }
+    },
+    {
+      "step": "the merged report mentions the ready sibling",
+      "status": "ok",
+      "detail": {
+        "bodies": [
+          "[@E2E executor](mention://agent/agt_e2e) Sub-issue [MUL-10](mention://issue/iss_ea3y8i4hriuy) - \"Sibling prerequisite\" -"
+        ]
+      }
+    },
+    {
+      "step": "the merged report mentions the prerequisite",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the ready sibling records the merge",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the ready sibling stays parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "gated child parks in backlog",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "rerun on a waiting issue answers 409 dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create on a waiting issue answers 409 dependencies_unmet",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "no round was created by either attempt",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "assign with a body force leaves the issue waiting",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "assign with a body force creates no round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "assign with a body force records no override",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "the member status override is accepted",
+      "status": "ok",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "step": "the override dispatches exactly one round",
+      "status": "ok",
+      "detail": {
+        "tasks": 1
+      }
+    },
+    {
+      "step": "the override is audited exactly once",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "forged target starts parked",
+      "status": "ok",
+      "detail": {
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "task create with attempt is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create with preserveIssueStatus is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "task create with preserve_issue_status is refused",
+      "status": "ok",
+      "detail": {
+        "status": 409,
+        "code": "dependencies_unmet"
+      }
+    },
+    {
+      "step": "no forged exemption created a round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "batch force leaves a waiting issue parked",
+      "status": "ok",
+      "detail": {
+        "http": 200,
+        "status": "backlog"
+      }
+    },
+    {
+      "step": "batch force creates no round",
+      "status": "ok",
+      "detail": {
+        "tasks": 0
+      }
+    },
+    {
+      "step": "batch force records no override",
+      "status": "ok",
+      "detail": {}
+    },
+    {
+      "step": "a comment on a prerequisite still lands",
+      "status": "ok",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "step": "a finished prerequisite adds no second round to a forced-over child",
+      "status": "ok",
+      "detail": {
+        "before": 1,
+        "after": 1
+      }
+    }
+  ],
+  "failures": [],
+  "result": "pass"
+}
