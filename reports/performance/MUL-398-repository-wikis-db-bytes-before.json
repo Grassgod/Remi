@@ -1,0 +1,770 @@
+{
+  "generatedAt": "2026-09-27T05:54:34.330Z",
+  "issue": "MUL-398",
+  "route": "/api/workspaces/:id/repository-wikis",
+  "requestPath": "/api/workspaces/local/repository-wikis",
+  "stage": "before",
+  "commit": "43d75571e736293b1300fabf1c54c2d03302de57",
+  "runtime": {
+    "bun": "1.3.14",
+    "platform": "linux x64",
+    "postgres": "18.4",
+    "database": "multiremi_mul398_2321526_475250",
+    "transport": "in-process app.request() over PostgresSyncDatabase (Worker + SharedArrayBuffer)",
+    "accounting": "Server-Timing dbb (production request-metrics db_bytes) + per-statement JSON.stringify({rows,count}) attribution"
+  },
+  "fixture": {
+    "pages": 146,
+    "pageStorage": "openviking",
+    "pageBodyBytes": 50000,
+    "repositoryScopedRuns": 130,
+    "scheduleOnlyRuns": 48,
+    "legacyRuns": 0,
+    "scheduleOnlyCompilationRuns": 3,
+    "runPayloadBytes": 46800,
+    "runResultBytes": 32000,
+    "compilationRuns": 133,
+    "nominalPayloadBytes": 6084000,
+    "nominalResultBytes": 5696000,
+    "seedMs": 1188.3,
+    "storedPayloadBytes": 6573861,
+    "storedResultBytes": 5556228,
+    "storedRuns": 178
+  },
+  "result": {
+    "status": 200,
+    "samples": 5,
+    "warmups": 1,
+    "minMs": 144.423,
+    "p50Ms": 147.381,
+    "p95Ms": 163.744,
+    "maxMs": 163.744,
+    "dbBytes": 23471509,
+    "dbBytesAllEqual": true,
+    "dbQueries": 11,
+    "dbQueriesAllEqual": true,
+    "dbMs": 71.7,
+    "dbParseMs": 33.5,
+    "responseBytes": 1065,
+    "repositories": 2,
+    "topStatements": [
+      {
+        "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+        "calls": 1,
+        "rows": 178,
+        "bytes": 12306475
+      },
+      {
+        "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+        "calls": 1,
+        "rows": 133,
+        "bytes": 10872505
+      },
+      {
+        "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+        "calls": 1,
+        "rows": 146,
+        "bytes": 120178
+      },
+      {
+        "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+        "calls": 2,
+        "rows": 2,
+        "bytes": 114751
+      },
+      {
+        "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+        "calls": 1,
+        "rows": 133,
+        "bytes": 55510
+      },
+      {
+        "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+        "calls": 2,
+        "rows": 2,
+        "bytes": 1350
+      },
+      {
+        "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+        "calls": 1,
+        "rows": 1,
+        "bytes": 618
+      },
+      {
+        "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+        "calls": 1,
+        "rows": 1,
+        "bytes": 101
+      },
+      {
+        "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+        "calls": 1,
+        "rows": 0,
+        "bytes": 0
+      }
+    ]
+  },
+  "responseContract": {
+    "body": {
+      "repositories": [
+        {
+          "repository_id": "repo_mul398_bridge",
+          "repository_name": "mul398-bridge-fixture",
+          "status": "healthy",
+          "status_message": null,
+          "source_revision": null,
+          "page_count": 146,
+          "updated_at": "2026-09-27T05:54:32.830Z",
+          "build": {
+            "status": "idle",
+            "run_id": "run_mul398_0000",
+            "task_id": null,
+            "failure_reason": null,
+            "started_at": "2026-09-26T05:00:00.000Z",
+            "updated_at": "2026-09-26T05:00:30.000Z",
+            "source_revision": "sha000000",
+            "published": false,
+            "outcome": null
+          },
+          "last_published_at": "2026-09-27T05:54:32.830Z",
+          "builds_since_publish": 0,
+          "consecutive_blocked": 0,
+          "alert": null
+        },
+        {
+          "repository_id": "repo_mul398_scheduled",
+          "repository_name": "mul398-scheduled-fixture",
+          "status": "unbuilt",
+          "status_message": null,
+          "source_revision": null,
+          "page_count": 0,
+          "updated_at": null,
+          "build": {
+            "status": "idle",
+            "run_id": "run_mul398_sched_0000",
+            "task_id": null,
+            "failure_reason": null,
+            "started_at": "2026-09-26T02:50:00.000Z",
+            "updated_at": "2026-09-26T02:50:30.000Z",
+            "source_revision": null,
+            "published": false,
+            "outcome": null
+          },
+          "last_published_at": null,
+          "builds_since_publish": 3,
+          "consecutive_blocked": 0,
+          "alert": null
+        }
+      ]
+    },
+    "fieldPaths": [
+      "repositories[].alert",
+      "repositories[].build.failure_reason",
+      "repositories[].build.outcome",
+      "repositories[].build.published",
+      "repositories[].build.run_id",
+      "repositories[].build.source_revision",
+      "repositories[].build.started_at",
+      "repositories[].build.status",
+      "repositories[].build.task_id",
+      "repositories[].build.updated_at",
+      "repositories[].builds_since_publish",
+      "repositories[].consecutive_blocked",
+      "repositories[].last_published_at",
+      "repositories[].page_count",
+      "repositories[].repository_id",
+      "repositories[].repository_name",
+      "repositories[].source_revision",
+      "repositories[].status",
+      "repositories[].status_message",
+      "repositories[].updated_at"
+    ]
+  },
+  "samples": [
+    {
+      "totalMs": 163.7444770000002,
+      "dbMs": 71.7,
+      "dbParseMs": 43.8,
+      "dbQueries": 11,
+      "dbBytes": 23471509,
+      "responseBytes": 1065,
+      "repositories": 2,
+      "responseBody": {
+        "repositories": [
+          {
+            "repository_id": "repo_mul398_bridge",
+            "repository_name": "mul398-bridge-fixture",
+            "status": "healthy",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 146,
+            "updated_at": "2026-09-27T05:54:32.830Z",
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T05:00:00.000Z",
+              "updated_at": "2026-09-26T05:00:30.000Z",
+              "source_revision": "sha000000",
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": "2026-09-27T05:54:32.830Z",
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
+          },
+          {
+            "repository_id": "repo_mul398_scheduled",
+            "repository_name": "mul398-scheduled-fixture",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_sched_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T02:50:00.000Z",
+              "updated_at": "2026-09-26T02:50:30.000Z",
+              "source_revision": null,
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 3,
+            "consecutive_blocked": 0,
+            "alert": null
+          }
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+          "calls": 1,
+          "rows": 178,
+          "bytes": 12306475
+        },
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 10872505
+        },
+        {
+          "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+          "calls": 1,
+          "rows": 146,
+          "bytes": 120178
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 114751
+        },
+        {
+          "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 55510
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 1350
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 618
+        },
+        {
+          "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 101
+        },
+        {
+          "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "totalMs": 156.4862909999997,
+      "dbMs": 71.7,
+      "dbParseMs": 37,
+      "dbQueries": 11,
+      "dbBytes": 23471509,
+      "responseBytes": 1065,
+      "repositories": 2,
+      "responseBody": {
+        "repositories": [
+          {
+            "repository_id": "repo_mul398_bridge",
+            "repository_name": "mul398-bridge-fixture",
+            "status": "healthy",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 146,
+            "updated_at": "2026-09-27T05:54:32.830Z",
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T05:00:00.000Z",
+              "updated_at": "2026-09-26T05:00:30.000Z",
+              "source_revision": "sha000000",
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": "2026-09-27T05:54:32.830Z",
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
+          },
+          {
+            "repository_id": "repo_mul398_scheduled",
+            "repository_name": "mul398-scheduled-fixture",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_sched_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T02:50:00.000Z",
+              "updated_at": "2026-09-26T02:50:30.000Z",
+              "source_revision": null,
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 3,
+            "consecutive_blocked": 0,
+            "alert": null
+          }
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+          "calls": 1,
+          "rows": 178,
+          "bytes": 12306475
+        },
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 10872505
+        },
+        {
+          "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+          "calls": 1,
+          "rows": 146,
+          "bytes": 120178
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 114751
+        },
+        {
+          "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 55510
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 1350
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 618
+        },
+        {
+          "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 101
+        },
+        {
+          "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "totalMs": 146.82772699999987,
+      "dbMs": 73.5,
+      "dbParseMs": 30.9,
+      "dbQueries": 11,
+      "dbBytes": 23471509,
+      "responseBytes": 1065,
+      "repositories": 2,
+      "responseBody": {
+        "repositories": [
+          {
+            "repository_id": "repo_mul398_bridge",
+            "repository_name": "mul398-bridge-fixture",
+            "status": "healthy",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 146,
+            "updated_at": "2026-09-27T05:54:32.830Z",
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T05:00:00.000Z",
+              "updated_at": "2026-09-26T05:00:30.000Z",
+              "source_revision": "sha000000",
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": "2026-09-27T05:54:32.830Z",
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
+          },
+          {
+            "repository_id": "repo_mul398_scheduled",
+            "repository_name": "mul398-scheduled-fixture",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_sched_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T02:50:00.000Z",
+              "updated_at": "2026-09-26T02:50:30.000Z",
+              "source_revision": null,
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 3,
+            "consecutive_blocked": 0,
+            "alert": null
+          }
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+          "calls": 1,
+          "rows": 178,
+          "bytes": 12306475
+        },
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 10872505
+        },
+        {
+          "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+          "calls": 1,
+          "rows": 146,
+          "bytes": 120178
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 114751
+        },
+        {
+          "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 55510
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 1350
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 618
+        },
+        {
+          "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 101
+        },
+        {
+          "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "totalMs": 147.38143600000012,
+      "dbMs": 73.1,
+      "dbParseMs": 31.9,
+      "dbQueries": 11,
+      "dbBytes": 23471509,
+      "responseBytes": 1065,
+      "repositories": 2,
+      "responseBody": {
+        "repositories": [
+          {
+            "repository_id": "repo_mul398_bridge",
+            "repository_name": "mul398-bridge-fixture",
+            "status": "healthy",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 146,
+            "updated_at": "2026-09-27T05:54:32.830Z",
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T05:00:00.000Z",
+              "updated_at": "2026-09-26T05:00:30.000Z",
+              "source_revision": "sha000000",
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": "2026-09-27T05:54:32.830Z",
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
+          },
+          {
+            "repository_id": "repo_mul398_scheduled",
+            "repository_name": "mul398-scheduled-fixture",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_sched_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T02:50:00.000Z",
+              "updated_at": "2026-09-26T02:50:30.000Z",
+              "source_revision": null,
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 3,
+            "consecutive_blocked": 0,
+            "alert": null
+          }
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+          "calls": 1,
+          "rows": 178,
+          "bytes": 12306475
+        },
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 10872505
+        },
+        {
+          "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+          "calls": 1,
+          "rows": 146,
+          "bytes": 120178
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 114751
+        },
+        {
+          "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 55510
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 1350
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 618
+        },
+        {
+          "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 101
+        },
+        {
+          "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "totalMs": 144.42278399999987,
+      "dbMs": 71.1,
+      "dbParseMs": 33.5,
+      "dbQueries": 11,
+      "dbBytes": 23471509,
+      "responseBytes": 1065,
+      "repositories": 2,
+      "responseBody": {
+        "repositories": [
+          {
+            "repository_id": "repo_mul398_bridge",
+            "repository_name": "mul398-bridge-fixture",
+            "status": "healthy",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 146,
+            "updated_at": "2026-09-27T05:54:32.830Z",
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T05:00:00.000Z",
+              "updated_at": "2026-09-26T05:00:30.000Z",
+              "source_revision": "sha000000",
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": "2026-09-27T05:54:32.830Z",
+            "builds_since_publish": 0,
+            "consecutive_blocked": 0,
+            "alert": null
+          },
+          {
+            "repository_id": "repo_mul398_scheduled",
+            "repository_name": "mul398-scheduled-fixture",
+            "status": "unbuilt",
+            "status_message": null,
+            "source_revision": null,
+            "page_count": 0,
+            "updated_at": null,
+            "build": {
+              "status": "idle",
+              "run_id": "run_mul398_sched_0000",
+              "task_id": null,
+              "failure_reason": null,
+              "started_at": "2026-09-26T02:50:00.000Z",
+              "updated_at": "2026-09-26T02:50:30.000Z",
+              "source_revision": null,
+              "published": false,
+              "outcome": null
+            },
+            "last_published_at": null,
+            "builds_since_publish": 3,
+            "consecutive_blocked": 0,
+            "alert": null
+          }
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_tar",
+          "calls": 1,
+          "rows": 178,
+          "bytes": 12306475
+        },
+        {
+          "sql": "SELECT r.* FROM multiremi_autopilot_runs r JOIN multiremi_autopilots a ON a.id = r.autopilot_id WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR (r.schedule_ta",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 10872505
+        },
+        {
+          "sql": "SELECT * FROM multiremi_repository_wiki_docs WHERE workspace_id = ? ORDER BY updated_at DESC",
+          "calls": 1,
+          "rows": 146,
+          "bytes": 120178
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilot_runs WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 114751
+        },
+        {
+          "sql": "SELECT r.*, MAX(o.created_at) AS publication_at FROM multiremi_knowledge_compilation_runs r LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id AND o.artifact_scope = 'repository_wiki' AND o.action NOT",
+          "calls": 1,
+          "rows": 133,
+          "bytes": 55510
+        },
+        {
+          "sql": "SELECT * FROM multiremi_autopilots WHERE id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 1350
+        },
+        {
+          "sql": "SELECT * FROM multiremi_workspaces WHERE id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 618
+        },
+        {
+          "sql": "SELECT repository_id, MAX(updated_at) AS publis FROM multiremi_repository_wiki_docs WHERE workspace_id = ? GROUP BY repository_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 101
+        },
+        {
+          "sql": "SELECT 1 AS published FROM multiremi_repository_wiki_docs doc LEFT JOIN multiremi_repository_wiki_doc_revisions revision ON revision.doc_id = doc.id WHERE doc.workspace_id = ? AND doc.repo",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    }
+  ]
+}
