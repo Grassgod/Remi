@@ -640,12 +640,12 @@ describe("MUL-400 E3 — surfaces", () => {
     expect(detail.waitingOn.unmet).toHaveLength(1);
 
     const progress = await (await app.request("/api/issues/child-progress")).json() as {
-      progress: Array<{ parentIssueId: string; waiting: number; active: number }>;
+      progress: Array<{ parentIssueId: string; total: number; waiting: number; active: number }>;
     };
     const parentRow = progress.progress.find((row) => row.parentIssueId === parent.id)!;
     expect(parentRow.waiting).toBe(1);
     expect(parentRow.active).toBe(1);
-    expect((parentRow as { total: number }).total).toBe(3);
+    expect(parentRow.total).toBe(3);
   });
 
   it("filters lists by parent_id and top_level_only", async () => {
