@@ -273,7 +273,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       // MUL-400 E3 gate 3: this funnel refuses the first task of a waiting
       // issue; the caller has to force-start it explicitly first.
       if (error instanceof IssueDependencyError) {
-        return c.json({ error: error.message, code: error.code }, 409);
+        return c.json({ error: error.message, code: error.code, unmet: error.details.unmet ?? [] }, 409);
       }
       throw error;
     }
