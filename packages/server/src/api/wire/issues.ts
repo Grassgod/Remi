@@ -22,7 +22,11 @@ import type {
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
-import { IssueDependencyError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
+import {
+  BatchParentStatusGuardError,
+  IssueDependencyError,
+  ParentStatusGuardError,
+} from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
@@ -240,6 +244,14 @@ export function issueSearchErrorResponse(c: Context, err: unknown): Response | n
   return null;
 }
 
+/**
+ * MUL-400 S1: a refused batch names every row the pre-flight rejected, so a
+ * caller can tell "this batch was refused" from "these particular rows were".
+ */
+function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: string[] } {
+  return err instanceof BatchParentStatusGuardError ? { rejected_issue_ids: err.rejectedIssueIds } : {};
+}
+
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   // MUL-400 E1: the parent-status guard is a conflict, and the client needs the
@@ -247,13 +259,18 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
   // the member-only override.
   if (err instanceof ParentStatusGuardError) {
     if (err.code === "parent_done_requires_member") {
-      return c.json({ error: err.message, code: err.code }, 403);
+      return c.json({
+        error: err.message,
+        code: err.code,
+        ...rejectedIssueIds(err),
+      }, 403);
     }
     return c.json({
       error: err.message,
       code: err.code,
       reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
       open_children: err.details.openChildren ?? 0,
+      ...rejectedIssueIds(err),
     }, 409);
   }
   // MUL-400 E3 gate 2: leaving backlog with unmet prerequisites is a conflict,
@@ -327,6 +344,31 @@ export function denyTaskIdentityIssueForce(c: Context, input: UpdateIssueInput):
     error: "force is a member-only override; a task cannot bypass the parent-status guard",
     code: "issue_force_requires_member",
   }, 403);
+}
+
+/**
+ * MUL-400 S1: fields the server owns and stamps from the authenticated request.
+ *
+ * The routes overwrite the camelCase spelling, but the store reads several of
+ * these as `input.foo ?? input.foo_snake` (the `issue_status_forced` audit's
+ * source task, the parent wakeup's `parentTaskId`, and A4's `actorType`). A body
+ * that sends BOTH spellings would therefore leave the snake_case alias behind
+ * to win the `??`. Strip both spellings before stamping, and strip the actor
+ * fields too so a body can never pick the identity the guard branches on.
+ */
+const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
+  "actorType",
+  "actor_type",
+  "actorId",
+  "actor_id",
+  "parentTaskId",
+  "parent_task_id",
+] as const;
+
+export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
+  const out: Record<string, unknown> = { ...input };
+  for (const field of SERVER_OWNED_ISSUE_UPDATE_FIELDS) delete out[field];
+  return out as UpdateIssueInput;
 }
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {

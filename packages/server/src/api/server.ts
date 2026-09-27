@@ -7,7 +7,7 @@ import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
-import { ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
+import { BatchParentStatusGuardError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
 import {
   DaemonIdentityOwnerConflictError,
   DaemonRetiredError,
@@ -430,14 +430,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // a server fault. The native Issue routes throw straight out of the store, so
     // the mapping lives here next to the other typed store errors.
     if (err instanceof ParentStatusGuardError) {
+      const rejected = err instanceof BatchParentStatusGuardError
+        ? { rejected_issue_ids: err.rejectedIssueIds }
+        : {};
       if (err.code === "parent_done_requires_member") {
-        return c.json({ error: err.message, code: err.code }, 403);
+        return c.json({ error: err.message, code: err.code, ...rejected }, 403);
       }
       return c.json({
         error: err.message,
         code: err.code,
         reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
         open_children: err.details.openChildren ?? 0,
+        ...rejected,
       }, 409);
     }
     if (err instanceof RuntimeWorkspaceError) return c.json({ error: err.message, code: "runtime_workspace_error" }, err.status);

@@ -74,6 +74,12 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    owners get the `child_issue_terminal` inbox type, warning for failed/blocked
    and info otherwise. A parent with no assignee keeps its historic comment and
    skip record and now also reaches subscribers.
+   A child that ends while its parent is already `done`/`cancelled` is a
+   different case: the parent's status is a settled human decision and nothing
+   may be filed against a closed parent, so the ending is recorded as a single
+   `child_status_after_parent_closed` activity (child id, key and outcome) and
+   nothing else — no comment, no round, no status change. Silence would be the
+   one outcome E2 forbids.
 6. **The merge-completion path respects the child count instead of bypassing it.**
    The SCM merge effect closes a linked Issue when the merge lands, and a merge
    that a human authorized is the confirmation guard A exists to obtain — so A1
@@ -96,6 +102,70 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    at `in_review` with open children moves the next time a child event fires, and
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
+
+8. **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
+   is a bare `BEGIN`/`COMMIT` with no savepoint support, so a nested
+   `transaction()` inside an open one commits the outer transaction early,
+   releases its row locks, and turns the outer `ROLLBACK` into a no-op. The
+   store therefore keeps its `...WithinTransaction` convention: the outermost
+   caller owns the only transaction, and everything under it calls the variant
+   that assumes an open transaction.
+   - `notifyChildStatusChange` opens the single transaction for a child report.
+     The notification comment (with its Session event) and the parent's queued
+     round are written inside it; the round is created through
+     `TasksRepo.createTaskWithinTransaction`, so it still passes through the
+     same creation entry point the rest of the product uses (S2's dependency
+     gate lives there). `notifyTaskEnqueued` and the realtime `comment:created`
+     broadcast are deferred until after the COMMIT.
+   - `createSystemIssueComment` splits into a self-transactional wrapper and a
+     `WithinTransaction` variant, chosen by whether the caller already owns one;
+     its Session event uses `appendSessionEventWithinTransaction` for the same
+     reason.
+   - The task-terminal paths (`completeTask`, `failTask`, `cancelTask`,
+     `redispatchTaskWithinTransaction`, `cancelTasksByTriggerComments`,
+     `recoverOrphans`) and the organizer action facade collect their Issue
+     transitions and replay the hook after their own commit.
+   - **A hook failure does not roll back the child's status.** By the time the
+     hook runs, the child's transition is committed — that is the whole point of
+     running post-commit. The hook's own writes are atomic: a failure inside it
+     leaves no half-written round, comment or activity. The failure is visible at
+     the call site when the caller owns the write (the direct Issue path
+     rethrows) and is always logged with `log.warn` by
+     `TasksRepo.runChildStatusChanges` for the terminal paths, which must not
+     fail a completed run; `journalctl`/the `remi` log file carries the line
+     `child status hook skipped for <issue id>: <message>`.
+   - `PostgresSyncDatabase.transaction()` is deliberately left alone. Teaching it
+     savepoints is a platform-level change with its own blast radius (every
+     caller, the worker bridge, and the SQLite backend's differing semantics),
+     well outside this issue. The constraint is instead held by the call-site
+     convention above and by the depth-counter regression tests.
+   - S2's dependency gate lives in this same hook. Its automatic start
+     (`assignIssue`) opens its own transaction, so it must stay *outside* the
+     report transaction — before it, committing separately — and only its
+     returned readiness lines feed the report. Verified on a scratch merge of
+     the two branches: the combined path still measures depth 1 on Postgres.
+9. **A batch update is pre-flighted as a whole, then written row by row.** Before
+   the first write, `batchUpdateIssues` evaluates guard A (A1 and A4 included)
+   for every row and refuses the whole batch if any row would be rejected,
+   returning the refused issue ids in `rejected_issue_ids`. This is what makes
+   "refused" and "partially applied" distinguishable. The per-row guard still
+   runs during the write, because a concurrent writer can move an Issue into a
+   guarded state in the window between the pre-flight and the write; that
+   residual race is accepted rather than solved with a global lock. The historic
+   behaviour of silently skipping non-guard errors (missing or inaccessible
+   rows) is unchanged, and a refusal in the write loop now surfaces as an error
+   instead of a 200.
+10. **Unchanged behaviours this ADR pins down.** Two things the second QA round
+    raised are deliberate and stay as they are:
+    - `batchUpdateIssues` still silently skips a row whose write fails for a
+      reason other than the parent-status guard (a missing or inaccessible
+      Issue, for instance). That is the historic batch contract and the `updated`
+      count is what the caller uses; the guard is the one refusal that must
+      surface. A caller should not read `updated` as "everything else succeeded".
+    - `recoverOrphans` only produces an E2 report when the orphan's failure
+      actually moves its Issue's status. A failed task whose Issue still has
+      another live round leaves that Issue where it was, so there is no child
+      ending to report and none is fabricated.
 
 ## Alternatives considered
 

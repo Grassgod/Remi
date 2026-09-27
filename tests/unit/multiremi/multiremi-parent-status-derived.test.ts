@@ -329,7 +329,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(activityOf(store, otherParent.id, "issue_status_forced")).toHaveLength(2);
   });
 
-  it("ignores an injected parent-status bypass flag on every write route", async () => {
+  it("ignores every injected parent-status bypass spelling on all four write routes", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Injection caller", provider: "codex" });
@@ -338,17 +338,26 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const credential = await store.createTaskAccessToken(callerTask, "local");
     const app = createMultiremiApp({ store });
 
+    // Every shape QA's probes used, plus the `options` nesting the store reads
+    // as its own third argument — none of them may reach the guard.
     const injectedFields = [
       { bypass_parent_status_guard: true },
       { bypassParentStatusGuard: true },
       { allowParentStatusGuardBypass: true },
+      { allow_parent_status_guard_bypass: true },
       { holdParentStatus: true },
       { hold_parent_status: true },
+      { holdParentStatus: false, bypass_parent_status_guard: true },
+      { options: { allowParentStatusGuardBypass: true } },
+      { options: { holdParentStatus: true, allowParentStatusGuardBypass: true } },
     ];
+
+    const patchRoutes = ["/api/multiremi/issues", "/api/issues"];
+    const batchRoutes = ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"];
 
     let index = 0;
     for (const injected of injectedFields) {
-      // Fresh parent per attempt so a prior partial write cannot mask the next.
+      // A fresh parent per attempt, so a prior partial write cannot mask the next.
       const parent = store.createIssue({
         title: `Injection parent ${index++}`,
         status: "in_progress",
@@ -356,40 +365,303 @@ describe("MUL-400 E1 — parent status derived from children", () => {
         assigneeId: member.id,
       });
       store.createIssue({ title: "Injection child", parentIssueId: parent.id, status: "in_progress" });
+      const label = JSON.stringify(injected);
 
-      // Two PATCH routes, task identity.
-      for (const path of [`/api/multiremi/issues/${parent.id}`, `/api/issues/${parent.id}`]) {
-        const response = await app.request(path, {
+      // The two PATCH routes, task identity: A4 refuses before anything else.
+      for (const path of patchRoutes) {
+        const response = await app.request(`${path}/${parent.id}`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ status: "done", ...injected }),
         });
-        expect(response.status, `${path} ${JSON.stringify(injected)}`).toBe(403);
-        expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+        expect(response.status, `${path} ${label}`).toBe(403);
+        expect((await response.json()).code, `${path} ${label}`).toBe("parent_done_requires_member");
+        expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
       }
 
-      // Two batch routes, task identity.
-      for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
+      // The two batch routes, same identity, same refusal.
+      for (const path of batchRoutes) {
         const response = await app.request(path, {
           method: "POST",
           headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "done", ...injected } }),
         });
-        expect(response.status, `${path} ${JSON.stringify(injected)}`).toBe(403);
-        expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+        expect(response.status, `${path} ${label}`).toBe(403);
+        expect((await response.json()).code, `${path} ${label}`).toBe("parent_done_requires_member");
+        expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
       }
 
-      // A member cannot bypass through the body either: the guard is the guard.
+      // A member may not take the guard out through the body either. The child
+      // here is still open, so the stored decision is refused by the open-children
+      // rule; the A1 variant below covers the closed-children case.
       const memberAttempt = await app.request(`/api/multiremi/issues/${parent.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "done", actorType: "member", actorId: "local", ...injected }),
+        body: JSON.stringify({ status: "done", ...injected }),
       });
-      expect(memberAttempt.status, JSON.stringify(injected)).toBe(409);
-      expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-      expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
-      expect(activityOf(store, parent.id, "issue_status_forced")).toHaveLength(0);
+      expect(memberAttempt.status, `member ${label}`).toBe(409);
+      expect((await memberAttempt.json()).code, `member ${label}`).toBe("issue_status_held");
+      expect(store.getIssue(parent.id)?.status, `member ${label}`).toBe("in_progress");
+      expect(activityOf(store, parent.id, "parent_status_held"), label).toHaveLength(0);
+      expect(activityOf(store, parent.id, "issue_status_forced"), label).toHaveLength(0);
+
+      // The other half of QA's finding: an AGENT-owned parent whose children are
+      // all finished but which has no result-bearing round yet. A member request
+      // is refused by A1, and the injected bypass must not lift that either.
+      const agentParent = store.createIssue({
+        title: `Injection A1 parent ${index++}`,
+        status: "in_progress",
+        assigneeType: "agent",
+        assigneeId: agent.id,
+      });
+      store.updateIssue(
+        store.createIssue({ title: "Injection A1 child", parentIssueId: agentParent.id, status: "in_progress" }).id,
+        { status: "done" },
+      );
+      const memberA1 = await app.request(`/api/multiremi/issues/${agentParent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "done", ...injected }),
+      });
+      expect(memberA1.status, `member A1 ${label}`).toBe(409);
+      expect((await memberA1.json()).code, `member A1 ${label}`).toBe("final_summary_missing");
+      expect(store.getIssue(agentParent.id)?.status, `member A1 ${label}`).toBe("in_progress");
+      expect(activityOf(store, agentParent.id, "issue_status_forced"), `member A1 ${label}`).toHaveLength(0);
     }
+  });
+
+  it("refuses a body that claims a member identity on all four write routes", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Identity caller", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Identity owner", role: "member" });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    const app = createMultiremiApp({ store });
+
+    // The route stamps `actorType`/`actorId` from the token, so both the
+    // camelCase and the snake_case spellings of a forged member identity are
+    // server-owned fields and get stripped before the store sees them.
+    const forgedIdentities = [
+      { actorType: "member" },
+      { actor_type: "member" },
+      { actorType: "member", actorId: "local" },
+      { actor_type: "member", actor_id: "local" },
+      { actorType: "member", force: true },
+      { actor_type: "member", force: true },
+    ];
+
+    let index = 0;
+    for (const forged of forgedIdentities) {
+      const parent = store.createIssue({
+        title: `Identity parent ${index++}`,
+        status: "in_progress",
+        assigneeType: "member",
+        assigneeId: member.id,
+      });
+      store.createIssue({ title: "Identity child", parentIssueId: parent.id, status: "in_progress" });
+      const label = JSON.stringify(forged);
+
+      for (const path of ["/api/multiremi/issues", "/api/issues"]) {
+        const response = await app.request(`${path}/${parent.id}`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "done", ...forged }),
+        });
+        // A task identity sending `force` is refused outright by the route (403
+        // `issue_force_requires_member`); without `force` A4 refuses it (403
+        // `parent_done_requires_member`). Either way it is 403, never a write.
+        expect(response.status, `${path} ${label}`).toBe(403);
+        expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
+      }
+
+      for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
+        const response = await app.request(path, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "done", ...forged } }),
+        });
+        expect(response.status, `${path} ${label}`).toBe(403);
+        expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
+      }
+
+      expect(activityOf(store, parent.id, "issue_status_forced"), label).toHaveLength(0);
+      expect(activityOf(store, parent.id, "parent_status_held"), label).toHaveLength(0);
+    }
+  });
+
+  it("strips a forged snake_case parent_task_id from every write route", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Forge caller", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Forge owner", role: "member" });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    // An unrelated task an attacker would like to blame in the audit record.
+    const innocentTask = store.createTask({ agentId: agent.id, prompt: "innocent" });
+    const app = createMultiremiApp({ store });
+
+    const forgeBodies = [
+      { parent_task_id: innocentTask.id },
+      { parentTaskId: innocentTask.id },
+      { parent_task_id: innocentTask.id, actor_type: "member", actor_id: "local" },
+      { parent_task_id: innocentTask.id, actorType: "member", actorId: "local", force: true },
+    ];
+
+    let index = 0;
+    for (const forged of forgeBodies) {
+      for (const route of [
+        { path: `/api/multiremi/issues/{id}`, batch: false },
+        { path: `/api/issues/{id}`, batch: false },
+        { path: "/api/multiremi/issues/batch-update", batch: true },
+        { path: "/api/issues/batch-update", batch: true },
+      ]) {
+        const parent = store.createIssue({
+          title: `Forge parent ${index++}`,
+          status: "in_progress",
+          assigneeType: "member",
+          assigneeId: member.id,
+        });
+        store.createIssue({ title: "Forge child", parentIssueId: parent.id, status: "in_progress" });
+        const url = route.path.replace("{id}", parent.id);
+        const response = await app.request(url, {
+          method: route.batch ? "POST" : "PATCH",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify(route.batch
+            ? { issue_ids: [parent.id], updates: { status: "done", ...forged } }
+            : { status: "done", ...forged }),
+        });
+        // The task identity is still refused, so the forgery buys nothing.
+        expect(response.status, `${url} ${JSON.stringify(forged)}`).toBe(403);
+
+        // A member can legitimately force; the audit must name the request's own
+        // task (where present) and never the forged one.
+        const memberForce = await app.request(url, {
+          method: route.batch ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(route.batch
+            ? { issue_ids: [parent.id], updates: { status: "done", force: true, ...forged } }
+            : { status: "done", force: true, ...forged }),
+        });
+        expect(memberForce.status, `${url} member ${JSON.stringify(forged)}`).toBe(200);
+        const forced = activityOf(store, parent.id, "issue_status_forced");
+        expect(forced, url).toHaveLength(1);
+        expect(forced[0]?.data?.sourceTaskId, `${url} ${JSON.stringify(forged)}`).toBeUndefined();
+        expect(forced[0]?.data?.parentTaskId, `${url} ${JSON.stringify(forged)}`).toBeUndefined();
+        // ... and the wakeup round the child report queues carries no forged
+        // lineage either.
+        const rounds = store.listTasksForIssue(parent.id);
+        expect(rounds.every((task) => task.parentTaskId !== innocentTask.id), url).toBe(true);
+      }
+    }
+  });
+
+  it("refuses the whole batch without writing any row when one row is guarded", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Batch caller", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Batch owner", role: "member" });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    const app = createMultiremiApp({ store });
+
+    for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
+      // [plain, guarded parent, plain]: only the middle row is refused, and no
+      // row may be written.
+      const plainA = store.createIssue({ title: `Batch plain A ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+      const parent = store.createIssue({ title: `Batch parent ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+      store.createIssue({ title: "Batch parent child", parentIssueId: parent.id, status: "in_progress" });
+      const plainB = store.createIssue({ title: `Batch plain B ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+
+      const response = await app.request(path, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_ids: [plainA.id, parent.id, plainB.id], updates: { status: "done" } }),
+      });
+      expect(response.status, path).toBe(403);
+      const body = await response.json();
+      expect(body.code, path).toBe("parent_done_requires_member");
+      expect(body.rejected_issue_ids, path).toEqual([parent.id]);
+
+      // All-or-nothing: neither the rows before nor after the refused one moved.
+      expect(store.getIssue(plainA.id)?.status, path).toBe("in_progress");
+      expect(store.getIssue(parent.id)?.status, path).toBe("in_progress");
+      expect(store.getIssue(plainB.id)?.status, path).toBe("in_progress");
+      expect(activityOf(store, plainA.id, "issue_status_forced"), path).toHaveLength(0);
+      expect(activityOf(store, parent.id, "issue_status_forced"), path).toHaveLength(0);
+    }
+  });
+
+  it("keeps a batch update that clears the guard to a status the rows may enter", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Batch mover", provider: "codex" });
+    const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
+    const credential = await store.createTaskAccessToken(callerTask, "local");
+    const app = createMultiremiApp({ store });
+
+    // `in_review` is not a member-only terminal, so the pre-flight lets the
+    // batch through; only `done` on a parent is A4's business.
+    const parent = store.createIssue({ title: "Non-terminal batch parent", status: "in_progress" });
+    const child = store.createIssue({ title: "Non-terminal child", parentIssueId: parent.id, status: "in_progress" });
+    const response = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [child.id], updates: { status: "blocked" } }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(child.id)?.status).toBe("blocked");
+  });
+
+  it("records one activity and nothing else when a child ends after the parent closed", () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: "rt_closed_parent", name: "Worker", provider: "claude", maxConcurrency: 4 });
+    const agent = store.createAgent({ name: "Closed parent owner", provider: "claude", runtimeId: runtime.id });
+    const parent = store.createIssue({
+      title: "Already closed parent",
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const failingChild = store.createIssue({
+      title: "Child that fails late",
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    store.updateIssue(parent.id, { status: "done", force: true });
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+
+    // The child fails through the task path: the parent must be told ONCE, by
+    // activity only — no comment, no round, no status change.
+    const failingTask = store.createTask({ agentId: agent.id, issueId: failingChild.id, prompt: "explode" });
+    runTask(store, runtime.id, failingTask.id);
+    store.failTask(failingTask.id, { error: "boom" });
+    expect(store.getIssue(failingChild.id)?.status).toBe("blocked");
+
+    const commentsBefore = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system").length;
+    const roundsBefore = store.listTasksForIssue(parent.id).length;
+    expect(activityOf(store, parent.id, "child_status_after_parent_closed")).toHaveLength(1);
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expect(store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system")).toHaveLength(commentsBefore);
+    expect(store.listTasksForIssue(parent.id)).toHaveLength(roundsBefore);
+
+    // The same for a late `done` on another child, with its own activity.
+    const doneChild = store.createIssue({
+      title: "Child that finishes late",
+      parentIssueId: parent.id,
+      status: "in_progress",
+    });
+    store.updateIssue(doneChild.id, { status: "done" });
+    expect(store.getIssue(parent.id)?.status).toBe("done");
+    const late = activityOf(store, parent.id, "child_status_after_parent_closed");
+    expect(late).toHaveLength(2);
+    expect(late.map((entry) => entry.data?.outcome)).toEqual(["failed", "done"]);
+    expect(store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system"))
+      .toHaveLength(commentsBefore);
+    expect(store.listTasksForIssue(parent.id)).toHaveLength(roundsBefore);
   });
 
   it("does not apply A4 to an agent closing an issue without children", async () => {

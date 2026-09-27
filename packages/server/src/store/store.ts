@@ -4611,6 +4611,7 @@ runMigrations(this.db);
   } {
     const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
     let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    let cancelledResult: ReturnType<TasksRepo["cancelTaskWithinTransaction"]> | null = null;
     const result = this.db.transaction(() => {
       const supervisorTask = this.getTask(input.supervisorTaskId);
       const supervisorAgent = this.getAgent(input.supervisorAgentId);
@@ -4657,7 +4658,10 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        task = this.tasks.cancelTask(target.id);
+        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
+        // its COMMIT would end this one early on Postgres (no savepoints).
+        cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges);
+        task = cancelledResult.task;
       } else if (input.action === "redispatch") {
         redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges);
         task = redispatchResult.cancelled;
@@ -4696,7 +4700,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true });
+      }, { deferAgentMentionDispatch: true, withinTransaction: true });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -4710,6 +4714,7 @@ runMigrations(this.db);
     // The organizer transaction collected the cancelled task's Issue transitions;
     // replay them now that it has committed (MUL-400 E1/E2).
     this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+    if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
     this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;

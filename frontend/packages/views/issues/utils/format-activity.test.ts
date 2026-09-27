@@ -195,6 +195,23 @@ describe("formatActivity", () => {
     expect(
       formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
     ).toBe('activity.issue_status_forced {"status":"status.done"}');
+    // A child that ends after its parent was closed: activity only, and the
+    // copy names both the child and its outcome.
+    expect(
+      formatActivity(
+        activity("child_status_after_parent_closed", {
+          details: { childIssueKey: "MUL-2", outcome: "failed" },
+        }),
+        t,
+      ),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"MUL-2","outcome":"activity.child_outcome_failed"}',
+    );
+    expect(
+      formatActivity(activity("child_status_after_parent_closed", { details: { outcome: "done" } }), t),
+    ).toBe(
+      'activity.child_status_after_parent_closed {"key":"?","outcome":"activity.child_outcome_done"}',
+    );
   });
 
   it("explains why an agent comment mention was skipped", () => {
