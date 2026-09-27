@@ -933,45 +933,66 @@ describe("peer channel — receiving", () => {
 
 describe("peer channel — frozen retry slot (QA round 2)", () => {
   /**
-   * A peer that answers the first attempt of every batch with nothing at all —
-   * the ACK is lost — and then behaves once the sender retries. `seen` is the
-   * concatenation of the events each *delivered* batch carried, so it is exactly
-   * what the receiver would have processed.
+   * A receiver double that models the real one: it processes every batch it
+   * receives, dedupes by `(epoch, batch_seq)` exactly like `PeerChannel.receive`,
+   * and can lose the *response* of chosen batches on their first attempt.
+   *
+   * Modelling the dedupe matters. "ACK lost" does not mean "the receiver did
+   * nothing" — it means the receiver handled the batch and the sender never
+   * learned it. A double that only records acknowledged attempts would hide the
+   * very bug these tests exist to catch: a retry that carries extra events under
+   * an already-handled number is answered `duplicate`, so those extra events are
+   * silently lost.
    */
   function loseFirstAckPeer(options: { loseAckFor?: number[] } = {}) {
     const posts: Array<{ body: string; batchSeq: number; events: unknown[] }> = [];
-    const seen: Array<{ seq: number }> = [];
+    const seqs: number[] = [];
     const attemptsPerSeq = new Map<number, number>();
-    // Only the listed batches lose their first response; later batches deliver
+    const highestHandled = new Map<string, number>();
+    const epoch = "receiver-double";
+    // Only the listed batches lose their first response; later batches answer
     // normally, which is what makes "the retry happened, the rest followed"
     // distinguishable from "every first attempt fails".
     const loseAckFor = new Set(options.loseAckFor ?? [1]);
+    let duplicateBatches = 0;
+
     const fetchImpl: PeerFetch = async (_url, init) => {
       const body = String(init.body);
-      const parsed = JSON.parse(body) as { batch_seq: number; events: Array<{ payload: { messages?: Array<{ seq: number }> } }> };
+      const parsed = JSON.parse(body) as {
+        epoch: string;
+        batch_seq: number;
+        events: Array<{ payload: { messages?: Array<{ seq: number }> } }>;
+      };
       posts.push({ body, batchSeq: parsed.batch_seq, events: parsed.events });
       const attempt = (attemptsPerSeq.get(parsed.batch_seq) ?? 0) + 1;
       attemptsPerSeq.set(parsed.batch_seq, attempt);
-      if (attempt === 1 && loseAckFor.has(parsed.batch_seq)) throw new Error("response lost");
-      // Delivered: record one logical event per message seq, like the receiver.
-      for (const event of parsed.events) {
-        for (const message of event.payload.messages ?? []) seen.push({ seq: message.seq });
+
+      // Receiver side, identical rule to PeerChannel.receive: at or below the
+      // high-water mark for this epoch means "already handled", delivered once.
+      const highest = highestHandled.get(epoch) ?? 0;
+      const duplicate = parsed.batch_seq <= highest;
+      if (duplicate) {
+        duplicateBatches += 1;
+      } else {
+        highestHandled.set(epoch, parsed.batch_seq);
+        for (const event of parsed.events) {
+          for (const message of event.payload.messages ?? []) seqs.push(message.seq);
+        }
       }
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+
+      // The response is what gets lost, not the processing.
+      if (attempt === 1 && loseAckFor.has(parsed.batch_seq)) throw new Error("response lost");
+      return new Response(JSON.stringify({ ok: true, duplicate }), { status: 200 });
     };
+
     return {
       fetchImpl,
       posts,
-      seen,
-      seqs: () => seen.map((entry) => entry.seq),
+      seqs: () => [...seqs],
+      duplicates: () => duplicateBatches,
       /** Every attempt made for one batch_seq, in order. */
       bodiesFor: (batchSeq: number) => posts.filter((post) => post.batchSeq === batchSeq).map((post) => post.body),
     };
-  }
-
-  /** One task_messages event carrying a single message with the given seq. */
-  function messagesEvent(seq: number) {
-    return (payload: Record<string, unknown>) => payload;
   }
 
   it("delivers every event when an ACK is lost and the queue evicts while retrying (QA repro)", async () => {
