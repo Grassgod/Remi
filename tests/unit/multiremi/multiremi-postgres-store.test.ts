@@ -20,7 +20,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
@@ -365,8 +365,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id], [foreignSubject.id, owner.id]]) {
         db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
       }
+      for (const [taskId, runtimeId] of [[foreignRuntime.id, other.id], [foreignSubject.id, owner.id]]) {
+        db.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
+          [taskId, runtimeId, "2026-09-27T00:00:00.000Z"]);
+      }
       const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
       for (const badId of [foreignRuntime.id, foreignSubject.id, "tsk_pg_archive_missing"]) {
+        const previous = store.getTaskTrace(badId);
         const fixture = await buildArchiveFixture({
           subject: { kind: "chat", id: chat.id },
           traces: {
@@ -386,7 +391,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
           claim.uploadAttempt!)).rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
         expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
         expect(store.getTaskTrace(good.id)).toBeNull();
-        expect(store.getTaskTrace(badId)).toBeNull();
+        expect(store.getTaskTrace(badId)).toEqual(previous);
         expect(existsSync(join(root, archive.relativePath))).toBe(false);
       }
       const tampered = await buildArchiveFixture({
@@ -408,6 +413,64 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
       expect(store.getTaskTrace(good.id)).toBeNull();
       expect(existsSync(join(root, archive.relativePath))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove a newer attempt's final archive when an older completion fails on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-archive-fence-"));
+    try {
+      const agent = store.createAgent({ name: "PG archive fence", provider: "codex", workspaceId: "local" });
+      const runtime = store.registerRuntime({
+        id: "rt_pg_archive_fence", name: "fence", provider: "codex",
+        daemonId: "dmn_pg_archive_fence", workspaceId: "local",
+      });
+      const chat = store.createChatSession({ agentId: agent.id, title: "Fence", workspaceId: "local" });
+      db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", [runtime.id, chat.id]);
+      const task = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "trace" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, task.id]);
+      const scope = { kind: "chat", id: chat.id } as const;
+      const fixture = await buildArchiveFixture({
+        subject: scope, traces: { [task.id]: traceFileBody({ events: 1, taskId: task.id }) },
+      });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({
+        workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+        runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes,
+      }).archive;
+      const old = await service.claimUploadAttempt(runtime.id, scope, archive.id);
+      await service.upload(runtime.id, scope, archive.id, old.uploadAttempt!, new Response(fixture.bytes).body);
+      let entered!: () => void;
+      let release!: () => void;
+      const reachedVerify = new Promise<void>((resolve) => { entered = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const internal = service as unknown as { validateArchiveIngest: (...args: unknown[]) => Promise<unknown> };
+      const verify = internal.validateArchiveIngest.bind(service);
+      let first = true;
+      internal.validateArchiveIngest = async (...args) => {
+        if (first) {
+          first = false;
+          entered();
+          await gate;
+          throw new Error("old PG attempt rejected after replacement");
+        }
+        return verify(...args);
+      };
+      const stale = service.complete(runtime.id, scope, archive.id, old.uploadAttempt!);
+      await reachedVerify;
+      expect(store.markSessionArchiveFailedAttempt(archive.id, runtime.id, old.uploadAttempt!, "retry"))
+        .toMatchObject({ status: "failed" });
+      db.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+        ["2000-01-01T00:00:00.000Z", archive.id]);
+      const newer = await service.claimUploadAttempt(runtime.id, scope, archive.id);
+      await service.upload(runtime.id, scope, archive.id, newer.uploadAttempt!, new Response(fixture.bytes).body);
+      expect((await service.complete(runtime.id, scope, archive.id, newer.uploadAttempt!)).status).toBe("ready");
+      release();
+      await expect(stale).rejects.toThrow("old PG attempt rejected after replacement");
+      expect(store.getSessionArchive(archive.id)).toMatchObject({ status: "ready", attemptCount: newer.uploadAttempt });
+      expect(readFileSync(join(root, archive.relativePath))).toEqual(Buffer.from(fixture.bytes));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
