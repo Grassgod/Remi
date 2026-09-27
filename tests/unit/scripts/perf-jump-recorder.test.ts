@@ -1997,6 +1997,31 @@ describe("collector Server-Timing round trip", () => {
     expect(parseServerTiming(formatCollectedServerTiming([{ name: "db", duration: 0, description: "" }])).db).toBe(0);
   });
 
+  it("carries the count all the way into the report's per-path aggregate", () => {
+    // The acceptance reader looks at `stats.apiByPath[].dbqMax`, so the fix has to
+    // survive the whole path: header -> collector -> round -> scenario stats.
+    const serverHeader = 'total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="84", dbb;desc="12345"';
+    const asCollected = parseServerTiming(serverHeader);
+    expect(asCollected.dbq).toBe(84);
+    // The browser shape, then the collector's rebuild, then the round's parse.
+    const rebuilt = formatCollectedServerTiming([
+      { name: "total", duration: asCollected.total!, description: "" },
+      { name: "db", duration: asCollected.db!, description: "" },
+      { name: "dbp", duration: asCollected.dbp!, description: "" },
+      { name: "dbq", duration: 0, description: String(asCollected.dbq) },
+      { name: "dbb", duration: 0, description: String(asCollected.dbb) },
+    ]);
+    const stats = computeApiPathStats([
+      { apiFirstScreenEntries: [
+        { path: "/api/issues", method: "GET", wave: 1, after: null, startMs: 0, responseEndMs: 20, durationMs: 20, encodedBytes: 0, serverTiming: parseServerTiming(rebuilt), gapMs: 7.7 },
+        { path: "/api/issues", method: "GET", wave: 1, after: null, startMs: 0, responseEndMs: 20, durationMs: 20, encodedBytes: 0, serverTiming: parseServerTiming(rebuilt), gapMs: 7.7 },
+      ] } as never,
+    ]);
+    const row = stats.find((stat) => stat.path === "/api/issues")!;
+    expect(row.dbqMax).toBe(84);
+    expect(row.dbbMax).toBe(12345);
+  });
+
   it("accepts a count that arrived through either parameter", () => {
     // Tolerated on both sides so an older collector shape or a proxy that rewrites
     // `desc` into `dur` cannot silently zero the acceptance number.
