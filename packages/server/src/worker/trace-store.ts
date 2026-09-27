@@ -124,6 +124,20 @@ export interface TraceStore {
 export const TRACE_READ_DEFAULT_LIMIT = 200;
 export const TRACE_READ_MAX_LIMIT = 500;
 
+export function normalizeTraceReadArgs(afterSeq?: number, limit?: number, maxBytes?: number): {
+  afterSeq: number; limit: number; maxBytes: number;
+} {
+  return {
+    afterSeq: afterSeq === undefined || Number.isNaN(afterSeq) || afterSeq < 0 ? 0 : Math.floor(afterSeq),
+    limit: limit === undefined || Number.isNaN(limit)
+      ? TRACE_READ_DEFAULT_LIMIT
+      : Math.max(1, Math.min(Math.floor(limit), TRACE_READ_MAX_LIMIT)),
+    maxBytes: maxBytes === undefined || Number.isNaN(maxBytes)
+      ? Infinity
+      : Math.max(0, Math.floor(maxBytes)),
+  };
+}
+
 interface TraceState {
   events: TraceEvent[];
   head: number;
@@ -176,21 +190,21 @@ export class InMemoryTraceStore implements TraceStore {
     taskId: string,
     afterSeq = 0,
     limit = TRACE_READ_DEFAULT_LIMIT,
-    maxBytes = Number.MAX_SAFE_INTEGER,
+    maxBytes?: number,
   ): TraceReadResult {
     const state = this.tasks.get(taskId);
     if (!state) return { events: [], head: 0, eof: true };
 
-    const boundedLimit = Math.max(1, Math.min(Math.floor(limit), TRACE_READ_MAX_LIMIT));
+    const args = normalizeTraceReadArgs(afterSeq, limit, maxBytes);
     const events: TraceEvent[] = [];
     let bytes = 0;
     for (const event of state.events) {
-      if (event.seq <= afterSeq) continue;
-      if (events.length >= boundedLimit) break;
+      if (event.seq <= args.afterSeq) continue;
+      if (events.length >= args.limit) break;
       const size = traceEventBytes(event);
       // Always admit the first event of the page, even if it alone exceeds the
       // byte budget; otherwise a single large event would block every reader.
-      if (events.length > 0 && bytes + size > maxBytes) break;
+      if (events.length > 0 && bytes + size > args.maxBytes) break;
       events.push(event);
       bytes += size;
     }
@@ -198,7 +212,7 @@ export class InMemoryTraceStore implements TraceStore {
     // Written traces are dense, so the last returned seq tells the truth. A
     // backfilled trace is sparse and this stays a best-effort answer; callers that
     // need exactness compare against `head`.
-    const lastSeq = events.at(-1)?.seq ?? afterSeq;
+    const lastSeq = events.at(-1)?.seq ?? args.afterSeq;
     return { events, head, eof: lastSeq >= head };
   }
 

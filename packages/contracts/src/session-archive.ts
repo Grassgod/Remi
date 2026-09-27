@@ -14,7 +14,7 @@
  */
 
 import type { SessionArchiveSubjectKind } from "./trace-file.js";
-import { TRACE_END_STATUSES } from "./trace-file.js";
+import { checkTraceFileLines } from "./trace-file.js";
 
 export const SESSION_ARCHIVE_FORMAT_V2 = "multiremi.session-archive.v2" as const;
 /** v1 tar.gz container; accepted rows stay readable, new uploads are rejected. */
@@ -229,7 +229,7 @@ export interface TraceMemberWindow {
   events: TraceEventRecord[];
   /** Largest seq present in the whole member; 0 when it has no events. */
   head: number;
-  /** Whether the member ends with a valid trailer line. */
+  /** Whether the complete member passes the shared trace-file closure check. */
   closed: boolean;
   /** True when no further event exists after the last returned one. */
   complete: boolean;
@@ -272,9 +272,8 @@ export function splitTraceMemberLines(bytes: Uint8Array): string[] {
  * - a repeated `seq` is corruption and the *first* occurrence wins;
  * - `head` is the largest seq in the member, not the event count, because
  *   historical traces may have gaps;
- * - `closed` is true only when the last line is a valid {@link TraceFileTrailer}
- *   (a complete terminal `end` record). A file with only a header, or with a
- *   trailing line that is not a trailer, stays open.
+ * - `closed` follows the shared trace-file validator: framing, events, trailer
+ *   counts and complete final line must all agree.
  */
 export function readTraceMemberWindow(
   bytes: Uint8Array,
@@ -297,10 +296,10 @@ export function readTraceMemberWindow(
     if (parsed.seq > head) head = parsed.seq;
     events.push({ ...parsed.value, seq: parsed.seq });
   }
-  // A trailer is recognised by shape, not by position alone: the ruling only
-  // lets the `TraceFileTrailer` shape close a file, so a stray no-seq line at
-  // the end does not mark the trace finished.
-  const closed = lines.length > 0 && isTraceFileTrailer(lines[lines.length - 1]!);
+  const checked = checkTraceFileLines(lines, {
+    incompleteTail: bytes.length > 0 && bytes[bytes.length - 1] !== 10,
+  });
+  const closed = checked.ok && checked.value.closed;
 
   const from = Number.isSafeInteger(cursor) && cursor > 0 ? cursor : 0;
   const window = events.filter((event) => event.seq > from).slice(0, limit);
@@ -313,34 +312,6 @@ export function readTraceMemberWindow(
     nextCursor,
     duplicateSeqSkipped,
   };
-}
-
-/**
- * True when `line` is a valid trace trailer.
- *
- * `TraceFileTrailer` is `{ end: { status, head, event_count, ended_at } }`, so a
- * line only closes a trace when it carries a valid `end` record. Everything else —
- * including a trailing event with a malformed seq, or a header-only file — is
- * not a trailer.
- */
-export function isTraceFileTrailer(line: string): boolean {
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch {
-    return false;
-  }
-  if (!isRecord(value)) return false;
-  if (!isRecord(value.end)) return false;
-  const end = value.end;
-  return TRACE_END_STATUSES.some((status) => status === end.status)
-    && Number.isSafeInteger(end.head) && Number(end.head) >= 0
-    && Number.isSafeInteger(end.event_count) && Number(end.event_count) >= 0
-    && Number(end.event_count) <= Number(end.head)
-    && (Number(end.head) === 0) === (Number(end.event_count) === 0)
-    && typeof end.ended_at === "string"
-    && !Number.isNaN(Date.parse(end.ended_at))
-    && new Date(end.ended_at).toISOString() === end.ended_at;
 }
 
 function parseTraceLine(line: string): TraceLine | null {

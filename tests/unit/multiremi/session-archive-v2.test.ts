@@ -245,7 +245,8 @@ describe("Session archive random access", () => {
       status: "ready",
     });
     // Header, three events with a gap where seq 3 would be, a duplicate seq 2, a
-    // ruled trailer, then a crash-truncated half line with no newline.
+    // trailer, then a crash-truncated half line. The events are readable, but
+    // B3's shared validator cannot establish that this trace is closed.
     const body = [
       JSON.stringify({
         format: TRACE_FILE_FORMAT,
@@ -255,10 +256,10 @@ describe("Session archive random access", () => {
         provider: "codex",
         started_at: "2026-09-27T00:00:00.000Z",
       }),
-      JSON.stringify({ seq: 1, type: "execution", content: "one" }),
-      JSON.stringify({ seq: 2, type: "execution", content: "two" }),
-      JSON.stringify({ seq: 4, type: "execution", content: "four" }),
-      JSON.stringify({ seq: 2, type: "execution", content: "duplicate two" }),
+      JSON.stringify({ seq: 1, ts: "2026-09-27T00:00:01.000Z", type: "execution", content: "one" }),
+      JSON.stringify({ seq: 2, ts: "2026-09-27T00:00:02.000Z", type: "execution", content: "two" }),
+      JSON.stringify({ seq: 4, ts: "2026-09-27T00:00:04.000Z", type: "execution", content: "four" }),
+      JSON.stringify({ seq: 2, ts: "2026-09-27T00:00:02.000Z", type: "execution", content: "duplicate two" }),
       JSON.stringify({
         end: {
           status: "completed",
@@ -297,7 +298,7 @@ describe("Session archive random access", () => {
     // `head` is the largest seq, not the count: seq 3 is missing and the half
     // line (seq 5) never made it into the file.
     const pointer = store.getTaskTrace("tsk_cursor")!;
-    expect(pointer).toMatchObject({ headSeq: 4, eventCount: 3, closed: true, archiveId: ready.id });
+    expect(pointer).toMatchObject({ headSeq: 4, eventCount: 3, closed: false, archiveId: ready.id });
 
     const reader = new SessionArchiveReader({ store, root });
     const window = await reader.readTraceLines(pointer, 0, 50);
@@ -305,7 +306,7 @@ describe("Session archive random access", () => {
     expect(window.events[1]?.content).toBe("two");
     expect(window.duplicateSeqSkipped).toBe(1);
     expect(window.head).toBe(4);
-    expect(window.closed).toBe(true);
+    expect(window.closed).toBe(false);
     expect(window.complete).toBe(true);
 
     const paged = await reader.readTraceLines(pointer, 1, 1);
@@ -832,9 +833,9 @@ describe("Session archive QA round 1", () => {
         provider: "codex",
         started_at: "2026-09-27T00:00:00.000Z",
       }),
-      JSON.stringify({ seq: 1, type: "execution", content: "one" }),
-      JSON.stringify({ seq: 10, type: "execution", content: "ten" }),
-      JSON.stringify({ seq: 20, type: "execution", content: "twenty" }),
+      JSON.stringify({ seq: 1, ts: "2026-09-27T00:00:01.000Z", type: "execution", content: "one" }),
+      JSON.stringify({ seq: 10, ts: "2026-09-27T00:00:10.000Z", type: "execution", content: "ten" }),
+      JSON.stringify({ seq: 20, ts: "2026-09-27T00:00:20.000Z", type: "execution", content: "twenty" }),
       JSON.stringify({
         end: { status: "completed", head: 20, event_count: 3, ended_at: "2026-09-27T01:00:00.000Z" },
       }),

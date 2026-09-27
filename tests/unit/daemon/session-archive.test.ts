@@ -25,10 +25,10 @@ import { traceFileBody } from "../../unit/multiremi/session-archive-fixtures.js"
 import {
   SESSION_ARCHIVE_INDEX_MEMBER,
   SESSION_ARCHIVE_FORMAT_V2,
-  isTraceFileTrailer,
   readTraceMemberWindow,
   type SessionArchiveIndex,
 } from "@multiremi/contracts/session-archive.js";
+import { isTraceFileTrailer } from "@multiremi/contracts/trace-file.js";
 
 interface ArchiveContents {
   members: Map<string, Buffer>;
@@ -452,7 +452,7 @@ describe("Session archive v2 writer", () => {
     ];
     for (const end of invalid) {
       const trailer = JSON.stringify({ end });
-      expect(isTraceFileTrailer(trailer)).toBe(false);
+      expect(isTraceFileTrailer(JSON.parse(trailer))).toBe(false);
       expect(readTraceMemberWindow(Buffer.from(`${base}${trailer}\n`), 0, 10).closed).toBe(false);
     }
   });

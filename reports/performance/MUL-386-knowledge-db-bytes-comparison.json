@@ -1,0 +1,412 @@
+{
+  "generatedAt": "2026-09-26T10:23:18.318Z",
+  "beforeCommit": "a1e6162312b34d272e22b633d185f014f535f23e",
+  "afterCommit": "92f99d452f3bfdb75d1c327dba8fb8f3a0128c65",
+  "accounting": "db_bytes = JSON.stringify({ rows, count }) per statement, matching pg-worker.ts",
+  "comparisons": [
+    {
+      "mode": "postgres",
+      "rows": [
+        {
+          "route": "submissions list",
+          "beforeBytes": 12085257,
+          "afterBytes": 396399,
+          "beforeStatements": 694,
+          "afterStatements": 694,
+          "beforeMiB": "11.53",
+          "afterMiB": "0.38",
+          "factor": "30.5",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_submissions",
+              "beforeBytes": 11772417,
+              "afterBytes": 0,
+              "beforeCalls": 1,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks",
+              "beforeBytes": 182457,
+              "afterBytes": 182457,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "beforeBytes": 63162,
+              "afterBytes": 63162,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues",
+              "beforeBytes": 62667,
+              "afterBytes": 62667,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id FROM multiremi_issues",
+              "beforeBytes": 4554,
+              "afterBytes": 4554,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT l.* FROM multiremi_issue_labels",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id, workspace_id, project_id, repository FROM multiremi_knowledge_submissions",
+              "beforeBytes": 0,
+              "afterBytes": 83559,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            }
+          ]
+        },
+        {
+          "route": "runs list",
+          "beforeBytes": 15082499,
+          "afterBytes": 213027,
+          "beforeStatements": 503,
+          "afterStatements": 404,
+          "beforeMiB": "14.38",
+          "afterMiB": "0.20",
+          "factor": "70.8",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_run_sources",
+              "beforeBytes": 6965638,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_repository_wiki_docs",
+              "beforeBytes": 5937782,
+              "afterBytes": 0,
+              "beforeCalls": 1,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "beforeBytes": 2032435,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "beforeBytes": 63800,
+              "afterBytes": 63800,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_outputs",
+              "beforeBytes": 48000,
+              "afterBytes": 48000,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_runs",
+              "beforeBytes": 34422,
+              "afterBytes": 34422,
+              "beforeCalls": 1,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspaces",
+              "beforeBytes": 422,
+              "afterBytes": 422,
+              "beforeCalls": 1,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT id, title, path FROM multiremi_project_docs",
+              "beforeBytes": 0,
+              "afterBytes": 3401,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT id, title, path FROM multiremi_repository_wiki_docs",
+              "beforeBytes": 0,
+              "afterBytes": 8702,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT id, run_id, submission_id, source_type,  FROM multiremi_knowledge_compilation_run_sources",
+              "beforeBytes": 0,
+              "afterBytes": 54280,
+              "beforeCalls": 0,
+              "afterCalls": 100
+            }
+          ]
+        },
+        {
+          "route": "recall",
+          "beforeBytes": 16286206,
+          "afterBytes": 28941,
+          "beforeStatements": 42,
+          "afterStatements": 42,
+          "beforeMiB": "15.53",
+          "afterMiB": "0.03",
+          "factor": "562.7",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "beforeBytes": 16274260,
+              "afterBytes": 0,
+              "beforeCalls": 20,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESC FROM multiremi_project_resources",
+              "beforeBytes": 11946,
+              "afterBytes": 11946,
+              "beforeCalls": 22,
+              "afterCalls": 22
+            },
+            {
+              "sql": "SELECT id, project_id, workspace_id, kind, slug FROM multiremi_project_docs",
+              "beforeBytes": 0,
+              "afterBytes": 16995,
+              "beforeCalls": 0,
+              "afterCalls": 20
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "sqlite",
+      "rows": [
+        {
+          "route": "submissions list",
+          "beforeBytes": 12085257,
+          "afterBytes": 396399,
+          "beforeStatements": 694,
+          "afterStatements": 694,
+          "beforeMiB": "11.53",
+          "afterMiB": "0.38",
+          "factor": "30.5",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_submissions",
+              "beforeBytes": 11772417,
+              "afterBytes": 0,
+              "beforeCalls": 1,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks",
+              "beforeBytes": 182457,
+              "afterBytes": 182457,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "beforeBytes": 63162,
+              "afterBytes": 63162,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues",
+              "beforeBytes": 62667,
+              "afterBytes": 62667,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id FROM multiremi_issues",
+              "beforeBytes": 4554,
+              "afterBytes": 4554,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT l.* FROM multiremi_issue_labels",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 99,
+              "afterCalls": 99
+            },
+            {
+              "sql": "SELECT id, workspace_id, project_id, repository FROM multiremi_knowledge_submissions",
+              "beforeBytes": 0,
+              "afterBytes": 83559,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            }
+          ]
+        },
+        {
+          "route": "runs list",
+          "beforeBytes": 15082499,
+          "afterBytes": 213027,
+          "beforeStatements": 503,
+          "afterStatements": 404,
+          "beforeMiB": "14.38",
+          "afterMiB": "0.20",
+          "factor": "70.8",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_run_sources",
+              "beforeBytes": 6965638,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_repository_wiki_docs",
+              "beforeBytes": 5937782,
+              "afterBytes": 0,
+              "beforeCalls": 1,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "beforeBytes": 2032435,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents",
+              "beforeBytes": 63800,
+              "afterBytes": 63800,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_outputs",
+              "beforeBytes": 48000,
+              "afterBytes": 48000,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT * FROM multiremi_knowledge_compilation_runs",
+              "beforeBytes": 34422,
+              "afterBytes": 34422,
+              "beforeCalls": 1,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspaces",
+              "beforeBytes": 422,
+              "afterBytes": 422,
+              "beforeCalls": 1,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills",
+              "beforeBytes": 0,
+              "afterBytes": 0,
+              "beforeCalls": 100,
+              "afterCalls": 100
+            },
+            {
+              "sql": "SELECT id, title, path FROM multiremi_project_docs",
+              "beforeBytes": 0,
+              "afterBytes": 3401,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT id, title, path FROM multiremi_repository_wiki_docs",
+              "beforeBytes": 0,
+              "afterBytes": 8702,
+              "beforeCalls": 0,
+              "afterCalls": 1
+            },
+            {
+              "sql": "SELECT id, run_id, submission_id, source_type,  FROM multiremi_knowledge_compilation_run_sources",
+              "beforeBytes": 0,
+              "afterBytes": 54280,
+              "beforeCalls": 0,
+              "afterCalls": 100
+            }
+          ]
+        },
+        {
+          "route": "recall",
+          "beforeBytes": 16286074,
+          "afterBytes": 28809,
+          "beforeStatements": 42,
+          "afterStatements": 42,
+          "beforeMiB": "15.53",
+          "afterMiB": "0.03",
+          "factor": "565.3",
+          "statements": [
+            {
+              "sql": "SELECT * FROM multiremi_project_docs",
+              "beforeBytes": 16274260,
+              "afterBytes": 0,
+              "beforeCalls": 20,
+              "afterCalls": 0
+            },
+            {
+              "sql": "SELECT p.*, COUNT(i.id) AS issue_count, COALESC FROM multiremi_project_resources",
+              "beforeBytes": 11814,
+              "afterBytes": 11814,
+              "beforeCalls": 22,
+              "afterCalls": 22
+            },
+            {
+              "sql": "SELECT id, project_id, workspace_id, kind, slug FROM multiremi_project_docs",
+              "beforeBytes": 0,
+              "afterBytes": 16995,
+              "beforeCalls": 0,
+              "afterCalls": 20
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

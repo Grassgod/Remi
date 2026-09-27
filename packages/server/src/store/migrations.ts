@@ -44,6 +44,7 @@ const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
 const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
 const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
+const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3194,6 +3195,16 @@ export function runMigrations(db: SqlDatabase): void {
         ON multiremi_tasks(created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_status_created
         ON multiremi_tasks(status, created_at DESC, id DESC);
+    `);
+  });
+  // MUL-386 C.2: `recall` resolves one OpenViking URI per search hit. It used to
+  // call `listProjectDocs`, reading every doc in the project (body included) and
+  // comparing URIs in JavaScript — 15.5 MB of bridge payload per request. This
+  // index backs the replacement lookup by `(project_id, content_uri)`.
+  runMigrationOnce(db, PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION, () => {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_content_uri
+        ON multiremi_project_docs(project_id, content_uri);
     `);
   });
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {
