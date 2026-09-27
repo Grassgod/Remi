@@ -86,6 +86,12 @@ import {
 } from "./lib/deeplink-target";
 import { injectInboxTarget, STUBBED_WRITES, stubLoopNotTerminated } from "./lib/stub-writes";
 import {
+  entryPathFor,
+  PAGE_SEQUENCE,
+  warmEntryForPage,
+  type WarmEntry,
+} from "./lib/page-sequence";
+import {
   collectExcludedRunningIssueIds,
   ENTRY_API_POLL_MS,
   ENTRY_QUIET_CAP_MS,
@@ -124,23 +130,6 @@ const WARM_NAV_TIMEOUT_MS = 10_000;
  */
 const URL_COMMIT_TIMEOUT_MS = 10_000;
 
-/** The eleven MUL-367 pages, in the order one round visits them. */
-const PAGE_SEQUENCE = [
-  { key: "issues", path: "/issues" },
-  { key: "my-issues", path: "/my-issues" },
-  { key: "chat", path: "/chat" },
-  { key: "inbox", path: "/inbox" },
-  { key: "agents", path: "/agents" },
-  { key: "runtimes", path: "/runtimes" },
-  { key: "projects", path: "/projects" },
-  { key: "workbench", path: "/workbench" },
-  { key: "settings", path: "/settings" },
-  { key: "autopilots", path: "/autopilots" },
-  { key: "skills", path: "/skills" },
-] as const;
-
-type PageKey = (typeof PAGE_SEQUENCE)[number]["key"];
-
 /**
  * Inbox notification types that render `AutopilotRunReport` instead of an issue
  * timeline, so a deep link into them would not exercise the timeline path.
@@ -151,9 +140,6 @@ const READING_RULE =
   "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。";
 
 // ── Scenario model ───────────────────────────────────────────────────────────
-
-/** Where a warm round starts from before it clicks into the measured page. */
-type WarmEntry = "issues-list" | "inbox";
 
 interface Scenario {
   key: string;
@@ -764,7 +750,7 @@ async function measureRound(options: {
     if (cold) {
       await page.goto(targetUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
     } else {
-      const entryUrl = workspaceUrl(baseUrl, slug, scenario.entry === "inbox" ? "/inbox" : "/issues");
+      const entryUrl = workspaceUrl(baseUrl, slug, entryPathFor(scenario.entry));
       const entryStartedAt = Date.now();
       const entryNavigate = page.goto(entryUrl, { waitUntil: "commit", timeout: ROUND_TIMEOUT_MS });
       await entryNavigate;
@@ -1347,7 +1333,9 @@ function buildScenarios(options: {
         shape,
         path: page.path,
         targetCommentId: null,
-        entry: "issues-list" as WarmEntry,
+        // `page-issues` enters from the inbox: entering from the issues list and
+        // clicking the issues link is a same-page click (S9-0.1 item 2).
+        entry: warmEntryForPage(page.key),
         clickIssueId: null,
         sidebarPath: mode === "warm" ? page.path : null,
         inboxRowIndex: null,
@@ -1397,7 +1385,7 @@ async function warmupScenarios(options: {
   for (const scenario of scenarios) entries.add(scenario.entry);
   try {
     for (const entry of entries) {
-      const entryPath = entry === "inbox" ? "/inbox" : "/issues";
+      const entryPath = entryPathFor(entry);
       await page.goto(workspaceUrl(baseUrl, slug, entryPath), { waitUntil: "load", timeout: ROUND_TIMEOUT_MS }).catch(() => {});
       // Let the client finish its first data fetch before moving on: a route is
       // only compiled past the point the compiler has seen it.
