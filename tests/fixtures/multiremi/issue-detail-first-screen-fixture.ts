@@ -390,6 +390,38 @@ export function fillTaskBodies(
 
 const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})/g;
 
+/** Timeline page cursors are `base64url([createdAt, id])` — see `encodeTimelineCursor`. */
+const CURSOR_KEY_RE = /^(?:next|prev)_cursor$/;
+
+/**
+ * Scrub the wall clock out of a base64url page cursor.
+ *
+ * The cursor payload embeds `createdAt`, so the ISO rewrite below cannot see it:
+ * any change in how many times the pinned clock is read (a new migration calling
+ * `runMigrationOnce`, for instance) shifts the embedded millisecond and fails
+ * this golden for a reason that has nothing to do with the response shape.
+ * Decode, replace the timestamp, keep the id, and re-encode so the field stays a
+ * cursor-shaped string. Anything that is not a `[timestamp, id]` payload is
+ * returned untouched.
+ */
+function normalizeCursor(cursor: string): string {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    return cursor;
+  }
+  if (!Array.isArray(payload)) return cursor;
+  let changed = false;
+  const scrubbed = payload.map((entry) => {
+    if (typeof entry !== "string") return entry;
+    const replaced = entry.replace(ISO_RE, "<timestamp>");
+    if (replaced !== entry) changed = true;
+    return replaced;
+  });
+  return changed ? Buffer.from(JSON.stringify(scrubbed), "utf8").toString("base64url") : cursor;
+}
+
 /**
  * Replace wall-clock timestamps with a placeholder of the same type so the
  * pre- and post-optimization bodies can be compared with `toEqual`.
@@ -397,6 +429,9 @@ const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:
  * Only `created_at` / `updated_at` / `joined_at` / `resolved_at`-shaped strings
  * are rewritten: ids, bodies, counts and field presence stay exactly as the
  * route produced them, which is what the shape guard has to catch.
+ *
+ * `next_cursor` / `prev_cursor` are scrubbed inside their base64url payload, so
+ * the cursor still has to decode to the same `[<timestamp>, id]` pair.
  */
 export function normalizeIssueDetailResponse(value: unknown): unknown {
   if (typeof value === "string") return value.replace(ISO_RE, "<timestamp>");
@@ -404,7 +439,9 @@ export function normalizeIssueDetailResponse(value: unknown): unknown {
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = normalizeIssueDetailResponse(entry);
+      out[key] = CURSOR_KEY_RE.test(key) && typeof entry === "string"
+        ? normalizeCursor(entry)
+        : normalizeIssueDetailResponse(entry);
     }
     return out;
   }
