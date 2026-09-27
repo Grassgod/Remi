@@ -484,6 +484,81 @@ describe("Organizer supervisor privilege layer", () => {
     expect(redispatchComment.body).toContain(`Replacement task: ${redispatchedBody.replacement_task.id}`);
   });
 
+  it("does not broadcast the organizer audit comment when the transaction rolls back", async () => {
+    const fixture = await setup();
+    await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+
+    // QA round 3 reproduction: fail AFTER the audit comment is written but
+    // BEFORE the organizer transaction commits. The comment row must roll back
+    // (it does — it is in the same transaction) and, crucially, the realtime
+    // push must not have gone out for a comment that never existed.
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = fixture.store.onWorkspaceEvent((event) => {
+      if (event.type === "comment:created") events.push(event);
+    });
+    // QA's injection point: after the audit comment is written, before COMMIT.
+    const issues = (fixture.store as unknown as {
+      issues: { notifyOrganizerAction: (...args: unknown[]) => void };
+    }).issues;
+    const originalNotify = issues.notifyOrganizerAction.bind(issues);
+    issues.notifyOrganizerAction = (...args: unknown[]) => {
+      originalNotify(...args);
+      throw new Error("organizer rollback injection");
+    };
+
+    let threw = false;
+    try {
+      fixture.store.performOrganizerAction({
+        supervisorTaskId: fixture.supervisorTask.id,
+        supervisorAgentId: fixture.supervisorAgent.id,
+        targetTaskId: fixture.targetTask.id,
+        action: "cancel",
+        reason: "rollback probe",
+      });
+    } catch (err) {
+      threw = true;
+      expect((err as Error).message).toBe("organizer rollback injection");
+    } finally {
+      issues.notifyOrganizerAction = originalNotify;
+      unsubscribe();
+    }
+
+    expect(threw).toBe(true);
+    // The transaction rolled back: no audit comment, the target still queued.
+    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("queued");
+    expect(events.filter((event) => event.type === "comment:created")).toHaveLength(0);
+  });
+
+  it("broadcasts the organizer audit comment exactly once after the commit", async () => {
+    const fixture = await setup();
+    const supervisorToken = await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+
+    const events: Array<{ type: string; payload: Record<string, unknown>; inTransaction?: boolean }> = [];
+    const unsubscribe = fixture.store.onWorkspaceEvent((event) => {
+      if (event.type === "comment:created") events.push({ ...event, inTransaction: db!.inTransaction });
+    });
+    try {
+      // The organizer redispatch route is the path that writes the audit comment
+      // inside the organizer transaction.
+      const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+        method: "POST",
+        headers: headers(supervisorToken.token),
+        body: JSON.stringify({ reason: "commit probe" }),
+      });
+      expect(response.status).toBe(202);
+    } finally {
+      unsubscribe();
+    }
+
+    // The comment row is committed and the push fired exactly once, outside the
+    // transaction (so the client could not see it before it was durable).
+    expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("cancelled");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.inTransaction).toBe(false);
+  });
+
   it("dispatches rich organizer comment mentions only after the outer transaction commits", async () => {
     const fixture = await setup();
     await grantSupervisor(fixture);

@@ -2,7 +2,7 @@
 // (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import type { CancelTaskResult } from "./tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
@@ -143,6 +143,7 @@ export class ChatRepo {
       throw new ChatValidationError("Chat sessions cannot be bound to an Issue");
     }
     const cancelled: CancelTaskResult[] = [];
+    const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const updated = this.ctx.db.transaction(() => {
       const initial = this.getChatSession(id);
       if (!initial) throw new Error(`Chat session not found: ${id}`);
@@ -166,7 +167,7 @@ export class ChatRepo {
       );
       if (input.status === "archived") {
         for (const task of this.pendingTasks(id)) {
-          cancelled.push(this.ctx.tasks().cancelTaskWithinTransaction(task.id));
+          cancelled.push(this.ctx.tasks().cancelTaskWithinTransaction(task.id, childStatusChanges));
         }
         this.discardPendingAgentIssueUpdatesWithinTransaction(id);
       }
@@ -174,6 +175,7 @@ export class ChatRepo {
       return updated;
     })();
     for (const result of cancelled) this.ctx.tasks().notifyCancelledTask(result);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitChatEvent(updated, "chat:session_updated", {
       title: updated.title,
       status: updated.status,
@@ -185,13 +187,15 @@ export class ChatRepo {
   }
 
   deleteChatSession(id: string): boolean {
+    const childStatusChangesDel: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const result = this.ctx.db.transaction(() => {
       const initial = this.getChatSession(id);
       if (!initial) return null;
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getChatSession(id);
       if (!current) return null;
-      const cancelled = this.pendingTasks(id).map((task) => this.ctx.tasks().cancelTaskWithinTransaction(task.id));
+      const cancelled = this.pendingTasks(id).map((task) =>
+        this.ctx.tasks().cancelTaskWithinTransaction(task.id, childStatusChangesDel));
       // Keep the original private scope on retained task audits. Clearing it
       // would make their transcripts inherit the workspace Agent visibility.
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE chat_session_id = ?", [id]);
@@ -267,12 +271,13 @@ export class ChatRepo {
   }
 
   removeQueuedChatTasks(chatSessionId: string, taskId?: string): void {
+    const childStatusChangesQ: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const cancelled = this.ctx.db.transaction(() => {
       this.lockActiveSession(chatSessionId);
       const tasks = taskId ? [this.requireQueuedTask(chatSessionId, taskId)]
         : this.pendingTasks(chatSessionId).slice(1).filter((task) => task.status === "queued");
       return tasks.map((task) => {
-        const result = this.ctx.tasks().cancelTaskWithinTransaction(task.id);
+        const result = this.ctx.tasks().cancelTaskWithinTransaction(task.id, childStatusChangesQ);
         this.ctx.db.run(`UPDATE multiremi_attachments SET chat_message_id = NULL WHERE chat_message_id IN
           (SELECT id FROM multiremi_chat_messages WHERE chat_session_id = ? AND task_id = ? AND role = 'user')`, [chatSessionId, task.id]);
         this.ctx.db.run("DELETE FROM multiremi_chat_messages WHERE chat_session_id = ? AND task_id = ? AND role = 'user'", [chatSessionId, task.id]);
@@ -280,10 +285,12 @@ export class ChatRepo {
       });
     })();
     for (const result of cancelled) this.ctx.tasks().notifyCancelledTask(result);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChangesQ);
     this.ctx.emitChatEvent(this.getChatSession(chatSessionId)!, "chat:queue_updated", {});
   }
 
   prioritizeQueuedChatTask(chatSessionId: string, taskId: string): { task_id: string; active_task_id: string | null } {
+    const childStatusChangesP: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const result = this.ctx.db.transaction(() => {
       this.lockActiveSession(chatSessionId);
       this.requireQueuedTask(chatSessionId, taskId);
@@ -294,10 +301,11 @@ export class ChatRepo {
         ?? (pending[0]?.attempt > 1 ? pending[0] : undefined);
       const priority = Math.max(0, ...pending.map((task) => task.priority)) + 1;
       this.ctx.db.run("UPDATE multiremi_tasks SET priority = ?, updated_at = ? WHERE id = ? AND status = 'queued'", [priority, nowIso(), taskId]);
-      const cancelled = active ? this.ctx.tasks().cancelTaskWithinTransaction(active.id) : null;
+      const cancelled = active ? this.ctx.tasks().cancelTaskWithinTransaction(active.id, childStatusChangesP) : null;
       return { cancelled, activeTaskId: active?.id ?? null };
     })();
     if (result.cancelled) this.ctx.tasks().notifyCancelledTask(result.cancelled);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChangesP);
     this.ctx.notifyTaskEnqueued(this.ctx.tasks().getTask(taskId)!);
     this.ctx.emitChatEvent(this.getChatSession(chatSessionId)!, "chat:queue_updated", {});
     return { task_id: taskId, active_task_id: result.activeTaskId };
@@ -429,6 +437,8 @@ export class ChatRepo {
   }
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
+    const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const result = this.ctx.db.transaction(() => {
       const session = this.lockActiveSession(chatSessionId);
       const body = (input.body ?? input.content)?.trim();
@@ -445,7 +455,7 @@ export class ChatRepo {
         holdsWorkspace: false,
         prompt: body,
         parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-      });
+      }, childStatusChanges, deferredEvents);
       this.appendChatMessageWithinTransaction({
         id: messageId,
         chatSessionId: session.id,
@@ -467,6 +477,8 @@ export class ChatRepo {
       return { session: this.getChatSession(session.id)!, message: this.getChatMessage(messageId)!, task, queued };
     })();
     this.ctx.notifyTaskEnqueued(result.task);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     this.ctx.emitChatEvent(result.session, "chat:message", {
       message_id: result.message.id,
       role: "user",

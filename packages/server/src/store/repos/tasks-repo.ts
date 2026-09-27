@@ -28,7 +28,13 @@ import {
   modelFallbackSwitchReason,
 } from "@shared/contracts/task-failure-reasons.js";
 import { chatWorkspaceLineageCurrent, parseChatWorkspaceFingerprint, resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT, type StoreContext } from "@multiremi/store/context.js";
+import {
+  EVENT_TASK_QUEUED_CAPABILITY_TIMEOUT,
+  createCommitEventQueue,
+  type CommitEventQueue,
+  type StoreContext,
+  type WorkspaceEvent,
+} from "@multiremi/store/context.js";
 import {
   isQueuedCapabilityAlert,
   isQueuedCapabilityWaitReason,
@@ -304,6 +310,19 @@ export interface ChildStatusChange {
   /** Terminal status of the task that produced the transition, when it was terminal. */
   taskTerminalStatus?: "completed" | "failed" | "cancelled";
 }
+
+/**
+ * MUL-400 S1 (QA round 3): where an in-transaction writer hands the Issue
+ * transitions its writes produced.
+ *
+ * It is a required parameter on every `...WithinTransaction` variant. The type
+ * is deliberately not optional and not nullable: the alternative — running the
+ * E1/E2 hook inline — opens a second `BEGIN` inside the caller's transaction,
+ * and `PostgresSyncDatabase` has no savepoints, so that inner `COMMIT` would
+ * commit the caller's work early and release its locks. Requiring the collector
+ * makes the compiler ask every call site which transaction owns the write.
+ */
+export type ChildStatusChangeCollector = ChildStatusChange[];
 
 interface TaskTerminalFollowUps {
   retry: MultiremiTask | null;
@@ -584,30 +603,47 @@ export class TasksRepo {
   }
 
   createTask(input: CreateTaskInput): MultiremiTask {
-    const task = this.ctx.db.transaction(() => this.createTaskWithinTransaction(input))();
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const task = this.ctx.db.transaction(() =>
+      this.createTaskWithinTransaction(input, childStatusChanges, deferredEvents))();
     this.ctx.notifyTaskEnqueued(task);
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return task;
   }
 
   ensureDelegationWakeup(input: DelegationWakeupInput): DelegationWakeupResult {
     const initial = this.getTask(input.sourceTaskId);
     if (!initial) return { task: null, created: false, covered: false };
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const result = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const source = this.getTask(input.sourceTaskId);
       if (!source || source.workspaceId !== initial.workspaceId) {
         return { task: null, created: false, covered: false };
       }
-      return this.ensureDelegationWakeupWithinWorkspaceLock(source, input);
+      return this.ensureDelegationWakeupWithinWorkspaceLock(source, input, childStatusChanges, deferredEvents);
     })();
     for (const task of result.createdTasks ?? (result.created && result.task ? [result.task] : [])) {
       this.ctx.notifyTaskEnqueued(task);
     }
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return result;
   }
 
-  /** Caller owns the transaction; notification must happen only after it commits. */
-  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
+  /**
+   * Caller owns the transaction; notification and the E1/E2 hook must happen
+   * only after it commits. `childStatusChanges` is required (see
+   * {@link ChildStatusChangeCollector}) so no call site can run the hook inline.
+   */
+  createTaskWithinTransaction(
+    input: CreateTaskInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+  ): MultiremiTask {
     const initialAgent = this.ctx.agents().getAgent(input.agentId);
     if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
     if (initialAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
@@ -622,11 +658,15 @@ export class TasksRepo {
     if (currentAgent.workspaceId !== workspaceId) {
       throw new Error(`Agent workspace changed while creating task: ${input.agentId}`);
     }
-    return this.createTaskWithinWorkspaceLock(input);
+    return this.createTaskWithinWorkspaceLock(input, childStatusChanges, deferredEvents);
   }
 
   /** Caller holds the task workspace row lock in an open transaction. */
-  private createTaskWithinWorkspaceLock(input: CreateTaskInput): MultiremiTask {
+  private createTaskWithinWorkspaceLock(
+    input: CreateTaskInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+  ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
@@ -1010,7 +1050,10 @@ export class TasksRepo {
     // that round is waiting to be claimed.
     const preserveIssueStatus = Boolean(input.preserveIssueStatus ?? input.preserve_issue_status);
     if (task.issueId && !parentTaskId && !preserveIssueStatus && !this.hasInFlightTaskForIssue(task.issueId)) {
-      this.syncIssueStatusFromTaskWithinTransaction(task, "todo");
+      this.syncIssueStatusFromTaskWithinTransaction(task, "todo", {
+        collectChildStatusChanges: childStatusChanges,
+        deferredEvents,
+      });
     }
     return task;
   }
@@ -1020,6 +1063,7 @@ export class TasksRepo {
     agentId: string,
     executionScope = "",
     audit?: { reason: string; taskId?: string | null },
+    deferredEvents?: CommitEventQueue,
   ): MultiremiSessionAgentLane | null {
     const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
     // A legacy task can predate lane creation, and an agent may already have
@@ -1059,7 +1103,7 @@ export class TasksRepo {
             previousRuntimeId: lane.runtimeId,
             previousProvider: lane.provider,
           },
-        });
+        }, deferredEvents);
       }
     }
     return this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope) ?? lane;
@@ -2454,6 +2498,8 @@ export class TasksRepo {
   }
 
   startTask(taskId: string): MultiremiTask {
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const task = this.ctx.db.transaction(() => {
       const current = this.getTask(taskId);
       if (current) this.getTaskChatExecutionKind(current);
@@ -2466,10 +2512,16 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
       const started = this.getTask(taskId)!;
-      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress", { rederive: true });
+      this.syncIssueStatusFromTaskWithinTransaction(started, "in_progress", {
+        rederive: true,
+        collectChildStatusChanges: childStatusChanges,
+        deferredEvents,
+      });
       return started;
     })();
     this.ctx.notifyTaskEvent("task:running", task);
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return task;
   }
 
@@ -2518,6 +2570,8 @@ export class TasksRepo {
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
     const id = input.id ?? createId("hrq");
     let transitionedTask: MultiremiTask | null = null;
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
       this.ctx.db.run(
@@ -2541,12 +2595,16 @@ export class TasksRepo {
           this.syncIssueStatusFromTaskWithinTransaction(transitionedTask, "in_review", {
             rederive: true,
             exemptFromParentStatusGuard: true,
+            collectChildStatusChanges: childStatusChanges,
+            deferredEvents,
           });
         }
       }
       return this.getTaskHumanRequest(id)!;
     })();
     if (transitionedTask) this.ctx.notifyTaskEvent("task:awaiting_human", transitionedTask);
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return request;
   }
 
@@ -2568,6 +2626,8 @@ export class TasksRepo {
     input: { response: Record<string, unknown>; respondedBy?: string | null },
   ): MultiremiTaskHumanRequest | null {
     let resumedTask: MultiremiTask | null = null;
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
       const result = this.ctx.db.run(
@@ -2578,16 +2638,20 @@ export class TasksRepo {
       );
       if (result.changes === 0) return null;
       const responded = this.getTaskHumanRequest(requestId)!;
-      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId);
+      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
       return responded;
     })();
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return request;
   }
 
   /** Worker-initiated terminal transition (timeout, or task aborted while pending). */
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
     let resumedTask: MultiremiTask | null = null;
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const result = this.ctx.db.run(
         `UPDATE multiremi_task_human_requests
@@ -2597,15 +2661,21 @@ export class TasksRepo {
       );
       if (result.changes === 0) return null;
       const expired = this.getTaskHumanRequest(requestId)!;
-      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(expired.taskId);
+      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(expired.taskId, childStatusChanges, deferredEvents);
       return expired;
     })();
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
+    this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     return request;
   }
 
   /** Caller owns the request/task/Issue/outbox transaction. */
-  private resumeTaskFromAwaitingHumanWithinTransaction(taskId: string): MultiremiTask | null {
+  private resumeTaskFromAwaitingHumanWithinTransaction(
+    taskId: string,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+  ): MultiremiTask | null {
     const pending = this.ctx.db.query(
       "SELECT COUNT(*) AS n FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
     ).get(taskId) as { n: number } | null;
@@ -2619,7 +2689,11 @@ export class TasksRepo {
     if (result.changes > 0) {
       const task = this.getTask(taskId);
       if (task) {
-        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", { rederive: true });
+        this.syncIssueStatusFromTaskWithinTransaction(task, "in_progress", {
+          rederive: true,
+          collectChildStatusChanges: childStatusChanges,
+          deferredEvents,
+        });
         return task;
       }
     }
@@ -2920,6 +2994,7 @@ export class TasksRepo {
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -2955,11 +3030,12 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const completed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges);
+      const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents);
       return { task: completed, followUps };
     })();
     const task = terminal.task;
     this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     this.postAgentReplyComment(task, input.output);
     for (const delegationReturn of terminal.followUps.delegationReturns) {
       this.ctx.notifyTaskEnqueued(delegationReturn);
@@ -2979,6 +3055,7 @@ export class TasksRepo {
     const initial = this.getTask(taskId);
     if (!initial || !isActiveTaskStatus(initial.status)) throw new Error(`Task not found or terminal: ${taskId}`);
     const childStatusChanges: ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
     const terminal = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
       const current = this.getTask(taskId);
@@ -3004,10 +3081,11 @@ export class TasksRepo {
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
       const failed = this.getTask(taskId)!;
-      const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges);
+      const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges, deferredEvents);
       return { task: failed, followUps };
     })();
     this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     if (
       !terminal.followUps.retry
       && terminal.task.issueId
@@ -3026,16 +3104,20 @@ export class TasksRepo {
 
   cancelTask(taskId: string): MultiremiTask {
     const childStatusChanges: ChildStatusChange[] = [];
-    const terminal = this.ctx.db.transaction(() => this.cancelTaskWithinTransaction(taskId, childStatusChanges))();
+    const deferredEvents = createCommitEventQueue();
+    const terminal = this.ctx.db.transaction(() =>
+      this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents))();
     this.runChildStatusChanges(childStatusChanges);
     this.notifyCancelledTask(terminal);
+    this.ctx.emitCommitEvents(deferredEvents);
     return terminal.task;
   }
 
   /** Caller commits before invoking {@link runChildStatusChanges} / {@link notifyCancelledTask}. */
   cancelTaskWithinTransaction(
     taskId: string,
-    childStatusChanges: ChildStatusChange[] | null = null,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): CancelTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -3043,13 +3125,14 @@ export class TasksRepo {
     const current = this.getTask(taskId);
     if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    return this.cancelTaskWithinWorkspaceLock(current, false, childStatusChanges);
+    return this.cancelTaskWithinWorkspaceLock(current, false, childStatusChanges, deferredEvents);
   }
 
   /** Caller owns the outer transaction; notifications are deferred until it commits. */
   redispatchTaskWithinTransaction(
     taskId: string,
-    childStatusChanges: ChildStatusChange[] | null = null,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): RedispatchTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -3059,7 +3142,7 @@ export class TasksRepo {
       throw new Error(`Task not found or terminal: ${taskId}`);
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    const terminal = this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges);
+    const terminal = this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges, deferredEvents);
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(current.chatSessionId) !== current.issueId;
@@ -3085,7 +3168,7 @@ export class TasksRepo {
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
       assignmentSourceEventId: current.assignmentSourceEventId,
-    });
+    }, childStatusChanges);
     if (replacement.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -3104,6 +3187,7 @@ export class TasksRepo {
     const uniqueCommentIds = [...new Set(commentIds.map(cleanOptionalString).filter((id): id is string => Boolean(id)))];
     if (!uniqueCommentIds.length) return 0;
     const childStatusChanges: ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
     const terminals = this.ctx.db.transaction(() => {
       // Terminal delegation handling uses this same lock to detach an explicit
       // @Leader return from its source comment. Re-read only after acquiring
@@ -3123,10 +3207,11 @@ export class TasksRepo {
       ).all(workspaceId, ...uniqueCommentIds) as Row[];
       const tasks = rows.map(toTask);
       this.lockTaskIssueSessionsWithinWorkspaceLock(tasks);
-      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges));
+      return tasks.map((task) => this.cancelTaskWithinWorkspaceLock(task, false, childStatusChanges, deferredEvents));
     })();
     this.runChildStatusChanges(childStatusChanges);
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
+    this.ctx.emitCommitEvents(deferredEvents);
     return terminals.length;
   }
 
@@ -3157,6 +3242,7 @@ export class TasksRepo {
     const initialRuntime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!initialRuntime) throw new Error(`Runtime not found: ${runtimeId}`);
     const workspaceId = initialRuntime.workspaceId ?? "local";
+    const deferredEvents = createCommitEventQueue();
     const recovered = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
@@ -3197,7 +3283,7 @@ export class TasksRepo {
       const delegationReturns: MultiremiTask[] = [];
       const childStatusChanges: ChildStatusChange[] = [];
       for (const task of failedTasks) {
-        const followUps = this.afterTaskTerminal(task, "failed", task.error, true, false, childStatusChanges);
+        const followUps = this.afterTaskTerminal(task, "failed", task.error, true, false, childStatusChanges, deferredEvents);
         if (followUps.retry) retries.push(followUps.retry);
         delegationReturns.push(...followUps.delegationReturns);
       }
@@ -3205,13 +3291,19 @@ export class TasksRepo {
     })();
 
     this.runChildStatusChanges(recovered.childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     for (const retry of recovered.retries) this.ctx.notifyTaskEnqueued(retry);
     for (const delegationReturn of recovered.delegationReturns) this.ctx.notifyTaskEnqueued(delegationReturn);
     for (const task of recovered.failedTasks) this.ctx.notifyTaskEvent("task:failed", task);
     return { orphaned: recovered.failedTasks.length, retried: recovered.retries.length };
   }
 
-  private maybeRetryFailedTask(parent: MultiremiTask, workspaceLockHeld = false): MultiremiTask | null {
+  private maybeRetryFailedTask(
+    parent: MultiremiTask,
+    workspaceLockHeld = false,
+    childStatusChanges: ChildStatusChangeCollector = [],
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
+  ): MultiremiTask | null {
     if (parent.status !== "failed") return null;
     if (!parent.failureReason) return null;
     // MUL-336 splits failure into three recovery policies. TRANSIENT/throttle
@@ -3367,7 +3459,7 @@ export class TasksRepo {
       assignmentSourceEventId: parent.assignmentSourceEventId,
     };
     const retry = workspaceLockHeld
-      ? this.createTaskWithinWorkspaceLock(retryInput)
+      ? this.createTaskWithinWorkspaceLock(retryInput, childStatusChanges, deferredEvents)
       : this.createTask(retryInput);
     if (retry.chatSessionId) {
       this.ctx.db.run(
@@ -3425,6 +3517,8 @@ export class TasksRepo {
   private ensureDelegationWakeupWithinWorkspaceLock(
     source: MultiremiTask,
     input: DelegationWakeupInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): DelegationWakeupResult {
     const rawRequiredEventSeq = Number(input.requiredEventSeq);
     const requiredEventSeq = Number.isFinite(rawRequiredEventSeq)
@@ -3444,7 +3538,7 @@ export class TasksRepo {
         terminalStatus,
         terminalBody: input.terminalBody ?? null,
         requiredEventSeq,
-      });
+      }, childStatusChanges, deferredEvents);
       const task = drained.taskBySourceId.get(source.id) ?? null;
       const created = task != null && drained.createdTasks.some((candidate) => candidate.id === task.id);
       return {
@@ -3547,7 +3641,7 @@ export class TasksRepo {
       parentTaskId: source.id,
       assignmentAuthorType: "system",
       assignmentAuthorId: null,
-    });
+    }, childStatusChanges);
     this.ctx.appendIssueActivity(source.issueId, {
       actorType: "system",
       actorId: null,
@@ -3577,6 +3671,8 @@ export class TasksRepo {
       terminalBody: string | null;
       requiredEventSeq: number;
     } | null,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): DelegationReturnDrainResult {
     this.ctx.db.run(
       "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?",
@@ -3757,7 +3853,7 @@ export class TasksRepo {
         parentTaskId: first.source.id,
         assignmentAuthorType: "system",
         assignmentAuthorId: null,
-      });
+      }, childStatusChanges, deferredEvents);
       this.stampDelegationReports(unresolved, task.id);
       const coveredSourceTaskIds = unresolved.map((report) => report.source.id);
       for (const report of unresolved) taskBySourceId.set(report.source.id, task);
@@ -3847,9 +3943,10 @@ export class TasksRepo {
     task: MultiremiTask,
     status: "completed" | "failed" | "cancelled",
     body: string | null,
-    workspaceLockHeld = false,
-    replacementPlanned = false,
-    childStatusChanges: ChildStatusChange[] | null = null,
+    workspaceLockHeld: boolean,
+    replacementPlanned: boolean,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): TaskTerminalFollowUps {
     const now = nowIso();
     // Runtime recovery also invokes this hook directly. Reject stale transport
@@ -3884,7 +3981,9 @@ export class TasksRepo {
         [now, task.chatSessionId, task.sessionId],
       );
     }
-    const retry = status === "failed" ? this.maybeRetryFailedTask(task, workspaceLockHeld) : null;
+    const retry = status === "failed"
+      ? this.maybeRetryFailedTask(task, workspaceLockHeld, childStatusChanges ?? [], deferredEvents)
+      : null;
     if (retry && task.chatSessionId) {
       this.ctx.feishuBot().retargetFeishuRoundPushTaskWithinTransaction(task.id, retry.id);
     }
@@ -4028,7 +4127,7 @@ export class TasksRepo {
           this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
             reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
             taskId: task.id,
-          });
+          }, deferredEvents);
         // A pending recovery retry already suppresses this wakeup for its own
         // source: the drain below skips any delegation source that has a
         // successor attempt with the same lineage. The retry carries that
@@ -4041,7 +4140,7 @@ export class TasksRepo {
                 requiredEventSeq: terminalEvent.seq,
                 terminalStatus: status,
                 terminalBody: body,
-              })
+              }, childStatusChanges ?? [], deferredEvents)
             : this.ensureDelegationWakeup({
                 sourceTaskId: task.id,
                 requiredEventSeq: terminalEvent.seq,
@@ -4065,6 +4164,7 @@ export class TasksRepo {
         if (workspaceLockHeld) {
           this.syncIssueStatusFromTaskWithinTransaction(task, issueStatus, {
             collectChildStatusChanges: childStatusChanges,
+            deferredEvents,
           });
         } else {
           this.syncIssueStatusFromTask(task, issueStatus);
@@ -4096,6 +4196,8 @@ export class TasksRepo {
         roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
           issue,
           leaderTask: task,
+          childStatusChanges: childStatusChanges ?? [],
+          deferredEvents,
         });
       }
     }
@@ -4235,8 +4337,9 @@ export class TasksRepo {
    */
   private cancelTaskWithinWorkspaceLock(
     current: MultiremiTask,
-    replacementPlanned = false,
-    childStatusChanges: ChildStatusChange[] | null = null,
+    replacementPlanned: boolean,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue = createCommitEventQueue(),
   ): {
     task: MultiremiTask;
     followUps: TaskTerminalFollowUps;
@@ -4261,7 +4364,7 @@ export class TasksRepo {
     return {
       task: cancelled,
       followUps: this.afterTaskTerminal(
-        cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges,
+        cancelled, "cancelled", null, true, replacementPlanned, childStatusChanges, deferredEvents,
       ),
     };
   }
@@ -4467,11 +4570,14 @@ export class TasksRepo {
     options: { exemptFromParentStatusGuard?: boolean } = {},
   ): void {
     const childStatusChanges: ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => this.syncIssueStatusFromTaskWithinTransaction(task, status, {
       ...options,
       collectChildStatusChanges: childStatusChanges,
+      deferredEvents,
     }))();
     this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
   }
 
   /**
@@ -4481,24 +4587,48 @@ export class TasksRepo {
    */
   /**
    * Public replay for callers that own their own transaction (the organizer
-   * action path builds one in the store facade). Failure is logged, never
-   * rethrown, so a notification problem cannot fail the committed transition.
+   * action path and the store facade's task-creation callers). Failure is
+   * logged, never rethrown, so a notification problem cannot fail the
+   * committed transition.
    */
-  runCollectedChildStatusChanges(changes: ChildStatusChange[]): void {
-    this.runChildStatusChanges(changes);
+  runCollectedChildStatusChanges(changes: ChildStatusChange[], seen: Set<string> = new Set()): void {
+    this.runChildStatusChanges(changes, seen);
   }
 
-  private runChildStatusChanges(changes: ChildStatusChange[]): void {
-    for (const change of changes) {
-      try {
-        this.ctx.issues().notifyChildStatusChange(change.previous, change.issue, change.taskId, {
-          taskTerminalStatus: change.taskTerminalStatus,
-        });
-      } catch (err) {
-        log.warn(
-          `child status hook skipped for ${change.issue.id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+  /**
+   * Replay collected Issue transitions, now that their transaction committed.
+   *
+   * A hook can itself produce a further transition (the parent round it queues
+   * moves that parent's own status, which is a child event for the grandparent).
+   * Those nested transitions come back as the hook's return value and are
+   * drained here — always after the write that produced them committed, so the
+   * hook never opens a transaction inside another one.
+   *
+   * `seen` bounds the chain: the same (issue, previous -> next, task) transition
+   * is replayed once. Without it a parent/child status ping-pong would keep
+   * producing work forever.
+   */
+  private runChildStatusChanges(changes: ChildStatusChange[], seen: Set<string> = new Set()): void {
+    let queue = changes;
+    while (queue.length > 0) {
+      const next: ChildStatusChange[] = [];
+      for (const change of queue) {
+        const key = [change.issue.id, change.previous.status, change.issue.status, change.taskId].join("|");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        try {
+          const nested = this.ctx.issues().notifyChildStatusChange(change.previous, change.issue, change.taskId, {
+            taskTerminalStatus: change.taskTerminalStatus,
+            seen,
+          });
+          if (nested && nested.length > 0) next.push(...nested);
+        } catch (err) {
+          log.warn(
+            `child status hook skipped for ${change.issue.id}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
+      queue = next;
     }
   }
 
@@ -4511,16 +4641,24 @@ export class TasksRepo {
       /**
        * Caller-owned collector: the E1/E2 hook must run after the caller's
        * transaction commits, so the transition is recorded here and replayed by
-       * {@link runChildStatusChanges}. Pass `null` to run it inline (either the
-       * caller already holds no transaction, or it accepts the nesting).
+       * {@link runChildStatusChanges}. Required — there is no inline path,
+       * because running the hook here would open a second `BEGIN` inside the
+       * caller's transaction and Postgres has no savepoints.
        */
-      collectChildStatusChanges?: ChildStatusChange[] | null;
+      collectChildStatusChanges: ChildStatusChangeCollector;
       /** Skip guard B for a transition the guard deliberately exempts. */
       exemptFromParentStatusGuard?: boolean;
-    } = {},
+      /**
+       * Caller-owned queue for the S1-introduced activity this write emits
+       * (`parent_status_held`'s `activity:created`). The owner flushes it after
+       * COMMIT. The trailing `issue:updated` below is main-existing and
+       * deliberately not deferred.
+       */
+      deferredEvents?: CommitEventQueue;
+    },
   ): void {
     if (!task.issueId || task.chatSessionId) return;
-    const childStatusChanges = options.collectChildStatusChanges ?? null;
+    const childStatusChanges = options.collectChildStatusChanges;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
     // SQLite, so a late worker can never reopen a concurrently accepted or
@@ -4536,6 +4674,7 @@ export class TasksRepo {
     // (or closing an intake parent whose generated children are still open).
     status = this.ctx.issues().holdParentStatusForOpenChildren(task.issueId, status, {
       exempt: options.exemptFromParentStatusGuard === true,
+      deferredEvents: options.deferredEvents,
     });
     const issue = this.ctx.issues().getIssue(task.issueId);
     // Explicit issue terminal states are user decisions. A late worker event
@@ -4565,31 +4704,18 @@ export class TasksRepo {
       // hook writes comments, session events and tasks of its own, and
       // PostgresSyncDatabase has no savepoints, so running it in here would both
       // roll the status back on failure and emit a nested BEGIN on Postgres.
-      if (childStatusChanges) {
-        childStatusChanges.push({
-          previous: issue,
-          issue: updatedIssue,
-          taskId: task.id,
-          taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
-            ? task.status
-            : undefined,
-        });
-      } else {
-        // No collector: the caller is outside the workspace lock and has already
-        // committed, so the hook runs here. Failures stay non-fatal.
-        this.runChildStatusChanges([{
-          previous: issue,
-          issue: updatedIssue,
-          taskId: task.id,
-          taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
-            ? task.status
-            : undefined,
-        }]);
-      }
+      childStatusChanges.push({
+        previous: issue,
+        issue: updatedIssue,
+        taskId: task.id,
+        taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+          ? task.status
+          : undefined,
+      });
     }
     // Task lifecycle writes bypass the HTTP layer, so publish the same partial
     // patch that issue pages and boards already consume from realtime updates.
-    this.ctx.emitWorkspaceEvent({
+    const issueUpdatedEvent: WorkspaceEvent = {
       type: "issue:updated",
       workspaceId: issue.workspaceId,
       actorType: "agent",
@@ -4605,7 +4731,11 @@ export class TasksRepo {
         status_changed: true,
         prev_status: issue.status,
       },
-    });
+    };
+    // Main-existing emission, unchanged by MUL-400: QA round 3 lists this one as
+    // out of scope (the task-status write already commits in the same
+    // transaction, and the patch describes a row both writers agree on).
+    this.ctx.emitWorkspaceEvent(issueUpdatedEvent);
   }
 
   private hasInFlightTaskForIssue(issueId: string): boolean {

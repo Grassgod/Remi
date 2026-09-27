@@ -195,6 +195,78 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
   });
 
+  it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask (Postgres)", () => {
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const parent = store.createIssue({
+      title: "PG lifecycle parent",
+      workspaceId,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    const child = store.createIssue({
+      title: "PG lifecycle child",
+      workspaceId,
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+
+    // QA round 3: the counter must be armed BEFORE createTask. The preparation
+    // phase (create -> claim -> start -> complete) is where the nested
+    // `syncIssueStatusFromTaskWithinTransaction` lived, and measuring only the
+    // terminal call hid it.
+    counter.reset();
+    const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "lifecycle" });
+    expect(counter.max, "createTask").toBe(1);
+    // The child parked at todo, as createTask's own derivation requires.
+    expect(store.getIssue(child.id)?.status).toBe("todo");
+
+    let claimed = store.claimTask(runtime);
+    while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime);
+    expect(claimed?.id).toBe(task.id);
+    counter.reset();
+    store.startTask(task.id);
+    expect(counter.max, "startTask").toBe(1);
+    expect(store.getIssue(child.id)?.status).toBe("in_progress");
+
+    counter.reset();
+    store.completeTask(task.id, { output: "lifecycle done" });
+    expect(counter.max, "completeTask").toBe(1);
+  });
+
+  it("keeps a comment-triggered automatic dispatch at depth 1 (Postgres)", () => {
+    const { workspaceId, agent, runtime } = freshWorkspace();
+    const parent = store.createIssue({
+      title: "PG dispatch parent",
+      workspaceId,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    const child = store.createIssue({
+      title: "PG dispatch child",
+      workspaceId,
+      parentIssueId: parent.id,
+      status: "in_progress",
+      assigneeType: "agent",
+      assigneeId: agent,
+    });
+    // A member comment that mentions the owner dispatches a round through the
+    // same task-creation entry point createTask uses.
+    const member = store.createWorkspaceMember({ name: "PG dispatch member", role: "member", workspaceId });
+    void member;
+
+    counter.reset();
+    store.createIssueComment(child.id, {
+      authorType: "member",
+      authorId: "local",
+      body: `[@${agent}](mention://agent/${agent}) please continue`,
+    });
+    expect(counter.max).toBe(1);
+  });
+
   it("keeps completeTask, failTask and cancelTask at depth 1 on Postgres", () => {
     const { workspaceId, agent, runtime } = freshWorkspace();
     const parent = store.createIssue({
