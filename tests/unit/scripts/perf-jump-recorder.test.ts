@@ -51,7 +51,13 @@ import {
 } from "../../../frontend/scripts/perf/lib/round-measurement";
 import type { ResourceEntry } from "../../../frontend/scripts/perf/lib/harness";
 import { computeApiPathStats } from "../../../frontend/scripts/perf/lib/jump-recorder";
-import { sanitizePath } from "../../../frontend/scripts/perf/lib/harness";
+import { formatCollectedServerTiming, parseServerTiming, sanitizePath } from "../../../frontend/scripts/perf/lib/harness";
+import {
+  entryPathFor,
+  PAGE_SEQUENCE,
+  warmEntryForPage,
+  warmRouteForPage,
+} from "../../../frontend/scripts/perf/lib/page-sequence";
 import {
   collectExcludedRunningIssueIds,
   DEFAULT_ENTRY_QUIET_MS,
@@ -1946,6 +1952,63 @@ describe("running-issue exclusions", () => {
   });
 });
 
+// ── MUL-395 S9-0.1 item 1: the collector dropped `desc`-only metrics.
+//    The API carries `dbq`/`dbb` as `desc` (counts are not durations), and the
+//    browser reports such a metric as `{duration: 0, description: "84"}`, so
+//    writing `dur` back replaced the query count with a synthetic zero.
+
+describe("collector Server-Timing round trip", () => {
+  it("keeps the count of a desc-only metric instead of its synthetic zero", () => {
+    // The browser's shape for `dbq;desc="84"` and `db;dur=12.3`.
+    const rebuilt = formatCollectedServerTiming([
+      { name: "total", duration: 20.5, description: "" },
+      { name: "db", duration: 12.3, description: "" },
+      { name: "dbp", duration: 1.2, description: "" },
+      { name: "dbq", duration: 0, description: "84" },
+      { name: "dbb", duration: 0, description: "12345" },
+    ]);
+    // No synthetic `dur=0.0` on the counts, and no invented `desc=""`.
+    expect(rebuilt).toBe('total;dur=20.5, db;dur=12.3, dbp;dur=1.2, dbq;desc="84", dbb;desc="12345"');
+
+    const parsed = parseServerTiming(rebuilt);
+    expect(parsed.dbq).toBe(84);
+    expect(parsed.dbb).toBe(12345);
+    expect(parsed.total).toBe(20.5);
+    expect(parsed.db).toBe(12.3);
+    expect(parsed.dbp).toBe(1.2);
+  });
+
+  it("parses the server's own header before the browser ever touches it", () => {
+    // `formatServerTiming` in request-metrics.ts is the producer; reading its
+    // output directly keeps the two in step without a browser in the loop.
+    const parsed = parseServerTiming('total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="12345"');
+    expect(parsed.dbq).toBe(7);
+    expect(parsed.dbb).toBe(12345);
+    expect(parsed.total).toBe(12.3);
+  });
+
+  it("keeps a real duration when the metric also carries a description", () => {
+    // A metric with a genuine non-zero `dur` and a description must keep both.
+    const rebuilt = formatCollectedServerTiming([{ name: "db", duration: 12.3, description: "7" }]);
+    expect(rebuilt).toBe('db;dur=12.3;desc="7"');
+    // `dur` wins when it is not the synthesised zero.
+    expect(parseServerTiming(rebuilt).db).toBe(12.3);
+    // A genuine zero duration with no description still reads as zero.
+    expect(parseServerTiming(formatCollectedServerTiming([{ name: "db", duration: 0, description: "" }])).db).toBe(0);
+  });
+
+  it("accepts a count that arrived through either parameter", () => {
+    // Tolerated on both sides so an older collector shape or a proxy that rewrites
+    // `desc` into `dur` cannot silently zero the acceptance number.
+    expect(parseServerTiming('dbq;dur=84, dbb;dur=12345').dbq).toBe(84);
+    expect(parseServerTiming('dbq;desc="84"').dbq).toBe(84);
+    expect(parseServerTiming('dbq;dur=0;desc="84"').dbq).toBe(84);
+    // Nothing usable stays null rather than becoming 0.
+    expect(parseServerTiming("dbq").dbq).toBeNull();
+    expect(parseServerTiming(null).dbq).toBeNull();
+  });
+});
+
 // ── MUL-395 review `cmt_tf79501ls2zg` §4: fixtures write ids by hand
 //    (`iss_zerojump_short`), and those have to normalize like generated ones.
 
@@ -1995,6 +2058,30 @@ describe("sanitizePath", () => {
     expect(path).not.toContain("?");
   });
 
+  it("drops the query and fragment of a relative URL too", () => {
+    // S9-0 QA `cmt_stwldfuv91ry` §5: every collector entry point happens to pass an
+    // absolute URL today, so the relative branch went untested and kept the query.
+    // The function is a defense-in-depth boundary, and a relative URL carries the
+    // same token/cursor material.
+    const withQuery = sanitizePath(
+      "/api/issues/iss_zerojump_short?token=super-secret&cursor=abc123",
+      "http://host",
+      [],
+    );
+    expect(withQuery).toBe("/api/issues/:id");
+    expect(withQuery).not.toContain("super-secret");
+    expect(withQuery).not.toContain("cursor");
+    expect(withQuery).not.toContain("?");
+
+    // A fragment is stripped as well, query or not.
+    expect(sanitizePath("/api/issues/iss_zerojump_short#frag", "http://host", [])).toBe("/api/issues/:id");
+    expect(sanitizePath("/api/issues?x=1#frag", "http://host", [])).toBe("/api/issues");
+    // A bare relative path with nothing to strip is unchanged.
+    expect(sanitizePath("/api/chat/pending-tasks", "http://host", [])).toBe("/api/chat/pending-tasks");
+    // Query-only, no path segments at all.
+    expect(sanitizePath("?token=super-secret", "http://host", [])).toBe("/");
+  });
+
   it("leaves static route segments alone", () => {
     // Two real static segments that carry a separator or a prefix-like shape.
     expect(sanitizePath("http://host/api/chat/pending-tasks", "http://host", [])).toBe("/api/chat/pending-tasks");
@@ -2002,6 +2089,10 @@ describe("sanitizePath", () => {
     // Multi-segment static paths stay intact end to end.
     expect(sanitizePath("http://host/api/inbox/unread-count", "http://host", [])).toBe("/api/inbox/unread-count");
     expect(sanitizePath("http://host/api/issues/grouped", "http://host", [])).toBe("/api/issues/grouped");
+  });
+
+  it("leaves a relative path alone when it has no query to drop", () => {
+    expect(sanitizePath("/api/issues/grouped", "http://host", [])).toBe("/api/issues/grouped");
   });
 
   it("cannot swallow any static segment of the real route table", () => {
@@ -2027,5 +2118,48 @@ describe("sanitizePath", () => {
     for (const segment of [...segments].slice(0, 200)) {
       expect(sanitizePath(`/api/${segment}`, "http://host", [])).toBe(`/api/${segment}`);
     }
+  });
+});
+
+// ── MUL-395 S9-0.1 item 2: `page-issues::warm` entered from the issues list and
+//    then clicked the issues link, so the round measured a same-page click. The
+//    entry mapping lives in `lib/page-sequence.ts` so it can be asserted at all
+//    (`page-speed.ts` calls `main()` on import).
+
+describe("warm page entries", () => {
+  it("never enters a warm page from the page itself", () => {
+    for (const page of PAGE_SEQUENCE) {
+      const route = warmRouteForPage(page);
+      expect(route.entryPath).not.toBe(route.targetPath);
+    }
+  });
+
+  it("sends page-issues to the inbox and leaves every other page on the issues list", () => {
+    expect(warmEntryForPage("issues")).toBe("inbox");
+    expect(warmRouteForPage({ key: "issues", path: "/issues" })).toEqual({
+      entry: "inbox",
+      entryPath: "/inbox",
+      targetPath: "/issues",
+    });
+    // The other ten pages keep the shared entry, so their recorded numbers stay
+    // comparable with the ones already in the artifacts.
+    for (const page of PAGE_SEQUENCE) {
+      if (page.key === "issues") continue;
+      expect(warmEntryForPage(page.key)).toBe("issues-list");
+      expect(warmRouteForPage(page).entryPath).toBe("/issues");
+    }
+  });
+
+  it("maps both entry kinds onto the paths the driver navigates to", () => {
+    expect(entryPathFor("issues-list")).toBe("/issues");
+    expect(entryPathFor("inbox")).toBe("/inbox");
+  });
+
+  it("covers every page the probe navigates, with unique keys", () => {
+    // The list is the report's row set: a page silently dropped here disappears
+    // from every future comparison.
+    expect(PAGE_SEQUENCE).toHaveLength(11);
+    expect(new Set(PAGE_SEQUENCE.map((page) => page.key)).size).toBe(11);
+    expect(new Set(PAGE_SEQUENCE.map((page) => page.path)).size).toBe(11);
   });
 });
