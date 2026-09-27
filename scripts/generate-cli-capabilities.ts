@@ -364,6 +364,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/issues\/:id\/decisions\/:decisionId\/withdraw$/, "issue.decision.withdraw"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/dependencies$/, "issue.dependency.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/dependencies\/:dependencyId$/, "issue.dependency.remove"],
+    [/^POST \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.add"],
+    [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.remove"],
     [/^GET \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.list"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.remove"],

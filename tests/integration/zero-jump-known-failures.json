@@ -9,88 +9,11 @@
     "generatedAt": "2026-09-26",
     "summary": "9 个 key::mode 行全部失败，与清单一一对应：8 行只有 perf-state，detail-deeplink::cold 另有 jumps（跳动 1 次）。"
   },
-  "rows": [
-    {
-      "key": "detail-short",
-      "mode": "cold",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-short",
-      "mode": "warm",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-long",
-      "mode": "cold",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-long",
-      "mode": "warm",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-running",
-      "mode": "cold",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-running",
-      "mode": "warm",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    },
-    {
-      "key": "detail-deeplink",
-      "mode": "cold",
-      "violations": [
-        "jumps",
-        "perf-state"
-      ],
-      "reason": "深链目标在第 40 条评论，落位前页面先按最新一页渲染再滚到目标，未修复前会跳动；深链落位时内容整体位移一次（8359.8px 内容、2450px 滚动），由 MUL-393 的深链改写负责",
-      "owner": "MUL-393"
-    },
-    {
-      "key": "detail-deeplink",
-      "mode": "warm",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "深链目标在第 40 条评论，落位前页面先按最新一页渲染再滚到目标；冷启动会跳动，热路径当前不跳",
-      "owner": "MUL-393"
-    },
-    {
-      "key": "detail-long-sidebar",
-      "mode": "cold",
-      "violations": [
-        "perf-state"
-      ],
-      "reason": "main 上没有任何应用代码写 data-perf-state（写入方改到 MUL-443），因此就绪判定必然缺失",
-      "owner": "MUL-443 / MUL-444"
-    }
-  ]
+  "empty": {
+    "since": "2026-09-27",
+    "issue": "MUL-390",
+    "reason": "MUL-390 在详情页接入 useAnchoredReveal：写入 data-perf-state、隐藏到目标定位完成，并在其分支的 strict 实测里把 9 行全部跑到 0 违例，因此按规则 3 删掉整份清单。证据：reports/performance/MUL-390-zero-jump-strict-2026-09-27.json。",
+    "ratchet": "清单对冻结基线单向收紧；删除整份清单是它的终态。此后任何新增违例都按规则 1 直接失败，新增行必须同批附新的 strict 基线报告。"
+  },
+  "rows": []
 }
