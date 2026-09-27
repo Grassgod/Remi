@@ -523,16 +523,20 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
       .toHaveLength(1);
   });
 
-  it("keeps the done branch (no open children) at depth 1", () => {
-    const { store } = setupDepthStore();
+  it("keeps the granted and summarized done branch at depth 1", () => {
+    const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = store.createIssue({ title: "SCM done parent", workspaceId: "local" });
-    store.updateIssue(parent.id, { status: "in_progress" });
+    const parent = store.createIssue({
+      title: "SCM done parent", workspaceId: "local", status: "in_progress",
+      assigneeType: "agent", assigneeId: agent.id,
+    });
     store.updateIssue(store.createIssue({
       title: "Finished child",
       parentIssueId: parent.id,
       status: "in_progress",
     }).id, { status: "done" });
+    store.grantParentDone(parent.id, "local");
+    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: agent.id });
     projectChangeRequest(store, connection.id, `${parent.key} final delivery`);
 
     const counter = wrapStore(store);

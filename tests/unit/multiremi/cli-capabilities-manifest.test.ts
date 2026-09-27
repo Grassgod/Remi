@@ -168,10 +168,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 668,
+      mapped: 672,
       exempt: 91,
       missing: 0,
-      total: 759,
+      total: 763,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])

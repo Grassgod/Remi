@@ -3209,6 +3209,18 @@ runMigrations(this.db);
     return this.issues.listIssueDependencies(issueId);
   }
 
+  issueParentDoneGrantView(issue: MultiremiIssue) {
+    return this.issues.issueParentDoneGrantView(issue);
+  }
+
+  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
+    return this.issues.grantParentDone(issueId, memberId);
+  }
+
+  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
+    return this.issues.revokeParentDone(issueId, memberId);
+  }
+
   createIssueDependency(
     issueId: string,
     input: CreateIssueDependencyInput,
@@ -3243,6 +3255,18 @@ runMigrations(this.db);
 
   countOpenChildIssues(parentIssueId: string): number {
     return this.issues.countOpenChildIssues(parentIssueId);
+  }
+
+  hasChildIssues(issueId: string): boolean {
+    return this.issues.hasChildIssues(issueId);
+  }
+
+  parentDoneGrantStatus(issue: MultiremiIssue) {
+    return this.issues.parentDoneGrantStatus(issue);
+  }
+
+  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }) {
+    return this.issues.finalSummaryAfterLastChild(parentIssueId, options);
   }
 
   holdParentStatusForOpenChildren(

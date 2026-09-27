@@ -434,13 +434,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         ? { rejected_issue_ids: err.rejectedIssueIds }
         : {};
       if (err.code === "parent_done_requires_member") {
-        return c.json({ error: err.message, code: err.code, ...rejected }, 403);
+        return c.json({ error: err.message, code: err.code, reason: err.details.reason ?? "grant_missing", ...rejected }, 403);
       }
       return c.json({
         error: err.message,
         code: err.code,
-        reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
+        reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
         open_children: err.details.openChildren ?? 0,
+        ...(err.details.lastChildClosedAt !== undefined ? { last_child_closed_at: err.details.lastChildClosedAt } : {}),
         ...rejected,
       }, 409);
     }

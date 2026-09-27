@@ -1815,11 +1815,40 @@ export interface MultiremiIssue {
   labels: MultiremiLabel[];
   /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
   attachments?: MultiremiAttachment[];
+  /**
+   * MUL-400 S1c (A4): the raw `parent_done_grant` columns. All three are null
+   * when no member has authorized the owner agent, which is the default for
+   * every existing row. The derived shape the detail routes expose is
+   * {@link MultiremiIssueParentDoneGrant}.
+   */
+  parentDoneGrantAt: string | null;
+  parentDoneGrantBy: string | null;
+  parentDoneGrantAgentId: string | null;
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * MUL-400 S1c (A4): why a stored grant does or does not authorize the CURRENT
+ * owner agent to close the parent. `grant_missing` is "nobody granted";
+ * `assignee_changed` is "the grant still names a different agent" (D1: a grant
+ * never follows a re-assignment); `owner_not_agent` is "the owner resolves to no
+ * runnable agent at all", which is also what a member-owned parent reports.
+ */
+export type MultiremiIssueParentDoneGrantIneffectiveReason =
+  | "grant_missing"
+  | "assignee_changed"
+  | "owner_not_agent";
+
+export interface MultiremiIssueParentDoneGrant {
+  granted_at: string;
+  granted_by: string;
+  agent_id: string;
+  effective: boolean;
+  ineffective_reason: MultiremiIssueParentDoneGrantIneffectiveReason | null;
 }
 
 export interface MultiremiIssueWithTasks extends MultiremiIssue {

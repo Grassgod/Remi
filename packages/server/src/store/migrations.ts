@@ -2770,6 +2770,12 @@ export function runMigrations(db: SqlDatabase): void {
   // purge snapshot or resurrect archive bytes after the control-plane row is
   // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
+  // MUL-400 S1c (A4): a member may authorize the parent issue's owner agent to
+  // close that single parent once its children are finished. Three nullable
+  // columns, add-only: NULL means "no grant" and matches the pre-S1c behaviour.
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_at TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_by TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_agent_id TEXT");
   const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
   addColumnIfMissing(db, "multiremi_issues", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");

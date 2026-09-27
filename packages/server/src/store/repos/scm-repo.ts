@@ -1728,29 +1728,28 @@ export class ScmRepo {
            WHERE cr.connection_id = ? AND cr.repository_id = ? AND cr.external_id = ?`,
         ).get(issueId, event.connectionId, event.repositoryId, event.subjectId) as Row | null;
         if (!changeRequestRow) throw new Error("SCM change request for merge completion could not be found");
-        // MUL-400 E1: a merge authorizes the MERGE, not the parent's closure.
-        // The governing rule is the child count:
-        //
-        // - No children, or every child finished: close the Issue. A1 and A4 do
-        //   not apply — the human-authorized merge is the confirmation.
-        // - A child is still running: the parent's status must NOT move. The
-        //   effect is marked applied (a hold is a settled outcome, not a retry)
-        //   and leaves a `parent_status_held` row naming the change request. It
-        //   never re-closes the parent later; when the last child finishes, `done`
-        //   is the human's call under E1.
-        //
-        // Child PRs routinely carry the parent key in their title (`MUL-400 S1: …`),
-        // and auto-link matches keys by word boundary, so closing on merge alone
-        // would shut a parent that still has running children.
-        const openChildren = this.ctx.issues().countOpenChildIssues(issueId);
-        const holdForOpenChildren = openChildren > 0;
+        // A linked parent closes only after children, an effective owner-agent
+        // grant and a final summary. A held effect is settled and is not retried.
+        const issues = this.ctx.issues();
+        const hasChildren = issues.hasChildIssues(issueId);
+        const openChildren = hasChildren ? issues.countOpenChildIssues(issueId) : 0;
+        const grant = current && hasChildren ? issues.parentDoneGrantStatus(current) : null;
+        const summary = hasChildren && openChildren === 0 && grant?.effective
+          ? issues.finalSummaryAfterLastChild(issueId, { acceptCommentBy: grant.agentId })
+          : null;
+        const holdReason = openChildren > 0 ? "children_open"
+          : hasChildren && !grant?.effective ? "grant_missing"
+          : hasChildren && !summary?.satisfied ? "final_summary_missing"
+          : null;
         const updated = current && current.status !== "done"
-          ? this.ctx.issues().updateIssue(issueId, { status: "done" }, {
-            allowParentStatusGuardBypass: !holdForOpenChildren,
-            holdParentStatus: holdForOpenChildren,
-            holdParentStatusData: holdForOpenChildren
+          ? issues.updateIssue(issueId, { status: "done" }, {
+            allowParentStatusGuardBypass: holdReason == null,
+            holdParentStatus: holdReason != null,
+            holdParentStatusData: holdReason
               ? {
                 source: "scm_merge",
+                reason: holdReason,
+                grant_reason: grant?.reason ?? null,
                 changeRequestNumber: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
                 change_request_number: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
                 changeRequestUrl: nullableString(changeRequestRow.url),
@@ -1763,6 +1762,17 @@ export class ScmRepo {
         // records on the status actually having moved.
         const closed = updated?.status === "done" ? updated : null;
         if (closed) {
+          if (hasChildren && grant?.effective) {
+            this.ctx.appendIssueActivity(issueId, {
+              actorType: "agent", actorId: grant.agentId, type: "parent_done_grant_used",
+              data: {
+                source: "scm_merge", agentId: grant.agentId,
+                grantedBy: grant.grantedBy, grantedAt: grant.grantedAt,
+                changeRequestNumber: changeRequestRow.number == null ? null : Number(changeRequestRow.number),
+                changeRequestUrl: nullableString(changeRequestRow.url),
+              },
+            });
+          }
           this.ctx.appendIssueActivity(issueId, {
             actorType: "system",
             actorId: null,

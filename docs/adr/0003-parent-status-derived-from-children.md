@@ -50,13 +50,18 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 3. **The final-summary signal (A1)** for `done` is: after the last child closes,
    the parent owner completed a round whose `result` carries non-empty output.
    It is skipped for member-owned parents (a human closing the Issue *is* the
-   summary). The check reads the owner's tasks on the parent, so it needs no new
-   column and no migration.
+   summary). An authorized owner agent can also satisfy A1 by posting a non-empty
+   `comment` on that parent after the final child closes. The same alternative
+   applies to SCM merge completion; member closure retains the completed-round
+   rule. The check reads tasks and comments on the parent.
 4. **`force` is member-only.** `UpdateIssueInput.force` passes the guards and
    records `issue_status_forced` (with the child count it overrode). A task
    identity sending `force` gets 403 on all three status writers (both PATCH
-   routes and batch update), and A4 additionally rejects a task identity closing
-   any Issue that has children (`parent_done_requires_member`). Workflow:
+   routes and batch update). A4 rejects a task identity closing an Issue with
+   children unless a member granted this parent to its current owner agent.
+   The grant stores that agent id; reassignment makes it ineffective until a
+   member grants again. Grant creation and revocation are member-only, audited
+   actions. The grant check trusts the agent id in the task token. Workflow:
    attempt without `--force` to see the reason, then repeat with it.
    The system-only bypass is deliberately NOT a field on `UpdateIssueInput`: it
    is an `UpdateIssueOptions` argument passed positionally by the store, because
@@ -80,21 +85,17 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `child_status_after_parent_closed` activity (child id, key and outcome) and
    nothing else — no comment, no round, no status change. Silence would be the
    one outcome E2 forbids.
-6. **The merge-completion path respects the child count instead of bypassing it.**
-   The SCM merge effect closes a linked Issue when the merge lands, and a merge
-   that a human authorized is the confirmation guard A exists to obtain — so A1
-   and A4 do not apply and no `issue_status_forced` row is written. But that
-   authorization covers *the merge*, not the closure of a parent whose children
-   are still running, so the effect branches on `open_children`:
-   - **children still open** — the parent's status does not move. The effect
-     records `parent_status_held` (with `requested: "done"`, `source:
-     "scm_merge"`, and the change request's number and url) and marks itself
-     applied. A hold is a settled outcome, not a retry, and it never re-closes
-     the parent later: when the last child finishes, `done` is the human's call
-     under E1. Without this branch, a *child's* PR — which routinely names the
-     parent key in its title, and which auto-link matches by key word boundary —
-     would close a parent with live children the moment that child merged.
-   - **children all finished, or none** — the Issue closes, as before.
+6. **The merge-completion path treats parent closure as an agent decision.**
+   A linked Issue with no children still closes on merge. For a parent, the SCM
+   effect checks in order: every child finished, the current owner agent has an
+   effective grant, and A1 has a completed result-bearing round or a qualifying
+   owner-agent comment. The first failed check records `parent_status_held` with
+   `reason: children_open | grant_missing | final_summary_missing`, `source:
+   "scm_merge"`, and the change request number and URL. The effect is marked
+   applied; a hold is settled and is never retried. When all checks pass, the
+   Issue closes and `parent_done_grant_used(source: scm_merge)` is audited.
+   A child's PR routinely names the parent key, so the merge itself cannot
+   supply the parent's summary or closure authorization.
 
    The exemption itself never travels through the wire: it is a server-only
    argument on `updateIssue`, so no request body can reach it.

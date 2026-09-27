@@ -60,6 +60,7 @@ import type {
   MultiremiIssueDependency,
   MultiremiIssueDependencyType,
   MultiremiIssueKind,
+  MultiremiIssueParentDoneGrant,
   MultiremiIssuePriority,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
@@ -109,12 +110,29 @@ function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
   }
 }
 
-/** 409 for a held parent transition; the route maps it to the API error code. */
+/**
+ * MUL-400 S1c (A4): why an agent was refused `done` on a parent it does not (or
+ * no longer does) hold an effective grant for. The wire response repeats it so
+ * a run can tell "ask a member to authorize me" apart from "the grant lapsed".
+ */
+export type ParentDoneGrantRefusalReason =
+  | "grant_missing"
+  | "not_owner_agent"
+  | "assignee_changed"
+  | "owner_not_agent"
+  | "final_summary_missing"
+  | "children_open";
+
+/** 409/403 for a held parent transition; the route maps it to the API error code. */
 export class ParentStatusGuardError extends Error {
   constructor(
     readonly code: "issue_status_held" | "final_summary_missing" | "parent_done_requires_member",
     message: string,
-    readonly details: { openChildren?: number; lastChildClosedAt?: string | null } = {},
+    readonly details: {
+      openChildren?: number;
+      lastChildClosedAt?: string | null;
+      reason?: ParentDoneGrantRefusalReason;
+    } = {},
   ) {
     super(message);
   }
@@ -133,6 +151,10 @@ export class BatchParentStatusGuardError extends ParentStatusGuardError {
     super(cause.code, cause.message, cause.details);
     this.rejectedIssueIds = rejectedIssueIds;
   }
+}
+
+export class ParentDoneGrantOwnerError extends Error {
+  readonly code = "parent_done_grant_owner_not_agent";
 }
 
 /** Statuses a parent with unfinished children must not enter. */
@@ -1013,6 +1035,9 @@ export class IssuesRepo {
    * that touch other fields — the auto-retitle service, the merge-completion
    * effect and every title/description/priority edit in the UI — are not status
    * decisions and must keep working on parents that already have children.
+   *
+   * MUL-400 S1c (A4): a task identity may close a parent when a member has
+   * authorized THIS issue's owner agent — see {@link parentDoneGrantStatus}.
    */
   private assertParentStatusAllowed(
     id: string,
@@ -1022,16 +1047,19 @@ export class IssuesRepo {
   ): void {
     if (!statusNeedsChildGuard(nextStatus)) return;
     const force = input.force === true;
-    const hasChildren = this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
-    ).get(id) != null;
+    const hasChildren = this.hasChildIssues(id);
     if (!hasChildren) return;
-    // A4: a task identity may never close a parent issue at all, force or not.
+    // A4: a task identity may never close a parent issue at all, force or not —
+    // unless a member has authorized exactly this agent on this parent (S1c).
     if (statusIsMemberOnlyParentTerminal(nextStatus) && input.actorType === "agent") {
-      throw new ParentStatusGuardError(
-        "parent_done_requires_member",
-        `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member can close an issue that has children`,
-      );
+      const grant = this.parentDoneGrantStatus(current);
+      if (!grant.effective || grant.agentId !== input.actorId) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member, or the owner agent a member has authorized on this issue, can close an issue that has children`,
+          { reason: grant.effective ? "not_owner_agent" : grant.reason ?? "grant_missing" },
+        );
+      }
     }
     if (force) return;
     const openChildren = this.countOpenChildIssues(id);
@@ -1039,19 +1067,96 @@ export class IssuesRepo {
       throw new ParentStatusGuardError(
         "issue_status_held",
         `${current.key} still has ${openChildren} unfinished child issue(s); finish or cancel them, or repeat the request with force`,
-        { openChildren },
+        { openChildren, reason: "children_open" },
       );
     }
     if (nextStatus === "done") {
-      const summary = this.finalSummaryAfterLastChild(id);
+      // A1. The authorized owner agent (S1c D2) may satisfy it either with a
+      // finished result-bearing round or with a summary comment it posted after
+      // the last child closed; every other caller keeps the original rule.
+      const grant = input.actorType === "agent" ? this.parentDoneGrantStatus(current) : null;
+      const acceptCommentBy = grant?.effective && grant.agentId === input.actorId ? input.actorId : null;
+      const summary = this.finalSummaryAfterLastChild(id, { acceptCommentBy });
       if (!summary.satisfied) {
         throw new ParentStatusGuardError(
           "final_summary_missing",
-          `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
-          { lastChildClosedAt: summary.lastChildClosedAt },
+          acceptCommentBy
+            ? `Post a summary comment on ${current.key} after the last child finished, then set it to done`
+            : `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
+          { lastChildClosedAt: summary.lastChildClosedAt, reason: "final_summary_missing" },
         );
       }
     }
+  }
+
+  /**
+   * MUL-400 S1c (A4): does this Issue have any children at all? `countOpenChildIssues`
+   * answers a different question (unfinished children), and the grant rules key
+   * off "has children", not "has open children".
+   */
+  hasChildIssues(issueId: string): boolean {
+    return this.ctx.db.query(
+      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
+    ).get(issueId) != null;
+  }
+
+  /**
+   * MUL-400 S1c (A4): the ONE place that decides whether the stored grant still
+   * authorizes the CURRENT owner agent. Read by guard A (inside its row lock),
+   * the SCM merge effect and the detail routes, so all three agree.
+   *
+   * The effective agent is re-resolved from the Issue's assignee on every read
+   * (`resolveRunnableAgentForAssignee`: agent -> itself, squad -> its leader).
+   * A grant records the agent that was the owner when the member granted it, so
+   * re-assigning the parent makes the grant ineffective (`assignee_changed`,
+   * D1) instead of silently following the new owner.
+   */
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: ParentDoneGrantRefusalReason | null;
+  } {
+    const grantedAt = issue.parentDoneGrantAt ?? null;
+    const grantedBy = issue.parentDoneGrantBy ?? null;
+    const agentId = issue.parentDoneGrantAgentId ?? null;
+    const granted = grantedAt != null && agentId != null;
+    if (!granted) {
+      return { granted: false, grantedAt, grantedBy, agentId, ownerAgentId: null, effective: false, reason: "grant_missing" };
+    }
+    const ownerAgentId = issue.assigneeType && issue.assigneeId
+      ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id ?? null
+      : null;
+    const effective = granted && ownerAgentId != null && ownerAgentId === agentId;
+    const reason: ParentDoneGrantRefusalReason | null = effective
+      ? null
+      : !granted
+        ? "grant_missing"
+        : ownerAgentId == null
+          ? "owner_not_agent"
+          : "assignee_changed";
+    return { granted, grantedAt, grantedBy, agentId, ownerAgentId, effective, reason };
+  }
+
+  /**
+   * The wire shape for `issue.parent_done_grant` (S7 / MUL-414 renders the
+   * toggle from it). `null` means "no grant was ever recorded"; a recorded but
+   * ineffective grant still returns its data with `effective: false` so the UI
+   * can say "re-authorize" instead of pretending nothing happened.
+   */
+  issueParentDoneGrantView(issue: MultiremiIssue): MultiremiIssueParentDoneGrant | null {
+    const status = this.parentDoneGrantStatus(issue);
+    if (!status.granted || status.grantedAt == null || status.grantedBy == null || status.agentId == null) return null;
+    return {
+      granted_at: status.grantedAt,
+      granted_by: status.grantedBy,
+      agent_id: status.agentId,
+      effective: status.effective,
+      ineffective_reason: status.effective ? null : status.reason === "assignee_changed" ? "assignee_changed" : "owner_not_agent",
+    };
   }
 
   /**
@@ -1061,12 +1166,11 @@ export class IssuesRepo {
    * with a non-empty result and `completed_at` at or after the last child's
    * terminal timestamp.
    *
-   * System paths that close an Issue on an external authority's behalf (the SCM
-   * merge effect) skip this and guard A4 entirely: the merge already required
-   * 贺华杰's authorization, so the Issue's terminal state carries the same human
-   * decision the guard exists to protect.
+   * An authorized owner agent may also satisfy A1 with its own non-empty
+   * comment after the final child closes. SCM checks the same signal before
+   * bypassing guard A; member closure keeps the original completed-task rule.
    */
-  finalSummaryAfterLastChild(parentIssueId: string): { satisfied: boolean; lastChildClosedAt: string | null } {
+  finalSummaryAfterLastChild(parentIssueId: string, options: { acceptCommentBy?: string | null } = {}): { satisfied: boolean; lastChildClosedAt: string | null } {
     const parent = this.getIssue(parentIssueId);
     if (!parent) return { satisfied: false, lastChildClosedAt: null };
     if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
@@ -1082,6 +1186,16 @@ export class IssuesRepo {
       ? this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId)?.id ?? null
       : null;
     if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
+    if (options.acceptCommentBy === parentAgentId) {
+      const comments = this.ctx.db.query(
+        `SELECT body FROM multiremi_issue_comments
+         WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
+           ${lastChildClosedAt ? "AND created_at >= ?" : ""}`,
+      ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
+      if (comments.some((row) => String(row.body ?? "").trim().length > 0)) {
+        return { satisfied: true, lastChildClosedAt };
+      }
+    }
     // `result` is a JSON blob written by completeTask; "has a result" means the
     // stored payload carries non-empty output text, so evaluate it in JS rather
     // than pattern-matching the serialized column in SQL.
@@ -1094,6 +1208,57 @@ export class IssuesRepo {
     ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
     const satisfied = rows.some((row) => storedTaskResultHasOutput(row.result));
     return { satisfied, lastChildClosedAt };
+  }
+
+  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      const ownerAgentId = current.assigneeType && current.assigneeId
+        ? this.ctx.resolveRunnableAgentForAssignee(current.assigneeType, current.assigneeId)?.id ?? null
+        : null;
+      if (!ownerAgentId) throw new ParentDoneGrantOwnerError("Assign an agent or squad owner before granting parent closure");
+      if (current.parentDoneGrantAt && current.parentDoneGrantAgentId === ownerAgentId) return current;
+      const now = nowIso();
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = ?, parent_done_grant_by = ?, parent_done_grant_agent_id = ?, updated_at = ? WHERE id = ?",
+        [now, memberId, ownerAgentId, now, issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_created",
+        data: {
+          agentId: ownerAgentId, agent_id: ownerAgentId, memberId, member_id: memberId,
+          previousAgentId: current.parentDoneGrantAgentId, previous_agent_id: current.parentDoneGrantAgentId,
+          grantedAt: now, granted_at: now,
+        },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
+  }
+
+  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      if (!current.parentDoneGrantAt) return current;
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = NULL, parent_done_grant_by = NULL, parent_done_grant_agent_id = NULL, updated_at = ? WHERE id = ?",
+        [nowIso(), issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_revoked",
+        data: { agentId: current.parentDoneGrantAgentId, agent_id: current.parentDoneGrantAgentId, memberId, member_id: memberId },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
   }
 
   listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
@@ -1190,6 +1355,7 @@ export class IssuesRepo {
     let previous: MultiremiIssue | null = null;
     let updatedAt = "";
     let cancelledTasks = 0;
+    const heldEvents = createCommitEventQueue();
     const updated = this.ctx.db.transaction(() => {
       if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
         const initial = this.getIssue(id);
@@ -1279,7 +1445,7 @@ export class IssuesRepo {
       // skipped entirely, so nothing about the Issue moves.
       const holdParentStatus = options.holdParentStatus === true;
       if (holdParentStatus) {
-        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null);
+        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, heldEvents);
       } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
         this.assertParentStatusAllowed(id, current, nextStatus, input);
       }
@@ -1356,7 +1522,10 @@ export class IssuesRepo {
       });
       return next;
     })();
-    if (updated === previous) return { issue: updated, cancelledTasks };
+    if (updated === previous) {
+      this.ctx.emitCommitEvents(heldEvents);
+      return { issue: updated, cancelledTasks };
+    }
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
@@ -1381,6 +1550,15 @@ export class IssuesRepo {
           ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
         },
       });
+    }
+    if (previous!.status !== "done" && updated.status === "done" && input.actorType === "agent") {
+      const grant = this.parentDoneGrantStatus(updated);
+      if (grant.effective && grant.agentId === input.actorId && this.hasChildIssues(id)) {
+        this.ctx.appendIssueActivity(id, {
+          actorType: "agent", actorId: input.actorId, type: "parent_done_grant_used",
+          data: { source: "api", agentId: grant.agentId, grantedBy: grant.grantedBy, grantedAt: grant.grantedAt },
+        });
+      }
     }
     if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
     if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
@@ -1638,6 +1816,7 @@ export class IssuesRepo {
     issueId: string,
     requested: string,
     extra: Record<string, unknown> | null,
+    deferredEvents: CommitEventQueue,
   ): void {
     const openChildren = this.countOpenChildIssues(issueId);
     this.ctx.appendIssueActivity(issueId, {
@@ -1650,9 +1829,10 @@ export class IssuesRepo {
         openChildren,
         open_children: openChildren,
         status: "in_progress",
+        reason: "children_open",
         ...(extra ?? {}),
       },
-    });
+    }, deferredEvents);
   }
 
   /**
@@ -4899,6 +5079,9 @@ function toIssue(row: Row): MultiremiIssue {
     contextRefs: parseJson(row.context_refs, []),
     metadata: parseIssueMetadata(row.metadata),
     labels: [],
+    parentDoneGrantAt: nullableString(row.parent_done_grant_at),
+    parentDoneGrantBy: nullableString(row.parent_done_grant_by),
+    parentDoneGrantAgentId: nullableString(row.parent_done_grant_agent_id),
     createdBy: nullableString(row.created_by),
     completedAt: nullableString(row.completed_at),
     archivedAt: nullableString(row.archived_at),
