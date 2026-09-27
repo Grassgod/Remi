@@ -3109,6 +3109,26 @@ export interface MultiremiKnowledgeSubmission {
   updatedAt: string;
 }
 
+/**
+ * Submission as it appears in a list page (MUL-386 C.2).
+ *
+ * The list route deliberately stops reading `body` and `patch`: 100 raw bodies
+ * plus patches were 11.8–14 MB of `db_bytes` per request. `bodyExcerpt` is the
+ * SQL-side prefix that keeps the one-line list preview working; the full text is
+ * fetched per id when a row is actually opened.
+ */
+export interface MultiremiKnowledgeSubmissionListItem
+  extends Omit<MultiremiKnowledgeSubmission, "body" | "patch"> {
+  bodyExcerpt: string;
+}
+
+/** Id/title/path only — the fields an `artifact` summary in a run list uses. */
+export interface MultiremiKnowledgeDocSummary {
+  id: string;
+  title: string;
+  path: string;
+}
+
 export interface MultiremiKnowledgeCompilationRun {
   id: string;
   workspaceId: string;
@@ -3131,6 +3151,8 @@ export interface MultiremiKnowledgeSubmissionListInput {
   repositoryId?: string | null;
   scope?: string | null;
   status?: string | null;
+  /** Literal, case-insensitive substring match over body/id/path/slug/type/scope. */
+  q?: string | null;
   cursor?: string | null;
   limit?: number | null;
 }
@@ -3158,6 +3180,16 @@ export interface MultiremiKnowledgeCompilationRunSource {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+
+/**
+ * Run source without `metadata` (MUL-386 C.2).
+ *
+ * `metadata` is arbitrary JSON (SCM payloads with file lists); the runs list
+ * shipped up to 13.8 MB of it for 100 runs. Only the single-run route returns it.
+ */
+export type MultiremiKnowledgeCompilationRunSourceListItem =
+  Omit<MultiremiKnowledgeCompilationRunSource, "metadata">;
+
 
 export interface MultiremiKnowledgeCompilationOutput {
   id: string;
