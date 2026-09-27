@@ -21,10 +21,11 @@ import type {
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
+import { BatchParentStatusGuardError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
-import { cleanString, hasRequestField } from "./context.js";
+import { cleanString, currentTaskAccessToken, hasRequestField } from "./context.js";
 import { labelCompatibilityResponse } from "./projects.js";
 
 export function issueCompatibilityResponse(
@@ -237,8 +238,35 @@ export function issueSearchErrorResponse(c: Context, err: unknown): Response | n
   return null;
 }
 
+/**
+ * MUL-400 S1: a refused batch names every row the pre-flight rejected, so a
+ * caller can tell "this batch was refused" from "these particular rows were".
+ */
+function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: string[] } {
+  return err instanceof BatchParentStatusGuardError ? { rejected_issue_ids: err.rejectedIssueIds } : {};
+}
+
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // MUL-400 E1: the parent-status guard is a conflict, and the client needs the
+  // machine-readable code plus `open_children` to show the reason and to offer
+  // the member-only override.
+  if (err instanceof ParentStatusGuardError) {
+    if (err.code === "parent_done_requires_member") {
+      return c.json({
+        error: err.message,
+        code: err.code,
+        ...rejectedIssueIds(err),
+      }, 403);
+    }
+    return c.json({
+      error: err.message,
+      code: err.code,
+      reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
+      open_children: err.details.openChildren ?? 0,
+      ...rejectedIssueIds(err),
+    }, 409);
+  }
   if (err.message === "auto_title is reserved for system metadata") {
     return c.json({ error: err.message }, 400);
   }
@@ -281,6 +309,45 @@ export function issueDependencyErrorResponse(c: Context, err: unknown): Response
   return null;
 }
 
+/**
+ * MUL-400 E1: `force` is a member-only escape hatch for the parent-status guard.
+ * A task identity (a run) must never be able to bypass the guard on its own, so
+ * both PATCH routes funnel through here and get a 403 instead of the field.
+ */
+export function denyTaskIdentityIssueForce(c: Context, input: UpdateIssueInput): Response | null {
+  if (input.force !== true) return null;
+  if (!currentTaskAccessToken(c)) return null;
+  return c.json({
+    error: "force is a member-only override; a task cannot bypass the parent-status guard",
+    code: "issue_force_requires_member",
+  }, 403);
+}
+
+/**
+ * MUL-400 S1: fields the server owns and stamps from the authenticated request.
+ *
+ * The routes overwrite the camelCase spelling, but the store reads several of
+ * these as `input.foo ?? input.foo_snake` (the `issue_status_forced` audit's
+ * source task, the parent wakeup's `parentTaskId`, and A4's `actorType`). A body
+ * that sends BOTH spellings would therefore leave the snake_case alias behind
+ * to win the `??`. Strip both spellings before stamping, and strip the actor
+ * fields too so a body can never pick the identity the guard branches on.
+ */
+const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
+  "actorType",
+  "actor_type",
+  "actorId",
+  "actor_id",
+  "parentTaskId",
+  "parent_task_id",
+] as const;
+
+export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
+  const out: Record<string, unknown> = { ...input };
+  for (const field of SERVER_OWNED_ISSUE_UPDATE_FIELDS) delete out[field];
+  return out as UpdateIssueInput;
+}
+
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
   const out: UpdateIssueInput = {};
   if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
@@ -298,6 +365,9 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
+  // MUL-400 E1: `force` survives the compatibility projection. The routes strip
+  // it for task identities, so reaching the store with it means a member asked.
+  if (hasRequestField(input, "force")) out.force = input.force === true;
   return out;
 }
 
@@ -374,6 +444,10 @@ export function issueDetailCompatibilityResponse(
   const attachments = withExtras.attachments ?? store.listAttachmentsForExistingIssue(issue.id);
   if (reactions.length) response.reactions = reactions.map(issueReactionCompatibilityResponse);
   if (attachments.length) response.attachments = attachments.map(issueDetailAttachmentCompatibilityResponse);
+  // MUL-400 E1's `child_count` is deliberately NOT added here: MUL-385 pins this
+  // route at exactly four statements and forbids a parent_issue_id read. The
+  // native `/api/multiremi/issues/:id` route carries it instead, where the child
+  // progress it counts is already loaded.
   return response;
 }
 

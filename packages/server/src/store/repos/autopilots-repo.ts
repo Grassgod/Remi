@@ -12,7 +12,7 @@ import {
   parseJson,
   toJson,
 } from "@multiremi/store/helpers.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
@@ -445,6 +445,8 @@ export class AutopilotsRepo {
     ).all() as Array<{ autopilot_id: string }>;
     for (const { autopilot_id: autopilotId } of autopilots) {
       for (;;) {
+        const scheduledChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+        const scheduledEvents = createCommitEventQueue();
         const task = this.ctx.db.transaction(() => {
           this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
           const autopilot = this.getAutopilot(autopilotId);
@@ -489,7 +491,7 @@ export class AutopilotsRepo {
               parentTaskId: parent?.id ?? null,
               issueCreationRestricted: Boolean(autopilot.issueCreationRestricted || trigger.issueCreationRestricted || parent?.issueCreationRestricted || agent.issueCreationRequiresProposal),
               assignmentAuthorType: "system", assignmentAuthorId: autopilot.id,
-            });
+            }, scheduledChanges, scheduledEvents);
             this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'running', task_id = ? WHERE id = ? AND status = 'queued'", [created.id, run.id]);
             return created;
           }
@@ -497,6 +499,8 @@ export class AutopilotsRepo {
         })();
         if (!task) break;
         this.ctx.notifyTaskEnqueued(task);
+        this.ctx.tasks().runCollectedChildStatusChanges(scheduledChanges);
+        this.ctx.emitCommitEvents(scheduledEvents);
       }
     }
   }
@@ -965,8 +969,32 @@ export class AutopilotsRepo {
    * active run (at most one exists per repository, enforced by runAutopilot).
    */
   listLatestRepositoryAutopilotRuns(workspaceId: string): MultiremiAutopilotRunRecord[] {
+    // Projected, not `SELECT r.*` (MUL-398 A). `result` is never read on this
+    // path, and on 209 it alone accounted for 6.1 MB of the 10.8 MB this
+    // statement shipped across the PG bridge.
+    //
+    // `payload` cannot be dropped outright: `autopilotRunSourceRevision()`
+    // falls back to `payload.data` whenever the dedupe key does not pin a
+    // revision, and that fallback is the summary's `build.source_revision`.
+    //
+    // The CASE is deliberately a superset of that predicate rather than the
+    // obvious `IS NULL OR LIKE '%:head'`: the function reads the text after the
+    // second `:` and falls through when it is empty, which also covers keys with
+    // fewer than two separators (`a:b`) and keys with a trailing separator
+    // (`a:b:`). Nulling `payload` for those would turn a payload-derived
+    // `source_revision` into null, so they keep the column. Rows the guard
+    // excludes are provably pinned and never consult `payload`.
     const rows = this.ctx.db.query(
-      `SELECT r.* FROM multiremi_autopilot_runs r
+      `SELECT r.id, r.autopilot_id, r.source, r.status, r.issue_id, r.task_id,
+         r.trigger_id, r.event_id, r.issue_session_id, r.repository_id,
+         r.dedupe_key, r.schedule_target, r.schedule_batch_id,
+         r.triggered_at, r.completed_at, r.failure_reason, r.created_at,
+         CASE WHEN r.dedupe_key IS NULL
+                   OR r.dedupe_key NOT LIKE '%:%:%'
+                   OR r.dedupe_key LIKE '%:%:'
+                   OR r.dedupe_key LIKE '%:head'
+              THEN r.payload ELSE NULL END AS payload
+       FROM multiremi_autopilot_runs r
        JOIN multiremi_autopilots a ON a.id = r.autopilot_id
        WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR
          (r.schedule_target IS NOT NULL AND EXISTS (
@@ -1238,6 +1266,8 @@ export class AutopilotsRepo {
     let taskToNotify: MultiremiTask | null = null;
     let createdRun = false;
     let startedAutopilot: MultiremiAutopilot | null = null;
+    const autopilotChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
+    const autopilotEvents = createCommitEventQueue();
     const run = this.ctx.db.transaction(() => {
       this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
       const autopilot = this.getAutopilot(autopilotId);
@@ -1365,13 +1395,13 @@ export class AutopilotsRepo {
       let issue: MultiremiIssue | null = null;
       let issueSessionId: string | null = null;
       if (autopilot.executionMode === "create_issue") {
-        issue = this.ctx.issues().createIssue({
+        issue = this.ctx.issues().createIssueWithinTransaction({
           title: prompt,
           description: autopilot.description,
           workspaceId: autopilot.workspaceId,
           projectId: autopilot.projectId,
           createdBy: autopilot.id,
-        });
+        }, autopilotEvents);
       } else if (autopilot.executionMode === "trigger_issue") {
         if (!triggerIssueId) throw new Error("trigger_issue runs require trigger_issue_id");
         issue = this.ctx.issues().getIssue(triggerIssueId);
@@ -1418,7 +1448,7 @@ export class AutopilotsRepo {
         assignmentSourceEventId: eventId,
         parentTaskId: sourceTaskId,
         issueCreationRestricted,
-      });
+      }, autopilotChanges, autopilotEvents);
       taskToNotify = task;
       issueSessionId = task.issueSessionId ?? issueSessionId;
       this.ctx.db.run(
@@ -1438,6 +1468,8 @@ export class AutopilotsRepo {
     })();
 
     if (taskToNotify) this.ctx.notifyTaskEnqueued(taskToNotify);
+    this.ctx.tasks().runCollectedChildStatusChanges(autopilotChanges);
+    this.ctx.emitCommitEvents(autopilotEvents);
     if (createdRun && startedAutopilot && run.status === "running") {
       this.ctx.analytics().recordAutopilotRunStartedAnalytics(startedAutopilot, run);
     }

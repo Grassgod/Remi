@@ -4,6 +4,7 @@ import type { StoreContext } from "@multiremi/store/context.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiProjectDocRef,
+  MultiremiKnowledgeDocSummary,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
   MultiremiRepositoryWikiStatus,
@@ -93,6 +94,27 @@ export class RepositoryWikiRepo {
       `SELECT * FROM multiremi_repository_wiki_docs
        WHERE workspace_id = ? ORDER BY updated_at DESC`,
     ).all(workspaceId) as Row[]).map(toRepositoryWikiDoc);
+  }
+
+  /**
+   * Id/title/path for a bounded set of docs (MUL-386 C.2).
+   *
+   * Run-list responses only need `artifact{id,title,path}`, but the old path
+   * read every doc in the repository — `body` included — so 100 runs shipped
+   * megabytes of unrelated content. Bounded by the caller's id list.
+   */
+  listSummariesByIds(workspaceId: string, ids: readonly string[]): MultiremiKnowledgeDocSummary[] {
+    const unique = [...new Set(ids.map((id) => String(id ?? "").trim()).filter(Boolean))];
+    if (!unique.length) return [];
+    const placeholders = unique.map(() => "?").join(", ");
+    return (this.ctx.db.query(
+      `SELECT id, title, path FROM multiremi_repository_wiki_docs
+       WHERE workspace_id = ? AND id IN (${placeholders})`,
+    ).all(workspaceId, ...unique) as Row[]).map((row) => ({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+      path: String(row.path ?? ""),
+    }));
   }
 
   getByRef(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc | null {

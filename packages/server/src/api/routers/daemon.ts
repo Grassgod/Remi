@@ -50,6 +50,9 @@ import {
 } from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_DECISION_DEGRADE_REASONS,
+  type FeishuDecisionDegradeReason,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
   FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
@@ -80,6 +83,9 @@ import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
+
+/** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
+const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
 import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
 type DaemonInstallRequestBody = {
@@ -379,6 +385,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       active_task_count?: number;
       supports_bot_menu?: boolean;
       feishu_concierge_protocol?: number;
+      feishu_decision_card?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -412,6 +419,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       agentPluginProtocol: reportsAgentPluginProtocol ? body.agent_plugin_protocol : undefined,
       supportsBotMenu: body.supports_bot_menu,
       supportsFeishuBotConfig,
+      supportsDecisionCard: normalizeDaemonProtocolVersion(body.feishu_decision_card)
+        >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -482,6 +491,15 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.presentation ? { presentation: outbound.presentation } : {}),
           ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
           ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
+          ...(outbound.kind ? { kind: outbound.kind } : {}),
+          ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
+          // The host needs the asking Task to register a click the moment it
+          // sends the card, and needs to know a row is already plain text so it
+          // does not retry it as a malformed card (MUL-407).
+          ...(outbound.humanRequestTaskId ? { human_request_task_id: outbound.humanRequestTaskId } : {}),
+          ...(outbound.targetMessageId ? { target_message_id: outbound.targetMessageId } : {}),
+          ...(outbound.expiresAt ? { expires_at: outbound.expiresAt } : {}),
+          ...(outbound.degraded ? { degraded: outbound.degraded } : {}),
         };
       }
     }
@@ -526,6 +544,25 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       }
       throw error;
     }
+  });
+
+  /**
+   * Cards this Runtime must keep answering clicks for (MUL-407). The host's
+   * click map is process-local, so it re-registers from here on every start;
+   * unlike a Task-stream card there is no presentation checkpoint to replay.
+   */
+  app.get("/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    if (currentAccessToken(c)?.type !== "daemon") {
+      return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+    }
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
+    if (denied) return denied;
+    const runtime = store.getRuntimeLite(runtimeId);
+    if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+    const cards = store.listFeishuBotLiveDecisionCards(runtime.workspaceId ?? "local", runtimeId);
+    c.header("Cache-Control", "no-store");
+    return c.json({ cards });
   });
 
   app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/status", async (c) => {
@@ -581,6 +618,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       mention_open_id?: unknown;
       presentation?: unknown;
       retryable?: unknown;
+      interaction_open_id?: unknown;
+      degraded?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
@@ -609,6 +648,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         error: body.error ? redactFeishuBotError(String(body.error)) : null,
         presentation,
         retryable: typeof body.retryable === "boolean" ? body.retryable : undefined,
+        interactionOpenId: body.interaction_open_id === null ? null
+          : cleanString(typeof body.interaction_open_id === "string" ? body.interaction_open_id : null),
+        degraded: normalizeDecisionDegradeReason(body.degraded),
       },
     );
     if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
@@ -942,8 +984,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
     const runtime = store.getRuntime(c.req.param("runtimeId"));
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    const tasks = store.listTasks()
-      .filter((task) => isDaemonPendingTaskForRuntime(task, runtime.id))
+    // MUL-386 C.1: was `store.listTasks()` (every task in the deployment, full
+    // rows) filtered down to this runtime's queued/dispatched work. `/tasks/pending`
+    // is polled by daemons, so the unbounded read turned into an 8 MB+ bridge reply
+    // that the bridge hard limit now refuses. Filter in SQL instead.
+    const tasks = store.listTasksForRuntimeStatuses(runtime.id, DAEMON_PENDING_TASK_STATUSES)
       .sort(compareDaemonPendingTasks)
       .map((task) => daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
     return c.json(tasks);
@@ -995,7 +1040,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown> }>(c);
+    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown>; timeout_ms?: number }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1003,7 +1048,12 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!existing) return c.json({ error: "task not found" }, 404);
     if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
     const kind = body.kind === "question" ? "question" : "permission";
-    const request = store.createTaskHumanRequest({ taskId, kind, payload: body.payload ?? {} });
+    const request = store.createTaskHumanRequest({
+      taskId,
+      kind,
+      payload: body.payload ?? {},
+      timeoutMs: body.timeout_ms,
+    });
     return c.json({ request }, 201);
   });
   app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
@@ -1396,4 +1446,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
 function normalizeDaemonProtocolVersion(value: unknown): number {
   const protocol = Number(value);
   return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
+}
+
+/** Decision lanes only; anything else is treated as "not reported". */
+function normalizeDecisionDegradeReason(value: unknown): FeishuDecisionDegradeReason | undefined {
+  return typeof value === "string" && FEISHU_DECISION_DEGRADE_REASONS.includes(value as FeishuDecisionDegradeReason)
+    ? value as FeishuDecisionDegradeReason
+    : undefined;
 }

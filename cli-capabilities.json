@@ -3515,6 +3515,91 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.decision.request": {
+      "command": "remi issue decision request",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.request",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.decision.list": {
+      "command": "remi issue decision list",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.list",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.decision.answer": {
+      "command": "remi issue decision answer",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.answer",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.decision.escalate": {
+      "command": "remi issue decision escalate",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.escalate",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
+    "issue.decision.withdraw": {
+      "command": "remi issue decision withdraw",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.withdraw",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.dependency.list": {
       "command": "remi issue dependency list",
       "aliases": [],
@@ -6830,6 +6915,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "autopilot.run.group": {
+      "command": "remi autopilot run",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": null,
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "autopilot.run.list": {
       "command": "remi autopilot run list",
       "aliases": [],
@@ -6864,14 +6966,14 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "autopilot.run": {
-      "command": "remi autopilot run",
+    "autopilot.run-now": {
+      "command": "remi autopilot run-now",
       "aliases": [],
       "auth": [
         "human",
         "task"
       ],
-      "capability": "autopilot.run",
+      "capability": "autopilot.run-now",
       "mutation": "write",
       "output": [
         "table",
@@ -10149,6 +10251,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -10265,6 +10372,9 @@
     },
     "GET /api/issues/:id/comments": {
       "command": "comment.list"
+    },
+    "GET /api/issues/:id/decisions": {
+      "command": "issue.decision.list"
     },
     "GET /api/issues/:id/dependencies": {
       "command": "issue.dependency.list"
@@ -11146,7 +11256,7 @@
       "command": "autopilot.delivery.replay"
     },
     "POST /api/autopilots/:id/trigger": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/autopilots/:id/triggers": {
       "command": "autopilot.trigger.create"
@@ -11480,6 +11590,18 @@
     "POST /api/issues/:id/comments": {
       "command": "comment.add"
     },
+    "POST /api/issues/:id/decisions": {
+      "command": "issue.decision.request"
+    },
+    "POST /api/issues/:id/decisions/:decisionId/answer": {
+      "command": "issue.decision.answer"
+    },
+    "POST /api/issues/:id/decisions/:decisionId/escalate": {
+      "command": "issue.decision.escalate"
+    },
+    "POST /api/issues/:id/decisions/:decisionId/withdraw": {
+      "command": "issue.decision.withdraw"
+    },
     "POST /api/issues/:id/dependencies": {
       "command": "issue.dependency.add"
     },
@@ -11615,15 +11737,15 @@
       "command": "autopilot.delivery.replay"
     },
     "POST /api/multiremi/autopilots/:id/run": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/multiremi/autopilots/:id/run-scheduled": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
-      "reason": "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run."
+      "reason": "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run-now."
     },
     "POST /api/multiremi/autopilots/:id/trigger": {
-      "command": "autopilot.run"
+      "command": "autopilot.run-now"
     },
     "POST /api/multiremi/autopilots/:id/webhook": {
       "cli_exempt": true,
