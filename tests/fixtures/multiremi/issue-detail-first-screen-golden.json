@@ -47,6 +47,7 @@
     "created_at": "<timestamp>",
     "updated_at": "<timestamp>",
     "metadata": {},
+    "pending_decision_count": 0,
     "labels": [
       {
         "id": "lbl_mul385_2",
