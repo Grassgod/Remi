@@ -167,11 +167,13 @@ describe("CLI capabilities manifest", () => {
   });
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
+    // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
+    // machine-to-server protocol, so they raise the exempt count with the total.
     expect(cliCoverageReport(manifest)).toEqual({
       mapped: 670,
-      exempt: 91,
+      exempt: 105,
       missing: 0,
-      total: 761,
+      total: 775,
     });
     expect(manifest.max_planned_routes).toBe(0);
     expect(manifest.routes["POST /api/workspaces/:id/relay-config/:engine/probe"])
