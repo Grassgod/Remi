@@ -81,7 +81,7 @@ function prepareReport(store: MultiremiStore) {
   expect(root.mention).toBeUndefined();
   store.reportFeishuBotOutbound("local", "rt_bot", root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${issue.id}` });
   const leader = store.createTask({ agentId: agent, issueId: issue.id, prompt: "Work on Issue" });
-  const wake = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: leader });
+  const wake = store.prepareFeishuIssueRoundPushes({ issue, leaderTask: leader });
   expect(wake).toHaveLength(1);
   return wake[0]!;
 }
@@ -104,7 +104,7 @@ describe("Feishu Issue topics", () => {
         store.registerRuntime({ id: "rt_claude", name: "Claude", provider: "claude", workspaceId: "local" });
         store.updateAgent(botAgentId, { provider: "claude" });
         const wake = kind === "round"
-          ? store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: sourceTask })[0]!
+          ? store.prepareFeishuIssueRoundPushes({ issue, leaderTask: sourceTask })[0]!
           : store.prepareFeishuBotHumanRequestPush(store.createTaskHumanRequest({
             taskId: sourceTask.id, kind: "question", payload: { message: "Continue?" },
           }))!;

@@ -14,6 +14,10 @@ export const INBOX_ROUTE_BY_TYPE = {
   autopilot_run_failed: "inbox_ledger",
   autopilot_run_overdue: "inbox_ledger",
   organizer_action: "inbox_ledger",
+  // MUL-400 E2: a child issue reached a terminal/parked state while the parent
+  // is owned by a human, so the parent owner hears about it directly instead
+  // of only through the parent's activity feed.
+  child_issue_terminal: "inbox_action",
 } as const satisfies Record<string, RegisteredInboxRoute>;
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;
