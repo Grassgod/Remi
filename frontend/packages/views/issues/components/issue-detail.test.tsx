@@ -971,6 +971,10 @@ describe("IssueDetail (shared)", () => {
       | ((atBottom: boolean) => void)
       | undefined;
     const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
+    // Realistic geometry: 1200px of content in a 400px viewport, so the true
+    // end is scrollTop 800 and jsdom's default 0/0 cannot stand in for it.
+    Object.defineProperty(scrollRoot, "scrollHeight", { configurable: true, get: () => 1200 });
+    Object.defineProperty(scrollRoot, "clientHeight", { configurable: true, get: () => 400 });
 
     scrollRoot.scrollTop = 600;
     await act(async () => {
@@ -978,17 +982,26 @@ describe("IssueDetail (shared)", () => {
     });
     expect(followOutput()).toBe(false);
 
-    // The reader drives back towards the end: a downward scroll, then
-    // Virtuoso's at-bottom signal. Both are required — the scroll proves the
-    // intent, the signal proves the position. The signal alone must not be
-    // enough, or a reader parked inside Virtuoso's wide band would be dragged
-    // back without ever moving down.
+    // The reader drives back down, but stops 160px short — still inside
+    // Virtuoso's 120px-ish notion of "near the end" in spirit and well outside
+    // the hook's 24px one. `pin()` adopts the distance at the moment it is
+    // called, so pinning here would hold a 160px gap and every later comment
+    // would maintain it (MUL-390 `cmt_rblm56fti12j`). The signal alone, and the
+    // signal plus a partial descent, must both leave the machine released.
     await act(async () => {
       atBottomStateChange!(true);
     });
     expect(followOutput()).toBe(false);
 
     scrollRoot.scrollTop = 640;
+    await act(async () => {
+      fireEvent.scroll(scrollRoot);
+      atBottomStateChange!(true);
+    });
+    expect(followOutput()).toBe(false);
+
+    // Reaching the true end re-pins, and following resumes.
+    scrollRoot.scrollTop = 800;
     await act(async () => {
       fireEvent.scroll(scrollRoot);
       atBottomStateChange!(true);

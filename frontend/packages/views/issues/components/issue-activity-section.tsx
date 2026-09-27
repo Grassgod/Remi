@@ -86,6 +86,17 @@ interface IssueActivitySectionProps {
 const ISSUE_TIMELINE_INITIAL_FIRST_ITEM_INDEX = 1_000_000;
 
 /**
+ * The stick hook's re-pin threshold, in pixels. Passed to the hook explicitly
+ * and used for the one decision the consumer makes on its behalf: Virtuoso's
+ * `atBottomStateChange` fires from ~120 px away, but `useStickToBottom.pin()`
+ * adopts the *current* distance as the offset it then holds, so calling it from
+ * inside that wider band pins the page ~119 px short of the end and every later
+ * comment maintains that gap (MUL-390 `cmt_rblm56fti12j`). Only pin when the
+ * container is genuinely inside the hook's own band.
+ */
+const STICK_PIN_THRESHOLD_PX = 24;
+
+/**
  * The issue's conversation: subscribers header, live agent card, published
  * results, the timeline itself (virtualized or flat) and the single composer.
  */
@@ -296,6 +307,13 @@ export function IssueActivitySection({
   const jumpToLatest = useCallback(() => {
     onReturnToBottom();
   }, [onReturnToBottom]);
+
+  // The container's distance to the true end, for the at-bottom decision below.
+  const bottomDistance = useCallback((): number => {
+    const el = scrollContainerEl;
+    if (!el) return 0;
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  }, [scrollContainerEl]);
 
   // A comment that lands while the return trip is still gliding makes the
   // content taller under a trip whose destination was computed when the button
@@ -631,6 +649,7 @@ export function IssueActivitySection({
                     bottom
                     && sawDownwardScrollRef.current
                     && stickStateRef.current !== "returning"
+                    && bottomDistance() <= STICK_PIN_THRESHOLD_PX
                   ) {
                     onPinToBottom();
                   }
