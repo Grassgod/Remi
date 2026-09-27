@@ -19,6 +19,7 @@ import {
 } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousEncryptionKey: string | undefined;
@@ -621,15 +622,237 @@ describe("Feishu decision cards for Issue human requests", () => {
     });
     // The identity the callback name is derived from, plus the recipient.
     expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toEqual([{
-      requestId: request.id,
-      taskId: store.getTaskHumanRequest(request.id)!.taskId,
-      chatId: "oc_decision_card",
-      messageId: "om_recoverable",
-      recipientOpenId: "ou_the_person",
+      request_id: request.id,
+      task_id: store.getTaskHumanRequest(request.id)!.taskId,
+      chat_id: "oc_decision_card",
+      message_id: "om_recoverable",
+      recipient_open_id: "ou_the_person",
     }]);
     // A settled request is no longer clickable, so it drops out.
     store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
     expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toEqual([]);
+  });
+
+  it("recovers a live card through the real route and the real daemon client", async () => {
+    // The fake daemon in the host tests bypassed both the HTTP route and the
+    // client's field parsing, which is exactly how a camelCase/snake_case
+    // mismatch shipped. This goes through `createMultiremiApp` and the real
+    // `MultiremiDaemonClient`, so the wire shape is what is actually asserted.
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_recovery_card",
+      interactionOpenId: "ou_the_person",
+    });
+    const token = await store.createAccessToken({
+      name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
+    });
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const parsed = new URL(url, "http://local");
+      return app.request(parsed.pathname + parsed.search, init);
+    }) as typeof fetch;
+    try {
+      const client = new MultiremiDaemonClient("http://local", token.token);
+      const cards = await client.listFeishuBotDecisionCards("rt_bot");
+      // One live card, parsed field for field — zero was the shipped bug.
+      expect(cards).toEqual([{
+        requestId: request.id,
+        taskId,
+        chatId: "oc_decision_card",
+        messageId: "om_recovery_card",
+        recipientOpenId: "ou_the_person",
+      }]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    // The store agrees with what the client recovered.
+    expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toHaveLength(1);
+  });
+
+  it("does not expose cross-daemon or cross-workspace cards on the recovery route", async () => {
+    const { store, agentId, app } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_private",
+      interactionOpenId: "ou_the_person",
+    });
+    const path = "/api/daemon/runtimes/rt_bot/feishu-bot/decision-cards";
+    const tokenFor = async (daemonId: string, workspaceId = "local") =>
+      (await store.createAccessToken({ name: daemonId, type: "daemon", workspaceId, daemonId })).token;
+
+    // The host itself reads its own card.
+    const own = await app.request(path, {
+      headers: { Authorization: `Bearer ${await tokenFor("bot-host")}` },
+    });
+    expect(own.status).toBe(200);
+    const body = await own.json() as { cards: Array<Record<string, unknown>> };
+    expect(body.cards).toHaveLength(1);
+    // Only the fields the host needs — nothing extra leaks with them.
+    expect(Object.keys(body.cards[0]!).sort()).toEqual(
+      ["chat_id", "message_id", "recipient_open_id", "request_id", "task_id"]);
+
+    // Another daemon in the same workspace is refused.
+    expect((await app.request(path, {
+      headers: { Authorization: `Bearer ${await tokenFor("someone-else")}` },
+    })).status).toBe(403);
+    // So is a daemon from another workspace, even one whose id matches.
+    const other = store.createWorkspace({ name: "Other", slug: "other" });
+    store.registerRuntime({ id: "rt_other", name: "Other", provider: "codex",
+      workspaceId: other.id, daemonId: "other-host" });
+    store.heartbeatRuntime("rt_other", { supportsFeishuBotConfig: true, supportsDecisionCard: true });
+    expect((await app.request(path, {
+      headers: { Authorization: `Bearer ${await tokenFor("other-host", other.id)}` },
+    })).status).toBe(403);
+    // A human token is not a daemon token.
+    const human = await store.createAccessToken({ name: "human", type: "pat", workspaceId: "local", userId: "local" });
+    expect((await app.request(path, {
+      headers: { Authorization: `Bearer ${human.token}` },
+    })).status).toBe(403);
+    expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
+  });
+
+  it("B4: a reminder is suppressed once less than a minute of lifetime remains", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_window_card",
+      interactionOpenId: "ou_the_person",
+    });
+    const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
+
+    // 30s and 20s left are both inside the window but too late to be useful.
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 30_000))).toBeNull();
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 20_000))).toBeNull();
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+      .toEqual({ reminder_sent_at: null });
+    // 61s left clears the floor and produces the one reminder.
+    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))!;
+    expect(reminder.kind).toBe("decision_reminder");
+    expect(reminder.humanRequestId).toBe(request.id);
+    // Only once, even if the clock keeps running into the final minute.
+    store.reportFeishuBotOutbound("local", "rt_bot", reminder.id, {
+      claimToken: reminder.claimToken, status: "sent", externalMessageId: "om_reminder",
+    }, new Date(expiresAt - 61_000));
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 10_000))).toBeNull();
+  });
+
+  it("B4: a late card still gets its reminder while a minute remains", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
+    // The host was offline across the window; the card is parked far out.
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET status = 'pending', claim_token = NULL, available_at = ? WHERE id = ?",
+      [new Date(expiresAt + 60_000).toISOString(), card.id]);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 7 * 60_000))).toBeNull();
+    // It comes back with 90s left: the card goes out and the reminder follows.
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET available_at = ? WHERE id = ?",
+      [new Date(expiresAt - 90_000).toISOString(), card.id]);
+    const late = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 90_000))!;
+    store.reportFeishuBotOutbound("local", "rt_bot", late.id, {
+      claimToken: late.claimToken, status: "sent", externalMessageId: "om_late",
+      interactionOpenId: "ou_the_person",
+    }, new Date(expiresAt - 90_000));
+    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 80_000))!;
+    expect(reminder.kind).toBe("decision_reminder");
+    // But the same late card with only 30s left would not have.
+    expect(db!.query("SELECT reminder_sent_at FROM multiremi_task_human_requests WHERE id = ?").get(request.id))
+      .toMatchObject({ reminder_sent_at: expect.any(String) });
+  });
+
+  it("records a host-reported degradation on the Issue exactly once", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    });
+
+    const degraded = store.listIssueActivity(issue.id).filter((entry) => entry.type === "decision_card_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]).toMatchObject({ body: request.id });
+    const data = degraded[0]!.data as Record<string, unknown>;
+    // The same fields the control-plane-decided case writes.
+    expect(data).toMatchObject({
+      request_id: request.id, delivery_id: card.id, kind: "decision_card", reason: "send_failed",
+    });
+    expect(db!.query("SELECT degraded FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(card.id))
+      .toEqual({ degraded: "send_failed" });
+
+    // A repeat report cannot write a second activity: the delivery is already
+    // `sent`, so the claim-token guard rejects it before the activity code runs.
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_text_again",
+      interactionOpenId: "ou_the_person", degraded: "send_failed",
+    })).toBe(false);
+    expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "decision_card_degraded"))
+      .toHaveLength(1);
+  });
+
+  it("B5: interaction_open_id can only be written on this host's own delivery", () => {
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    // Another daemon cannot report on this delivery at all: the runtime must be
+    // the configured bot host for the workspace.
+    expect(store.reportFeishuBotOutbound("local", "rt_not_the_bot_host", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_hijack",
+      interactionOpenId: "ou_someone_else",
+    })).toBe(false);
+    // Neither can a claim token that does not match.
+    expect(store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: "foc_forged", status: "sent", externalMessageId: "om_hijack",
+      interactionOpenId: "ou_someone_else",
+    })).toBe(false);
+    expect(db!.query("SELECT interaction_open_id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+      .get(card.id)).toEqual({ interaction_open_id: null, status: "sending" });
+    // The real host writes it, and only for its own row.
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_ok",
+      interactionOpenId: "ou_the_person",
+    });
+    expect(db!.query("SELECT interaction_open_id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+      .get(card.id)).toEqual({ interaction_open_id: "ou_the_person" });
+    expect(store.getTaskHumanRequest(request.id)!.status).toBe("pending");
+  });
+
+  it("degrades to text when a stored person config is invalid, without throwing", () => {
+    // Bypass the save-time validation to reproduce a database written before it
+    // existed. The push path must degrade, not throw: a request with no delivery
+    // leaves the person who was asked with no way to hear about it.
+    const { store, agentId } = scaffold();
+    const issue = issueWithTopic(store, agentId);
+    const taskId = sourceTask(store, agentId, issue.id);
+    const workspaceRow = db!.query("SELECT settings FROM multiremi_workspaces WHERE id = 'local'").get() as { settings: string };
+    const settings = JSON.parse(workspaceRow.settings) as Record<string, unknown>;
+    settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "person", notifyOpenId: "not-an-open-id" };
+    db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+
+    let request: ReturnType<typeof askQuestion> | null = null;
+    expect(() => { request = askQuestion(store, taskId); }).not.toThrow();
+    expect(request).not.toBeNull();
+    const delivery = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(delivery.kind).toBe("decision_card");
+    expect(delivery.degraded).toBe("invalid_recipient");
+    expect(decodeDecisionCardBody(delivery.body)).toBeNull();
+    expect(delivery.body).toContain("Continue?");
+    expect(delivery.body).not.toContain("<at id=");
+    const degraded = store.listIssueActivity(issue.id).find((entry) => entry.type === "decision_card_degraded");
+    expect((degraded?.data as Record<string, unknown>).reason).toBe("invalid_recipient");
   });
 });
 

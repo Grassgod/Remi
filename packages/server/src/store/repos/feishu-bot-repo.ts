@@ -31,7 +31,10 @@ import {
 } from "@multiremi/feishu-bot/credentials.js";
 import { normalizeFeishuBotErrorCode } from "@multiremi/feishu-bot/diagnostics.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
-import { readWorkspaceIssueTopics } from "@multiremi/issue-topics/config.js";
+import {
+  readWorkspaceIssueTopics,
+  readWorkspaceIssueTopicsForDelivery,
+} from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import {
@@ -1119,7 +1122,9 @@ export class FeishuBotRepo {
   prepareIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return false;
-    const topicConfig = readWorkspaceIssueTopics(workspace.settings);
+    // A stored config the current validation would reject must not abort the
+    // caller; an unusable target degrades later, at delivery time.
+    const topicConfig = readWorkspaceIssueTopicsForDelivery(workspace.settings);
     if (!topicConfig.enabled || !topicConfig.chatId) return false;
     if (topicConfig.projectIds && (!issue.projectId || !topicConfig.projectIds.includes(issue.projectId))) {
       return false;
@@ -1203,7 +1208,9 @@ export class FeishuBotRepo {
     if (!issue) return null;
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return null;
-    const topics = readWorkspaceIssueTopics(workspace.settings);
+    // The push path must never throw on a stored config: a request with no
+    // delivery leaves the person who was asked with no way to hear about it.
+    const topics = readWorkspaceIssueTopicsForDelivery(workspace.settings);
     if (!topics.enabled || !topics.chatId) return null;
     const bot = this.statusSnapshot(issue.workspaceId);
     if (bot.status !== "online" || !bot.config) return null;
@@ -1429,19 +1436,30 @@ export class FeishuBotRepo {
         degraded,
       ],
     );
-    this.ctx.appendIssueActivity(issue.id, {
-      actorType: "system",
-      type: degraded ? "decision_card_degraded" : "decision_card_queued",
-      body: request.id,
-      data: {
-        request_id: request.id,
-        source_task_id: sourceTask.id,
-        delivery_id: deliveryId,
-        kind: "decision_card",
-        notify_mode: topics.notifyMode ?? "group_owner",
-        ...(degraded ? { reason: degraded } : {}),
-      },
-    });
+    // A degrade the control plane already knows about and a degrade the host
+    // discovers later both land on this Issue as the same activity type with the
+    // same fields, so an operator reads one story rather than two dialects.
+    if (degraded) {
+      this.appendDecisionDegradedActivity(issue.id, {
+        requestId: request.id,
+        sourceTaskId: sourceTask.id,
+        deliveryId,
+        reason: degraded,
+      });
+    } else {
+      this.ctx.appendIssueActivity(issue.id, {
+        actorType: "system",
+        type: "decision_card_queued",
+        body: request.id,
+        data: {
+          request_id: request.id,
+          source_task_id: sourceTask.id,
+          delivery_id: deliveryId,
+          kind: "decision_card",
+          notify_mode: topics.notifyMode ?? "group_owner",
+        },
+      });
+    }
     return deliveryId;
   }
 
@@ -1518,9 +1536,13 @@ export class FeishuBotRepo {
       `SELECT request.id, request.task_id, request.expires_at, request.created_at
        FROM multiremi_task_human_requests request
        JOIN multiremi_tasks task ON task.id = request.task_id
-       WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
+      WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
          AND request.expires_at IS NOT NULL
-         AND request.expires_at > ?
+         -- A reminder is worth sending only while it still leaves the reader
+         -- time to act: under a minute of lifetime left, the nudge would arrive
+         -- as the request expires. The bound is the same expression the CAS and
+         -- the claim use, so SQLite and Postgres agree.
+         AND request.expires_at >= ?
          AND task.issue_id IS NOT NULL AND task.workspace_id = ?
          AND (
            SELECT COUNT(*) FROM multiremi_feishu_bot_outbound_deliveries o
@@ -1529,7 +1551,7 @@ export class FeishuBotRepo {
              AND o.degraded IS NULL
          ) > 0
        ORDER BY request.expires_at ASC, request.id ASC`,
-    ).all(now.toISOString(), workspaceId) as Row[];
+    ).all(new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString(), workspaceId) as Row[];
     for (const row of due) {
       // A reminder is due once the deadline is within its lead. The lead is
       // half the request's lifetime, capped at ten minutes, so a five-minute
@@ -1549,8 +1571,10 @@ export class FeishuBotRepo {
       if (!sent) continue;
       const claimed = this.ctx.db.run(
         `UPDATE multiremi_task_human_requests SET reminder_sent_at = ?
-         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL`,
-        [now.toISOString(), String(row.id)],
+         WHERE id = ? AND status = 'pending' AND reminder_sent_at IS NULL
+           AND expires_at IS NOT NULL AND expires_at >= ?`,
+        [now.toISOString(), String(row.id),
+          new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString()],
       );
       if (claimed.changes !== 1) continue;
       const request = this.ctx.tasks().getTaskHumanRequest(String(row.id));
@@ -1614,11 +1638,11 @@ export class FeishuBotRepo {
    * callback name is derived from plus the recipient the card was sent to.
    */
   listLiveDecisionCards(workspaceId: string, runtimeId: string): Array<{
-    requestId: string;
-    taskId: string;
-    chatId: string;
-    messageId: string;
-    recipientOpenId: string;
+    request_id: string;
+    task_id: string;
+    chat_id: string;
+    message_id: string;
+    recipient_open_id: string;
   }> {
     if (!this.supportsDecisionCard(workspaceId, runtimeId)) return [];
     const rows = this.ctx.db.query(
@@ -1634,12 +1658,70 @@ export class FeishuBotRepo {
        ORDER BY o.created_at ASC, o.id ASC`,
     ).all(workspaceId) as Row[];
     return rows.map((row) => ({
-      requestId: String(row.human_request_id),
-      taskId: String(row.human_request_task_id),
-      chatId: String(row.chat_id),
-      messageId: String(row.external_message_id),
-      recipientOpenId: String(row.interaction_open_id),
+      // Snake_case, like every other field the daemon protocol carries. The
+      // client parser reads exactly these keys; emitting camelCase here
+      // silently produced zero recoverable cards, which is what QA caught.
+      request_id: String(row.human_request_id),
+      task_id: String(row.human_request_task_id),
+      chat_id: String(row.chat_id),
+      message_id: String(row.external_message_id),
+      recipient_open_id: String(row.interaction_open_id),
     }));
+  }
+
+  /**
+   * The Issue a delivery belongs to, so a host-reported outcome can be recorded
+   * on the same timeline the queue entry was. Returns null when the row is not
+   * an Issue lane (a Chat reply has no Issue to write to).
+   */
+  private issueIdForDeliveryRow(workspaceId: string, row: Row): string | null {
+    const direct = this.ctx.db.query(
+      `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ? AND workspace_id = ?`,
+    ).get(String(row.binding_id), workspaceId) as Row | null;
+    if (direct?.issue_id) return String(direct.issue_id);
+    const taskId = cleanOptionalString(row.human_request_task_id);
+    const task = taskId ? this.ctx.tasks().getTask(taskId) : null;
+    return task?.issueId ?? null;
+  }
+
+  /**
+   * One activity type for every degradation, whoever decided it (MUL-407).
+   *
+   * The control plane writes this when it already knows nobody is addressable;
+   * the host writes it when its own `group_owner` lookup fails or Feishu refuses
+   * the card. Sharing the type and the fields means an operator reading the
+   * Issue sees one story rather than two dialects of the same event.
+   */
+  private appendDecisionDegradedActivity(issueId: string, input: {
+    requestId: string | null;
+    sourceTaskId: string | null;
+    deliveryId: string;
+    reason: string;
+  }): void {
+    // The row's own `degraded` column is the first guard: `degraded =
+    // COALESCE(?, degraded)` already committed inside this transaction, so a
+    // repeat report cannot reach this method. This second check makes the
+    // insert itself idempotent, keyed on the exact payload shape both backends
+    // store (no JSON path functions, which SQLite and Postgres spell
+    // differently).
+    const data = {
+      request_id: input.requestId,
+      source_task_id: input.sourceTaskId,
+      delivery_id: input.deliveryId,
+      kind: "decision_card",
+      reason: input.reason,
+    };
+    const alreadyRecorded = this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_issue_activity
+       WHERE issue_id = ? AND type = 'decision_card_degraded' AND data = ? LIMIT 1`,
+    ).get(issueId, toJson(data)) as Row | null;
+    if (alreadyRecorded) return;
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: "system",
+      type: "decision_card_degraded",
+      body: input.requestId,
+      data,
+    });
   }
 
   /** The Agent's name is the card's conversation label for a server-built card. */
@@ -2033,7 +2115,8 @@ export class FeishuBotRepo {
     if (input.status === "sent") {
       return this.ctx.db.transaction(() => {
         const row = this.ctx.db.query(
-          `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments
+          `SELECT binding_id, chat_id, reply_to_message_id, task_id, attachments,
+                  kind, human_request_id, human_request_task_id, degraded
            FROM multiremi_feishu_bot_outbound_deliveries
            WHERE id = ? AND workspace_id = ? AND status = 'sending' AND claim_token = ?`,
         ).get(deliveryId, workspaceId, input.claimToken) as Row | null;
@@ -2057,6 +2140,22 @@ export class FeishuBotRepo {
             deliveryId, workspaceId, input.claimToken],
         );
         if (updated.changes !== 1) return false;
+        // A degrade the host decided (a `group_owner` lookup that came back
+        // empty, or a card Feishu refused) is as much a part of the request's
+        // story as one the control plane decided up front, so it gets the same
+        // activity and the same fields. `degraded = COALESCE(?, degraded)` above
+        // means a repeated report cannot write it twice, and the guarded insert
+        // below keeps that true even when two reports race.
+        const reportedDegrade = cleanOptionalString(input.degraded);
+        if (reportedDegrade && !cleanOptionalString(row.degraded)) {
+          const issueId = this.issueIdForDeliveryRow(workspaceId, row);
+          if (issueId) this.appendDecisionDegradedActivity(issueId, {
+            requestId: cleanOptionalString(row.human_request_id),
+            sourceTaskId: cleanOptionalString(row.human_request_task_id),
+            deliveryId,
+            reason: reportedDegrade,
+          });
+        }
         if (seedsTopic) {
           this.ctx.db.run(
             `UPDATE multiremi_feishu_bot_chat_bindings

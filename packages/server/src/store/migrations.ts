@@ -4100,21 +4100,141 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
  * table is rebuilt. Same shape as the outbound-delivery rebuild above, including
  * the Postgres branch that only has to relax the column.
  */
+const HUMAN_REQUEST_PUSH_TABLE = "multiremi_feishu_bot_human_request_pushes";
+const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
+
+/**
+ * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
+ * NULL. SQLite cannot drop NOT NULL in place and the column is UNIQUE, so the
+ * table is rebuilt.
+ *
+ * The rebuild is atomic and self-healing, because a crash used to be permanent:
+ * the previous version ran RENAME → CREATE → copy → DROP as four separate
+ * statements, so a crash after the RENAME left every push row stranded in
+ * `_legacy` with an empty live table and no way back. Two habits fix that:
+ * run the whole rebuild inside one transaction (SQLite rolls a DDL transaction
+ * back cleanly), and treat a surviving `_legacy` table as unfinished work —
+ * copy from it and drop it — rather than as an error.
+ *
+ * `foreign_keys` cannot be toggled inside a transaction. Nothing references
+ * this table (it is a leaf: no `REFERENCES multiremi_feishu_bot_human_request_pushes`
+ * anywhere in the schema), so the surrounding code only has to turn them off
+ * for the rebuild's duration to keep the RENAME from rewriting its own FKs.
+ */
 function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase): void {
-  const column = (db.query("PRAGMA table_info(multiremi_feishu_bot_human_request_pushes)").all() as Array<{
-    name: string;
-    notnull: number;
-  }>).find((entry) => entry.name === "wake_task_id");
-  if (!column || Number(column.notnull) === 0) return;
-  if (isPostgresConfigured()) {
-    db.exec("ALTER TABLE multiremi_feishu_bot_human_request_pushes ALTER COLUMN wake_task_id DROP NOT NULL");
+  if (isPostgresDialect(db)) {
+    // Postgres can relax the column in place, and the PRAGMA below is SQLite
+    // only — asking for `is_nullable` through `PRAGMA table_info` would be
+    // translated into a query Postgres cannot answer. `DROP NOT NULL` is itself
+    // idempotent, so a repeated run is harmless.
+    const column = (db.query(`PRAGMA table_info(${HUMAN_REQUEST_PUSH_TABLE})`).all() as Array<{
+      name: string;
+      notnull: number;
+    }>).find((entry) => entry.name === "wake_task_id");
+    if (!column || Number(column.notnull) === 0) return;
+    db.exec(`ALTER TABLE ${HUMAN_REQUEST_PUSH_TABLE} ALTER COLUMN wake_task_id DROP NOT NULL`);
     return;
   }
 
+  // A previous crash may have left the copy behind. Finish that work first,
+  // whether or not the live table still needs rebuilding: the live table may
+  // have been recreated empty while the only real rows sit in `_legacy`.
+  healStrandedHumanRequestPushRows(db);
+
+  const columns = db.query(`PRAGMA table_info(${HUMAN_REQUEST_PUSH_TABLE})`).all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const wakeTask = columns.find((entry) => entry.name === "wake_task_id");
+  if (!wakeTask || Number(wakeTask.notnull) === 0) {
+    // Already the new shape. The rebuild is done, but a crash between the DROP
+    // and the index creation in the version that shipped this would have left
+    // the table without its index, so assert it either way — the statement is
+    // idempotent.
+    ensureHumanRequestPushWakeIndex(db);
+    return;
+  }
+
+  rebuildHumanRequestPushTableForNullableWakeTaskId(db);
+}
+
+function ensureHumanRequestPushWakeIndex(db: SqlDatabase): void {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_${HUMAN_REQUEST_PUSH_TABLE}_wake
+    ON ${HUMAN_REQUEST_PUSH_TABLE}(wake_task_id)`);
+}
+
+/**
+ * Which dialect this handle speaks. `isPostgresConfigured()` reads the process
+ * environment, which is right for a real deployment but wrong for the Postgres
+ * test harness — it drives `PostgresSyncDatabase` over an explicit admin URL and
+ * never sets `MULTIREMI_DATABASE_URL`. The handle itself is the reliable signal:
+ * `PostgresSyncDatabase` translates SQLite SQL, so a statement reaching its
+ * `sqlite_master` probe would fail on the server.
+ */
+function isPostgresDialect(db: SqlDatabase): boolean {
+  // Ask the database rather than an environment variable or a method name.
+  // Bun's SQLite handle also exposes `inTransaction`, so probing for that made
+  // SQLite look like Postgres and silently skipped the rebuild; and the Postgres
+  // test harnesses reach `runMigrations` through thin wrappers, so a marker on
+  // one class is not enough either. `sqlite_master` is the one signal that is
+  // true no matter how the handle was wrapped: only SQLite can answer it.
+  try {
+    db.query("SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1").get();
+    return false;
+  } catch {
+    // No SQLite catalogue, so this handle speaks to something else.
+    return true;
+  }
+}
+
+/**
+ * Repair a database a crashed rebuild left behind. Idempotent: with no
+ * `_legacy` table it does nothing, and once the rows are copied the leftover is
+ * dropped so the next run finds nothing to do.
+ */
+function healStrandedHumanRequestPushRows(db: SqlDatabase): void {
+  const legacy = db.query(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(HUMAN_REQUEST_PUSH_LEGACY_TABLE) as { name?: string } | null;
+  if (!legacy?.name) return;
+  const live = db.query(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(HUMAN_REQUEST_PUSH_TABLE) as { name?: string } | null;
+  // Even the heal is one transaction, so a crash during recovery leaves the
+  // same recoverable state rather than a half-copied table.
+  db.transaction(() => {
+    // The live table must accept a NULL wake Task before anything is copied into
+    // it. A crash can also have left the *original* DDL back in place beside the
+    // renamed copy (an older binary recreated it after the rename); copying into
+    // that shape would still work, but the migration would then be "done" with a
+    // NOT NULL column, so rebuild instead.
+    const liveColumns = live?.name
+      ? db.query(`PRAGMA table_info(${HUMAN_REQUEST_PUSH_TABLE})`).all() as Array<{ name: string; notnull: number }>
+      : [];
+    const liveWake = liveColumns.find((column) => column.name === "wake_task_id");
+    const liveIsCurrent = Boolean(liveWake) && Number(liveWake!.notnull) === 0;
+    if (!live?.name || !liveIsCurrent) {
+      // The crash happened between RENAME and CREATE. Recreate the new shape and
+      // move the stranded rows back into it.
+      if (live?.name) db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_TABLE}`);
+      createHumanRequestPushTable(db);
+      copyHumanRequestPushRows(db);
+      db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+      ensureHumanRequestPushWakeIndex(db);
+      return;
+    }
+    // Both tables exist in the current shape: the live one may be empty or
+    // partially copied. An `INSERT OR IGNORE` keyed on the primary key is safe
+    // to repeat, so copy whatever is missing and only then drop the leftover.
+    copyHumanRequestPushRows(db);
+    db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+    ensureHumanRequestPushWakeIndex(db);
+  })();
+}
+
+function createHumanRequestPushTable(db: SqlDatabase): void {
   db.exec(`
-    ALTER TABLE multiremi_feishu_bot_human_request_pushes
-      RENAME TO multiremi_feishu_bot_human_request_pushes_legacy;
-    CREATE TABLE multiremi_feishu_bot_human_request_pushes (
+    CREATE TABLE ${HUMAN_REQUEST_PUSH_TABLE} (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
       binding_id TEXT NOT NULL,
@@ -4130,19 +4250,44 @@ function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase): void {
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
       FOREIGN KEY(source_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE,
       FOREIGN KEY(wake_task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
-    );
-    INSERT INTO multiremi_feishu_bot_human_request_pushes (
+    )`);
+}
+
+/**
+ * Copy every stranded row, skipping ids the live table already holds. The
+ * legacy table predates `delivery_id`, so that column becomes NULL — the
+ * decision-card lanes never had a wake Task to record there.
+ */
+function copyHumanRequestPushRows(db: SqlDatabase): void {
+  db.exec(`
+    INSERT OR IGNORE INTO ${HUMAN_REQUEST_PUSH_TABLE} (
       id, workspace_id, binding_id, issue_id, source_task_id,
       request_id, wake_task_id, delivery_id, created_at, updated_at
     )
     SELECT
       id, workspace_id, binding_id, issue_id, source_task_id,
       request_id, wake_task_id, NULL, created_at, updated_at
-    FROM multiremi_feishu_bot_human_request_pushes_legacy;
-    DROP TABLE multiremi_feishu_bot_human_request_pushes_legacy;
-    CREATE INDEX idx_multiremi_feishu_bot_human_request_pushes_wake
-      ON multiremi_feishu_bot_human_request_pushes(wake_task_id);
-  `);
+    FROM ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+}
+
+function rebuildHumanRequestPushTableForNullableWakeTaskId(db: SqlDatabase): void {
+  // `foreign_keys` is a no-op inside a transaction, so it is toggled around the
+  // whole transaction the way the chat-session rebuild does.
+  const foreignKeysEnabled =
+    Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys?: number } | null)?.foreign_keys) === 1;
+  if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`DROP TABLE IF EXISTS ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+      db.exec(`ALTER TABLE ${HUMAN_REQUEST_PUSH_TABLE} RENAME TO ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+      createHumanRequestPushTable(db);
+      copyHumanRequestPushRows(db);
+      db.exec(`DROP TABLE ${HUMAN_REQUEST_PUSH_LEGACY_TABLE}`);
+      ensureHumanRequestPushWakeIndex(db);
+    })();
+  } finally {
+    if (foreignKeysEnabled) db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 function backfillCanonicalDaemonRouting(db: SqlDatabase): void {

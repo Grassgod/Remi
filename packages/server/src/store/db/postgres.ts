@@ -240,6 +240,13 @@ class PgStatement implements SqlStatement {
 }
 
 export class PostgresSyncDatabase implements SqlDatabase {
+  /**
+   * Explicit dialect marker. Migrations must not infer the backend from a
+   * method that happens to exist on both handles: Bun's `Database` also has
+   * `inTransaction`, so probing for it misidentifies SQLite as Postgres and the
+   * rebuild path silently never runs (MUL-407).
+   */
+  readonly dialect = "postgres" as const;
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
   constructor(url: string) {
