@@ -10,7 +10,7 @@ import type {
 } from "@multiremi/contracts/messaging.js";
 import { nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
-import type { StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-repo.js";
@@ -24,7 +24,7 @@ import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-re
  */
 export type MessagingOutcomeHost = Pick<
   StoreContext,
-  "db" | "createInboxItem" | "resolveWorkspaceMemberForNotification" | "isNotificationMuted" | "issues"
+  "db" | "createInboxItem" | "resolveWorkspaceMemberForNotification" | "isNotificationMuted" | "issues" | "emitCommitEvents"
 >;
 
 export interface MessageRef {
@@ -335,12 +335,15 @@ export class MessagingOutcomeService {
   /** Creates the Issue directly. Reserved for a human who may approve. */
   createIssue(ref: MessageRef, input: MessageIssueOutcomeInput): MessageIssueOutcomeResult {
     const issueInput = normalizeIssueInput(input);
-    return this.ctx.db.transaction(() => this.createIssueWithinTransaction(ref, {
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => this.createIssueWithinTransaction(ref, {
       ...issueInput,
       workspaceId: input.workspaceId,
       taskId: cleanText(input.taskId),
       createdBy: cleanText(input.createdBy),
-    }))();
+    }, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return result;
   }
 
   /** Asks a person to approve creating an Issue, without creating one yet. */
@@ -420,7 +423,8 @@ export class MessagingOutcomeService {
   }
 
   approveProposal(proposalId: string, input: { workspaceId: string; approvedBy: string }): ResolveMessageProposalResult {
-    return this.ctx.db.transaction(() => {
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => {
       const proposal = this.requireProposal(proposalId, input.workspaceId);
       const ref = { connectionId: proposal.connectionId, externalMessageId: proposal.externalMessageId };
       this.lockMessage(ref);
@@ -433,7 +437,7 @@ export class MessagingOutcomeService {
         workspaceId: input.workspaceId,
         taskId: null,
         createdBy: input.approvedBy,
-      });
+      }, deferredEvents);
       this.repo.resolveProposal({
         id: proposalId,
         workspaceId: input.workspaceId,
@@ -443,6 +447,8 @@ export class MessagingOutcomeService {
       this.markProposalInboxHandled(current.ref);
       return { ...result, proposal: this.requireProposal(proposalId, input.workspaceId) };
     })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return result;
   }
 
   rejectProposal(proposalId: string, input: { workspaceId: string; rejectedBy: string }): ResolveMessageProposalResult {
@@ -488,6 +494,7 @@ export class MessagingOutcomeService {
   private createIssueWithinTransaction(
     ref: MessageRef,
     input: MessageIssueInput & { workspaceId: string; taskId: string | null; createdBy: string | null },
+    deferredEvents: CommitEventQueue,
   ): MessageIssueOutcomeResult {
     const message = this.requireMessage(ref, input.workspaceId);
     this.assertTaskWorkspace(input.taskId, input.workspaceId);
@@ -501,7 +508,7 @@ export class MessagingOutcomeService {
       }
       return { message, outcome: existing, issue, created: false };
     }
-    const issue = this.ctx.issues().createIssue({
+    const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
       priority: input.priority ?? undefined,
@@ -518,7 +525,7 @@ export class MessagingOutcomeService {
         message_url: message.url,
       }],
       createdBy: input.createdBy,
-    });
+    }, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.repo.recordOutcome({
       workspaceId: input.workspaceId,

@@ -63,6 +63,10 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     },
   });
   return {
+    // Forward the backend: the store runs migrations on construction, and an
+    // inherited MULTIREMI_DATABASE_URL must not make this SQLite fixture take
+    // the Postgres migration branch (MUL-407).
+    dialect: "sqlite" as const,
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -79,7 +83,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
 }
 
 function createCountedStore(): { store: MultiremiStore; db: Database; probe: Probe } {
-  const db = new Database(":memory:");
+  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
   databases.push(db);
   const probe: Probe = {
     statements: 0,
@@ -93,7 +97,7 @@ function createCountedStore(): { store: MultiremiStore; db: Database; probe: Pro
 }
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }

@@ -636,7 +636,7 @@ function mappedOperationsCommand(route: string): string | null {
     [/^DELETE \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.delete"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/runs$/, "autopilot.run.list"],
     [/^GET \/api\/autopilots\/:id\/runs\/:runId$/, "autopilot.run.get"],
-    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/(?:run|trigger)$/, "autopilot.run"],
+    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/(?:run|trigger)$/, "autopilot.run-now"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries$/, "autopilot.delivery.list"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId$/, "autopilot.delivery.get"],
     [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId\/replay$/, "autopilot.delivery.replay"],
@@ -753,7 +753,7 @@ function exemptRoute(route: string): CliManifestRoute | null {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");
   }
   if (path === "/api/multiremi/autopilots/:id/run-scheduled") {
-    return exempt("daemon_internal_protocol", "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run.");
+    return exempt("daemon_internal_protocol", "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run-now.");
   }
   if (path === "/api/multiremi/autopilots/:id/webhook") {
     return exempt("oauth_or_webhook_callback", "Autopilot webhook reception is invoked by an external system, not a user command.");
