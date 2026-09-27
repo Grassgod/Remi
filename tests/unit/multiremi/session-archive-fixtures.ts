@@ -19,6 +19,7 @@ import {
   type SessionArchiveSubject,
 } from "@multiremi/contracts/session-archive.js";
 import { readTraceMemberWindow } from "@multiremi/contracts/session-archive.js";
+import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { sessionArchiveSourceRevision } from "@shared/session-archive/source-revision.js";
 import { ZipStreamWriter } from "@shared/zip/writer.js";
 
@@ -63,27 +64,40 @@ export interface ArchiveFixtureOptions {
 /**
  * Build a trace file body in the ruled shape.
  *
- * The header line and the trailer line carry no `seq` (they are structural, not
- * events); every event carries an integer `seq` starting at 1. Passing
- * `closed: false` omits the trailer, which is what a task still running looks
- * like. `gapAfter` drops one seq so tests can prove `head` is the largest seq
- * rather than the event count.
+ * The header and trailer lines carry no `seq` (they are framing, not events);
+ * every event carries an integer `seq` starting at 1. The trailer is B0's
+ * `TraceFileTrailer` — `{ end: { status, head, event_count, ended_at } }` —
+ * because only that shape closes a trace. `closed: false` omits it, which is
+ * what a still-running task looks like, and `headerOnly` emits just the header
+ * so a test can prove an unsealed file stays open.
  */
 export function traceFileBody(options: {
   events: number;
   taskId?: string;
+  /** Emit a trailer; defaults to true. Ignored when `headerOnly` is set. */
   closed?: boolean;
+  /** Emit only the header line, i.e. a trace started but never written to. */
+  headerOnly?: boolean;
   /** Drop this seq (1-based) to simulate a historical gap. */
   gapAfter?: number;
 }): string {
+  const taskId = options.taskId ?? "tsk_fixture";
   const lines: string[] = [];
   lines.push(JSON.stringify({
-    format: "multiremi.trace.v1",
-    task_id: options.taskId ?? "tsk_fixture",
+    format: TRACE_FILE_FORMAT,
+    task_id: taskId,
+    session_id: "ises_fixture",
+    agent_id: "agt_fixture",
+    provider: "codex",
     started_at: "2026-09-27T00:00:00.000Z",
   }));
+  if (options.headerOnly) return `${lines.join("\n")}\n`;
+  let head = 0;
+  let eventCount = 0;
   for (let seq = 1; seq <= options.events; seq++) {
     if (options.gapAfter !== undefined && seq === options.gapAfter) continue;
+    head = seq;
+    eventCount += 1;
     lines.push(JSON.stringify({
       seq,
       ts: new Date(Date.UTC(2026, 8, 27, 0, 0, seq)).toISOString(),
@@ -92,7 +106,14 @@ export function traceFileBody(options: {
     }));
   }
   if (options.closed !== false) {
-    lines.push(JSON.stringify({ status: "completed", event_count: options.events }));
+    lines.push(JSON.stringify({
+      end: {
+        status: "completed",
+        head,
+        event_count: eventCount,
+        ended_at: "2026-09-27T01:00:00.000Z",
+      },
+    }));
   }
   return `${lines.join("\n")}\n`;
 }

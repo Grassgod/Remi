@@ -303,21 +303,21 @@ describe("Multiremi session archives", () => {
       const client = new MultiremiDaemonClient(origin, token.token, {
         sessionArchiveProxyMaxBytes: 8 * 1024 * 1024,
       });
-      const initialized = await client.initIssueSessionArchive(runtime.id, issue.id, {
+      const initialized = await client.initSessionArchive(runtime.id, { kind: "issue", id: issue.id }, {
         sourceRevision: streamFixture.sourceRevision,
         sha256: digest,
         sizeBytes: bytes.byteLength,
         fileCount: 2,
       });
-      const uploaded = await client.uploadIssueSessionArchive(
+      const uploaded = await client.uploadSessionArchive(
         runtime.id,
-        issue.id,
+        { kind: "issue", id: issue.id },
         initialized.archive.id,
         archivePath,
       );
-      const completed = await client.completeIssueSessionArchive(
+      const completed = await client.completeSessionArchive(
         runtime.id,
-        issue.id,
+        { kind: "issue", id: issue.id },
         initialized.archive.id,
       );
 
@@ -508,7 +508,7 @@ describe("Multiremi session archives", () => {
         sha256: digest,
         size_bytes: bytes.byteLength,
         file_count: 1,
-        metadata: { providers: ["claude", "codex"] },
+        metadata: { providers: ["claude", "codex"], format: SESSION_ARCHIVE_FORMAT_V2 },
       }),
     });
     expect(init.status).toBe(201);
@@ -641,7 +641,10 @@ describe("Multiremi session archives", () => {
       requested_ready: null,
       gc_ready: false,
     });
-    expect(store.getSessionArchive(ready.id)?.metadata).toEqual({ providers: ["claude", "codex"] });
+    expect(store.getSessionArchive(ready.id)?.metadata).toEqual({
+      providers: ["claude", "codex"],
+      format: SESSION_ARCHIVE_FORMAT_V2,
+    });
   });
 
   it("heartbeats slow upload progress so the stall detector does not fence a live attempt", async () => {
@@ -788,8 +791,9 @@ describe("Multiremi session archives", () => {
     const body = JSON.stringify({
       source_revision: crashFixture.sourceRevision,
       sha256: crashFixture.sha256,
-          metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
-      });
+      size_bytes: bytes.byteLength,
+      metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+    });
     const firstResponse = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,
@@ -898,8 +902,9 @@ describe("Multiremi session archives", () => {
     const body = JSON.stringify({
       source_revision: "stalled-budget-v1",
       sha256: sha256(bytes),
-          metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
-      });
+      size_bytes: bytes.byteLength,
+      metadata: { format: SESSION_ARCHIVE_FORMAT_V2 },
+    });
     const firstResponse = await app.request(`${base}/init`, {
       method: "POST",
       headers: daemonHeaders,

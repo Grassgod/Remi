@@ -9,6 +9,7 @@ import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { createStore, resetMultiremiTestEnv, db } from "./helpers.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 
 function freshDb(): Database {
   return new Database(":memory:");
@@ -243,15 +244,29 @@ describe("Session archive random access", () => {
       branchName: `agent/${issue.key}`,
       status: "ready",
     });
-    // Header, four events with a gap where seq 3 would be, a duplicate seq 2, a
-    // trailer, then a crash-truncated half line with no newline.
+    // Header, three events with a gap where seq 3 would be, a duplicate seq 2, a
+    // ruled trailer, then a crash-truncated half line with no newline.
     const body = [
-      JSON.stringify({ format: "multiremi.trace.v1", task_id: "tsk_cursor" }),
+      JSON.stringify({
+        format: TRACE_FILE_FORMAT,
+        task_id: "tsk_cursor",
+        session_id: "ises_1",
+        agent_id: "agt_1",
+        provider: "codex",
+        started_at: "2026-09-27T00:00:00.000Z",
+      }),
       JSON.stringify({ seq: 1, type: "execution", content: "one" }),
       JSON.stringify({ seq: 2, type: "execution", content: "two" }),
       JSON.stringify({ seq: 4, type: "execution", content: "four" }),
       JSON.stringify({ seq: 2, type: "execution", content: "duplicate two" }),
-      JSON.stringify({ status: "completed", event_count: 3 }),
+      JSON.stringify({
+        end: {
+          status: "completed",
+          head: 4,
+          event_count: 3,
+          ended_at: "2026-09-27T01:00:00.000Z",
+        },
+      }),
     ].join("\n") + "\n" + JSON.stringify({ seq: 5, type: "execution" });
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },
