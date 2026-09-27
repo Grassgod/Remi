@@ -2,7 +2,7 @@
 // results), extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
-import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveFollowDeltaRatio, resolveFollowTokenLimit, resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
@@ -619,7 +619,11 @@ export class IssueSessionsRepo {
       assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
       assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
       assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
-      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+      // MUL-456 fix round 1: a present `parentTaskId` (including the explicit
+      // `null` the session route stamps) is authoritative, so a body-supplied
+      // `parent_task_id` can no longer fall through the `??` when the caller
+      // has no task lineage. Anonymous compatibility keeps the old alias read.
+      parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
     });
   }
 

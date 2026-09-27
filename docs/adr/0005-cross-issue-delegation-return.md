@@ -80,7 +80,21 @@ Two further behaviours were decided with the fix's reviewers:
    return Session, the source is stamped with that task as its
    `delegation_return_task_id` and the skip reason is
    `covered_by_delegate_wakeup`. Only `parent_task_id` carries the lineage;
-   `trigger_comment_id` is not consulted. Because the E2 child-status round also
+   because that predicate is trusted, `parent_task_id` itself is
+   credential-owned. On every task-creation surface a verified request
+   (member PAT, login session, task token, daemon token) supplies it from the
+   credential — its own task id for a task token, otherwise `null` — and the
+   route strips both body spellings (`parentTaskId`, `parent_task_id`) before
+   stamping, so no nested or alias spelling can outrank it. The store reads a
+   present camelCase key as authoritative *including an explicit `null`*
+   (`resolveCamelOrSnakeString`) instead of the historical
+   `camel ?? snake` fallback. Comment bodies obey the same rule: a comment's
+   `task_id` links it to its run, and the mention dispatcher and assignee
+   auto-response read that link back as `parent_task_id`, so only the task-token
+   branch of `issueCommentCreateInput` may set it. Anonymous compatibility
+   (auth disabled, or the deployment master token) is deliberately unchanged.
+   `trigger_comment_id` is not consulted.
+   Because the E2 child-status round also
    sets `parent_task_id`, server-generated wake rounds carry
    `wake_source = 'child_status'` and the de-duplication query requires
    `wake_source IS NULL`. `wake_source` is a server-owned column: retries,
@@ -99,7 +113,11 @@ Two further behaviours were decided with the fix's reviewers:
 
 7. **The result comment id is resolved once.** `result_comment_id` is the
    newest comment on the target issue whose `task_id` is the source task, read
-   inside the terminal transaction. It is never back-filled: the automatic
+   inside the terminal transaction. Exactly one such SELECT runs per terminal
+   transaction: the value resolved for the bridge metadata is threaded into the
+   return-prompt construction, so the two cannot disagree even if a later
+   comment commits in between (comment writes do not take the workspace
+   lifecycle lock). It is never back-filled: the automatic
    result comment is posted after that transaction commits, so a report with no
    in-run comment carries `result_comment_id: null` and the prompt line
    `Result comment: none at completion (the final reply is posted as a comment
@@ -124,6 +142,10 @@ Two further behaviours were decided with the fix's reviewers:
   are localized in the issue timeline for all four languages.
 - The task table gains three nullable columns and one index in an add-only
   migration. Existing rows keep their legacy behaviour.
+- An archived return Session keeps receiving the bridge and the queued return:
+  the Session's `status` is a list filter, not a lifecycle end, and the
+  dispatcher's deliverables are visible on the Issue either way. The round
+  stays claimable, so the daemon drains it normally.
 - The return task still relies on the existing delegation machinery: the
   return cannot bounce, a retry chain reports once, and the parent status guard
   does not reopen a closed parent.

@@ -17,6 +17,7 @@ import {
   nullableString,
   parseJson,
   parseTaskUsageEntries,
+  resolveCamelOrSnakeString,
   resolveOptionalStringField,
   toJson,
   type RuntimeUsageEntry,
@@ -760,7 +761,12 @@ export class TasksRepo {
     const triggerCommentId = cleanOptionalString(input.triggerCommentId ?? input.trigger_comment_id);
     const triggerComment = triggerCommentId ? this.ctx.getRawIssueComment(triggerCommentId) : null;
     if (triggerCommentId && !triggerComment) throw new Error(`Comment not found: ${triggerCommentId}`);
-    const requestedParentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
+    // MUL-456 fix round 1: a present `parentTaskId` is authoritative, including
+    // an explicit `null`; the snake_case alias is only read when the camelCase
+    // key is absent. `camel ?? snake` let a body-supplied `parent_task_id` win
+    // exactly when the server stamped `null`, which is the D4 manual-wake-up
+    // forgery this round closes (see api/wire/context.ts).
+    const requestedParentTaskId = resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id");
     const parentTaskId = requestedParentTaskId ?? triggerComment?.taskId ?? null;
     const parentTask = parentTaskId ? this.getTask(parentTaskId) : null;
     if (parentTaskId && !parentTask) throw new Error(`Parent task not found: ${parentTaskId}`);
@@ -3729,6 +3735,11 @@ export class TasksRepo {
       return { task: null, created: false, covered: false };
     }
     const returnSessionId = source.delegatedFromIssueSessionId ?? source.issueSessionId;
+    // MUL-456 fix round 1: the source's newest result comment is resolved at
+    // most once per terminal transaction and shared by the bridge metadata and
+    // the return prompt. `undefined` means "not resolved yet"; the drain
+    // resolves it when the cross-issue bridge branch did not run.
+    let triggerResultCommentId: string | null | undefined;
     if (terminalStatus && hasDelegationId && hasDelegator && source.agentId !== delegatedByAgentId
       && source.delegatedFromIssueSessionId && source.delegatedFromIssueSessionId !== source.issueSessionId) {
       const returnSession = this.ctx.issueSessions().getIssueSession(source.delegatedFromIssueSessionId);
@@ -3749,7 +3760,12 @@ export class TasksRepo {
          ORDER BY seq DESC LIMIT 1`,
       ).get(returnSession.id, source.id) as { seq: number } | null;
       const sourceIssue = source.issueId ? this.ctx.issues().getIssue(source.issueId) : null;
-      const resultCommentId = this.lastDelegationResultCommentId(source);
+      // The bridge metadata and the return prompt must name the same comment. A
+      // second SELECT could see a comment that landed between the two reads
+      // (comment writes do not take the workspace lifecycle lock), and both
+      // writes commit in one transaction, so resolve here and thread the value
+      // through the drain below.
+      triggerResultCommentId = this.lastDelegationResultCommentId(source);
       const bridge = existing ?? this.ctx.issueSessions().appendSessionEventWithinTransaction(returnSession.id, {
         authorType: "system",
         kind: "delegation_report",
@@ -3761,7 +3777,7 @@ export class TasksRepo {
           source_task_id: source.id,
           delegate_agent_id: source.agentId,
           terminal_status: terminalStatus,
-          result_comment_id: resultCommentId,
+          result_comment_id: triggerResultCommentId,
           delegation_id: delegationId,
         },
       });
@@ -3776,6 +3792,9 @@ export class TasksRepo {
         terminalStatus,
         terminalBody: input.terminalBody ?? null,
         requiredEventSeq,
+        // Only the cross-issue bridge branch above resolves the comment; when it
+        // did not run, the drain resolves it once for this source.
+        ...(triggerResultCommentId === undefined ? {} : { resultCommentId: triggerResultCommentId }),
       }, childStatusChanges, deferredEvents);
       const task = drained.taskBySourceId.get(source.id) ?? null;
       const created = task != null && drained.createdTasks.some((candidate) => candidate.id === task.id);
@@ -3935,6 +3954,14 @@ export class TasksRepo {
       terminalStatus: "completed" | "failed" | "cancelled";
       terminalBody: string | null;
       requiredEventSeq: number;
+      /**
+       * MUL-456 fix round 1: the result comment the terminal transaction already
+       * resolved for this source (`null` = resolved as absent, `undefined` =
+       * not resolved yet). Passing the value keeps the bridge metadata and the
+       * return prompt on the same comment; a missing value is resolved here,
+       * once, for the sources this trigger did not already cover.
+       */
+      resultCommentId?: string | null;
     } | null,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
@@ -3979,11 +4006,14 @@ export class TasksRepo {
       const terminalStatus = isTrigger
         ? trigger.terminalStatus
         : source.status as DelegationTerminalReport["terminalStatus"];
+      const resultCommentId = isTrigger && trigger.resultCommentId !== undefined
+        ? trigger.resultCommentId
+        : this.lastDelegationResultCommentId(source);
       return {
         source,
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,
         sourceIssueKey: source.issueId ? this.ctx.issues().getIssue(source.issueId)?.key ?? null : null,
-        resultCommentId: this.lastDelegationResultCommentId(source),
+        resultCommentId,
         terminalStatus,
         terminalBody: isTrigger
           ? trigger.terminalBody

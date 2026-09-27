@@ -11,6 +11,7 @@ import {
   nullableString,
   parseJson,
   resolveOptionalStringField,
+  resolveCamelOrSnakeString,
   searchMatch,
   searchRank,
   toJson,
@@ -1755,7 +1756,7 @@ export class IssuesRepo {
         cancelledTasks = this.unassignIssueWithinTransaction(id, {
           actorType: input.actorType ?? "system",
           actorId: input.actorId ?? null,
-          parentTaskId: input.parentTaskId ?? input.parent_task_id,
+          parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         });
       }
       const next = this.getIssue(id)!;
@@ -1765,7 +1766,7 @@ export class IssuesRepo {
         previousStatus: current.status,
         actorType: "system",
         actorId: null,
-        automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        automationSourceTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
       return next;
     })();
@@ -1796,7 +1797,7 @@ export class IssuesRepo {
           previous_status: previous!.status,
           openChildren: this.countOpenChildIssues(id),
           open_children: this.countOpenChildIssues(id),
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         },
       });
     }
@@ -1825,7 +1826,7 @@ export class IssuesRepo {
       this.notifyChildStatusChange(
         previous!,
         updated,
-        cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         collector,
       );
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
@@ -1874,7 +1875,9 @@ export class IssuesRepo {
         assigneeId: issue.assigneeId,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // MUL-456 fix round 1: a present `parentTaskId` — including the
+        // explicit `null` a verified route stamps — is authoritative.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, { force: true });
     } catch (err) {
       // The status change already committed and is what the member asked for;
@@ -3250,7 +3253,7 @@ export class IssuesRepo {
       const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }))();
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
     }
@@ -3342,7 +3345,8 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
     }
     if (assigneeType === "member") {

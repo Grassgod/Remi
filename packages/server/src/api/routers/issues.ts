@@ -41,6 +41,7 @@ import {
   currentTaskAccessToken,
   currentAccessToken,
   hasRequestField,
+  hasVerifiedRequestIdentity,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
   issueCommentListErrorResponse,
@@ -68,6 +69,8 @@ import {
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
   parseOptionalInt,
+  requestParentTaskLineage,
+  requestTaskLineageBody,
   sessionEventCompatibilityResponse,
   sessionParticipantCompatibilityResponse,
   sessionResultCompatibilityResponse,
@@ -1041,9 +1044,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
+    // MUL-456 fix round 1: rerun creates a task, so it obeys the same lineage
+    // rule as the other task-creation routes — a verified credential supplies
+    // the value, a body cannot.
+    const rerunBody = requestTaskLineageBody(c, body);
     const result = safeRerunIssue(store, issue.id, {
-      ...body,
-      parentTaskId: currentTaskParentId(c),
+      ...rerunBody,
+      ...requestParentTaskLineage(c, body),
     });
     if ("error" in result) {
       // MUL-400 E3: the task-creation gate reports the same 409 code as the
@@ -1383,11 +1390,16 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;
     const { actorType, actorId } = issueMutationActivity(c);
+    // MUL-456 fix round 1: `assignIssue` reads `parentTaskId ?? parent_task_id`,
+    // so assigning an agent is a task-creation surface too. Strip both
+    // spellings from a verified body before stamping the credential's value;
+    // anonymous compatibility keeps its historical alias read.
+    const assignBody = requestTaskLineageBody(c, body);
     const result = safeAssignIssue(store, issue.id, {
-      ...body,
+      ...assignBody,
       actorType,
       actorId,
-      parentTaskId: currentTaskParentId(c),
+      ...requestParentTaskLineage(c, body),
     });
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json({
@@ -1584,14 +1596,21 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
     const creator = issueSubscriberCaller(c);
     try {
+      // MUL-456 fix round 1: the session route stamps the only lineage a task
+      // may carry — the caller's own task credential, null for a member PAT or
+      // a login session. Strip both spellings first so neither a `parentTaskId`
+      // nor a `parent_task_id` in the body can outrank that value (`createTask`
+      // and this repo read `camel ?? snake`). The anonymous compatibility modes
+      // keep their historical pass-through.
+      const bodyParent = requestTaskLineageBody(c, body);
       const task = store.createSessionTask(session.id, {
-        ...body,
+        ...bodyParent,
         // Non-null past the `if (!agent) return 404` guard above; cleanString's
         // null just has to become the `agentId?: string` field's undefined.
         agentId: agentId ?? undefined,
         createdByType: creator.actorType,
         createdById: creator.actorId,
-        parentTaskId: currentTaskParentId(c),
+        ...requestParentTaskLineage(c, body),
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {

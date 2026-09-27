@@ -20,6 +20,7 @@ import {
   cleanString,
   currentTaskAccessToken,
   parseOptionalInt,
+  requestStrippedParentTaskLineage,
   taskCompatibilityResponse,
   taskListResponse,
   taskPublicResponse,
@@ -249,9 +250,16 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // self-continuation and intentionally suppresses that child's return in
     // drainDelegationReturnsWithinWorkspaceLock. This is a new requested round,
     // so every completed child Task must remain independently returnable.
+    //
+    // MUL-456 fix round 1: `parentTaskId` / `parent_task_id` are server-owned
+    // lineage. The destructure above drops both spellings from `publicInput`,
+    // so the only value that can reach the store is the credential's own task
+    // id — `null` for a member PAT or a login session. This route has always
+    // ignored body lineage, including in the anonymous compatibility modes.
+    const lineage = requestStrippedParentTaskLineage(c);
     const createInput: CreateTaskInput = {
       ...publicInput,
-      parentTaskId: currentTaskParentId(c),
+      ...lineage,
       ...(continuedTask
         ? {
           issueId: continuedTask.issueId,

@@ -1,7 +1,7 @@
 // Chat domain (chat sessions and chat messages), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
-import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import type { CancelTaskResult } from "./tasks-repo.js";
@@ -463,7 +463,8 @@ export class ChatRepo {
         workspaceId: session.workspaceId,
         holdsWorkspace: false,
         prompt: body,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, childStatusChanges, deferredEvents);
       this.appendChatMessageWithinTransaction({
         id: messageId,

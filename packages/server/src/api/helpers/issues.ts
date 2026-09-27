@@ -9,6 +9,7 @@ import {
   currentRequestUserId,
   currentTaskAccessToken,
   hasRequestField,
+  hasVerifiedRequestIdentity,
   parseOptionalInt,
 } from "../wire/index.js";
 import type { CompatibilityQueryMode } from "../wire/index.js";
@@ -102,13 +103,39 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
+  // MUL-456 fix round 1: with a verified credential, no branch below may name
+  // the run a comment belongs to. `comment.task_id` is read back as trusted
+  // lineage — the mention dispatcher turns it into `sourceTask`, and
+  // `createTask` inherits that as `parent_task_id`, which is exactly the field
+  // D4 reads as "this task was created by the delegating run". A member PAT (or
+  // a login JWT) could otherwise plant a wake-up that swallows the real return.
+  // Only the task-token branch above sets the link, and it takes it from the
+  // token. Anonymous compatibility (auth disabled / master token) is untouched.
+  const publicInput = hasVerifiedRequestIdentity(c) ? stripCommentTaskLink(input) : input;
   const userId = authenticatedRequestUserId(c);
-  if (userId) return { ...input, authorType: "member", authorId: userId };
-  if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
+  if (userId) return { ...publicInput, authorType: "member", authorId: userId };
+  if (cleanString(publicInput.authorType) || cleanString(publicInput.authorId)) return publicInput;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
-  if (agentId) return { ...input, authorType: "agent", authorId: agentId };
-  if (!currentAccessToken(c) && !currentJwtUserId(c)) return input;
-  return { ...input, authorType: "member", authorId: currentRequestUserId(c) };
+  if (agentId) return { ...publicInput, authorType: "agent", authorId: agentId };
+  if (!currentAccessToken(c) && !currentJwtUserId(c)) return publicInput;
+  return { ...publicInput, authorType: "member", authorId: currentRequestUserId(c) };
+}
+
+/**
+ * MUL-456 fix round 1: drop both spellings of the run link from a comment body.
+ *
+ * The task token branch of {@link issueCommentCreateInput} is the only caller
+ * allowed to supply `taskId`; every other surface must not be able to write
+ * another run's lineage into a comment that the mention dispatcher and the
+ * assignee auto-response then trust as `sourceTask` lineage.
+ */
+export function stripCommentTaskLink<T extends { taskId?: string | null; task_id?: string | null }>(
+  input: T,
+): T {
+  const out = { ...(input as Record<string, unknown>) };
+  delete out.taskId;
+  delete out.task_id;
+  return out as T;
 }
 
 export function issueSubscriberTarget(

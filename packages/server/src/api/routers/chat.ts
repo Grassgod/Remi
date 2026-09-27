@@ -13,6 +13,8 @@ import {
   chatMessageCompatibilityResponse,
   chatSessionCompatibilityResponse,
   currentRequestUserId,
+  requestParentTaskLineage,
+  requestTaskLineageBody,
   sendChatMessageCompatibilityResponse,
   taskPublicResponse,
 } from "../wire/index.js";
@@ -78,8 +80,11 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (message instanceof Response) return message;
     return chatMutation(c, () => {
       const result = store.sendChatMessage(loaded.session.id, {
-        ...message,
-        parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+        // MUL-456 fix round 1: sending a Chat message is task creation, so the
+        // lineage obeys the same rule as the other creation surfaces — a
+        // verified credential supplies it, a body cannot.
+        ...requestTaskLineageBody(c, message),
+        ...requestParentTaskLineage(c, message),
       });
       return c.json({ ...result, supports_queue: true, task: taskPublicResponse(result.task) }, 201);
     });
@@ -174,8 +179,8 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const message = normalizeSendChatMessageInput(c, body);
     if (message instanceof Response) return message;
     return chatMutation(c, () => c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(loaded.session.id, {
-      ...message,
-      parentTaskId: currentTaskAccessToken(c)?.taskId ?? null,
+      ...requestTaskLineageBody(c, message),
+      ...requestParentTaskLineage(c, message),
     })), 201));
   });
   app.get("/api/chat/sessions/:sessionId/pending-task", (c) => {
