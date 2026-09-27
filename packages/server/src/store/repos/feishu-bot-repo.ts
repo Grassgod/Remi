@@ -24,6 +24,8 @@ import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/
 import type { StoreContext } from "@multiremi/store/context.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import {
   decryptFeishuBotSecret,
   encryptFeishuBotSecret,
@@ -2042,11 +2044,28 @@ export class FeishuBotRepo {
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
   }
 
+  /**
+   * `seq` is read as `MAX(seq) + 1` and the audit trail is ordered by it
+   * (MUL-405), so concurrent writers must not read the same maximum. The read
+   * and the insert share one transaction that first takes the per-workspace
+   * number lock; callers already inside a transaction (sender allow/revoke, the
+   * disable paths) join it and keep their own commit boundary.
+   */
   recordAudit(
     workspaceId: string,
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> } = {},
   ): MultiremiFeishuBotAuditEntry {
+    return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
+  }
+
+  /** Caller already holds the transaction that takes the number lock. */
+  private recordAuditWithinTransaction(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
+  ): MultiremiFeishuBotAuditEntry {
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
     const id = createId("fba");
     const createdAt = nowIso();
     const details = input.details ?? {};

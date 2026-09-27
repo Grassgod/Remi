@@ -18,6 +18,8 @@ import {
 import { type StoreContext, toInboxItem, toIssueComment } from "@multiremi/store/context.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -151,10 +153,33 @@ const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
+  /**
+   * Create one Issue and allocate its number.
+   *
+   * The number comes from `MAX(issue_number) + 1` for the workspace, which is a
+   * read-then-write: two processes that read the same maximum both insert it and
+   * produce two issues with one key (MUL-405). The whole creation therefore runs
+   * inside one transaction that first takes the per-workspace number lock, so a
+   * peer blocks instead of reading a maximum this transaction is about to
+   * consume. The `(workspace_id, issue_number)` index is the second line of
+   * defense, not the mechanism.
+   *
+   * The transaction is entered through `db.transaction`, so a caller that is
+   * already inside one (Feishu ingest, messaging outcomes) keeps its own
+   * transaction and the lock lives until that outer commit.
+   */
   createIssue(input: CreateIssueInput): MultiremiIssue {
+    return this.ctx.db.transaction(() => this.createIssueWithinTransaction(input))();
+  }
+
+  /** Caller already holds the transaction that takes the number lock. */
+  private createIssueWithinTransaction(input: CreateIssueInput): MultiremiIssue {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Taken before any read this method depends on, so the maximum the INSERT
+    // uses cannot have been read by a peer that then inserts over it.
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
     if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");

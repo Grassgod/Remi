@@ -25,7 +25,66 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  /** True while a `transaction()` callback is running. SQLite and Postgres both expose this. */
+  readonly inTransaction?: boolean;
+  /**
+   * Cross-process mutex keyed by `key`, held for the duration of `fn` and
+   * released on every exit path, including a thrown callback.
+   *
+   * OPTIONAL on purpose. `bun:sqlite`'s `Database` satisfies this interface
+   * structurally, and the whole store is written against that — every repo test
+   * and benchmark hands a raw `Database` to a repo constructor. Demanding the
+   * method here would ripple a mechanical type error through ~80 files for no
+   * behavioral gain, so the interface states what a database *may* provide and
+   * the two call patterns below are the only way the store uses it:
+   *
+   *   advisoryLock(db, key, fn)      — see `advisoryLock`
+   *   advisoryXactLock(db, key)      — see `advisoryXactLock`
+   *
+   * Both fall back to a no-op, which is the documented SQLite behavior. A
+   * database that implements them (Postgres) gets real locks.
+   */
+  advisoryLock?<T>(key: string, fn: () => T): T;
+  /**
+   * Same idea, but scoped to the caller's open transaction instead of a
+   * callback: the lock is held until the transaction commits or rolls back.
+   * The caller must already be inside `transaction()`. Optional for the reason
+   * above; go through `advisoryXactLock(db, key)` rather than calling it here.
+   */
+  advisoryXactLock?(key: string): void;
   close(): void;
+}
+
+/**
+ * Run `fn` while holding the cross-process mutex named `key`.
+ *
+ * SQLite has no cross-process advisory lock, and it does not need one: a writer
+ * takes the database file lock for its whole transaction, so two processes
+ * cannot interleave the read-then-write these locks protect. It is therefore a
+ * documented no-op there, and the same call site expresses "only one process may
+ * be here at a time" for both backends with no dialect branch. Use it for work a
+ * whole process must serialize, such as the startup migration run.
+ */
+export function advisoryLock<T>(db: SqlDatabase, key: string, fn: () => T): T {
+  // Bound explicitly: reading the method off the optional property loses the
+  // receiver, and calling it through `Function.prototype.call` erases `T`.
+  const lock = db.advisoryLock?.bind(db);
+  if (!lock) return fn();
+  return lock(key, fn);
+}
+
+/**
+ * Take the transaction-scoped form of the lock named `key`. The caller must
+ * already be inside `db.transaction()`; it is released by that COMMIT or
+ * ROLLBACK rather than by a callback.
+ *
+ * Use this for a read-then-write that must not interleave with a peer, such as
+ * reading `MAX(issue_number) + 1` and inserting the row that uses it: a
+ * callback-scoped lock would be released before the insert commits. No-op on
+ * SQLite, for the reason on `advisoryLock`.
+ */
+export function advisoryXactLock(db: SqlDatabase, key: string): void {
+  db.advisoryXactLock?.call(db, key);
 }
 
 // ────────────────────────────── sqlite → postgres ──────────────────────────────
@@ -249,6 +308,32 @@ export class PostgresSyncDatabase implements SqlDatabase {
   get inTransaction(): boolean {
     return this.transactionDepth > 0;
   }
+  /**
+   * Session-level `pg_advisory_lock` held for the duration of `fn`.
+   *
+   * The lock is taken and released on this object's single bridge connection,
+   * which is the same connection every statement of a transaction uses, so a
+   * caller's open transaction stays on one session. Both statements are sent as
+   * plain SQL (never `exec`, which would translate/rewrite them) and the unlock
+   * runs in `finally` so a throwing callback cannot leak the lock.
+   *
+   * The hash key is computed by Postgres (`hashtext`) rather than in JS: the
+   * lock identity only has to agree between processes, and letting the server
+   * derive it keeps the key a stable 32-bit integer for both the session and the
+   * transaction forms.
+   */
+  advisoryLock<T>(key: string, fn: () => T): T {
+    this.bridge.exec("SELECT pg_advisory_lock(hashtext($1))", [key]);
+    try {
+      return fn();
+    } finally {
+      try {
+        this.bridge.exec("SELECT pg_advisory_unlock(hashtext($1))", [key]);
+      } catch {
+        // The connection is gone, which already released the lock with it.
+      }
+    }
+  }
   query(sql: string): SqlStatement {
     return new PgStatement(this.bridge, translateSqliteToPg(sql));
   }
@@ -264,17 +349,37 @@ export class PostgresSyncDatabase implements SqlDatabase {
       if (translated.trim()) this.bridge.exec(translated, []);
     }
   }
+  /**
+   * Run `fn` in a transaction, joining the caller's transaction when one is
+   * already open.
+   *
+   * Postgres has no nested `BEGIN`: a second one on an open transaction is
+   * ignored with a warning, and the matching `COMMIT` then commits the OUTER
+   * transaction. Issuing them verbatim turns any nested use into a partial
+   * commit — and the store does nest, e.g. `createIssue` is called by
+   * `FeishuBotRepo.submitMessage` and `MessagingOutcomeService.createIssue`
+   * from inside their own transactions. A savepoint is the correct primitive:
+   * a failing inner block rolls back to the savepoint and leaves the outer
+   * transaction usable, which is the same semantics bun:sqlite gives a nested
+   * `transaction()`. The lock is what callers actually need from the nesting,
+   * and it already covers the outer commit.
+   */
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
-      this.bridge.exec("BEGIN", []);
+      const outermost = this.transactionDepth === 0;
+      const savepoint = outermost ? null : `multiremi_sp_${this.transactionDepth}`;
+      if (outermost) this.bridge.exec("BEGIN", []);
+      else this.bridge.exec(`SAVEPOINT ${savepoint}`, []);
       this.transactionDepth += 1;
       try {
         const result = fn(...args);
-        this.bridge.exec("COMMIT", []);
+        if (outermost) this.bridge.exec("COMMIT", []);
+        else this.bridge.exec(`RELEASE SAVEPOINT ${savepoint}`, []);
         return result;
       } catch (err) {
         try {
-          this.bridge.exec("ROLLBACK", []);
+          if (outermost) this.bridge.exec("ROLLBACK", []);
+          else this.bridge.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
         } catch {
           // connection already aborted the transaction
         }
@@ -283,6 +388,20 @@ export class PostgresSyncDatabase implements SqlDatabase {
         this.transactionDepth -= 1;
       }
     };
+  }
+  /**
+   * Transaction-scoped lock on this bridge's single connection, so it is
+   * released by the caller's COMMIT or ROLLBACK rather than by a callback.
+   *
+   * Refusing to run outside a transaction is deliberate: in autocommit the
+   * lock would be taken and released by the same statement, which reads like a
+   * lock and behaves like nothing at all.
+   */
+  advisoryXactLock(key: string): void {
+    if (this.transactionDepth === 0) {
+      throw new Error("advisoryXactLock must be called inside a transaction");
+    }
+    this.bridge.exec("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
   }
   close(): void {
     this.bridge.close();
