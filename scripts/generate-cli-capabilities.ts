@@ -357,8 +357,15 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/issues\/:id\/tasks\/:taskId\/cancel$/, "issue.cancel"],
     [/^POST \/api\/issues\/:id\/squad-evaluated$/, "issue.squad-evaluated"],
     [/^GET \/api\/(?:multiremi\/)?issues\/:id\/dependencies$/, "issue.dependency.list"],
+    [/^GET \/api\/issues\/:id\/decisions$/, "issue.decision.list"],
+    [/^POST \/api\/issues\/:id\/decisions$/, "issue.decision.request"],
+    [/^POST \/api\/issues\/:id\/decisions\/:decisionId\/answer$/, "issue.decision.answer"],
+    [/^POST \/api\/issues\/:id\/decisions\/:decisionId\/escalate$/, "issue.decision.escalate"],
+    [/^POST \/api\/issues\/:id\/decisions\/:decisionId\/withdraw$/, "issue.decision.withdraw"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/dependencies$/, "issue.dependency.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/dependencies\/:dependencyId$/, "issue.dependency.remove"],
+    [/^POST \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.add"],
+    [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.remove"],
     [/^GET \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.list"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.remove"],
@@ -631,7 +638,7 @@ function mappedOperationsCommand(route: string): string | null {
     [/^DELETE \/api\/(?:multiremi\/)?autopilots\/:id$/, "autopilot.delete"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/runs$/, "autopilot.run.list"],
     [/^GET \/api\/autopilots\/:id\/runs\/:runId$/, "autopilot.run.get"],
-    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/(?:run|trigger)$/, "autopilot.run"],
+    [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/(?:run|trigger)$/, "autopilot.run-now"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries$/, "autopilot.delivery.list"],
     [/^GET \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId$/, "autopilot.delivery.get"],
     [/^POST \/api\/(?:multiremi\/)?autopilots\/:id\/deliveries\/:deliveryId\/replay$/, "autopilot.delivery.replay"],
@@ -748,7 +755,7 @@ function exemptRoute(route: string): CliManifestRoute | null {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");
   }
   if (path === "/api/multiremi/autopilots/:id/run-scheduled") {
-    return exempt("daemon_internal_protocol", "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run.");
+    return exempt("daemon_internal_protocol", "Scheduler execution is machine-to-server traffic; users trigger an autopilot with remi autopilot run-now.");
   }
   if (path === "/api/multiremi/autopilots/:id/webhook") {
     return exempt("oauth_or_webhook_callback", "Autopilot webhook reception is invoked by an external system, not a user command.");

@@ -84,6 +84,7 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  ParentStatusGuardError,
   type IssueTimelineCursor,
   type IssueTimelinePageResult,
   type BeginIssueDeletionResult,
@@ -166,6 +167,8 @@ export type {
 } from "@multiremi/store/repos/workspaces-repo.js";
 import {
   StoreContext,
+  createCommitEventQueue,
+  type CommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
   type TaskMessagesListener,
@@ -260,6 +263,11 @@ import type {
   ListIssueCommentsResult,
   MultiremiIssueDependency,
   MultiremiIssue,
+  MultiremiIssueDecision,
+  MultiremiIssueDecisionList,
+  CreateIssueDecisionInput,
+  AnswerIssueDecisionInput,
+  IssueDecisionActor,
   CreateKnowledgeCompilationRunInput,
   CreateKnowledgeSubmissionInput,
   MultiremiKnowledgeCompilationOutput,
@@ -381,6 +389,7 @@ import type {
   UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueOptions,
   UpdateIssueCommentInput,
   UpdateIssueSessionInput,
   UpdateLabelInput,
@@ -1882,6 +1891,17 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessTask(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueTaskHumanRequest(workspaceId: string, daemonId: string, taskId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
+  }
+
+  listFeishuBotLiveDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): ReturnType<FeishuBotRepo["listLiveDecisionCards"]> {
+    return this.feishuBot.listLiveDecisionCards(workspaceId, runtimeId);
+  }
+
   assertFeishuBotInboundAttachmentScope(...args: Parameters<FeishuBotRepo["assertInboundAttachmentScope"]>) {
     return this.feishuBot.assertInboundAttachmentScope(...args);
   }
@@ -1931,9 +1951,18 @@ runMigrations(this.db);
     return this.feishuBot.prepareHumanRequestPush(request);
   }
 
+  prepareFeishuIssueRoundPushes(input: {
+    issue: MultiremiIssue;
+    leaderTask: MultiremiTask;
+  }): MultiremiTask[] {
+    return this.feishuBot.prepareIssueRoundPushes(input);
+  }
+
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
   }): MultiremiTask[] {
     return this.feishuBot.prepareIssueRoundPushesWithinTransaction(input);
   }
@@ -3058,6 +3087,7 @@ runMigrations(this.db);
     agentPluginProtocol?: number;
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
+    supportsDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -3066,8 +3096,40 @@ runMigrations(this.db);
     return this.issues.createIssue(input);
   }
 
+  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue {
+    return this.issues.createIssueWithinTransaction(input, deferredEvents);
+  }
+
   getIssue(id: string): MultiremiIssue | null {
     return this.issues.getIssue(id);
+  }
+
+  getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecision(issueId, decisionId);
+  }
+
+  listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
+    return this.issues.listIssueDecisions(issueId);
+  }
+
+  countPendingIssueDecisions(issueId: string): number {
+    return this.issues.countPendingIssueDecisions(issueId);
+  }
+
+  createIssueDecision(sourceIssueId: string, input: CreateIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.createIssueDecision(sourceIssueId, input, actor);
+  }
+
+  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  }
+
+  escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.escalateIssueDecision(issueId, decisionId, actor);
+  }
+
+  withdrawIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
+    return this.issues.withdrawIssueDecision(issueId, decisionId, actor);
   }
 
   getIssueWorkspace(issueId: string): MultiremiIssueWorkspace | null {
@@ -3197,6 +3259,18 @@ runMigrations(this.db);
     return this.issues.listIssueDependencies(issueId);
   }
 
+  issueParentDoneGrantView(issue: MultiremiIssue) {
+    return this.issues.issueParentDoneGrantView(issue);
+  }
+
+  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
+    return this.issues.grantParentDone(issueId, memberId);
+  }
+
+  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
+    return this.issues.revokeParentDone(issueId, memberId);
+  }
+
   createIssueDependency(
     issueId: string,
     input: CreateIssueDependencyInput,
@@ -3217,12 +3291,75 @@ runMigrations(this.db);
     return this.issues.deleteIssueDependency(issueId, dependencyId, activity);
   }
 
-  updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue {
-    return this.updateIssueWithOutcome(id, input).issue;
+  updateIssue(id: string, input: UpdateIssueInput, options: UpdateIssueOptions = {}): MultiremiIssue {
+    return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
-  updateIssueWithOutcome(id: string, input: UpdateIssueInput): { issue: MultiremiIssue; cancelledTasks: number } {
-    return this.issues.updateIssueWithOutcome(id, input);
+  updateIssueWithOutcome(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions = {},
+  ): { issue: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithOutcome(id, input, options);
+  }
+
+  /**
+   * MUL-400 S1c (QA round 1): the caller owns the transaction. The status write
+   * and its audit activities commit together, and the caller replays the
+   * collected child-status transitions and flushes `deferredEvents` after
+   * COMMIT (see `runIssueUpdatePostCommit`).
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
+    return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
+  }
+
+  runIssueUpdatePostCommit(
+    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    input: UpdateIssueInput,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): void {
+    this.issues.runIssueUpdatePostCommit(result, input, collector, deferredEvents);
+  }
+
+  countOpenChildIssues(parentIssueId: string): number {
+    return this.issues.countOpenChildIssues(parentIssueId);
+  }
+
+  hasChildIssues(issueId: string): boolean {
+    return this.issues.hasChildIssues(issueId);
+  }
+
+  parentDoneGrantStatus(issue: MultiremiIssue) {
+    return this.issues.parentDoneGrantStatus(issue);
+  }
+
+  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }) {
+    return this.issues.finalSummaryAfterLastChild(parentIssueId, options);
+  }
+
+  holdParentStatusForOpenChildren(
+    issueId: string,
+    requested: string,
+    options: { exempt?: boolean; deferredEvents: import("./context.js").CommitEventQueue },
+  ): string {
+    return this.issues.holdParentStatusForOpenChildren(issueId, requested, options);
+  }
+
+  notifyChildStatusChange(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+  ): void {
+    this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -4410,8 +4547,13 @@ runMigrations(this.db);
     return this.tasks.createTask(input);
   }
 
-  createTaskWithinTransaction(input: CreateTaskInput): MultiremiTask {
-    return this.tasks.createTaskWithinTransaction(input);
+  /** Caller owns the transaction and replays the collector after it commits. */
+  createTaskWithinTransaction(
+    input: CreateTaskInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   ensureDelegationWakeup(input: {
@@ -4425,7 +4567,11 @@ runMigrations(this.db);
   }
 
   resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
-    return this.tasks.resetSessionAgentLane(sessionId, agentId, executionScope);
+    const deferredEvents = createCommitEventQueue();
+    const lane = this.db.transaction(() =>
+      this.tasks.resetSessionAgentLane(sessionId, agentId, executionScope, undefined, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return lane;
   }
 
   /**
@@ -4555,11 +4701,15 @@ runMigrations(this.db);
     requestId: string,
     input: { response: Record<string, unknown>; respondedBy?: string | null },
   ): MultiremiTaskHumanRequest | null {
-    return this.tasks.respondTaskHumanRequest(requestId, input);
+    const request = this.tasks.respondTaskHumanRequest(requestId, input);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
-    return this.tasks.expireTaskHumanRequest(requestId, status);
+    const request = this.tasks.expireTaskHumanRequest(requestId, status);
+    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    return request;
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
@@ -4600,7 +4750,13 @@ runMigrations(this.db);
     audit: MultiremiOrganizerAction;
     comment: MultiremiIssueComment;
   } {
+    const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
+    // MUL-400 S1 (QA round 3): the audit comment is written inside this
+    // transaction, so its realtime push waits for the COMMIT. On rollback the
+    // queue is dropped and no client ever sees a comment that does not exist.
+    const deferredEvents = createCommitEventQueue();
     let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    let cancelledResult: ReturnType<TasksRepo["cancelTaskWithinTransaction"]> | null = null;
     const result = this.db.transaction(() => {
       const supervisorTask = this.getTask(input.supervisorTaskId);
       const supervisorAgent = this.getAgent(input.supervisorAgentId);
@@ -4647,9 +4803,12 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        task = this.tasks.cancelTask(target.id);
+        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
+        // its COMMIT would end this one early on Postgres (no savepoints).
+        cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
+        task = cancelledResult.task;
       } else if (input.action === "redispatch") {
-        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id);
+        redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = redispatchResult.cancelled;
         replacementTask = redispatchResult.replacement;
       } else {
@@ -4686,7 +4845,7 @@ runMigrations(this.db);
           `Criterion: ${reason}`,
           `Audit record: ${audit.id}`,
         ].join("\n"),
-      }, { deferAgentMentionDispatch: true });
+      }, { deferAgentMentionDispatch: true, withinTransaction: true, deferredEvents });
       this.issues.notifyOrganizerAction(reportIssue, comment.body, "agent", supervisorAgent.id, {
         organizer_action_id: audit.id,
         action: input.action,
@@ -4697,7 +4856,13 @@ runMigrations(this.db);
       });
       return { task, replacementTask, message, audit, comment };
     })();
+    // The organizer transaction collected the cancelled task's Issue transitions;
+    // replay them now that it has committed (MUL-400 E1/E2).
+    this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+    if (cancelledResult) this.tasks.notifyCancelledTask(cancelledResult);
     if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+    // The transaction committed: publish everything it deferred.
+    this.ctx.emitCommitEvents(deferredEvents);
     this.issues.dispatchDeferredAgentCommentMentions(result.comment.id);
     return result;
   }
@@ -4745,8 +4910,19 @@ runMigrations(this.db);
     return this.tasks.failTask(taskId, input);
   }
 
-  cancelTaskWithinTransaction(taskId: string): import("./repos/tasks-repo.js").CancelTaskResult {
-    return this.tasks.cancelTaskWithinTransaction(taskId);
+  cancelTaskWithinTransaction(
+    taskId: string,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): import("./repos/tasks-repo.js").CancelTaskResult {
+    return this.tasks.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+  }
+
+  runCollectedChildStatusChanges(
+    changes: import("./repos/tasks-repo.js").ChildStatusChange[],
+    seen?: Set<string>,
+  ): void {
+    this.tasks.runCollectedChildStatusChanges(changes, seen);
   }
 
   notifyCancelledTask(result: import("./repos/tasks-repo.js").CancelTaskResult): void {

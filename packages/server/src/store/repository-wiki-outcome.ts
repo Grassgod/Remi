@@ -16,14 +16,21 @@ export function repositoryWikiOutcomeKey(taskId: string, repositoryId: string): 
 interface CompilationRow {
   id: string; repository_id: string; task_id: string | null; status: string;
   autopilot_run_id: string | null;
-  result_summary: string | null; dedupe_key: string | null; completed_at: string | null;
+  result_summary: string | null; dedupe_key: string | null;
   publication_at: string | null;
 }
 
 // Outputs, not agent claims or a matching source revision, prove an actual write.
 // Restore audits have no outputs and must never advance the publication clock.
+//
+// Projected, not `SELECT r.*` (MUL-398 A2). The row is internal to this module and
+// only the columns below are read out of it, but the summary route runs this once
+// per request over every repository-scoped compilation in the workspace — 1,443
+// rows on 209, where the whole row made it the largest single statement on the
+// route. `created_at` and `id` stay in the ORDER BY only.
 function compilations(ctx: StoreContext, workspaceId: string, taskId?: string): CompilationRow[] {
-  return ctx.db.query(`SELECT r.*, MAX(o.created_at) AS publication_at
+  return ctx.db.query(`SELECT r.id, r.repository_id, r.task_id, r.status, r.autopilot_run_id,
+      r.result_summary, r.dedupe_key, MAX(o.created_at) AS publication_at
     FROM multiremi_knowledge_compilation_runs r
     LEFT JOIN multiremi_knowledge_compilation_outputs o ON o.run_id = r.id
       AND o.artifact_scope = 'repository_wiki' AND o.action NOT IN ('noop', 'reject')
@@ -92,11 +99,27 @@ export function repositoryWikiObservability(ctx: StoreContext, workspaceId: stri
       metric.last_published_at = row.publication_at;
     }
   }
-  const runs = ctx.db.query(`SELECT r.* FROM multiremi_autopilot_runs r
+  // Projected, not `SELECT r.*` (MUL-398 A): the run row carries `payload` and
+  // `result`, and on 209 those made this one statement ship 12.2 MB across the
+  // PG bridge for a request that only reads the six columns below. `status` is
+  // filtered in the WHERE clause and never read back, so it stays out of the
+  // projection too.
+  //
+  // Row reduction (MUL-398 A2): a schedule-only run whose id no repository-scoped
+  // compilation row references is skipped by the loop below, yet it still crosses
+  // the bridge. On 209 that was 399 of the 1,842 rows. The EXISTS clause is
+  // exactly that skip condition pushed into SQL — the same predicate the
+  // build-state query uses — so the rows the loop keeps are unchanged.
+  const runs = ctx.db.query(`SELECT r.id, r.repository_id, r.schedule_target, r.task_id,
+      r.completed_at, r.created_at
+    FROM multiremi_autopilot_runs r
     JOIN multiremi_autopilots a ON a.id = r.autopilot_id
-    WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR r.schedule_target IS NOT NULL)
+    WHERE a.workspace_id = ? AND (r.repository_id IS NOT NULL OR
+        (r.schedule_target IS NOT NULL AND EXISTS (
+          SELECT 1 FROM multiremi_knowledge_compilation_runs k
+          WHERE k.autopilot_run_id = r.id AND k.repository_id IS NOT NULL AND k.workspace_id = ?)))
       AND r.status IN ('completed', 'failed')
-    ORDER BY r.completed_at DESC, r.created_at DESC, r.id DESC`).all(workspaceId) as Array<{
+    ORDER BY r.completed_at DESC, r.created_at DESC, r.id DESC`).all(workspaceId, workspaceId) as Array<{
       id: string; repository_id: string | null; schedule_target: string | null; task_id: string | null;
       completed_at: string | null; created_at: string;
     }>;
