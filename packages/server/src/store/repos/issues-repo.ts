@@ -269,6 +269,18 @@ type IssueDeletionBlockedResult = Extract<BeginIssueDeletionResult, { ok: false 
 // Issue reactions and comment reactions are the same table shape hung off two different parents,
 // so the list/add/remove bodies live once on the repo and are configured by these two specs. Only
 // the parent existence check and the workspace lookup stay with the public methods.
+/**
+ * MUL-409 (QA round 4, blocker 1): what the in-transaction forced start decided.
+ *
+ * `skipped` is set when the owner cannot run the work (no owner, a member
+ * owner, an archived assignee, a squad with no runnable agent). The status
+ * change still commits — the member asked for it — and the reason is recorded
+ * after the COMMIT as a `dispatch_skipped` activity.
+ */
+interface ForcedStartOutcome {
+  skipped: { reason: string; error: string } | null;
+}
+
 interface ReactionInput {
   actorType?: string;
   actorId?: string | null;
@@ -1596,7 +1608,18 @@ export class IssuesRepo {
     // the pre-write status is known) and executed after it commits, through
     // `assignIssue` so there is still exactly one dispatch path.
     let forcedStart = false;
+    // Every `force` that tries to leave `backlog`, whether or not the gate was
+    // still closed when the row lock was taken. The dispatch decision belongs to
+    // this transaction (see the `forceStartAttempt` block below).
+    let forceStartAttempt = false;
+    // Written inside the transaction closure below; declared here so the
+    // post-commit report can read the decision.
+    const dispatchOutcome: { value: ForcedStartOutcome | null } = { value: null };
     const writeEvents = createCommitEventQueue();
+    // Transitions the forced-start dispatch derives inside the write transaction
+    // (the round's own status move and what it means for the parent). They are
+    // replayed only after the COMMIT, never inline.
+    const collector: ChildStatusChangeCollector = [];
     // One queue for every writer in this transaction (MUL-400 S1): the held
     // parent status, the dependency gate and the unassign path all push here.
     // It is drained after the COMMIT below and dropped on rollback.
@@ -1680,10 +1703,21 @@ export class IssuesRepo {
       // issue that still waits on a prerequisite cannot leave backlog unless a
       // member forces it.
       this.assertDependenciesMetForStatus(id, current, nextStatus, input, writeEvents);
+      // MUL-409 (QA round 4, blocker 1) race ruling: the force request holds the
+      // Issue row lock here, so this read is authoritative. If the row is still
+      // `backlog` but every prerequisite has already been satisfied, the gate
+      // opened on its own, so this request crosses nothing and is an ordinary
+      // member start: no `dependency_force_started`, just the member's
+      // `issue_updated` (backlog -> todo) plus the `issue_assigned` the dispatch
+      // writes. The automatic path then sees the row is no longer `backlog` and
+      // skips it. Exactly one start record survives, whichever kind it is.
       forcedStart = input.force === true
         && current.status === "backlog"
         && (nextStatus === "todo" || nextStatus === "in_progress")
         && this.listUnmetPrerequisites(id).length > 0;
+      forceStartAttempt = input.force === true
+        && current.status === "backlog"
+        && (nextStatus === "todo" || nextStatus === "in_progress");
       // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
       // children cannot be parked in review or closed, and only a member may
       // override. Runs before the write so a rejected request changes nothing.
@@ -1767,6 +1801,24 @@ export class IssuesRepo {
           parentTaskId: input.parentTaskId ?? input.parent_task_id,
         }, writeEvents);
       }
+      // MUL-409 (QA round 4, blocker 1): a member's forced start dispatches in
+      // THIS transaction. The status write above already moved the row out of
+      // `backlog`, so the task-creation gate lets the round through, and the
+      // round, `issue_assigned` and `dependency_force_started` (written by
+      // `assertDependenciesMetForStatus` above) all commit with the status. A
+      // process that dies after the COMMIT therefore cannot leave a `todo` with
+      // nothing queued. Lock order matches `createTaskWithinTransaction`:
+      // workspace row first, then the Issue row already write-locked here.
+      if (forceStartAttempt) {
+        dispatchOutcome.value = this.startForcedIssueWithinTransaction({
+          current,
+          ownerType: nextAssigneeType,
+          ownerId: nextAssigneeId,
+          actorType: input.actorType ?? "member",
+          actorId: input.actorId ?? null,
+          parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        }, collector, writeEvents);
+      }
       const next = this.getIssue(id)!;
       this.linkReferencedAttachmentsToIssue(id, next.description);
       this.ctx.autopilots().enqueueIssueStatusChangedEvent({
@@ -1814,11 +1866,14 @@ export class IssuesRepo {
     if (previous!.status !== "done" && updated.status === "done") {
       this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
     }
-    // MUL-400 E3 (QA round 2, blocker 2): the forced start dispatches here, so
-    // the route's assign-on-update must not dispatch a second time — that path
-    // cancelled the round this one had just queued. `handledForcedStart` tells
-    // the caller the store already owns the dispatch.
-    if (forcedStart) this.dispatchForcedStart(updated, input);
+    // MUL-400 E3 (QA round 2, blocker 2): the forced start dispatched inside the
+    // write transaction above, so the route's assign-on-update must not dispatch
+    // a second time — that path cancelled the round this one had just queued.
+    // `handledForcedStart` tells the caller the store already owns the dispatch.
+    // A dispatch that could not run (archived owner, no runnable agent) was
+    // decided before the INSERT; reporting it here keeps the status change the
+    // member asked for, exactly like assign-on-update.
+    if (dispatchOutcome.value?.skipped) this.recordForcedStartSkipped(updated, dispatchOutcome.value.skipped, input);
     // The write above is committed; the hook runs after it on purpose (ADR
     // 0003). A failure here therefore cannot undo the Issue's own transition —
     // it is logged and rethrown so the caller learns the report did not land.
@@ -1828,7 +1883,6 @@ export class IssuesRepo {
     // never dropped) so the replay walks all the way to the grandparent. The
     // deferred queue covers the hook's own realtime pushes; it is flushed only
     // after the hook returned and its transaction committed.
-    const collector: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     try {
       this.notifyChildStatusChange(
@@ -1858,53 +1912,124 @@ export class IssuesRepo {
   }
 
   /**
-   * MUL-400 E3 forced start, after the status write committed.
+   * MUL-409 (QA round 4, blocker 1): the member's forced start is one
+   * transaction.
    *
-   * A member overriding the gate must get a running issue, not a `todo` with
-   * nothing queued — otherwise no automatic path can pick it up again, because
-   * both the gate and the automatic start only look at `backlog`. The dispatch
-   * goes through `assignIssue` (with `force`, so the gate lets it through)
-   * exactly like every other start, so the owner rules and the skip reporting
-   * stay in one place.
+   * The status write, `dependency_force_started`, `issue_assigned` and the round
+   * all commit together, so a process that dies between the status write and the
+   * dispatch can no longer leave a `todo` with nothing queued — no automatic
+   * path looks at `todo`, because both the gate and the automatic start only
+   * scan `backlog`.
    *
-   * Only an agent or squad owner gets a task. A member owner, or none at all,
-   * is a status change only: there is no agent to run it.
+   * Lock order matches `createTaskWithinTransaction`: the workspace row first
+   * (taken here, inside the caller's transaction), then the Issue row, which
+   * `updateIssueWithOutcome` already write-locked before calling in. Taking the
+   * Issue lock first and the workspace lock second is what would deadlock a
+   * concurrent `createTask`, so the order is not negotiable.
+   *
+   * Two outcomes, both durable inside this transaction:
+   *   - a dispatchable owner gets the round, plus `issue_assigned` and (when the
+   *     gate was genuinely still closed) `dependency_force_started`;
+   *   - an owner that cannot run (none at all, a member, an archived assignee,
+   *     a squad with no runnable agent) keeps the status change and records
+   *     `dispatch_skipped`. That matches the previous behaviour: the member's
+   *     request is honoured, the reason is visible, and nothing is rolled back.
+   *
+   * Any unexpected failure throws, so the caller's transaction rolls back to
+   * `backlog` with no round and no force activity.
    */
-  private dispatchForcedStart(issue: MultiremiIssue, input: UpdateIssueInput): void {
-    if (!issue.assigneeType || !issue.assigneeId || issue.assigneeType === "member") return;
-    // The status write above already moved the issue off `backlog`, so the
-    // auto-start claim cannot also win: whoever flips the row first owns the
-    // dispatch. This re-read is what keeps a forced start and a concurrent
-    // automatic start from both queueing a round.
-    if (this.getIssue(issue.id)?.status !== "todo" && this.getIssue(issue.id)?.status !== "in_progress") return;
-    try {
-      this.assignIssue(issue.id, {
-        assigneeType: issue.assigneeType,
-        assigneeId: issue.assigneeId,
-        actorType: input.actorType ?? "member",
-        actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-      }, { force: true });
-    } catch (err) {
-      // The status change already committed and is what the member asked for;
-      // a dispatch that cannot run (archived owner, no runnable agent) is
-      // reported rather than rolled back, mirroring assign-on-update.
-      log.warn(`dependency force-start dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
-      this.ctx.appendIssueActivity(issue.id, {
-        actorType: "system",
-        actorId: null,
-        type: "dispatch_skipped",
-        body: err instanceof Error ? err.message : String(err),
-        data: {
+  private startForcedIssueWithinTransaction(
+    context: {
+      current: MultiremiIssue;
+      ownerType: MultiremiAssigneeType | null;
+      ownerId: string | null;
+      actorType: string;
+      actorId: string | null;
+      parentTaskId: string | null;
+    },
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): ForcedStartOutcome {
+    const { current, ownerType, ownerId, actorType, actorId, parentTaskId } = context;
+    // Workspace row first, then the Issue row (already locked by the caller).
+    this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+
+    // A member owner, or none at all, has no agent to run: the status change is
+    // the whole outcome, exactly as before.
+    if (!ownerType || !ownerId || ownerType === "member") return { skipped: null };
+
+    const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
+    if (!taskAgent) {
+      // Decided before any INSERT, so the skip and the status change commit
+      // together and the issue is internally consistent.
+      log.warn(`dependency force-start dispatch skipped for ${current.id}: no runnable agent for ${ownerType}:${ownerId}`);
+      return {
+        skipped: {
           reason: "force_start_dispatch_failed",
-          error: err instanceof Error ? err.message : String(err),
-          assigneeType: issue.assigneeType,
-          assignee_type: issue.assigneeType,
-          assigneeId: issue.assigneeId,
-          assignee_id: issue.assigneeId,
+          error: `No runnable agent for ${ownerType}: ${ownerId}`,
         },
-      });
+      };
     }
+
+    const task = this.ctx.tasks().createTaskWithinTransaction({
+      agentId: taskAgent.id,
+      issueId: current.id,
+      workspaceId: current.workspaceId,
+      prompt: current.title,
+      parentTaskId,
+    }, childStatusChanges, deferredEvents);
+    this.ctx.appendIssueActivity(current.id, {
+      actorType,
+      actorId,
+      type: "issue_assigned",
+      body: `Queued ${taskAgent.name}`,
+      data: {
+        assigneeType: ownerType,
+        assignee_type: ownerType,
+        assigneeId: ownerId,
+        assignee_id: ownerId,
+        toType: ownerType,
+        to_type: ownerType,
+        toId: ownerId,
+        to_id: ownerId,
+        taskId: task.id,
+        task_id: task.id,
+        ...sourceTaskActivityData(parentTaskId),
+        cancelled: 0,
+      },
+    }, deferredEvents);
+    if (current.projectId) {
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), current.projectId]);
+    }
+    return { skipped: null };
+  }
+
+  /**
+   * The `dispatch_skipped` row for a forced start that could not run. Written
+   * after the transaction committed, because the status change it explains is
+   * kept: the member asked for the transition and gets it, with the reason
+   * recorded next to it, exactly like assign-on-update.
+   */
+  private recordForcedStartSkipped(
+    issue: MultiremiIssue,
+    skipped: { reason: string; error: string },
+    input: UpdateIssueInput,
+  ): void {
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "dispatch_skipped",
+      body: skipped.error,
+      data: {
+        reason: skipped.reason,
+        error: skipped.error,
+        assigneeType: issue.assigneeType,
+        assignee_type: issue.assigneeType,
+        assigneeId: issue.assigneeId,
+        assignee_id: issue.assigneeId,
+        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id ?? null),
+      },
+    });
   }
 
   restoreIssue(id: string): MultiremiIssue {

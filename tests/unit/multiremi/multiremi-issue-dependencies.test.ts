@@ -7,6 +7,8 @@
 // run lives in `reports/`.
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js";
+import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -1623,5 +1625,197 @@ describe("MUL-400 E3 — fix round 4: native PATCH dependency errors", () => {
       expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
       expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
     }
+  });
+});
+
+/**
+ * MUL-409 QA round 4, blocker 1 — the forced start is one transaction.
+ *
+ * The QA finding: the status transaction committed first and the dispatch ran
+ * afterwards, so a process that exited in between left the issue at `todo` with
+ * no round and no automatic path back (auto-start only scans `backlog`). The
+ * race ruling for the other half: when the force request takes the row lock
+ * after the gate already opened, it crosses nothing, so it must leave an
+ * ordinary member start and NOT a `dependency_force_started`.
+ *
+ * Invariant per attempt: exactly one task row (any status, cancelled included),
+ * the issue leaves `backlog` exactly once, and exactly one of the three start
+ * records exists — `dependency_auto_started`, `dependency_force_started`, or the
+ * member's `issue_updated` backlog -> todo with no dependency start activity.
+ */
+describe("MUL-409 — fix round 5: forced start is one transaction", () => {
+  function parked(name = "Force5") {
+    const { store, runtime, agent } = storeWithAgent(name);
+    const prereq = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Waiting",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    return { store, runtime, agent, prereq, dependent };
+  }
+
+  /** The three start records, classified the way the ruling names them. */
+  function classifyStart(store: Store, issueId: string): "auto" | "force" | "member" | "none" | "both" {
+    const auto = allActivityRows(store, issueId, "dependency_auto_started").length;
+    const force = allActivityRows(store, issueId, "dependency_force_started").length;
+    const member = store.listIssueActivity(issueId).some((entry) => {
+      if (entry.type !== "issue_updated") return false;
+      const data = (entry.data ?? null) as Record<string, unknown> | null;
+      // The activity row stores the member's request, so `status: "todo"` is the
+      // durable trace of a member-driven backlog -> todo transition.
+      return data?.status === "todo";
+    });
+    if (auto && force) return "both";
+    if (auto) return "auto";
+    if (force) return "force";
+    if (member) return "member";
+    return "none";
+  }
+
+  function expectSingleStart(store: Store, issueId: string, label: string) {
+    expect({
+      label,
+      tasks: allTaskRows(store, issueId).length,
+      start: classifyStart(store, issueId),
+      status: store.getIssue(issueId)!.status,
+    }).toEqual({ label, tasks: 1, start: expect.not.stringMatching(/^(none|both)$/) as unknown as string, status: "todo" });
+  }
+
+  it("commits the status, the force record, the assignment and the round together", () => {
+    const { store, dependent } = parked("atomic_commit");
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+    expectSingleStart(store, dependent.id, "commit");
+    // The dependency row stays: the issue runs *despite* an unmet prerequisite.
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+    const types = store.listIssueActivity(dependent.id).map((entry) => entry.type);
+    expect(types).toContain("dependency_force_started");
+    expect(types).toContain("issue_assigned");
+  });
+
+  it.each(["status update", "task insert", "issue_assigned", "dependency_force_started"] as const)(
+    "rolls the whole forced start back when %s fails",
+    (step) => {
+      const { store } = parked(`abort_${step.replace(/ /g, "_")}`);
+      const prereq2 = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+      const dependent = store.createIssue({
+        title: `Abort ${step}`,
+        status: "backlog",
+        blockedBy: [prereq2.id],
+        assigneeType: "agent",
+        assigneeId: store.listAgents("local")[0]!.id,
+      });
+
+      let injected = false;
+      const fail = (): never => { injected = true; throw new Error(`injected failure at ${step}`); };
+      const restore: Array<() => void> = [];
+
+      // Each patch replaces the real production step with one that throws once:
+      // the SQLite handle for the status UPDATE (the store reaches it through
+      // its own `db` reference, so the instance property shadows the prototype),
+      // the task repository's in-transaction insert, and the Issue activity
+      // writer.
+      if (step === "status update") {
+        const handle = db!;
+        const original = handle.run;
+        (handle as unknown as Record<string, unknown>).run = function patched(this: unknown, sql: string, ...rest: unknown[]) {
+          if (!injected && String(sql).includes("UPDATE multiremi_issues") && String(sql).includes("title = ?")) fail();
+          return (original as (...inner: unknown[]) => unknown).apply(this, [sql, ...rest]);
+        };
+        restore.push(() => { delete (handle as unknown as Record<string, unknown>).run; });
+      } else if (step === "task insert") {
+        const original = TasksRepo.prototype.createTaskWithinTransaction;
+        TasksRepo.prototype.createTaskWithinTransaction = function patched(this: TasksRepo, ...args: unknown[]) {
+          if (!injected) fail();
+          return (original as (...inner: unknown[]) => unknown).apply(this, args);
+        } as typeof TasksRepo.prototype.createTaskWithinTransaction;
+        restore.push(() => { TasksRepo.prototype.createTaskWithinTransaction = original; });
+      } else {
+        const original = StoreContext.prototype.appendIssueActivity;
+        StoreContext.prototype.appendIssueActivity = function patched(
+          this: StoreContext,
+          issueId: string,
+          input: { type: string },
+          queue?: CommitEventQueue,
+        ) {
+          if (!injected && input.type === step) fail();
+          return original.call(this, issueId, input, queue);
+        };
+        restore.push(() => { StoreContext.prototype.appendIssueActivity = original; });
+      }
+
+      try {
+        expect(() => store.updateIssue(dependent.id, {
+          status: "todo", force: true, actorType: "member", actorId: "mem_local",
+        })).toThrow(/injected failure/);
+        expect(injected).toBe(true);
+      } finally {
+        for (const undo of restore.reverse()) undo();
+      }
+
+      // Back to the honest waiting state, with nothing half-written.
+      expect({
+        step,
+        status: store.getIssue(dependent.id)!.status,
+        tasks: allTaskRows(store, dependent.id),
+        force: allActivityRows(store, dependent.id, "dependency_force_started"),
+        assigned: allActivityRows(store, dependent.id, "issue_assigned"),
+      }).toEqual({ step, status: "backlog", tasks: [], force: [], assigned: [] });
+    },
+  );
+
+  it("keeps the status change and records a skip when the owner cannot run", () => {
+    for (const kind of ["member", "none", "archived"] as const) {
+      const { store, dependent, agent } = parked(`skip_${kind}`);
+      if (kind === "member") {
+        const member = store.listWorkspaceMembers("local")[0]!;
+        db!.run("UPDATE multiremi_issues SET assignee_type = 'member', assignee_id = ? WHERE id = ?", [member.id, dependent.id]);
+      } else if (kind === "none") {
+        db!.run("UPDATE multiremi_issues SET assignee_type = NULL, assignee_id = NULL WHERE id = ?", [dependent.id]);
+      } else {
+        db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+      }
+
+      store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+
+      // Same durable shape as before: the member's transition stands, nothing is
+      // queued, and the reason is recorded.
+      expect({
+        kind,
+        status: store.getIssue(dependent.id)!.status,
+        tasks: allTaskRows(store, dependent.id),
+        force: allActivityRows(store, dependent.id, "dependency_force_started").length,
+      }).toEqual({ kind, status: "todo", tasks: [], force: 1 });
+      if (kind === "archived") {
+        expect(allActivityRows(store, dependent.id, "dispatch_skipped").at(-1)!.data)
+          .toMatchObject({ reason: "force_start_dispatch_failed" });
+      }
+    }
+  });
+
+  /**
+   * The race ruling: the gate is already open when the force request takes the
+   * lock. The request crosses nothing, so it must NOT claim an override — the
+   * member's own `issue_updated` is the single start record, and no dependency
+   * start activity is written.
+   */
+  it("records an ordinary member start when every prerequisite is already done", () => {
+    const { store, prereq, dependent } = parked("gate_open");
+    // Satisfy the prerequisite before the force request, so the gate is open.
+    db!.run("UPDATE multiremi_issues SET status = 'done' WHERE id = ?", [prereq.id]);
+    expect(store.listUnmetPrerequisites(dependent.id)).toEqual([]);
+
+    store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
+
+    expectSingleStart(store, dependent.id, "gate-already-open");
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")).toEqual([]);
+    // The member's own transition is the record that survives: the store writes
+    // `issue_updated` as the actor's own request (status, force, actor), which is
+    // the third start kind this ruling names.
+    const updated = allActivityRows(store, dependent.id, "issue_updated");
+    expect(updated.some((entry) => entry.data?.status === "todo" && entry.data?.force === true)).toBe(true);
   });
 });
