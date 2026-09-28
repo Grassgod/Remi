@@ -374,10 +374,21 @@ rollback below:
   token's `multiremi_access_tokens.last_used_at`) is excluded from that rule,
   consistent with the group's read-only timing probes on 209.
 
+  **The `local` workspace must already exist before this pre-check.** The auth
+  chain `loadCurrentWorkspaceRole` -> `loadCurrentWorkspaceMember` ->
+  `ensureLocalWorkspace()` first SELECTs it, but a missing row would INSERT a
+  workspace and UPDATE the user; those are business writes, not authentication
+  bookkeeping. On 209, all MUL-* issues belong to `local` (`issuePrefix: MUL`),
+  the API forbids deleting `local`, and existing authenticated browser/daemon
+  traffic has already initialized it. The B1 pre-check therefore cannot be the
+  first request creating it; the no-business-write guarantee below depends on
+  this initialized-workspace precondition.
+
   ```bash
   set -o pipefail
   remi platform operation list --output json --limit 100 | python3 -c "
   import json,sys
+  from datetime import datetime,timedelta,timezone
   terminal = {'succeeded', 'failed', 'cancelled', 'rolled_back'}
   non_terminal = {'queued', 'preparing', 'pulling', 'draining', 'switching', 'restarting', 'verifying', 'rolling_back'}
   operations = json.load(sys.stdin)['operations']
@@ -388,6 +399,25 @@ rollback below:
       print(f\"activeOperation: {op['id']} {op['kind']} {op['status']}\")
   if active:
       sys.exit(1)
+  def completed_at(op):
+      value = op.get('finishedAt')
+      if value is None:
+          value = op.get('updatedAt')
+      try:
+          stamp = datetime.fromisoformat(value.replace('Z', '+00:00'))
+          if stamp.tzinfo is None:
+              raise ValueError('timestamp needs a timezone')
+          return stamp.astimezone(timezone.utc)
+      except (AttributeError, TypeError, ValueError):
+          sys.exit('STOP: invalid finishedAt/updatedAt')
+  def utc_label(stamp):
+      return stamp.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+  if operations:
+      last = max(completed_at(op) for op in operations)
+      wait_until = last + timedelta(minutes=11)
+      if datetime.now(timezone.utc) < wait_until:
+          print(f\"STOP: last operation finished at {utc_label(last)}; wait until {utc_label(wait_until)}\")
+          sys.exit(1)
   print('activeOperation: none')
   "
   # expected, every time before and during the switch:
@@ -411,6 +441,17 @@ rollback below:
   because all earlier ones finished before its creation.
   `list()` orders by `created_at DESC`, so the first page includes that operation
   even when more than 100 terminal records exist.
+
+  Also wait 11 minutes after the latest completion in the returned operations:
+  use `finishedAt`, falling back to `updatedAt` only when it is null, and compare
+  in UTC. Terminal `report()` and queued `requestCancel()` both write
+  `finished_at` and `updated_at`; the fallback covers older or incomplete rows.
+  A missing or unparseable completion timestamp means STOP. An empty history
+  has no completion to wait for. The 11 minutes cover the maximum drain TTL of
+  600 seconds (`PLATFORM_DRAIN_MAX_TTL_MS` in `platform-maintenance-repo.ts`),
+  the default 10-second daemon heartbeat, and margin. This avoids a residual
+  lease pausing task claims during stage A observation after a failed release,
+  without reading or mutating maintenance state.
 
   Do not read maintenance for this pre-check. Drain belongs to an active
   operation; with none active, a residual expired drain is recovered by the

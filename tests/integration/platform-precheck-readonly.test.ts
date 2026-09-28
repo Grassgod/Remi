@@ -22,7 +22,7 @@ if (!scriptMatch) throw new Error("README operation pre-check script is missing"
 const pythonScript = scriptMatch[1]!.replace(/^  /gmu, "").replaceAll('\\"', '"');
 const authWrite = "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?";
 const scenarios = ["expired-drain", "missing-state", "active-operation"] as const;
-type Scenario = typeof scenarios[number];
+type Scenario = typeof scenarios[number] | "missing-local";
 interface Write { sql: string; changes: number }
 
 const contractSource = ts.createSourceFile("types.ts",
@@ -91,12 +91,15 @@ async function fixture(scenario: Scenario) {
   store.ensureLocalWorkspace();
   const credential = await store.createAccessToken({ name: "MUL-464 local HTTP audit", type: "pat" });
   let activeId: string | null = null;
-  if (scenario !== "missing-state") {
+  if (scenario === "expired-drain" || scenario === "active-operation") {
     store.getPlatformState();
     store.getPlatformMaintenance();
     const operation = store.createPlatformOperation({ kind: "restart" }, "local");
     if (scenario === "expired-drain") {
       store.reportPlatformOperation(operation.id, { status: "succeeded" });
+      const finishedAt = new Date(Date.now() - 12 * 60_000).toISOString();
+      raw.run("UPDATE multiremi_platform_operations SET finished_at = ?, updated_at = ? WHERE id = ?",
+        [finishedAt, finishedAt, operation.id]);
     } else {
       store.reportPlatformOperation(operation.id, { status: "rolling_back" });
       activeId = operation.id;
@@ -109,6 +112,9 @@ async function fixture(scenario: Scenario) {
   } else {
     raw.run("DELETE FROM multiremi_platform_state");
     raw.run("DELETE FROM multiremi_platform_maintenance");
+  }
+  if (scenario === "missing-local") {
+    raw.run("DELETE FROM multiremi_workspaces WHERE id = 'local'");
   }
   const snapshot = () => ({
     maintenance: raw.query("SELECT * FROM multiremi_platform_maintenance ORDER BY id").all(),
@@ -204,7 +210,9 @@ describe("MUL-464 serialized platform-operation invariants", () => {
       try {
         const operation = f.repo.create({ kind: "restart" }, "local");
         expect(f.repo.report(operation.id, { status })?.status, status).toBe(status);
-        expect(f.row(operation.id).active_slot, status).toBe(isTerminalPlatformOperationStatus(status) ? null : 1);
+        const row = f.row(operation.id);
+        expect(row.active_slot, status).toBe(isTerminalPlatformOperationStatus(status) ? null : 1);
+        expect(row.finished_at, status).toBe(isTerminalPlatformOperationStatus(status) ? row.updated_at : null);
       } finally { f.close(); }
     }
   });
@@ -234,6 +242,7 @@ describe("MUL-464 serialized platform-operation invariants", () => {
       const operation = f.repo.create({ kind: "restart" }, "local");
       expect(f.repo.requestCancel(operation.id).status).toBe("cancelled");
       expect(f.row(operation.id).active_slot).toBeNull();
+      expect(f.row(operation.id).finished_at).toBe(f.row(operation.id).updated_at);
       const before = f.row(operation.id);
       f.audit.recording = true;
       expect(f.repo.report(operation.id, { status: "queued" })?.status).toBe("cancelled");
@@ -254,6 +263,28 @@ describe("MUL-464 serialized platform-operation invariants", () => {
 });
 
 describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () => {
+  test("missing local workspace triggers business INSERT and UPDATE during authentication", async () => {
+    const f = await fixture("missing-local");
+    try {
+      expect(f.raw.query("SELECT id FROM multiremi_workspaces WHERE id = 'local'").get()).toBeNull();
+      expect(f.raw.query("SELECT id FROM multiremi_workspace_members WHERE workspace_id = 'local'").get())
+        .not.toBeNull();
+      await f.request("/api/multiremi/platform/operations?limit=100");
+      expect(f.audit.writes).toHaveLength(3);
+      expect(f.audit.writes[0]).toEqual({ sql: authWrite, changes: 1 });
+      expect(f.audit.writes[1]).toMatchObject({ changes: 1 });
+      expect(f.audit.writes[1]!.sql).toMatch(/^INSERT INTO multiremi_workspaces /u);
+      expect(f.audit.writes[2]).toEqual({
+        sql: "UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",
+        changes: 1,
+      });
+      expect(f.raw.query("SELECT id, issue_prefix FROM multiremi_workspaces WHERE id = 'local'").get())
+        .toEqual({ id: "local", issue_prefix: "MUL" });
+      expect(f.snapshot()).toEqual(f.before);
+      console.info(JSON.stringify({ endpoint: "operations", scenario: "missing-local", writes: f.audit.writes }));
+    } finally { f.close(); }
+  });
+
   for (const scenario of scenarios) {
     test(`operations leaves all platform state unchanged: ${scenario}`, async () => {
       const f = await fixture(scenario);
@@ -322,22 +353,31 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
     }
   });
 
-  for (const withActive of [false, true]) {
-    test(`150 terminal operations via CLI ${withActive ? "plus the latest active operation stop" : "permit an idle window"}`, async () => {
+  const histories = [
+    { name: "permit an idle window", minutesAgo: 12, withActive: false, missingFinishedAt: false },
+    { name: "plus the latest active operation stop", minutesAgo: 12, withActive: true, missingFinishedAt: false },
+    { name: "finished 5 minutes ago stop", minutesAgo: 5, withActive: false, missingFinishedAt: false },
+    { name: "with null finishedAt and updatedAt 5 minutes ago stop", minutesAgo: 5, withActive: false, missingFinishedAt: true },
+  ];
+  for (const history of histories) {
+    test(`150 terminal operations via CLI ${history.name}`, async () => {
       const f = await fixture("missing-state");
       try {
         f.audit.recording = false;
+        const lastFinishedAt = new Date(Date.now() - history.minutesAgo * 60_000).toISOString();
         for (let index = 0; index < 150; index++) {
           const operation = f.store.createPlatformOperation({ kind: "restart" }, "local");
           f.store.reportPlatformOperation(operation.id, { status: terminalStatuses[index % terminalStatuses.length]! });
-          // Distinct historical timestamps make the latest page deterministic.
-          f.raw.run("UPDATE multiremi_platform_operations SET created_at = ? WHERE id = ?",
-            [new Date(Date.UTC(2020, 0, 1) + index * 1000).toISOString(), operation.id]);
+          // Historical times isolate the wait gate from fixture creation time.
+          const createdAt = new Date(Date.UTC(2020, 0, 1) + index * 1000).toISOString();
+          const finishedAt = index === 149 ? lastFinishedAt : createdAt;
+          f.raw.run("UPDATE multiremi_platform_operations SET created_at = ?, finished_at = ?, updated_at = ? WHERE id = ?",
+            [createdAt, index === 149 && history.missingFinishedAt ? null : finishedAt, finishedAt, operation.id]);
         }
-        const active = withActive ? f.store.createPlatformOperation({ kind: "restart" }, "local") : null;
+        const active = history.withActive ? f.store.createPlatformOperation({ kind: "restart" }, "local") : null;
         if (active) f.store.reportPlatformOperation(active.id, { status: "rolling_back" });
         expect(f.raw.query("SELECT COUNT(*) AS n FROM multiremi_platform_operations").get())
-          .toEqual({ n: withActive ? 151 : 150 });
+          .toEqual({ n: history.withActive ? 151 : 150 });
         const before = f.snapshot();
         f.audit.writes.length = 0;
         f.audit.recording = true;
@@ -347,15 +387,20 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
         assertOnlyAuthWrites(f.audit.writes);
         expect(f.snapshot()).toEqual(before);
         const gate = checkOperations(body);
-        expect(gate.status, gate.stderr).toBe(withActive ? 1 : 0);
+        const waiting = history.minutesAgo < 11;
+        expect(gate.status, gate.stderr).toBe(history.withActive || waiting ? 1 : 0);
+        const waitUntil = new Date(Date.parse(lastFinishedAt) + 11 * 60_000).toISOString();
         expect(gate.stdout.trim()).toBe(active
-          ? `activeOperation: ${active.id} restart rolling_back` : "activeOperation: none");
+          ? `activeOperation: ${active.id} restart rolling_back`
+          : waiting ? `STOP: last operation finished at ${lastFinishedAt}; wait until ${waitUntil}`
+          : "activeOperation: none");
       } finally { f.close(); }
     });
   }
 
   test("the pre-check refuses non-terminal, unknown and malformed responses", () => {
-    const operation = (status: string) => ({ id: "pop_local", kind: "restart", status });
+    const operation = (status: string) => ({ id: "pop_local", kind: "restart", status,
+      finishedAt: new Date(Date.now() - 60 * 60_000).toISOString() });
     for (const status of ["queued", "preparing", "pulling", "draining", "switching",
       "restarting", "verifying", "rolling_back", "future_status"]) {
       const gate = checkOperations({ operations: [operation("succeeded"), operation(status)] });
@@ -368,6 +413,25 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
       const gate = checkOperations(body);
       expect(gate.status).not.toBe(0);
       expect(gate.stdout).not.toContain("activeOperation: none");
+    }
+  });
+
+  test("the wait gate uses the latest completion across the page and compares in UTC", () => {
+    const old = new Date(Date.now() - 12 * 60_000).toISOString();
+    const recent = new Date(Date.now() - 5 * 60_000).toISOString();
+    const operation = (finishedAt: string | null, updatedAt: string | null = null) =>
+      ({ id: "pop_local", kind: "restart", status: "failed", finishedAt, updatedAt });
+    const gate = checkOperations({ operations: [operation(old), operation(recent)] });
+    expect(gate.status).toBe(1);
+    expect(gate.stdout).toContain(`STOP: last operation finished at ${recent}; wait until `);
+    const offset = new Date(Date.parse(old) + 8 * 60 * 60_000).toISOString().replace("Z", "+08:00");
+    expect(checkOperations({ operations: [operation(offset)] }).status).toBe(0);
+    for (const [finishedAt, updatedAt] of [[null, null], ["invalid", old], [null, "invalid"],
+      [old.replace("Z", ""), null]] as const) {
+      const invalid = checkOperations({ operations: [operation(finishedAt, updatedAt)] });
+      expect(invalid.status).toBe(1);
+      expect(invalid.stderr).toContain("STOP: invalid finishedAt/updatedAt");
+      expect(invalid.stdout).not.toContain("activeOperation: none");
     }
   });
 });

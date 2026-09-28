@@ -255,6 +255,15 @@ describe("application compose stack", () => {
     expect(section).toContain("created_at DESC");
   });
 
+  test("the read-only pre-check requires an already initialized local workspace", () => {
+    const section = splitSection(deployReadme);
+    expect(section).toContain("`local` workspace must already exist");
+    expect(section).toContain("ensureLocalWorkspace()");
+    expect(section).toContain("those are business writes, not authentication");
+    expect(section).toContain("the API forbids deleting `local`");
+    expect(section).toContain("issuePrefix: MUL");
+  });
+
   test("the documented non-terminal statuses equal the complement of TERMINAL_STATUSES", () => {
     const section = splitSection(deployReadme);
     const body = section.match(/python3 -c "([\s\S]*?)\n  "/u)?.[1];
