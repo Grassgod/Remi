@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { MultiremiAttachment } from "@multiremi/contracts/types.js";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
@@ -89,6 +89,7 @@ for (const kind of ["ordinary", "task", "daemon"] as const) {
         expect(calls).toBe(2);
         expect(attachment.id).toMatch(/^att_[0-9a-f]{32}$/);
         expect(attachment.id).not.toBe(existing.id);
+        expect(existsSync(uploadedAttachmentPath(existing)), "the original attachment file must survive").toBe(true);
         expect(readFileSync(uploadedAttachmentPath(existing), "utf8")).toBe("original");
         expect(readFileSync(uploadedAttachmentPath(attachment), "utf8")).toBe("replacement");
         expect(diskFiles()).toEqual([...filesBefore, uploadedAttachmentPath(attachment)].sort());
@@ -168,3 +169,28 @@ it("keeps old ids readable and extracts full UUID ids from attachment URLs", () 
   expect(attachmentIdsFromText(`/api/attachments/${oldId}/content /api/attachments/${collisionId}/download`))
     .toEqual([oldId, collisionId]);
 });
+
+it("hard-deletes legacy attachments but never truncates a new upload back to the old id", async () => {
+  const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+  try {
+    const id = "att_0123456789ab";
+    const existing = h.store.createAttachment({ id, workspaceId: "local", uploaderId: h.fixture.readerUserId,
+      filename: "collision.pdf", url: `/api/attachments/${id}/content` });
+    writeFileSync(uploadedAttachmentPath(existing), "original", { flag: "wx" });
+    const before = await h.app.request(existing.url, { headers: h.headers });
+    expect(before.status).toBe(200);
+    expect(before.headers.get("etag")).toBe(`"${id}"`);
+    expect(await before.text()).toBe("original");
+    const deleted = await h.app.request(`/api/attachments/${id}`, { method: "DELETE", headers: h.headers });
+    expect(deleted.status).toBe(200);
+    expect(h.store.getAttachment(id)).toBeNull();
+    expect(existsSync(uploadedAttachmentPath(existing))).toBe(false);
+    const upload = await writer(h, "ordinary");
+    const { result } = await withIds([collisionUuid], upload);
+    expect(result.status).toBe(200);
+    expect((await result.json()).attachment.id).toBe(collisionId);
+    const stale = await h.app.request(existing.url, { headers: { ...h.headers, "If-None-Match": `"${id}"` } });
+    expect(stale.status).toBe(404);
+    expect(await stale.json()).toEqual({ error: "attachment not found" });
+  } finally { await h.dispose(); }
+}, 20000);
