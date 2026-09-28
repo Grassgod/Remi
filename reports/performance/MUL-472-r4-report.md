@@ -1,12 +1,12 @@
 # MUL-472 第四轮返工
 
-仅修第四轮 B1 与同类隐藏 observer。实际 main / before=b95dd2fa5e301588ba1e04aa9bacc370240d664c；merge=0c727a2a8e0808b727a5612f346c9eb6ba90bc00，无冲突。产品/测试提交=e64794a16ddc2170196b1349ae30fcb20197ea6c；frontend tree=eee7aa4a52f29cce83958dc9147e83e365b486e6。最终报告提交 head 和该 SHA 的 CI 6/6 核对记录随交付评论列出，PR #297 保持 Draft。
+仅修第四轮 B1 与同类隐藏 observer。实际 main / before=b95dd2fa5e301588ba1e04aa9bacc370240d664c；merge=0c727a2a8e0808b727a5612f346c9eb6ba90bc00，无冲突。产品/测试提交=ca53b9a581fb91e3d64cf2ba9dfd1ebd88fe7678；frontend tree=3bd1de444a46fcff168148262b36f94d629a05d6。最终报告提交 head 和该 SHA 的 CI 6/6 核对记录随交付评论列出，PR #297 保持 Draft。
 
 ## B1
 
 隐藏 ChatWindow 仍挂载缓存消息，任务 id 合法就会使 observer active；462 的合法 degraded header invalidate 因而触发 refetch。ChatMessageList 的 live 和 AssistantMessage 两处改为 visible && 原条件，ChatWindow 传实际 chatVisible。隐藏仅 stale，重开立即读取 stale，打开时 header 正常 refetch。没有使用 visible || shellGateOpen；角标/完成状态由已门控的 aggregate pending 和 WS 缓存更新承担，不依赖隐藏的 transcript 查询。
 
-按 key 审计另补 HumanRequestDock 的 enabled=chatVisible（详情默认 true），以及隐藏虚拟列表 startReached 的 visible 条件，避免命令式 fetchNextPage 绕过 enabled。成员/项目候选同 key 的必要权限、主体读取明确列为不门控。未改 gate registry、aggregate pending、462 实现、服务端、正式 recorder 或阈值。
+按 key 审计另补 HumanRequestDock 的 enabled=chatVisible（详情默认 true），以及隐藏虚拟列表 startReached 的 visible 条件，避免命令式 fetchNextPage 绕过 enabled。扩展到 19 组 key 的冷壳层守卫又定位到无缓存会话时隐藏 WorkLocationPicker 的项目候选：ChatWindow 传 projectsEnabled=chatVisible，其他可见选择器默认 true。修前守卫 1 fail，修后恢复全绿；成员/项目同 key 的必要权限、主体读取明确列为不门控。未改 gate registry、aggregate pending、462 实现、服务端、正式 recorder 或阈值。
 
 ## 按 key 扫描与来源
 
@@ -46,22 +46,22 @@
 
 ## 守卫与变异
 
-真实 DashboardLayout + ChatFab + ChatWindow（仅隔离 WS 传输），给 17 组附属 key 全部预置缓存，包括 messagesPage/pendingTask、PinRow details、聊天 recents、任务消息和人工请求。逐 key invalidate，再经真实 createTaskHandlers 发送合法 degraded header：gate 前 QueryCache fetch 事件=0。gate 后壳层请求正常，隐藏消息/表单仍 inactive；打开后立即取 stale。两个 QA 原负控收进正式文件；另有 live/assistant 独立用例、隐藏分页回调以及详情 degraded-header 正控。
+真实 DashboardLayout + ChatFab + ChatWindow（仅隔离 WS 传输），给 19 组 key 全部预置缓存，包括 messagesPage/pendingTask、PinRow details、聊天 recents、任务消息、人工请求、成员和项目候选。使用库自带 VirtuosoMockContext 提供 jsdom 尺寸，并断言缓存的历史回复行实际挂载；其 task id 与 pending 一致，live observer 被已持久化回复抑制，因此通用守卫直接覆盖嵌套 AssistantMessage，QA 原负控另覆盖 live observer。逐 key invalidate，再经真实 createTaskHandlers 发送合法 degraded header：gate 前 QueryCache fetch 事件=0。gate 后壳层请求正常，隐藏消息/表单/候选仍 inactive；打开后立即取 stale。另有无缓存会话的隐藏项目候选守卫、live/assistant 独立用例、隐藏分页回调以及详情 degraded-header 正控。
 
 ```text
 
  RUN  v4.1.10 /data00/home/hehuajie/.remi/multiremi/workspaces/issues/MUL-472/Remi/frontend/packages/views
 
- ❯ chat/components/chat-message-list.test.tsx (10 tests | 2 failed) 152ms
-     × keeps the live observer inactive while hidden and refetches stale data on reopen 24ms
-     × keeps the assistant observer inactive while hidden and refetches stale data on reopen 21ms
+ ❯ chat/components/chat-message-list.test.tsx (10 tests | 2 failed) 153ms
+     × keeps the live observer inactive while hidden and refetches stale data on reopen 21ms
+     × keeps the assistant observer inactive while hidden and refetches stale data on reopen 16ms
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: a failed-reference header refetches an open chat but not a hidden cached chat
-12:17:35.350 [chat.store] setOpen { from: true, to: false }
+13:17:02.208 [chat.store] setOpen { from: true, to: false }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: a failed-reference header refetches an open chat but not a hidden cached chat
-12:17:35.351 [chat.store] setActiveSession { from: null, to: 'cs_qa_refetch' }
-12:17:35.351 [chat.store] setOpen { from: false, to: true }
-12:17:35.465 [chat.ui] ChatWindow mount {
+13:17:02.208 [chat.store] setActiveSession { from: null, to: 'cs_qa_refetch' }
+13:17:02.209 [chat.store] setOpen { from: false, to: true }
+13:17:02.323 [chat.ui] ChatWindow mount {
   isOpen: true,
   activeSessionId: 'cs_qa_refetch',
   pendingTaskId: 'tsk_qa_refetch',
@@ -70,17 +70,17 @@ stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard 
 }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: a failed-reference header refetches an open chat but not a hidden cached chat
-12:17:35.541 [chat.store] setOpen { from: true, to: false }
+13:17:02.418 [chat.store] setOpen { from: true, to: false }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: a failed-reference header refetches an open chat but not a hidden cached chat
-12:17:35.558 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_qa_refetch', pendingTaskId: 'tsk_qa_refetch' }
+13:17:02.437 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_qa_refetch', pendingTaskId: 'tsk_qa_refetch' }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: an initially hidden cached chat does not refetch before page readiness
-12:17:35.565 [chat.store] setOpen { from: true, to: false }
+13:17:02.444 [chat.store] setOpen { from: true, to: false }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: an initially hidden cached chat does not refetch before page readiness
-12:17:35.565 [chat.store] setActiveSession { from: null, to: 'cs_qa_hidden' }
-12:17:35.608 [chat.ui] ChatWindow mount {
+13:17:02.445 [chat.store] setActiveSession { from: null, to: 'cs_qa_hidden' }
+13:17:02.492 [chat.ui] ChatWindow mount {
   isOpen: false,
   activeSessionId: 'cs_qa_hidden',
   pendingTaskId: 'tsk_qa_hidden',
@@ -89,14 +89,14 @@ stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard 
 }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > QA: an initially hidden cached chat does not refetch before page readiness
-12:17:35.653 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_qa_hidden', pendingTaskId: 'tsk_qa_hidden' }
+13:17:02.548 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_qa_hidden', pendingTaskId: 'tsk_qa_hidden' }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
-12:17:35.797 [chat.store] setOpen { from: true, to: false }
+13:17:02.698 [chat.store] setOpen { from: true, to: false }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
-12:17:35.799 [chat.store] setActiveSession { from: null, to: 'cs_guard_cached' }
-12:17:35.942 [chat.ui] ChatWindow mount {
+13:17:02.699 [chat.store] setActiveSession { from: null, to: 'cs_guard_cached' }
+13:17:02.848 [chat.ui] ChatWindow mount {
   isOpen: false,
   activeSessionId: 'cs_guard_cached',
   pendingTaskId: 'tsk_guard_live',
@@ -105,12 +105,12 @@ stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard 
 }
 
 stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
-12:17:35.969 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_guard_cached', pendingTaskId: 'tsk_guard_live' }
+13:17:02.914 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_guard_cached', pendingTaskId: 'tsk_guard_live' }
 
- ❯ layout/shell-deferred-queries.test.tsx (6 tests | 3 failed) 746ms
-     × QA: a failed-reference header refetches an open chat but not a hidden cached chat 214ms
-     × QA: an initially hidden cached chat does not refetch before page readiness 90ms
-     × keeps cached deferred keys quiet on invalidation, including a real degraded header 174ms
+ ❯ layout/shell-deferred-queries.test.tsx (6 tests | 3 failed) 842ms
+     × QA: a failed-reference header refetches an open chat but not a hidden cached chat 237ms
+     × QA: an initially hidden cached chat does not refetch before page readiness 105ms
+     × keeps cached deferred keys quiet on invalidation, including a real degraded header 218ms
 
 ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
 
@@ -123,13 +123,13 @@ AssertionError: expected true to be false // Object.is equality
 - false
 + true
 
- ❯ layout/shell-deferred-queries.test.tsx:262:100
-    260|       await act(async () => {});
-    261|       listTaskMessages.mockClear();
-    262|       expect(client.getQueryCache().find({ queryKey: chatKeys.taskMess…
+ ❯ layout/shell-deferred-queries.test.tsx:267:100
+    265|       await act(async () => {});
+    266|       listTaskMessages.mockClear();
+    267|       expect(client.getQueryCache().find({ queryKey: chatKeys.taskMess…
        |                                                                                                    ^
-    263|       await act(async () => { sync.handlers["task:message"]?.({ task_i…
-    264|       expect(listTaskMessages).not.toHaveBeenCalled();
+    268|       await act(async () => { sync.handlers["task:message"]?.({ task_i…
+    269|       expect(listTaskMessages).not.toHaveBeenCalled();
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
 
@@ -147,13 +147,13 @@ Received:
 
 Number of calls: 1
 
- ❯ layout/shell-deferred-queries.test.tsx:293:36
-    291|       expect(useChatStore.getState().isOpen).toBe(false);
-    292|       await act(async () => { sync.handlers["task:message"]?.({ task_i…
-    293|       expect(listTaskMessages).not.toHaveBeenCalled();
+ ❯ layout/shell-deferred-queries.test.tsx:298:36
+    296|       expect(useChatStore.getState().isOpen).toBe(false);
+    297|       await act(async () => { sync.handlers["task:message"]?.({ task_i…
+    298|       expect(listTaskMessages).not.toHaveBeenCalled();
        |                                    ^
-    294|     } finally {
-    295|       view.unmount(); sync.dispose?.(); client.clear();
+    299|     } finally {
+    300|       view.unmount(); sync.dispose?.(); client.clear();
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
 
@@ -175,13 +175,13 @@ AssertionError: expected [ [ 'task-messages', …(1) ], …(1) ] to deeply equal
 +   ],
 + ]
 
- ❯ layout/shell-deferred-queries.test.tsx:369:27
-    367|         sync.handlers["task:message"]?.({ task_id: taskId, degraded: t…
-    368|       });
-    369|       expect(startedKeys).toEqual([]);
+ ❯ layout/shell-deferred-queries.test.tsx:378:27
+    376|         sync.handlers["task:message"]?.({ task_id: taskId, degraded: t…
+    377|       });
+    378|       expect(startedKeys).toEqual([]);
        |                           ^
-    370|       expect(listTaskMessages).not.toHaveBeenCalled();
-    371|       expect(listTaskHumanRequests).not.toHaveBeenCalled();
+    379|       expect(listTaskMessages).not.toHaveBeenCalled();
+    380|       expect(listTaskHumanRequests).not.toHaveBeenCalled();
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
 
@@ -213,8 +213,75 @@ Number of calls: 1
 
  Test Files  2 failed (2)
       Tests  5 failed | 11 passed (16)
-   Start at  20:17:27
-   Duration  8.66s (transform 5.00s, setup 140ms, import 9.41s, tests 898ms, environment 1.12s)
+   Start at  21:16:53
+   Duration  9.02s (transform 5.13s, setup 114ms, import 9.63s, tests 995ms, environment 1.09s)
+
+
+```
+
+仅移除历史 AssistantMessage 的 visible 条件，通用守卫也变红；立即还原。
+
+```text
+
+ RUN  v4.1.10 /data00/home/hehuajie/.remi/multiremi/workspaces/issues/MUL-472/Remi/frontend/packages/views
+
+stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
+13:18:00.821 [chat.store] setOpen { from: true, to: false }
+
+stderr | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
+react-i18next:: useTranslation: You will need to pass in an i18next instance by using initReactI18next { code: 'NO_I18NEXT_INSTANCE' }
+
+stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
+13:18:00.826 [chat.store] setActiveSession { from: null, to: 'cs_guard_cached' }
+13:18:01.094 [chat.ui] ChatWindow mount {
+  isOpen: false,
+  activeSessionId: 'cs_guard_cached',
+  pendingTaskId: 'tsk_guard_live',
+  selectedAgentId: null,
+  wsId: 'ws-1'
+}
+
+stdout | layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
+13:18:01.213 [chat.ui] ChatWindow unmount { activeSessionId: 'cs_guard_cached', pendingTaskId: 'tsk_guard_live' }
+
+ ❯ layout/shell-deferred-queries.test.tsx (6 tests | 1 failed | 5 skipped) 404ms
+     × keeps cached deferred keys quiet on invalidation, including a real degraded header 402ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  layout/shell-deferred-queries.test.tsx > complete shell observer guard (MUL-472 R1) > keeps cached deferred keys quiet on invalidation, including a real degraded header
+AssertionError: expected [ [ 'task-messages', …(1) ], …(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   [
++     "task-messages",
++     "tsk_guard_live",
++   ],
++   [
++     "task-messages",
++     "tsk_guard_live",
++   ],
++ ]
+
+ ❯ layout/shell-deferred-queries.test.tsx:378:27
+    376|         sync.handlers["task:message"]?.({ task_id: taskId, degraded: t…
+    377|       });
+    378|       expect(startedKeys).toEqual([]);
+       |                           ^
+    379|       expect(listTaskMessages).not.toHaveBeenCalled();
+    380|       expect(listTaskHumanRequests).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 5 skipped (6)
+   Start at  21:17:51
+   Duration  9.40s (transform 4.62s, setup 68ms, import 8.25s, tests 404ms, environment 551ms)
 
 
 ```
@@ -225,139 +292,139 @@ Number of calls: 1
 
 | 场景 | n | 首行 ms | 请求首行后 ms | recorder / 固定元素 px | 违例 |
 | --- | --- | --- | --- | --- | --- |
-| issues 冷 | 3 | 3103.3 / 2838.6 / 2847.2 | 1049.5 .. 2153.3 | 0 / 0 | 0 |
-| issues 热 | 3 | 1903.3 / 1848.4 / 1754.4 | 124.3 .. 125.2 | 0 / 0 | 0 |
-| inbox 冷 | 2 | 2445.5 / 2700.5 | 69.3 .. 1114.6 | 0 / 0 | 0 |
-| inbox 热 | 2 | 1449.6 / 1378.4 | 无新请求（缓存） | 0 / 0 | 0 |
-| detail 冷 | 3 | 3276.1 / 3409.4 / 3282.0 | 262.4 .. 1641.2 | 0 / 0 | 0 |
-| detail 热 | 3 | 2329.9 / 2124.6 / 2359.7 | 无新请求（缓存） | 0 / 0 | 0 |
-| MUL-454 冷 | 1 | 4108.2 | 484.9 .. 1645.1 | 0 / 0 | 0 |
-| MUL-454 热 | 1 | 2876.3 | 无新请求（缓存） | 0 / 0 | 0 |
+| issues 冷 | 3 | 3166.5 / 3074.5 / 3037.3 | 1050.1 .. 2178.1 | 0 / 0 | 0 |
+| issues 热 | 3 | 1791.3 / 1831.7 / 1841.6 | 123.6 .. 127.7 | 0 / 0 | 0 |
+| inbox 冷 | 2 | 2464.3 / 2747.1 | 67.4 .. 1141.1 | 0 / 0 | 0 |
+| inbox 热 | 2 | 1420.2 / 1365.4 | 无新请求（缓存） | 0 / 0 | 0 |
+| detail 冷 | 3 | 3333.8 / 3406.5 / 3311.9 | 261.4 .. 1586.4 | 0 / 0 | 0 |
+| detail 热 | 3 | 2419.4 / 2363.3 / 2322.8 | 无新请求（缓存） | 0 / 0 | 0 |
+| MUL-454 冷 | 1 | 3772.5 | 400.3 .. 1567.8 | 0 / 0 | 0 |
+| MUL-454 热 | 1 | 2825.5 | 无新请求（缓存） | 0 / 0 | 0 |
 
 ### issues 冷
 
-首行 3103.3 / 2838.6 / 2847.2ms；锚点 iss_pin_me。
+首行 3166.5 / 3074.5 / 3037.3ms；锚点 iss_pin_me。
 
 | 被门控请求 | r1 发起 ms（首行后 ms） | r2 发起 ms（首行后 ms） | r3 发起 ms（首行后 ms） |
 | --- | --- | --- | --- |
-| /api/agents?workspace_id=local&include_archived=true | 4152.8 (+1049.5) | 3897.1 (+1058.5) | 3921.4 (+1074.2) |
-| /api/agent-task-snapshot | 4155.1 (+1051.8) | 3899.2 (+1060.6) | 3923.5 (+1076.3) |
-| /api/squads | 4157.1 (+1053.8) | 3901.2 (+1062.6) | 3925.4 (+1078.2) |
-| /api/invitations | 4159.6 (+1056.3) | 3903.5 (+1064.9) | 3927.6 (+1080.4) |
-| /api/inbox/summary?timezone_offset=-480 | 4161.5 (+1058.2) | 3905.9 (+1067.3) | 3929.5 (+1082.3) |
-| /api/cli/latest-version | 4163.5 (+1060.2) | 3907.8 (+1069.2) | 3931.3 (+1084.1) |
-| /api/issues?limit=1&statuses=in_review%2Cblocked | 4165.5 (+1062.2) | 3909.7 (+1071.1) | 3933.1 (+1085.9) |
-| /api/pins | 4167.7 (+1064.4) | 3911.6 (+1073.0) | 3934.9 (+1087.7) |
-| /api/issues/child-progress | 4172.9 (+1069.6) | 3916.6 (+1078.0) | 3939.9 (+1092.7) |
-| /api/chat/pending-tasks | 4175.5 (+1072.2) | 3918.8 (+1080.2) | 3942.1 (+1094.9) |
-| /api/chat/sessions?status=all | 4178.3 (+1075.0) | 3921.9 (+1083.3) | 3944.8 (+1097.6) |
-| /api/issues/iss_pin_me | 5229.1 (+2125.8) | 4950.6 (+2112.0) | 5000.5 (+2153.3) |
+| /api/agents?workspace_id=local&include_archived=true | 4271.4 (+1104.9) | 4130.0 (+1055.5) | 4087.4 (+1050.1) |
+| /api/agent-task-snapshot | 4273.4 (+1106.9) | 4132.1 (+1057.6) | 4089.5 (+1052.2) |
+| /api/squads | 4275.4 (+1108.9) | 4134.2 (+1059.7) | 4091.6 (+1054.3) |
+| /api/invitations | 4277.8 (+1111.3) | 4136.5 (+1062.0) | 4093.9 (+1056.6) |
+| /api/inbox/summary?timezone_offset=-480 | 4279.7 (+1113.2) | 4138.7 (+1064.2) | 4095.9 (+1058.6) |
+| /api/cli/latest-version | 4281.5 (+1115.0) | 4140.9 (+1066.4) | 4097.8 (+1060.5) |
+| /api/issues?limit=1&statuses=in_review%2Cblocked | 4283.4 (+1116.9) | 4142.9 (+1068.4) | 4099.7 (+1062.4) |
+| /api/pins | 4285.2 (+1118.7) | 4144.9 (+1070.4) | 4101.5 (+1064.2) |
+| /api/issues/child-progress | 4290.3 (+1123.8) | 4150.0 (+1075.5) | 4106.7 (+1069.4) |
+| /api/chat/pending-tasks | 4292.5 (+1126.0) | 4152.1 (+1077.6) | 4109.1 (+1071.8) |
+| /api/chat/sessions?status=all | 4295.1 (+1128.6) | 4155.1 (+1080.6) | 4111.8 (+1074.5) |
+| /api/issues/iss_pin_me | 5344.6 (+2178.1) | 5183.3 (+2108.8) | 5146.6 (+2109.3) |
 
 ### issues 热
 
-首行 1903.3 / 1848.4 / 1754.4ms；锚点 iss_pin_me。
+首行 1791.3 / 1831.7 / 1841.6ms；锚点 iss_pin_me。
 
 | 被门控请求 | r1 发起 ms（首行后 ms） | r2 发起 ms（首行后 ms） | r3 发起 ms（首行后 ms） |
 | --- | --- | --- | --- |
-| /api/issues/child-progress | 2028.1 (+124.8) | 1972.7 (+124.3) | 1879.6 (+125.2) |
+| /api/issues/child-progress | 1919.0 (+127.7) | 1955.3 (+123.6) | 1965.5 (+123.9) |
 
 ### inbox 冷
 
-首行 2445.5 / 2700.5ms；锚点 inb_probe_2。
+首行 2464.3 / 2747.1ms；锚点 inb_probe_2。
 
 | 被门控请求 | r1 发起 ms（首行后 ms） | r2 发起 ms（首行后 ms） |
 | --- | --- | --- |
-| /api/agents?workspace_id=local&include_archived=true | 2514.8 (+69.3) | 2770.3 (+69.8) |
-| /api/agent-task-snapshot | 2517.5 (+72.0) | 2772.8 (+72.3) |
-| /api/squads | 2519.9 (+74.4) | 2775.2 (+74.7) |
-| /api/invitations | 2523.0 (+77.5) | 2778.1 (+77.6) |
-| /api/inbox/summary?timezone_offset=-480 | 2525.5 (+80.0) | 2780.5 (+80.0) |
-| /api/cli/latest-version | 2527.8 (+82.3) | 2782.9 (+82.4) |
-| /api/issues?limit=1&statuses=in_review%2Cblocked | 2530.4 (+84.9) | 2785.4 (+84.9) |
-| /api/pins | 2532.7 (+87.2) | 2787.7 (+87.2) |
-| /api/chat/pending-tasks | 2536.0 (+90.5) | 2791.0 (+90.5) |
-| /api/chat/sessions?status=all | 2539.2 (+93.7) | 2794.3 (+93.8) |
-| /api/issues/iss_pin_me | 3560.1 (+1114.6) | 3791.7 (+1091.2) |
+| /api/agents?workspace_id=local&include_archived=true | 2535.7 (+71.4) | 2814.5 (+67.4) |
+| /api/agent-task-snapshot | 2538.5 (+74.2) | 2816.6 (+69.5) |
+| /api/squads | 2541.0 (+76.7) | 2818.6 (+71.5) |
+| /api/invitations | 2544.4 (+80.1) | 2821.8 (+74.7) |
+| /api/inbox/summary?timezone_offset=-480 | 2546.9 (+82.6) | 2823.8 (+76.7) |
+| /api/cli/latest-version | 2549.3 (+85.0) | 2825.8 (+78.7) |
+| /api/issues?limit=1&statuses=in_review%2Cblocked | 2551.9 (+87.6) | 2828.0 (+80.9) |
+| /api/pins | 2554.5 (+90.2) | 2830.0 (+82.9) |
+| /api/chat/pending-tasks | 2558.1 (+93.8) | 2832.9 (+85.8) |
+| /api/chat/sessions?status=all | 2561.9 (+97.6) | 2835.9 (+88.8) |
+| /api/issues/iss_pin_me | 3577.6 (+1113.3) | 3888.2 (+1141.1) |
 
 ### inbox 热
 
-首行 1449.6 / 1378.4ms；锚点 inb_probe_2。
+首行 1420.2 / 1365.4ms；锚点 inb_probe_2。
 
 无新门控请求（缓存）。
 
 ### detail 冷
 
-首行 3276.1 / 3409.4 / 3282.0ms；锚点 cmt_fqvm9ako4ept。
+首行 3333.8 / 3406.5 / 3311.9ms；锚点 cmt_jt0832dlduax。
 
 | 被门控请求 | r1 发起 ms（首行后 ms） | r2 发起 ms（首行后 ms） | r3 发起 ms（首行后 ms） |
 | --- | --- | --- | --- |
-| /api/agents?workspace_id=local&include_archived=true | 3771.2 (+495.1) | 3671.8 (+262.4) | 3758.1 (+476.1) |
-| /api/agent-task-snapshot | 3773.3 (+497.2) | 3673.9 (+264.5) | 3760.2 (+478.2) |
-| /api/squads | 3775.2 (+499.1) | 3675.8 (+266.4) | 3762.1 (+480.1) |
-| /api/invitations | 3777.7 (+501.6) | 3678.1 (+268.7) | 3764.5 (+482.5) |
-| /api/inbox/summary?timezone_offset=-480 | 3779.6 (+503.5) | 3680.0 (+270.6) | 3766.3 (+484.3) |
-| /api/cli/latest-version | 3781.5 (+505.4) | 3682.0 (+272.6) | 3768.3 (+486.3) |
-| /api/issues?limit=1&statuses=in_review%2Cblocked | 3783.5 (+507.4) | 3684.1 (+274.7) | 3770.3 (+488.3) |
-| /api/pins | 3785.4 (+509.3) | 3685.9 (+276.5) | 3772.3 (+490.3) |
-| /api/chat/pending-tasks | 3793.0 (+516.9) | 3693.3 (+283.9) | 3779.7 (+497.7) |
-| /api/chat/sessions?status=all | 3795.9 (+519.8) | 3696.1 (+286.7) | 3782.8 (+500.8) |
-| /api/issues/iss_pin_me | 4917.3 (+1641.2) | 4928.4 (+1519.0) | 4903.7 (+1621.7) |
+| /api/agents?workspace_id=local&include_archived=true | 3771.2 (+437.4) | 3667.9 (+261.4) | 3575.0 (+263.1) |
+| /api/agent-task-snapshot | 3773.3 (+439.5) | 3670.1 (+263.6) | 3577.0 (+265.1) |
+| /api/squads | 3775.2 (+441.4) | 3672.1 (+265.6) | 3579.0 (+267.1) |
+| /api/invitations | 3777.6 (+443.8) | 3674.6 (+268.1) | 3581.4 (+269.5) |
+| /api/inbox/summary?timezone_offset=-480 | 3779.5 (+445.7) | 3676.5 (+270.0) | 3583.4 (+271.5) |
+| /api/cli/latest-version | 3781.4 (+447.6) | 3678.5 (+272.0) | 3585.2 (+273.3) |
+| /api/issues?limit=1&statuses=in_review%2Cblocked | 3783.4 (+449.6) | 3680.5 (+274.0) | 3587.3 (+275.4) |
+| /api/pins | 3785.4 (+451.6) | 3682.6 (+276.1) | 3589.3 (+277.4) |
+| /api/chat/pending-tasks | 3792.9 (+459.1) | 3690.4 (+283.9) | 3597.9 (+286.0) |
+| /api/chat/sessions?status=all | 3795.6 (+461.8) | 3693.2 (+286.7) | 3600.9 (+289.0) |
+| /api/issues/iss_pin_me | 4920.2 (+1586.4) | 4815.2 (+1408.7) | 4725.2 (+1413.3) |
 
 ### detail 热
 
-首行 2329.9 / 2124.6 / 2359.7ms；锚点 cmt_fqvm9ako4ept。
+首行 2419.4 / 2363.3 / 2322.8ms；锚点 cmt_jt0832dlduax。
 
 无新门控请求（缓存）。
 
 ### MUL-454 冷
 
-首行 4108.2ms；锚点 cmt_hovywyyvgeen。
+首行 3772.5ms；锚点 cmt_r8usqdc0yr36。
 
 | 被门控请求 | r1 发起 ms（首行后 ms） |
 | --- | --- |
-| /api/agents?workspace_id=local&include_archived=true | 4593.1 (+484.9) |
-| /api/agent-task-snapshot | 4595.3 (+487.1) |
-| /api/squads | 4597.4 (+489.2) |
-| /api/invitations | 4599.8 (+491.6) |
-| /api/inbox/summary?timezone_offset=-480 | 4601.9 (+493.7) |
-| /api/cli/latest-version | 4603.8 (+495.6) |
-| /api/issues?limit=1&statuses=in_review%2Cblocked | 4606.0 (+497.8) |
-| /api/pins | 4608.1 (+499.9) |
-| /api/chat/pending-tasks | 4616.7 (+508.5) |
-| /api/chat/sessions?status=all | 4619.5 (+511.3) |
-| /api/issues/iss_pin_me | 5753.3 (+1645.1) |
+| /api/agents?workspace_id=local&include_archived=true | 4172.8 (+400.3) |
+| /api/agent-task-snapshot | 4174.8 (+402.3) |
+| /api/squads | 4176.8 (+404.3) |
+| /api/invitations | 4179.1 (+406.6) |
+| /api/inbox/summary?timezone_offset=-480 | 4181.1 (+408.6) |
+| /api/cli/latest-version | 4182.9 (+410.4) |
+| /api/issues?limit=1&statuses=in_review%2Cblocked | 4184.9 (+412.4) |
+| /api/pins | 4187.0 (+414.5) |
+| /api/chat/pending-tasks | 4194.7 (+422.2) |
+| /api/chat/sessions?status=all | 4197.6 (+425.1) |
+| /api/issues/iss_pin_me | 5340.3 (+1567.8) |
 
 ### MUL-454 热
 
-首行 2876.3ms；锚点 cmt_hovywyyvgeen。
+首行 2825.5ms；锚点 cmt_r8usqdc0yr36。
 
 无新门控请求（缓存）。
 
 ## 主动打开聊天
 
-点击 2504.2ms，主列表未出现，gate 未开。
+点击 2483.5ms，主列表未出现，gate 未开。
 
 | 请求 | 发起 ms | 点击后 ms |
 | --- | --- | --- |
-| /api/chat/pending-tasks | 2566.2 | 62.0 |
-| /api/chat/sessions?status=all | 2575.1 | 70.9 |
-| /api/chat/sessions/cs_fixture/messages/page?limit=50 | 2578.0 | 73.8 |
-| /api/chat/sessions/cs_fixture/pending-task | 2580.5 | 76.3 |
-| /api/tasks/tsk_chat_fixture/messages | 2696.7 | 192.5 |
-| /api/tasks/tsk_chat_fixture/human-requests | 2698.8 | 194.6 |
+| /api/chat/pending-tasks | 2503.3 | 19.8 |
+| /api/chat/sessions?status=all | 2510.8 | 27.3 |
+| /api/chat/sessions/cs_fixture/messages/page?limit=50 | 2513.4 | 29.9 |
+| /api/chat/sessions/cs_fixture/pending-task | 2515.4 | 31.9 |
+| /api/tasks/tsk_chat_fixture/messages | 2622.0 | 138.5 |
+| /api/tasks/tsk_chat_fixture/human-requests | 2624.3 | 140.8 |
 
 ## 同 main 对比
 
-新 fixture 的完整链路（含冷进入 issues）56→53：初入 29→27，热 inbox 23→22，热 detail 4→4。纯热两段 27→26。旧报告 51→50 是完整链路，23→23 才是纯热；第三轮 53→52 / 25→25 是旧 fixture 参考，均不充当本轮 b95dd2fa 基线。593ff2ba 原首屏 27→22 / 19→15 / 36→35 保留为历史参考。新增非空聊天任务会触发 aggregate pending 轮询，本轮逐请求原样保留，不混用观察窗。
+新 fixture 的完整链路（含冷进入 issues）56→53：初入 29→26，热 inbox 23→23，热 detail 4→4。纯热两段 27→27。旧报告 51→50 是完整链路，23→23 才是纯热；第三轮 53→52 / 25→25 是旧 fixture 参考，均不充当本轮 b95dd2fa 基线。593ff2ba 原首屏 27→22 / 19→15 / 36→35 保留为历史参考。新增非空聊天任务会触发 aggregate pending 轮询，本轮逐请求原样保留，不混用观察窗。
 
 | 场景 | 首屏 before | 首屏 after | 观察窗 before | 观察窗 after |
 | --- | --- | --- | --- | --- |
-| issues cold | 27 / 27 / 27 | 15 / 15 / 15 | 29 / 29 / 29 | 27 / 27 / 27 |
+| issues cold | 27 / 27 / 27 | 14 / 14 / 14 | 29 / 29 / 29 | 26 / 26 / 26 |
 | issues warm | 10 / 10 / 10 | 8 / 8 / 8 | 11 / 11 / 11 | 9 / 9 / 9 |
-| inbox cold | 19 / 19 | 8 / 8 | 20 / 20 | 19 / 19 |
+| inbox cold | 19 / 19 | 7 / 7 | 20 / 20 | 18 / 18 |
 | inbox warm | 2 / 2 | 1 / 1 | 3 / 2 | 1 / 1 |
 | detail cold | 39 / 39 / 39 | 27 / 27 / 27 | 40 / 40 / 40 | 38 / 38 / 38 |
-| detail warm | 19 / 19 / 19 | 18 / 18 / 18 | 20 / 20 / 20 | 18 / 18 / 18 |
+| detail warm | 19 / 19 / 19 | 19 / 19 / 19 | 20 / 20 / 20 | 19 / 19 / 19 |
 
 ## 回归
 
@@ -385,6 +452,7 @@ Number of calls: 1
 - `frontend/packages/views/common/human-request-dock.tsx`
 - `frontend/packages/views/issues/components/session-agent-stream-row.test.tsx`
 - `frontend/packages/views/layout/shell-deferred-queries.test.tsx`
+- `frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx`
 - `frontend/packages/views/test/task-handlers.ts`
 - `reports/performance/MUL-472-r4/MUL-472-r4-before-long.json`
 - `reports/performance/MUL-472-r4/MUL-472-r4-after-hot-path.json`
