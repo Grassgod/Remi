@@ -27,10 +27,11 @@ export class TestMultiremiDaemon extends MultiremiDaemon {
   constructor(options: MultiremiDaemonOptions) {
     const socketClosures = new Set<Promise<void>>();
     const connect = options.protocolClientOptions?.connect;
+    const cliVersion = options.protocolClientOptions?.cliVersion ?? version;
     super({
       onceOfferTimeoutMs: 1_000,
       ...options,
-      protocolClientOptions: { cliVersion: version, ...options.protocolClientOptions,
+      protocolClientOptions: { ...options.protocolClientOptions, cliVersion,
         connect: (url, init) => {
           const socket = connect ? connect(url, init) : new WebSocket(url, init as never);
           let resolveClose!: () => void;
@@ -43,8 +44,14 @@ export class TestMultiremiDaemon extends MultiremiDaemon {
       },
     });
     this.socketClosures = socketClosures;
-    // The legacy steer feed stops its timer without awaiting its final HTTP read.
     const client = (this as unknown as { client: MultiremiDaemonClient }).client;
+    // Registration and hello must advertise the same fixture release, including
+    // the startup input injected before hello can be sent.
+    const registerRuntime = client.registerRuntime.bind(client);
+    client.registerRuntime = input => registerRuntime({ ...input, metadata: { ...input.metadata, version: cliVersion, cli_version: cliVersion } });
+    const registerDaemonRuntime = client.registerDaemonRuntime.bind(client);
+    client.registerDaemonRuntime = input => registerDaemonRuntime({ ...input, cliVersion, runtime: { ...input.runtime, version: cliVersion } });
+    // The legacy steer feed stops its timer without awaiting its final HTTP read.
     const listSteers = client.listPendingTaskSteerMessages.bind(client);
     client.listPendingTaskSteerMessages = (...args) => {
       const request = listSteers(...args);

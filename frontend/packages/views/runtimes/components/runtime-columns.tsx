@@ -44,6 +44,7 @@ import {
 } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
 import { RuntimeNameEditor } from "./name-editor";
+import { RuntimeProtocolLine } from "./runtime-protocol-line";
 import { useT } from "../../i18n";
 
 // Per-row data assembled at the page level. The columns reach into
@@ -243,15 +244,18 @@ function RuntimeNameCell({
       <div className="flex h-8 w-8 shrink-0 items-center justify-center">
         <ProviderLogo provider={runtime.provider} className="h-5 w-5" />
       </div>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        {canEdit ? (
-          <RuntimeNameEditor runtime={runtime} displayValue={baseName} compact />
-        ) : (
-          <span className="block min-w-0 shrink truncate text-sm font-medium">
-            {baseName}
-          </span>
-        )}
-        <VisibilityBadge runtime={runtime} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {canEdit ? (
+            <RuntimeNameEditor runtime={runtime} displayValue={baseName} compact />
+          ) : (
+            <span className="block min-w-0 shrink truncate text-sm font-medium">
+              {baseName}
+            </span>
+          )}
+          <VisibilityBadge runtime={runtime} />
+        </div>
+        <RuntimeProtocolLine runtime={runtime} />
       </div>
     </div>
   );

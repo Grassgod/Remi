@@ -4,6 +4,7 @@ import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-of
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -409,6 +410,7 @@ describe("Multiremi API — daemon endpoints", () => {
       body: JSON.stringify({
         workspace_id: "local",
         daemon_id: credential.daemonId,
+        cli_version: DAEMON_MIN_CLI_VERSION,
         capabilities: { agent_plugins: 1 },
         runtimes: [{ type: "claude", version: "1.0.0" }],
       }),

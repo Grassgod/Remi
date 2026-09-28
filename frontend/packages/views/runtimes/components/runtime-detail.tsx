@@ -18,6 +18,7 @@ import { copyText } from "@multiremi/ui/lib/clipboard";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntime, Agent, MemberWithUser } from "@multiremi/core/types";
+import { RuntimeProtocolLine } from "./runtime-protocol-line";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
@@ -461,6 +462,7 @@ function HeroCard({
               {t(($) => $.detail.last_seen, { when: lastSeen })}
             </span>
           </div>
+          <RuntimeProtocolLine runtime={runtime} />
         </div>
       </div>
 

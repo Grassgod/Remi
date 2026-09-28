@@ -2757,6 +2757,10 @@ runMigrations(this.db);
     return this.runtimes.getRuntimeLite(id);
   }
 
+  recordDaemonProtocol(runtimeId: string, daemonId: string, version: number, cliVersion?: string): void {
+    this.runtimes.recordDaemonProtocol(runtimeId, daemonId, version, cliVersion);
+  }
+
   getRuntimeCodexProfile(id: string) {
     return this.runtimes.getRuntimeCodexProfile(id);
   }

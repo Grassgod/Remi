@@ -122,7 +122,12 @@ export class DaemonProtocolLayer {
       serverVersion: this.serverVersion,
       ownerAccessToken: identity.accessToken,
       authorizeRuntime: (daemonId, runtimeId) => this.authorizeRuntime(identity, daemonId, runtimeId),
-      onHello: hello => { for (const hooks of this.sessionHooks) hooks.hello?.(session, hello); },
+      onHello: hello => {
+        for (const runtimeId of session.runtimeIds) {
+          this.store.recordDaemonProtocol(runtimeId, hello.daemonId, DAEMON_PROTOCOL_VERSION, hello.cliVersion);
+        }
+        for (const hooks of this.sessionHooks) hooks.hello?.(session, hello);
+      },
       onHeartbeat: heartbeat => {
         const reply = this.handleHeartbeat(heartbeat);
         for (const hooks of this.sessionHooks) hooks.heartbeat?.(session, heartbeat);

@@ -4,6 +4,7 @@ import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-
 // billing/lark/chat batches, and the linked-resource console workflows.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { createStore, db, metricValue, resetMultiremiTestEnv, workspaceRepoVersion } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -1020,7 +1021,8 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       cacheReadTokens: 3,
       cacheWriteTokens: 2,
     }]);
-    const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local" });
+    // Isolate Plugin capability negotiation from the automatic CLI upgrade channel.
+    const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local", metadata: { cli_version: DAEMON_MIN_CLI_VERSION, parallel_agent_execution: 1 } });
     const app = createMultiremiApp({ store });
 
     // An upstream daemon build predates Agent Plugins entirely: it sends no

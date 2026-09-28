@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { ensureDaemonProtocolUpgrade } from "../helpers/daemon-protocol-upgrade.js";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
@@ -417,6 +418,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
+    ensureDaemonProtocolUpgrade(store, runtimeId, ack);
     if (reportsSshMeshProtocol) {
       const protocol = normalizeDaemonProtocolVersion(body.ssh_mesh_protocol);
       const meshAck = store.recordSshMeshHeartbeat(runtimeId, protocol, body.ssh_mesh_status);

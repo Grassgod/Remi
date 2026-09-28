@@ -689,8 +689,9 @@ server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
 这是本单要正面处理的矛盾：**最近几次 fleet 升级全部走心跳 ack 的 `pending_update`**
 （008、133、MBP 三台的 `daemon.log` 都有 `Multiremi daemon restarting with updated binary`），
 没有人工记录。如果服务端在心跳 handler 里按版本直接硬拒 v1，v1 daemon 就再也拿不到升级指令，
-而且 `dmn_40119`（字节 VM `iv-yerno49q0wxjd1vp77df-root`）没有可用 SSH 路径，
-等于永久断供。209 上至今还挂着 `remi-block-retired-daemon.conf` 挡一个 v0.2.27 之前、
+`dmn_40119` 是贺华杰本人的机器，计入「全部 daemon 升到 v2」的验收：先走升级通道，
+失败时经 SSH mesh 别名 `212` 登录处理（依据：MUL-401 Q5 答复 `cmt_70sumd6bces1`）。
+有 SSH 兜底也不能切断自动升级通道。209 上至今还挂着 `remi-block-retired-daemon.conf` 挡一个 v0.2.27 之前、
 不会看 401 停机的 daemon（MUL-368），说明「旧 daemon 卡死」真实发生过。
 
 因此 v2 服务端**不在心跳 handler 里拒绝**，而是把
@@ -725,14 +726,14 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 | `n37-066-008-hehuajie` | n37-066-008 (10.37.66.8) | systemd user unit | 升级通道（历史全部走它）；SSH 兜底可用 |
 | `n37-206-133-hehuajie` | n37-206-133 (10.37.206.133) | systemd user unit | 同上 |
 | `dmn_5d98ad65…` | GrassgodMBP (macOS，`http://10.66.66.4`) | launchd `dev.remi.multiremi.daemon` | 升级通道；SSH 经 WireGuard 兜底 |
-| `dmn_40119cf7…` | `iv-yerno…` 字节 VM | 未确认 | **只有升级通道**，无 SSH 路径；主机归属待确认 |
+| `dmn_40119cf7…` | 贺华杰；runtime `rt_1wfnlsb`（claude）、`rt_1wlrzjc`（codex） | 切换当天核对 | 升级通道；SSH 经 mesh 别名 `212` 兜底 |
 
 `launched_by = desktop` 的 daemon 会拒绝 CLI 更新（现有逻辑），fleet 里目前没有这种情况。
 
 ### 7.4b `DAEMON_MIN_CLI_VERSION` 是占位值
 
 代码里的 `"0.2.83"` 是**占位**，不是既成事实：它必须等于第一个真正携带协议 v2 的 release tag。
-由 A-7（MUL-423）在发版那一步钉死，不需要贺华杰定。已验证的行为只有「不可读的版本视为更旧、
+由带头大哥在 `v2-integration` 合入 main 时钉死。已验证的行为只有「不可读的版本视为更旧、
 必须升级」（有用例锁住）。
 
 ### 7.5 升级失败的提示
@@ -744,6 +745,16 @@ min_version, last_error }`：
 - `remi platform status` 汇总「待升级 N 台 / 失败 M 台」。
 
 失败来源就是 `multiremi_runtime_update_requests.status = failed` 的 error 字段。
+
+该字段只从数据库推导，不读取 v2 会话注册表。成功的 `hello` 将协议版本与 CLI 版本写入
+runtime 的可空 `daemon_protocol_version` 列与既有 `metadata.cli_version`；旧行的空值按 v1 读。
+HTTP 升级探测不覆盖最近一次成功协商的版本。当前 v2 且 CLI 达标时为 `ok`；否则优先查看
+CLI 升级请求：pending/running 为 `upgrade_pending`，最近一次 failed 为 `upgrade_failed`，
+其余为 `rejected`。ACP/agent 更新失败不算协议升级失败。平台汇总按 daemon 去重计数，
+失败优先于待升级，未排队的 `rejected` 也计入待升级。
+
+迁移只给 runtime 表新增一个可空列，不回填、不修改升级请求表。旧版代码不读取该列即可回退，
+无需删除列；切换与回滚核对见 [v2 切换清单](deploy/daemon-v2-cutover.md)。
 
 ### 7.6 回滚
 

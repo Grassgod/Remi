@@ -23,6 +23,7 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { FeishuConciergeHost, FeishuConciergeSupervisor } from "@multiremi/worker/feishu-concierge.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import {
   controlPlaneConciergeHost,
   sendDecisionLane as sendDecisionLaneForTest,
@@ -1531,6 +1532,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     // no Feishu app) and the HTTP hop, which the real client reaches through the
     // in-process app the way the existing heartbeat cases already do.
     const { store, agentId, app } = scaffold();
+    // This case exercises delivery, not installing a CLI through an upgrade ack.
+    store.updateRuntime("rt_bot", { metadata: { ...store.getRuntimeLite("rt_bot")!.metadata, cli_version: DAEMON_MIN_CLI_VERSION } });
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
