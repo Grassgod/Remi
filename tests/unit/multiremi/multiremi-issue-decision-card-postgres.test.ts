@@ -38,6 +38,51 @@ async function probe(): Promise<boolean> {
 const available = await probe();
 if (!available) console.warn(`[multiremi-issue-decision-card-postgres] Postgres unreachable at ${PG_ADMIN_URL} — skipping.`);
 
+const CLAIM_BARRIER_TIMEOUT_MS = 10_000;
+type ClaimWorkerMessage = {
+  type: "ready" | "due_selected" | "result" | "error";
+  pid?: number;
+  backendPid?: number;
+  decisionIds?: string[];
+  delivery?: { id: string; kind: string } | null;
+  message?: string;
+};
+
+function jsonLineReader(stream: ReadableStream<Uint8Array>): () => Promise<ClaimWorkerMessage> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return async () => {
+    while (true) {
+      const newline = buffered.indexOf("\n");
+      if (newline >= 0) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        return JSON.parse(line) as ClaimWorkerMessage;
+      }
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error("claim worker stdout closed before the next barrier message");
+      buffered += decoder.decode(chunk.value, { stream: true });
+    }
+  };
+}
+
+async function beforeBarrierTimeout<T>(operation: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(
+          `MUL-412 reminder barrier timed out waiting for ${label} after ${CLAIM_BARRIER_TIMEOUT_MS}ms`,
+        )), CLAIM_BARRIER_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
@@ -213,7 +258,6 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_concurrent", interactionOpenId: CARD_OPEN_ID,
     }, sentAt);
     const now = new Date();
-    const startAt = Date.now() + 1_000;
     const worker = `${import.meta.dir}/mul412-reminder-claim-worker.ts`;
     const spawn = () => Bun.spawn([process.execPath, worker], {
       cwd: process.cwd(),
@@ -223,28 +267,58 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         MUL412_CLAIM_WORKSPACE_ID: scope.workspaceId,
         MUL412_CLAIM_RUNTIME_ID: scope.runtimeId,
         MUL412_CLAIM_NOW: now.toISOString(),
-        MUL412_CLAIM_START_AT: String(startAt),
       },
       stdout: "pipe",
       stderr: "pipe",
     });
     const processes = [spawn(), spawn()];
-    const results = await Promise.all(processes.map(async (process) => {
-      const [exitCode, stdout, stderr] = await Promise.all([
-        process.exited,
-        new Response(process.stdout).text(),
-        new Response(process.stderr).text(),
-      ]);
-      expect(exitCode, stderr).toBe(0);
-      return JSON.parse(stdout.trim().split("\n").at(-1) ?? "null") as { id: string; kind: string } | null;
-    }));
-    const taken = results.filter((row): row is { id: string; kind: string } => row !== null);
-    expect(taken).toHaveLength(1);
-    expect(taken[0]!.kind).toBe("decision_reminder");
-    const rows = db.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_reminder' AND decision_id = ?",
-    ).get(decision.id) as { n: string | number };
-    expect(Number(rows.n)).toBe(1);
+    const nextMessages = processes.map(child => jsonLineReader(child.stdout));
+    const stderr = processes.map(child => new Response(child.stderr).text());
+    let completed = false;
+    try {
+      const ready = await Promise.all(nextMessages.map((next, index) =>
+        beforeBarrierTimeout(next(), `worker ${index + 1} initialization`)));
+      expect(ready.map(message => message.type)).toEqual(["ready", "ready"]);
+      const workerPids = ready.map(message => Number(message.pid));
+      const backendPids = ready.map(message => Number(message.backendPid));
+      expect(new Set(workerPids).size).toBe(2);
+      expect(new Set(backendPids).size).toBe(2);
+      expect(workerPids).toEqual(processes.map(child => child.pid));
+
+      for (const pid of workerPids) process.kill(pid, "SIGCONT");
+      const selected = await Promise.all(nextMessages.map((next, index) =>
+        beforeBarrierTimeout(next(), `worker ${index + 1} due SELECT`)));
+      expect(selected.map(message => message.type)).toEqual(["due_selected", "due_selected"]);
+      expect(selected.map(message => message.decisionIds)).toEqual([[decision.id], [decision.id]]);
+
+      for (const pid of workerPids) process.kill(pid, "SIGCONT");
+      const results = await Promise.all(nextMessages.map((next, index) =>
+        beforeBarrierTimeout(next(), `worker ${index + 1} claim result`)));
+      expect(results.map(message => message.type)).toEqual(["result", "result"]);
+      const deliveries = results.map(message => message.delivery ?? null);
+      const taken = deliveries.filter((row): row is { id: string; kind: string } => row !== null);
+      expect(taken).toHaveLength(1);
+      expect(taken[0]!.kind).toBe("decision_reminder");
+      expect(deliveries.filter(row => row === null)).toHaveLength(1);
+
+      const exitCodes = await Promise.all(processes.map((child, index) =>
+        beforeBarrierTimeout(child.exited, `worker ${index + 1} exit`)));
+      const errors = await Promise.all(stderr);
+      expect(exitCodes, errors.join("\n")).toEqual([0, 0]);
+      const rows = db.query(
+        "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_reminder' AND decision_id = ?",
+      ).get(decision.id) as { n: string | number };
+      expect(Number(rows.n)).toBe(1);
+      completed = true;
+    } finally {
+      if (!completed) {
+        for (const child of processes) {
+          try { process.kill(child.pid, "SIGCONT"); } catch { /* already exited */ }
+          if (child.exitCode === null) child.kill(9);
+        }
+        await Promise.allSettled(processes.map(child => child.exited));
+      }
+    }
   });
 
   it("writes the terminal card in the shape the host decodes, and rewrites once", () => {
