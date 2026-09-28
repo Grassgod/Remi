@@ -18,7 +18,7 @@
  * The integration suite is skipped (not failed) when Postgres is unreachable, so
  * the file is safe on machines without the configured MULTIREMI_DATABASE_URL.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -209,6 +209,13 @@ if (!pgAvailable) {
 describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
+
+  function drainSystemEvents(): void {
+    const pending = db.query("SELECT 1 FROM multiremi_system_events WHERE status IN ('pending', 'processing') LIMIT 1");
+    const at = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+    for (let round = 0; round < 100 && pending.get(); round++) store.dispatchPendingSystemEvents(at);
+    if (pending.get()) throw new Error("System event queue did not drain within 100 rounds");
+  }
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
@@ -2822,8 +2829,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   /**
    * MUL-409 fix round 2, blocking 4, failure half: when the dispatch itself
    * fails the prerequisite's `done` must not roll back, and the dependent must
-   * stay in a state a human can retry from. The hook records
-   * `dependency_auto_start_skipped` so the hold is visible.
+   * stay in a state a human can retry from. An unavailable owner is a business
+   * skip, recorded under the same locks as the start decision.
    */
   it("keeps the prerequisite done and the dependent retryable when auto-start dispatch fails (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_dep_fail", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
@@ -2836,8 +2843,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       assigneeType: "agent",
       assigneeId: owner.id,
     });
-    // The dependent's owner disappears, so the dispatch the hook attempts will
-    // throw (Agent not found) after the prerequisite's transition committed.
+    // The dependent's owner is unavailable when the hook makes its decision.
     db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
 
     db.resetTransactionDepthStats();
@@ -2851,9 +2857,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
     const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
     expect(skipped).toHaveLength(1);
-    // Owner validation runs inside the transaction, before the round is built,
-    // so the recorded reason is the validator's own message.
-    expect(String(skipped[0]?.body ?? "")).toContain("Agent is archived");
+    expect(String(skipped[0]?.body ?? "")).toContain("No runnable agent");
     // Fix round 4: there is no "release" step any more — the whole attempt
     // (claim included) rolls back, so the dependent never left `backlog` and has
     // nothing to release. The skip is the only durable trace.
@@ -3130,6 +3134,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    * transaction early.
    */
   it("rolls the whole automatic start back when a step fails (PG)", () => {
+    drainSystemEvents();
     const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Atomic owner", provider: "claude", runtimeId: runtime.id });
     const prereq = store.createIssue({ title: "Atomic prerequisite", status: "in_progress" });
@@ -3157,9 +3162,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       original(issueId, input, ...rest);
     };
 
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
     db.resetTransactionDepthStats();
-    store.updateIssue(prereq.id, { status: "done" });
-    ctx.appendIssueActivity = original;
+    try {
+      store.updateIssue(prereq.id, { status: "done" });
+    } finally {
+      ctx.appendIssueActivity = original;
+    }
+    expect(warnings.mock.calls).toHaveLength(1);
+    warnings.mockRestore();
 
     // Whole row sets, not counts of a filtered subset.
     const taskRows = db.query(
@@ -3179,19 +3190,170 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const skipped = db.query(
       "SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_start_skipped'",
     ).all(dependent.id) as Array<{ data: string }>;
-    expect(skipped).toHaveLength(1);
-    expect(JSON.parse(skipped[0]!.data)).toMatchObject({ reason: "dispatch_failed" });
+    expect(skipped).toEqual([]);
     // The prerequisite's own transition is untouched, and the depth stayed 1.
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     expect(db.maxTransactionDepth).toBe(1);
 
-    // And the retry after a fixed owner really starts it, through public assign.
-    db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
-    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: owner.id });
-    expect(assigned.task?.id).toBeDefined();
+    const checkRow = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(checkRow.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
     expect(db.query(
       "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
+  });
+
+  it("U8 ignores a stale backlog issue after its round was already queued (PG)", () => {
+    const runtime = store.registerRuntime({ name: "Stale PG runtime", provider: "claude" });
+    const owner = store.createAgent({ name: "Stale PG owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Stale PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Stale PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    store.updateIssue(prereq.id, { status: "done" });
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    const before = store.listTasksForIssue(dependent.id);
+    expect(before).toHaveLength(1);
+    const issues = (store as unknown as { issues: { autoStartDependent(...args: unknown[]): unknown } }).issues;
+    issues.autoStartDependent(dependent, store.getIssue(prereq.id)!, null, { since: store.getIssue(prereq.id)!.updatedAt });
+    expect(store.listTasksForIssue(dependent.id)).toEqual(before);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started")).toHaveLength(1);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+  });
+
+  it("U9 retries a transaction write failure without a business skip (PG 40001)", () => {
+    drainSystemEvents();
+    const runtime = store.registerRuntime({ name: "Replay write PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Replay write PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Replay write PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Replay write PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    const issues = (store as unknown as { issues: { runIssueUpdatePostCommit(...args: unknown[]): void } }).issues;
+    const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
+    try { store.updateIssue(prereq.id, { status: "done" }); } finally { hook.mockRestore(); }
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    const run = db.run.bind(db);
+    let injected = false;
+    const failure = spyOn(db, "run").mockImplementation((sql, ...args) => {
+      if (!injected && sql.includes("SET status = 'todo'")) {
+        injected = true;
+        return run("DO $$ BEGIN RAISE EXCEPTION 'injected replay PG write failure' USING ERRCODE = '40001'; END $$", []);
+      }
+      return run(sql, ...args);
+    });
+    try { store.dispatchPendingSystemEvents(new Date(check.availableAt)); } finally { failure.mockRestore(); }
+    expect(injected).toBe(true);
+    const first = store.getSystemEvent(check.id)!;
+    expect(first.status).toBe("pending");
+    expect(first.attemptCount).toBe(1);
+    expect(first.lastError).toContain("injected replay PG write failure");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    store.dispatchPendingSystemEvents(new Date(Date.parse(check.availableAt) + 10_000));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).map((task) => task.status)).toEqual(["queued"]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)).toMatchObject({ status: "processed", attemptCount: 2 });
+  });
+
+  it("U10 contains a PATCH auto-start write failure and replays it (PG)", async () => {
+    drainSystemEvents();
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ name: "Patch write PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Patch write PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Patch write PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Patch write PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    const run = db.run.bind(db);
+    let injected = false;
+    const failure = spyOn(db, "run").mockImplementation((sql, ...args) => {
+      if (!injected && sql.includes("SET status = 'todo'")) {
+        injected = true;
+        return run("DO $$ BEGIN RAISE EXCEPTION 'injected normal PG write failure' USING ERRCODE = '40001'; END $$", []);
+      }
+      return run(sql, ...args);
+    });
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(warnings.mock.calls).toHaveLength(1);
+    } finally {
+      failure.mockRestore();
+      warnings.mockRestore();
+    }
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).map((task) => task.status)).toEqual(["queued"]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+  });
+
+  it("U10b rolls back a failed business skip and records one on replay (PG)", async () => {
+    drainSystemEvents();
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ name: "Patch skip PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Patch skip PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Patch skip PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Patch skip PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
+    const ctx = (store as unknown as { ctx: StoreContext }).ctx;
+    const original = ctx.appendIssueActivity.bind(ctx);
+    let injected = false;
+    ctx.appendIssueActivity = (issueId, input, deferredEvents) => {
+      if (!injected && input.type === "dependency_auto_start_skipped") {
+        injected = true;
+        throw new Error("injected PG skip activity failure");
+      }
+      original(issueId, input, deferredEvents);
+    };
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(warnings.mock.calls).toHaveLength(1);
+    } finally {
+      ctx.appendIssueActivity = original;
+      warnings.mockRestore();
+    }
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped"))
+      .toHaveLength(1);
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
   });
 
   it("leaves no todo-without-round and no backlog-with-round when the process dies at the claim (PG)", async () => {

@@ -2974,8 +2974,12 @@ export class IssuesRepo {
       if (dependent.status !== "backlog") continue;
       const unmet = this.listUnmetPrerequisites(dependent.id);
       if (satisfied && unmet.length === 0) {
-        const line = this.autoStartDependent(dependent, issue, parentTaskId);
-        if (line) mergedLines.push(line);
+        try {
+          const line = this.autoStartDependent(dependent, issue, parentTaskId, { since: issue.updatedAt });
+          if (line) mergedLines.push(line);
+        } catch (error) {
+          log.warn(`dependency auto-start failed for ${dependent.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
         continue;
       }
       if (!satisfied) this.recordPrerequisiteFailure(dependent, issue, unmet, parentTaskId, nested, deferredEvents);
@@ -3184,12 +3188,8 @@ export class IssuesRepo {
     for (const dependent of this.listDependencyDependents(prerequisite.id)) {
       if (dependent.status !== "backlog" || this.listUnmetPrerequisites(dependent.id).length > 0) continue;
       if (!dependent.assigneeId || (dependent.assigneeType !== "agent" && dependent.assigneeType !== "squad")) continue;
-      const skipped = this.ctx.db.query(
-        `SELECT 1 FROM multiremi_issue_activity
-         WHERE issue_id = ? AND type = 'dependency_auto_start_skipped' AND created_at >= ? LIMIT 1`,
-      ).get(dependent.id, event.createdAt);
-      if (skipped) continue;
       this.autoStartDependent(dependent, prerequisite, cleanOptionalString(event.payload.automation_source_task_id), {
+        since: event.createdAt,
         replayEventId: event.id,
       });
     }
@@ -3204,7 +3204,7 @@ export class IssuesRepo {
     dependent: MultiremiIssue,
     satisfiedBy: MultiremiIssue,
     parentTaskId: string | null,
-    options: { replayEventId?: string } = {},
+    options: { since: string; replayEventId?: string },
   ): string | null {
     const ownerType = dependent.assigneeType;
     if (!ownerType || !dependent.assigneeId || ownerType === "member") {
@@ -3252,14 +3252,12 @@ export class IssuesRepo {
     // Captured after the member/no-owner guard above: the closure cannot rely on
     // property narrowing, and this id is what every write in it uses.
     const ownerId = dependent.assigneeId;
-    let outcome: { task: MultiremiTask | null; dispatched: boolean } | null = null;
     // S1's commit-time queue: the round's wakeup and the realtime status event
     // must not reach a client until the COMMIT that made them true. The queue is
     // drained by `ctx.emitCommitEvents` after the transaction below.
     const deferredEvents: CommitEventQueue = createCommitEventQueue();
     const nested: ChildStatusChangeCollector = [];
-    try {
-      const attempted = this.ctx.db.transaction((): { task: MultiremiTask | null; dispatched: boolean } | null => {
+    const outcome = this.ctx.db.transaction((): { task: MultiremiTask | null; dispatched: boolean } | null => {
         this.ctx.lockWorkspaceRuntimeLifecycle(dependent.workspaceId);
         if (this.ctx.db instanceof PostgresSyncDatabase) {
           this.ctx.db.query("SELECT id FROM multiremi_issues WHERE id = ? FOR UPDATE").get(dependent.id);
@@ -3272,12 +3270,30 @@ export class IssuesRepo {
         const existingRound = this.ctx.tasks().listTasksForIssue(dependent.id)
           .find((task) => isActiveTaskStatus(task.status));
         if (existingRound) return null;
-        // Owner resolution and validation happen INSIDE the transaction and
-        // before the round, mirroring `assignIssue`'s agent/squad branch, so a
-        // failure here rolls the status write back with everything else.
-        this.validateIssueAssignee(ownerType, ownerId);
+        const skipped = this.ctx.db.query(
+          `SELECT 1 FROM multiremi_issue_activity
+           WHERE issue_id = ? AND type = 'dependency_auto_start_skipped' AND created_at >= ? LIMIT 1`,
+        ).get(dependent.id, options.since);
+        if (skipped) return null;
         const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
-        if (!taskAgent) throw new Error(`No runnable agent for ${ownerType}: ${ownerId}`);
+        if (!taskAgent) {
+          const message = `No runnable agent for ${ownerType}: ${ownerId}`;
+          this.ctx.appendIssueActivity(dependent.id, {
+            actorType: "system",
+            actorId: SYSTEM_AUTHOR_ID,
+            type: "dependency_auto_start_skipped",
+            body: message,
+            data: {
+              satisfiedBy: satisfiedBy.id,
+              satisfied_by: satisfiedBy.id,
+              satisfiedByKey: satisfiedBy.key,
+              satisfied_by_key: satisfiedBy.key,
+              reason: "dispatch_failed",
+              error: message,
+            },
+          }, deferredEvents);
+          return { task: null, dispatched: false };
+        }
         const flipped = this.ctx.db.run(
           `UPDATE multiremi_issues
            SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
@@ -3341,18 +3357,12 @@ export class IssuesRepo {
           this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), current.projectId]);
         }
         return { task, dispatched: true };
-      })();
-      outcome = attempted;
-    } catch (err) {
-      // The whole attempt rolled back: the dependent is still `backlog` with no
-      // round, and none of this attempt's activity survived. The prerequisite's
-      // own `done` transition is untouched. The skip is recorded in its OWN
-      // transaction afterwards, so the operator can see why the start did not
-      // happen and how to fix it.
-      this.recordAutoStartSkipped(dependent, satisfiedBy, err);
+    })();
+    if (!outcome) return null;
+    if (!outcome.dispatched) {
+      this.ctx.emitCommitEvents(deferredEvents);
       return null;
     }
-    if (!outcome) return null;
     // Post-commit only: the wakeup listener and the realtime status event both
     // describe committed state. A crash between COMMIT and here therefore loses
     // only the live notification — a client that refreshes reads `todo` with its
@@ -3392,48 +3402,6 @@ export class IssuesRepo {
     this.ctx.emitCommitEvents(deferredEvents);
     this.ctx.tasks().runCollectedChildStatusChanges(nested);
     return null;
-  }
-
-  /**
-   * MUL-400 E3 (QA round 3, blockers 1+2): one `dependency_auto_start_skipped`
-   * for an auto-start whose transaction rolled back.
-   *
-   * This is deliberately a separate transaction from the failed attempt: the
-   * attempt must leave nothing behind (no round, no half activity, the issue
-   * still `backlog`), while the skip has to survive as the operator's signal.
-   * The dependent keeps its `backlog` row, so the visible state is honest —
-   * "waiting, and the automatic start did not work" — instead of a `todo` with
-   * nothing running.
-   */
-  private recordAutoStartSkipped(
-    dependent: MultiremiIssue,
-    satisfiedBy: MultiremiIssue,
-    err: unknown,
-  ): void {
-    const message = err instanceof Error ? err.message : String(err);
-    try {
-      this.ctx.appendIssueActivity(dependent.id, {
-        actorType: "system",
-        actorId: SYSTEM_AUTHOR_ID,
-        type: "dependency_auto_start_skipped",
-        body: message,
-        data: {
-          satisfiedBy: satisfiedBy.id,
-          satisfied_by: satisfiedBy.id,
-          satisfiedByKey: satisfiedBy.key,
-          satisfied_by_key: satisfiedBy.key,
-          reason: "dispatch_failed",
-          error: message,
-        },
-      });
-    } catch (recordError) {
-      log.warn(
-        `dependency auto-start skip record failed for ${dependent.id}: `
-        + `${recordError instanceof Error ? recordError.message : String(recordError)}`,
-      );
-      return;
-    }
-    log.warn(`dependency auto-start skipped for ${dependent.id}: ${message}`);
   }
 
   /**

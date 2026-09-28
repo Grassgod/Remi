@@ -286,6 +286,48 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         assertStarted(dependent, check, JSON.parse(started[0]!.data).replayed === true);
         expect(store.getSystemEvent(check.id)?.status).toBe("processed");
       }, 60_000);
+
+      it("P6 records one skip when normal and replay starts race for an unavailable owner", async () => {
+        const { prerequisite, dependent } = chain();
+        db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [
+          new Date().toISOString(), dependent.assigneeId,
+        ]);
+        const normalResume = join(directory, "resume-normal");
+        const replayResume = join(directory, "resume-replay");
+        const normal = spawnProbe(prerequisite, dependent, "after-done-commit", undefined, normalResume);
+        await waitForPhase(normal, "after-done-commit");
+        const check = checkEvent(prerequisite);
+        const replay = spawnProbe(prerequisite, dependent, "replay-before-commit", new Date(check.availableAt), replayResume);
+        await waitForPhase(replay, "replay-before-commit");
+        const blocker = new Bun.SQL(database, { max: 1 });
+        try {
+          await blocker.begin(async (tx) => {
+            await tx`SELECT id FROM multiremi_workspaces WHERE id = 'local' FOR UPDATE`;
+            writeFileSync(normalResume, "resume");
+            writeFileSync(replayResume, "resume");
+            const deadline = Date.now() + 10_000;
+            let waiting = 0;
+            while (Date.now() < deadline) {
+              await tx`SELECT pg_stat_clear_snapshot()`;
+              const rows = await tx`SELECT COUNT(*)::int AS count FROM pg_stat_activity
+                WHERE datname = current_database() AND wait_event_type = 'Lock'
+                  AND query LIKE '%multiremi_workspaces%'`;
+              waiting = Number(rows[0]?.count);
+              if (waiting >= 2) break;
+              await Bun.sleep(10);
+            }
+            expect(waiting).toBeGreaterThanOrEqual(2);
+          });
+        } finally {
+          await blocker.end();
+        }
+        expect(await normal.exited).toBe(0);
+        expect(await replay.exited).toBe(0);
+        restartStore();
+        assertWaiting(dependent);
+        expect(activities(dependent, "dependency_auto_start_skipped")).toHaveLength(1);
+        expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+      }, 60_000);
     }
   });
 }
