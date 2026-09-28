@@ -19,6 +19,14 @@
     ]
   },
   {
+    "key": "POST /api/daemon/register",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 326,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
     "key": "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "file": "packages/server/src/api/routers/daemon.ts",
     "line": 524,
@@ -316,7 +324,7 @@
   {
     "key": "POST /api/workspaces",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 143,
+    "line": 144,
     "hazards": [
       "getAgent",
       "listAgentSkills",
@@ -327,7 +335,7 @@
   {
     "key": "PUT /api/workspaces/:id/issue-topics",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 277,
+    "line": 278,
     "hazards": [
       "getProject"
     ]
@@ -335,7 +343,7 @@
   {
     "key": "GET /api/workspaces/:id/repository-wikis",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 509,
+    "line": 510,
     "hazards": [
       "getTask"
     ]
@@ -343,7 +351,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 610,
+    "line": 611,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -359,7 +367,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 666,
+    "line": 667,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -375,7 +383,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 765,
+    "line": 766,
     "hazards": [
       "advanceScheduledTargetRuns",
       "getAutopilot",
@@ -387,7 +395,7 @@
   {
     "key": "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 830,
+    "line": 831,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -403,7 +411,7 @@
   {
     "key": "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 880,
+    "line": 881,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -419,10 +427,58 @@
   {
     "key": "DELETE /api/workspaces/:id/repos/:repositoryId",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 1011,
+    "line": 1012,
     "hazards": [
       "getProject",
       "listProjects"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/relay-config/discovery",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1232,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/relay-config/:engine",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1242,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/relay-config/:engine/probe",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1293,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1308,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1317,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/relay-config/:engine/context-window",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1349,
+    "hazards": [
+      "getGatewayModels"
     ]
   },
   {
@@ -500,6 +556,7 @@
     "line": 66,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getTask",
       "listAgentSkills",
       "listAgents",
@@ -512,6 +569,7 @@
     "line": 80,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getTask",
       "listAgentSkills",
       "listAgentTasks",
@@ -534,6 +592,7 @@
     "line": 124,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getTask",
       "listAgentSkills",
       "listAgentTasks",
@@ -662,6 +721,7 @@
     "line": 231,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getTask",
       "listAgentSkills",
       "listAgents",
@@ -674,6 +734,7 @@
     "line": 245,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getSkill",
       "getTask",
       "listAgentSkills",
@@ -698,6 +759,7 @@
     "line": 268,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getTask",
       "listAgentSkills",
       "listAgentTasks",
@@ -761,6 +823,7 @@
     "line": 324,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "getSkill",
       "getTask",
       "listAgentSkills",
@@ -1010,6 +1073,22 @@
     ]
   },
   {
+    "key": "POST /api/multiremi/runtimes",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 154,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/runtimes/:id",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 236,
+    "hazards": [
+      "getGatewayModels"
+    ]
+  },
+  {
     "key": "GET /api/execution-groups",
     "file": "packages/server/src/api/routers/runtimes.ts",
     "line": 628,
@@ -1033,6 +1112,7 @@
     "line": 654,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "listSkillFiles"
     ]
   },
@@ -1042,7 +1122,16 @@
     "line": 655,
     "hazards": [
       "getAgent",
+      "getGatewayModels",
       "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/runtimes/:id",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 665,
+    "hazards": [
+      "getGatewayModels"
     ]
   },
   {
@@ -1998,7 +2087,7 @@
   {
     "key": "GET /api/multiremi/issues",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 502,
+    "line": 516,
     "hazards": [
       "getIssue",
       "listIssues"
@@ -2007,7 +2096,7 @@
   {
     "key": "GET /api/issues",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 510,
+    "line": 524,
     "hazards": [
       "getIssue",
       "listIssues"
@@ -2016,7 +2105,7 @@
   {
     "key": "GET /api/issues/status-pages",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 519,
+    "line": 533,
     "hazards": [
       "getIssue",
       "listIssues"
@@ -2025,7 +2114,7 @@
   {
     "key": "GET /api/multiremi/issues/grouped",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 538,
+    "line": 552,
     "hazards": [
       "getIssue",
       "listIssues"
@@ -2034,7 +2123,7 @@
   {
     "key": "GET /api/issues/grouped",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 546,
+    "line": 560,
     "hazards": [
       "getIssue",
       "listIssues"
@@ -2043,7 +2132,7 @@
   {
     "key": "GET /api/multiremi/issues/search",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 570,
+    "line": 584,
     "hazards": [
       "getIssue",
       "listIssues",
@@ -2053,7 +2142,7 @@
   {
     "key": "GET /api/issues/search",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 585,
+    "line": 599,
     "hazards": [
       "getIssue",
       "listIssues",
@@ -2063,7 +2152,7 @@
   {
     "key": "GET /api/issues/children",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 626,
+    "line": 640,
     "hazards": [
       "getIssue"
     ]
@@ -2071,7 +2160,7 @@
   {
     "key": "GET /api/multiremi/issues/children",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 635,
+    "line": 649,
     "hazards": [
       "getIssue"
     ]
@@ -2079,7 +2168,7 @@
   {
     "key": "POST /api/multiremi/issues/batch-update",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 655,
+    "line": 669,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2089,7 +2178,7 @@
   {
     "key": "POST /api/issues/batch-update",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 679,
+    "line": 693,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2099,7 +2188,7 @@
   {
     "key": "POST /api/multiremi/issues/batch-delete",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 709,
+    "line": 723,
     "hazards": [
       "getIssue"
     ]
@@ -2107,7 +2196,7 @@
   {
     "key": "POST /api/issues/batch-delete",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 722,
+    "line": 736,
     "hazards": [
       "getIssue"
     ]
@@ -2115,7 +2204,7 @@
   {
     "key": "POST /api/multiremi/issues",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 736,
+    "line": 750,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2126,7 +2215,7 @@
   {
     "key": "POST /api/issues",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 791,
+    "line": 805,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2140,7 +2229,7 @@
   {
     "key": "POST /api/multiremi/issues/quick-create",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 893,
+    "line": 907,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2151,7 +2240,7 @@
   {
     "key": "POST /api/issues/quick-create",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 918,
+    "line": 932,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2162,7 +2251,7 @@
   {
     "key": "GET /api/issues/:id/generated-issues",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 940,
+    "line": 954,
     "hazards": [
       "getIssue"
     ]
@@ -2170,7 +2259,7 @@
   {
     "key": "GET /api/multiremi/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 948,
+    "line": 962,
     "hazards": [
       "getAgent",
       "getChatSession",
@@ -2183,7 +2272,7 @@
   {
     "key": "GET /api/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 979,
+    "line": 993,
     "hazards": [
       "getIssue"
     ]
@@ -2191,7 +2280,7 @@
   {
     "key": "GET /api/issues/:id/workspace",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 994,
+    "line": 1008,
     "hazards": [
       "getIssue"
     ]
@@ -2199,7 +2288,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/timeline",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1035,
+    "line": 1049,
     "hazards": [
       "getIssue",
       "listIssueActivity",
@@ -2210,7 +2299,7 @@
   {
     "key": "GET /api/issues/:id/timeline",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1050,
+    "line": 1064,
     "hazards": [
       "getIssue",
       "listIssueActivity",
@@ -2221,7 +2310,7 @@
   {
     "key": "GET /api/issues/:id/active-task",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1065,
+    "line": 1079,
     "hazards": [
       "getAgent",
       "getChatSession",
@@ -2232,7 +2321,7 @@
   {
     "key": "GET /api/issues/:id/task-runs",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1082,
+    "line": 1096,
     "hazards": [
       "getAgent",
       "getChatSession",
@@ -2243,7 +2332,7 @@
   {
     "key": "GET /api/issues/:id/usage",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1097,
+    "line": 1111,
     "hazards": [
       "getIssue"
     ]
@@ -2251,7 +2340,7 @@
   {
     "key": "POST /api/issues/:id/rerun",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1104,
+    "line": 1118,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2262,7 +2351,7 @@
   {
     "key": "POST /api/issues/:id/tasks/:taskId/cancel",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1129,
+    "line": 1143,
     "hazards": [
       "getAgent",
       "getChatSession",
@@ -2274,7 +2363,7 @@
   {
     "key": "POST /api/issues/:id/squad-evaluated",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1140,
+    "line": 1154,
     "hazards": [
       "getIssue",
       "listIssueActivity"
@@ -2283,7 +2372,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/children",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1194,
+    "line": 1208,
     "hazards": [
       "getIssue"
     ]
@@ -2291,7 +2380,7 @@
   {
     "key": "GET /api/issues/:id/children",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1202,
+    "line": 1216,
     "hazards": [
       "getIssue"
     ]
@@ -2299,7 +2388,7 @@
   {
     "key": "GET /api/issues/:id/decisions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1218,
+    "line": 1232,
     "hazards": [
       "getIssue"
     ]
@@ -2307,7 +2396,7 @@
   {
     "key": "POST /api/issues/:id/decisions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1225,
+    "line": 1239,
     "hazards": [
       "getIssue"
     ]
@@ -2315,7 +2404,7 @@
   {
     "key": "POST /api/issues/:id/decisions/:decisionId/answer",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1242,
+    "line": 1256,
     "hazards": [
       "getIssue"
     ]
@@ -2323,7 +2412,7 @@
   {
     "key": "POST /api/issues/:id/decisions/:decisionId/escalate",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1259,
+    "line": 1273,
     "hazards": [
       "getIssue"
     ]
@@ -2331,7 +2420,7 @@
   {
     "key": "POST /api/issues/:id/decisions/:decisionId/withdraw",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1270,
+    "line": 1284,
     "hazards": [
       "getIssue"
     ]
@@ -2339,7 +2428,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/dependencies",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1281,
+    "line": 1295,
     "hazards": [
       "getIssue"
     ]
@@ -2347,7 +2436,7 @@
   {
     "key": "GET /api/issues/:id/dependencies",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1289,
+    "line": 1303,
     "hazards": [
       "getIssue"
     ]
@@ -2355,7 +2444,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/dependencies",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1297,
+    "line": 1311,
     "hazards": [
       "getIssue"
     ]
@@ -2363,7 +2452,7 @@
   {
     "key": "POST /api/issues/:id/dependencies",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1315,
+    "line": 1329,
     "hazards": [
       "getIssue"
     ]
@@ -2371,7 +2460,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id/dependencies/:dependencyId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1334,
+    "line": 1348,
     "hazards": [
       "getIssue"
     ]
@@ -2379,7 +2468,7 @@
   {
     "key": "DELETE /api/issues/:id/dependencies/:dependencyId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1342,
+    "line": 1356,
     "hazards": [
       "getIssue"
     ]
@@ -2387,7 +2476,7 @@
   {
     "key": "PATCH /api/multiremi/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1385,
+    "line": 1399,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2397,7 +2486,7 @@
   {
     "key": "PATCH /api/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1478,
+    "line": 1492,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2407,7 +2496,7 @@
   {
     "key": "PUT /api/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1479,
+    "line": 1493,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2417,7 +2506,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/retitle",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1480,
+    "line": 1494,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2429,7 +2518,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/restore",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1503,
+    "line": 1517,
     "hazards": [
       "getIssue"
     ]
@@ -2437,7 +2526,7 @@
   {
     "key": "POST /api/issues/:id/restore",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1512,
+    "line": 1526,
     "hazards": [
       "getIssue"
     ]
@@ -2445,7 +2534,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1522,
+    "line": 1536,
     "hazards": [
       "getIssue"
     ]
@@ -2453,7 +2542,7 @@
   {
     "key": "DELETE /api/issues/:id",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1537,
+    "line": 1551,
     "hazards": [
       "getIssue"
     ]
@@ -2461,7 +2550,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/assign",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1552,
+    "line": 1566,
     "hazards": [
       "getIssue",
       "getTask"
@@ -2470,7 +2559,7 @@
   {
     "key": "GET /api/issues/:id/sessions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1600,
+    "line": 1614,
     "hazards": [
       "getIssue"
     ]
@@ -2478,7 +2567,7 @@
   {
     "key": "POST /api/issues/:id/sessions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1612,
+    "line": 1626,
     "hazards": [
       "getIssue"
     ]
@@ -2486,7 +2575,7 @@
   {
     "key": "GET /api/issues/:id/sessions/:sessionId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1643,
+    "line": 1657,
     "hazards": [
       "getIssue"
     ]
@@ -2494,7 +2583,7 @@
   {
     "key": "PATCH /api/issues/:id/sessions/:sessionId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1654,
+    "line": 1668,
     "hazards": [
       "getIssue"
     ]
@@ -2502,7 +2591,7 @@
   {
     "key": "GET /api/issues/:id/sessions/:sessionId/participants",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1670,
+    "line": 1684,
     "hazards": [
       "getIssue"
     ]
@@ -2510,7 +2599,7 @@
   {
     "key": "POST /api/issues/:id/sessions/:sessionId/participants",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1678,
+    "line": 1692,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2520,7 +2609,7 @@
   {
     "key": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1699,
+    "line": 1713,
     "hazards": [
       "getIssue"
     ]
@@ -2528,7 +2617,7 @@
   {
     "key": "GET /api/issues/:id/sessions/:sessionId/events",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1708,
+    "line": 1722,
     "hazards": [
       "getIssue",
       "listSessionEvents"
@@ -2537,7 +2626,7 @@
   {
     "key": "POST /api/issues/:id/sessions/:sessionId/messages",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1722,
+    "line": 1736,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2547,7 +2636,7 @@
   {
     "key": "GET /api/issues/:id/sessions/:sessionId/tasks",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1738,
+    "line": 1752,
     "hazards": [
       "getAgent",
       "getChatSession",
@@ -2558,7 +2647,7 @@
   {
     "key": "POST /api/issues/:id/sessions/:sessionId/tasks",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1754,
+    "line": 1768,
     "hazards": [
       "getAgent",
       "getIssue",
@@ -2569,7 +2658,7 @@
   {
     "key": "GET /api/issues/:id/session-results",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1787,
+    "line": 1801,
     "hazards": [
       "getIssue",
       "listIssueSessionResults"
@@ -2578,7 +2667,7 @@
   {
     "key": "POST /api/issues/:id/sessions/:sessionId/results",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1794,
+    "line": 1808,
     "hazards": [
       "getIssue"
     ]
@@ -2586,7 +2675,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/comments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1813,
+    "line": 1827,
     "hazards": [
       "getIssue",
       "listIssueComments"
@@ -2595,7 +2684,7 @@
   {
     "key": "GET /api/issues/:id/comments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1828,
+    "line": 1842,
     "hazards": [
       "getIssue",
       "listIssueComments"
@@ -2604,7 +2693,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/comments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1843,
+    "line": 1857,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2614,7 +2703,7 @@
   {
     "key": "POST /api/issues/:id/comments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1851,
+    "line": 1865,
     "hazards": [
       "getIssue",
       "getIssueComment",
@@ -2624,7 +2713,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1864,
+    "line": 1878,
     "hazards": [
       "getIssue"
     ]
@@ -2632,7 +2721,7 @@
   {
     "key": "GET /api/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1871,
+    "line": 1885,
     "hazards": [
       "getIssue"
     ]
@@ -2640,7 +2729,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1878,
+    "line": 1892,
     "hazards": [
       "getIssue"
     ]
@@ -2648,7 +2737,7 @@
   {
     "key": "POST /api/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1886,
+    "line": 1900,
     "hazards": [
       "getIssue"
     ]
@@ -2656,7 +2745,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1897,
+    "line": 1911,
     "hazards": [
       "getIssue"
     ]
@@ -2664,7 +2753,7 @@
   {
     "key": "DELETE /api/issues/:id/reactions",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1906,
+    "line": 1920,
     "hazards": [
       "getIssue"
     ]
@@ -2672,7 +2761,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/attachments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1918,
+    "line": 1932,
     "hazards": [
       "getIssue"
     ]
@@ -2680,7 +2769,7 @@
   {
     "key": "GET /api/issues/:id/attachments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1925,
+    "line": 1939,
     "hazards": [
       "getIssue"
     ]
@@ -2688,7 +2777,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/attachments",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1932,
+    "line": 1946,
     "hazards": [
       "getAgent",
       "getChatMessage",
@@ -2701,7 +2790,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/labels",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1948,
+    "line": 1962,
     "hazards": [
       "getIssue"
     ]
@@ -2709,7 +2798,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/labels",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1956,
+    "line": 1970,
     "hazards": [
       "getIssue"
     ]
@@ -2717,7 +2806,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id/labels/:labelId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1969,
+    "line": 1983,
     "hazards": [
       "getIssue"
     ]
@@ -2725,7 +2814,7 @@
   {
     "key": "GET /api/issues/:id/labels",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1977,
+    "line": 1991,
     "hazards": [
       "getIssue"
     ]
@@ -2733,7 +2822,7 @@
   {
     "key": "POST /api/issues/:id/labels",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 1985,
+    "line": 1999,
     "hazards": [
       "getIssue"
     ]
@@ -2741,7 +2830,7 @@
   {
     "key": "DELETE /api/issues/:id/labels/:labelId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2001,
+    "line": 2015,
     "hazards": [
       "getIssue"
     ]
@@ -2749,7 +2838,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/subscribers",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2013,
+    "line": 2027,
     "hazards": [
       "getIssue"
     ]
@@ -2757,7 +2846,7 @@
   {
     "key": "GET /api/issues/:id/subscribers",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2020,
+    "line": 2034,
     "hazards": [
       "getIssue"
     ]
@@ -2765,7 +2854,7 @@
   {
     "key": "POST /api/multiremi/issues/:id/subscribers",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2027,
+    "line": 2041,
     "hazards": [
       "getIssue"
     ]
@@ -2773,7 +2862,7 @@
   {
     "key": "POST /api/issues/:id/subscribe",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2037,
+    "line": 2051,
     "hazards": [
       "getIssue"
     ]
@@ -2781,7 +2870,7 @@
   {
     "key": "POST /api/issues/:id/unsubscribe",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2064,
+    "line": 2078,
     "hazards": [
       "getIssue"
     ]
@@ -2789,7 +2878,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id/subscribers/:memberId",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2091,
+    "line": 2105,
     "hazards": [
       "getIssue"
     ]
@@ -2797,7 +2886,7 @@
   {
     "key": "GET /api/multiremi/issues/:id/metadata",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2099,
+    "line": 2113,
     "hazards": [
       "getIssue"
     ]
@@ -2805,7 +2894,7 @@
   {
     "key": "GET /api/issues/:id/metadata",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2106,
+    "line": 2120,
     "hazards": [
       "getIssue"
     ]
@@ -2813,7 +2902,7 @@
   {
     "key": "PUT /api/multiremi/issues/:id/metadata/:key",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2113,
+    "line": 2127,
     "hazards": [
       "getIssue"
     ]
@@ -2821,7 +2910,7 @@
   {
     "key": "PUT /api/issues/:id/metadata/:key",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2134,
+    "line": 2148,
     "hazards": [
       "getIssue"
     ]
@@ -2829,7 +2918,7 @@
   {
     "key": "DELETE /api/multiremi/issues/:id/metadata/:key",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2153,
+    "line": 2167,
     "hazards": [
       "getIssue"
     ]
@@ -2837,7 +2926,7 @@
   {
     "key": "DELETE /api/issues/:id/metadata/:key",
     "file": "packages/server/src/api/routers/issues.ts",
-    "line": 2168,
+    "line": 2182,
     "hazards": [
       "getIssue"
     ]

@@ -806,6 +806,20 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "PUT /api/workspaces/:id/feishu-bot", // feishu-bot.ts:267; large-column caller.
   "PUT /api/workspaces/:id/issue-topics", // workspaces.ts:269; large-column caller.
 
+  // 479 route audit: gatewayReasoningLevels and discovery/runtime setup can read
+  // the unbounded multiremi_gateway_models.models JSON snapshot. C-2: bound the
+  // snapshot reply and confirm single replies <6 MiB before removing each key.
+  "POST /api/daemon/register",
+  "PUT /api/workspaces/:id/relay-config/discovery",
+  "PUT /api/workspaces/:id/relay-config/:engine",
+  "POST /api/workspaces/:id/relay-config/:engine/probe",
+  "GET /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+  "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+  "PUT /api/workspaces/:id/relay-config/:engine/context-window",
+  "POST /api/multiremi/runtimes",
+  "PATCH /api/multiremi/runtimes/:id",
+  "PATCH /api/runtimes/:id",
+
   // C-1 ruling: preserve MUL-462 readback page size, avoiding extra bridge calls.
   // C-2: MUL-402 removes this read OR a separately authorized row-width algorithm.
   "POST /api/daemon/tasks/:taskId/messages",

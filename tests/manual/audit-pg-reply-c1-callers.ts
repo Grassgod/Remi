@@ -30,6 +30,7 @@ const seeds = new Set([
   "getIssueComment", "listIssueComments", "listIssueActivity", "listIssueTimelinePage",
   "getIssue", "listIssues", "searchIssues", "listChatMessages", "getChatMessage",
   "getChatSession", "listChatSessions",
+  "getGatewayModels",
 ]);
 type Callable = ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction;
 function callable(declaration: ts.Declaration): Callable | null {

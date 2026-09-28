@@ -4,6 +4,11 @@ import { DB_REPLY_TRANSITION_EXCEPTIONS } from "../../packages/server/src/observ
 
 type Audit = { tables: string; shape: string; caller: string };
 const rules: Array<[RegExp, Audit]> = [
+  [/\/relay-config\/(discovery|:engine(?:\/(?:probe|reasoning-levels|context-window))?)$/, {
+    tables: "multiremi_gateway_models.models JSON snapshot; model reasoning/context declarations",
+    shape: "getGatewayModels reads a single full row; discovery model count and model strings have no reply-byte cap",
+    caller: "workspaces.ts -> gatewayReasoningLevels / gateway discovery -> WorkspacesRepo.getGatewayModels",
+  }],
   [/POST \/api\/chat\/attachments\/send$/, {
     tables: "multiremi_tasks *: prompt, result, error；attachment metadata",
     shape: "task credential scope 的 getTask 单行整读；附件文件正文走外部存储",
@@ -159,6 +164,7 @@ const readerTables: Array<[RegExp, string]> = [
   [/^listIssueActivity$/, "multiremi_issue_activity: body/data"],
   [/^listIssueTimelinePage$/, "multiremi_issue_comments/body；multiremi_issue_activity/body/data"],
   [/^(getIssue|listIssues|searchIssues)$/, "multiremi_issues: description/metadata"],
+  [/^getGatewayModels$/, "multiremi_gateway_models: models JSON snapshot"],
   [/^(listChatMessages|getChatMessage)$/, "multiremi_chat_messages: body/failure_reason"],
   [/^(getChatSession|listChatSessions)$/, "multiremi_chat_sessions: title/work_dir等整行标量；last-message excerpt已SQL截240字符，缺本轮排除长样本"],
 ];
@@ -214,13 +220,13 @@ const rows = all.map(key => {
 
 const report = `# MUL-398 C-1 最终例外逐条审计
 
-前后实测基线 main \`b95dd2fa\`，后续已合入 main \`5f696786\` 并重跑审计；机制与表以本 PR 当前代码为准。MUL-465/471 改动事务边界、issue 行锁及提交后事件，未新增路由或无界大列读入口。由 \`tests/manual/report-pg-reply-c1-audit.ts\` 读取集中 Set，生成 ${all.length} 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
+前后实测基线 main \`b95dd2fa\`，后续已合入 main \`5e3417b4\` 并重跑审计；机制与表以本 PR 当前代码为准。MUL-405 新增锁调用，MUL-415 改写已入表的 children 读，MUL-479 新增 context-window 路由。由 \`tests/manual/report-pg-reply-c1-audit.ts\` 读取集中 Set，生成 ${all.length} 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
 
 209 \`cmt_5ncm70lxe805\`：v0.2.83 无单次回包埋点，且当前发布冻结，含埋点版本尚未部署。最先18行全部是 >500ms 慢请求内 **总** DB 字节 ≥6 MiB 的保守超集，并非单条超限证据；其余来自审计或续做/Senior裁定。合入前 Explorer 用 v0.2.83 慢请求总量再核对；快请求只能由源码审计覆盖。行 LIMIT、id 单行、读后裁剪均不能单独证明字节有界。
 
 本轮没有排除已识别风险项，尤其 repository-wikis 保守保留；当前 PG 规模测量见正式报告。原文档/代码归属以下表具体 caller 和对应 repos 为依据，\`*\` 指整行或未去掉所列大列的读取。表中同一类辅助读取可能在鉴权、actor scope 或写后回读中执行，例外覆盖整个 method+pattern。
 
-补审计使用 TypeScript checker 解析实际函数/方法声明和import别名，避免按同名方法字符串串错调用链。\`audit-pg-reply-c1-callers.ts\` 对706个字面量handler生成366条保守大列可达记录，见 \`MUL-398-c1-callers.json\`，原表遗漏的226条与新main的2条均已纳入。新增daemon decision GET/POST经鉴权读取整行issue，含description/metadata。覆盖项目指令、agent指令/skill正文及鉴权、写后回读辅助路径。它是可能路径审计，不是当前生产字节测量；条件/回调也保守纳入。动态路由及不在seed内的读取仍由前述逐类人工审计覆盖，没有根据静态分析做任何排除。
+补审计使用 TypeScript checker 解析实际函数/方法声明和import别名，避免按同名方法字符串串错调用链。\`audit-pg-reply-c1-callers.ts\` 对707个字面量handler生成376条保守大列可达记录，见 \`MUL-398-c1-callers.json\`。479 新路由复用 \`gatewayReasoningLevels\`，读取无字节界的 \`multiremi_gateway_models.models\` JSON 单行；将 \`getGatewayModels\` 纳入种子后发现10条原表未覆盖入口（新路由1条、既有入口9条），均补入表。MUL-415 改过的两条 children batch 路由已经在表内。它是可能路径审计，不是当前生产字节测量；条件/回调也保守纳入。动态路由及不在seed内的读取仍由前述逐类人工审计覆盖，没有根据静态分析做任何排除。
 
 | method + Hono 模式 | 来源 | 表 / 大列 | LIMIT / 投影 / 字节界 | 具体调用方 | 是否进表 / 收回条件 |
 |---|---|---|---|---|---|
