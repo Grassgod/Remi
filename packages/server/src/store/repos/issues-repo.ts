@@ -83,6 +83,7 @@ import type {
   MultiremiIssueWithTasks,
   MultiremiLabel,
   MultiremiSubscriptionReason,
+  MultiremiSystemEvent,
   MultiremiTask,
   MultiremiTimelineEntry,
   QuickCreateIssueInput,
@@ -3175,6 +3176,25 @@ export class IssuesRepo {
     return dependents;
   }
 
+  /** Recover only E3 automatic starts; readiness and failure notifications stay post-commit. */
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    if (!dependencyGateEnabled()) return;
+    const prerequisite = this.getIssue(event.resourceId);
+    if (!prerequisite || prerequisite.status !== "done") return;
+    for (const dependent of this.listDependencyDependents(prerequisite.id)) {
+      if (dependent.status !== "backlog" || this.listUnmetPrerequisites(dependent.id).length > 0) continue;
+      if (!dependent.assigneeId || (dependent.assigneeType !== "agent" && dependent.assigneeType !== "squad")) continue;
+      const skipped = this.ctx.db.query(
+        `SELECT 1 FROM multiremi_issue_activity
+         WHERE issue_id = ? AND type = 'dependency_auto_start_skipped' AND created_at >= ? LIMIT 1`,
+      ).get(dependent.id, event.createdAt);
+      if (skipped) continue;
+      this.autoStartDependent(dependent, prerequisite, cleanOptionalString(event.payload.automation_source_task_id), {
+        replayEventId: event.id,
+      });
+    }
+  }
+
   /**
    * MUL-400 E3 automatic start. The dependent becomes a real `todo` with a
    * queued round for its owner. The waiting predicate is rechecked while
@@ -3184,6 +3204,7 @@ export class IssuesRepo {
     dependent: MultiremiIssue,
     satisfiedBy: MultiremiIssue,
     parentTaskId: string | null,
+    options: { replayEventId?: string } = {},
   ): string | null {
     const ownerType = dependent.assigneeType;
     if (!ownerType || !dependent.assigneeId || ownerType === "member") {
@@ -3306,6 +3327,11 @@ export class IssuesRepo {
             satisfied_by_key: satisfiedBy.key,
             autoStarted: true,
             auto_started: true,
+            ...(options.replayEventId ? {
+              replayed: true,
+              replayEventId: options.replayEventId,
+              replay_event_id: options.replayEventId,
+            } : {}),
             taskId: task.id,
             task_id: task.id,
             ...sourceTaskActivityData(parentTaskId),
