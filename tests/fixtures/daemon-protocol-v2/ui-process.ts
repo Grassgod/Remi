@@ -44,12 +44,10 @@ function reply(value: Record<string, unknown>): void {
 
 reply({ ready: true, port: server.port });
 for await (const line of createInterface({ input: process.stdin })) {
-  const command = JSON.parse(line) as { op: string; runtimeId?: string; taskId?: string };
+  const command = JSON.parse(line) as { op: string; runtimeId?: string; taskId?: string; agentId?: string };
   try {
     if (command.op === "create_task") {
-      const agent = store.createAgent({ name: "Cross-process agent", provider: "claude",
-        workspaceId: "local", runtimeId: command.runtimeId! });
-      const task = store.createTask({ agentId: agent.id, prompt: "cross-process offer" });
+      const task = store.createTask({ agentId: command.agentId!, prompt: "cross-process offer" });
       reply({ op: command.op, taskId: task.id });
     } else if (command.op === "create_command") {
       const request = store.createRuntimeCommandRequest(command.runtimeId!, {

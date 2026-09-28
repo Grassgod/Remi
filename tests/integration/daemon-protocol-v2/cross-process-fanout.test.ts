@@ -53,7 +53,7 @@ async function startUiProcess(databasePath: string, runtimePort: number, secret:
   if (!ready.ready || !ready.port) throw new Error(`ui process did not start: ${ready.error ?? "no ready frame"}`);
   return {
     port: ready.port,
-    async command(command: { op: string; runtimeId?: string; taskId?: string }): Promise<UiReply> {
+    async command(command: { op: string; runtimeId?: string; taskId?: string; agentId?: string }): Promise<UiReply> {
       child.stdin.write(`${JSON.stringify(command)}\n`);
       await child.stdin.flush();
       const reply = await next();
@@ -114,11 +114,14 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       await h.startDaemon();
       await h.settleHeartbeat();
       const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id as string;
+      const agent = h.store.createAgent({ name: "Cross-process agent", provider: "claude",
+        workspaceId: "local", runtimeId });
+      await h.layer.drain();
       stage = "ui startup";
       ui = await startUiProcess(join(h.root, "server.db"), h.server.port!, secret);
       uiPort = ui.port;
       stage = "task offer";
-      const taskId = (await ui.command({ op: "create_task", runtimeId })).taskId!;
+      const taskId = (await ui.command({ op: "create_task", agentId: agent.id })).taskId!;
       await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.id === taskId),
         "peer-delivered offer", 10_000);
       await waitFor(() => h.store.getTask(taskId)?.status === "running", "running task", 10_000);
