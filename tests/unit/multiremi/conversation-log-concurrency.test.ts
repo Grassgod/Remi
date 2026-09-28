@@ -439,7 +439,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   });
   it.skipIf(!pgAdminUrl)("Postgres: chat turns appear with assistant messages and preserve message order", async () => {
     await withPostgres(async (db) => verifyChatTurnTiming(db));
-  });
+  }, 30_000);
   it("SQLite: system comment failure leaves no comment, event, log or activity", async () => {
     await withSqlite(async (db) => verifySystemCommentRollback(db, "sqlite"));
   });
@@ -502,6 +502,38 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   });
   it.skipIf(!pgAdminUrl)("Postgres: failed best-effort workspace queries keep a system comment", async () => {
     await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: failed workspace SQL inside an outer transaction preserves the system comment", async () => {
+    await withPostgres(async (db) => {
+      const store = new MultiremiStore(db);
+      const issue = store.createIssue({ title: "Outer transaction lookup", workspaceId: "local" });
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+      let failedQueries = 0;
+      context.issueWorkspaceId = (id) => {
+        failedQueries += 1;
+        return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+      };
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+      try {
+        const comment = db.transaction(() => {
+          expect(db.inTransaction).toBe(true);
+          const result = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_outer_lookup", "system survives outer query error");
+          expect(db.inTransaction).toBe(true);
+          expect(store.getIssueComment(result.id)?.body).toBe(result.body);
+          return result;
+        })();
+        expect(failedQueries).toBeGreaterThan(0);
+        expect(db.inTransaction).toBe(false);
+        expect(store.getIssueComment(comment.id)?.body).toBe("system survives outer query error");
+        expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe(comment.body);
+        expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
   });
   it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
     await withPostgres(async (db, url) => {

@@ -538,6 +538,8 @@ export class MultiremiStore {
   private tasks: TasksRepo;
 
   constructor(db?: SqlDatabase, options: {
+    /** Pointer reads can be routed to a read-only pool in the split topology. */
+    taskTraceQuery?: import("./repos/task-traces-repo.js").TaskTraceQuery;
     notificationSenders?: NotificationSenderRegistry;
     notificationMaxAttempts?: number;
     notificationRetryBaseDelayMs?: number;
@@ -595,7 +597,7 @@ export class MultiremiStore {
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
-    this.taskTraces = new TaskTracesRepo(this.ctx);
+    this.taskTraces = new TaskTracesRepo(this.ctx, options.taskTraceQuery);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -905,6 +907,18 @@ runMigrations(this.db);
 
   getTaskTrace(taskId: string): MultiremiTaskTrace | null {
     return this.taskTraces.get(taskId);
+  }
+
+  markTaskTraceDaemon(taskId: string, runtimeId: string): void {
+    this.taskTraces.markDaemon(taskId, runtimeId);
+  }
+
+  markTaskTraceNone(taskId: string): void {
+    this.taskTraces.markNone(taskId);
+  }
+
+  markTaskTraceLost(taskId: string): void {
+    this.taskTraces.markLost(taskId);
   }
 
   listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {
@@ -5133,6 +5147,7 @@ runMigrations(this.db);
 
   completeTask(taskId: string, input: {
     output: string;
+    traceEventCount?: number;
     branchName?: string | null;
     sessionId?: string | null;
     workDir?: string | null;
@@ -5142,6 +5157,7 @@ runMigrations(this.db);
 
   failTask(taskId: string, input: {
     error: string;
+    traceEventCount?: number;
     sessionId?: string | null;
     workDir?: string | null;
     failureReason?: string | null;

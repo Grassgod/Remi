@@ -133,6 +133,13 @@ export interface TraceEvent {
   meta?: Record<string, unknown> | null;
 }
 
+/** B5 HTTP/CLI read projection; these markers are never written to the trace. */
+export interface TraceReadEvent extends TraceEvent {
+  truncated?: true;
+  /** UTF-8 bytes of the original event's JSON, before read-time truncation. */
+  original_bytes?: number;
+}
+
 /**
  * An event as a producer hands it over: no `seq`, and normally no `ts`.
  *

@@ -1,11 +1,12 @@
-import type { ManagedIssueShare, SharedIssueBundle } from "../../types";
+import type { ManagedIssueShare, SharedIssueBundle, SharedTaskTracePage } from "../../types";
 import type { HttpClient } from "../http";
-import { parseWithFallback } from "../schema";
+import { parseStrictResponse, parseWithFallback } from "../schema";
 import {
   EMPTY_MANAGED_ISSUE_SHARE_RESPONSE,
   EMPTY_SHARED_ISSUE_BUNDLE,
   ManagedIssueShareResponseSchema,
   SharedIssueBundleSchema,
+  SharedTaskTracePageSchema,
 } from "../schemas/issue-shares";
 
 export class IssueSharesEndpoints {
@@ -56,5 +57,13 @@ export class IssueSharesEndpoints {
     return parseWithFallback(raw, SharedIssueBundleSchema, EMPTY_SHARED_ISSUE_BUNDLE, {
       endpoint: "GET /api/shares/:token",
     }) as SharedIssueBundle;
+  }
+
+  async getSharedTaskTrace(token: string, taskId: string, afterSeq = 0): Promise<SharedTaskTracePage> {
+    const query = new URLSearchParams({ after_seq: String(afterSeq) });
+    const raw = await this.http.fetch<unknown>(`/api/shares/${encodeURIComponent(token)}/tasks/${encodeURIComponent(taskId)}/trace?${query}`);
+    return parseStrictResponse(raw, SharedTaskTracePageSchema, {
+      endpoint: "GET /api/shares/:token/tasks/:task_id/trace",
+    }) as SharedTaskTracePage;
   }
 }

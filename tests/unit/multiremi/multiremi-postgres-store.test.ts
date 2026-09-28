@@ -24,6 +24,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
@@ -208,6 +212,7 @@ if (!pgAvailable) {
 describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
+  let pointerQueryCount = 0;
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
@@ -217,7 +222,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // Constructing the store runs migrate(): all CREATE TABLE / ALTER / index DDL
     // flows through translateSqliteToPg. A mis-translation would throw right here.
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
-    store = new MultiremiStore(db);
+    store = new MultiremiStore(db, {
+      taskTraceQuery: (sql, params) => {
+        pointerQueryCount++;
+        return db.query(sql).get(...params) as Record<string, unknown> | null;
+      },
+    });
     store.ensureLocalWorkspace();
   });
 
@@ -227,6 +237,55 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin.end();
   });
+
+  it("writes and reads trace pointers and routes hot and archive traces on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-trace-reader-"));
+    try {
+      const runtime = store.registerRuntime({ id: "rt_pg_trace_reader", name: "PG trace runtime", provider: "codex",
+        daemonId: "dmn_pg_trace_reader", workspaceId: "local" });
+      const agent = store.createAgent({ name: "PG trace agent", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
+      const issue = store.createIssue({ title: "PG trace reader", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      expect(store.getTaskTrace(task.id)).toMatchObject({ location: "daemon", runtimeId: runtime.id });
+      expect(pointerQueryCount).toBeGreaterThan(0);
+
+      const trace = new InMemoryTraceStore();
+      trace.append(task.id, [{ type: "text", content: "hot event" }]);
+      const reader = new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => trace),
+        archive: new SessionArchiveReader({ store, root }) });
+      expect(await reader.readTrace(task.id)).toMatchObject({ state: "ok", source: "daemon", head: 1 });
+
+      store.startTask(task.id);
+      store.completeTask(task.id, { output: "done", traceEventCount: 1 });
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+        traces: { [task.id]: traceFileBody({ events: 4, gapAfter: 2, taskId: task.id }) } });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+        issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+      const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+      await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+      expect((await service.complete(runtime.id, issue.id, archive.id, claim.uploadAttempt!)).status).toBe("ready");
+      expect(store.getTaskTrace(task.id)).toMatchObject({ location: "archive", archiveId: archive.id, headSeq: 4 });
+      expect((await reader.readTrace(task.id, 0, 2)).events.map(event => event.seq)).toEqual([1, 3]);
+      expect((await reader.readTrace(task.id, 3, 2)).events.map(event => event.seq)).toEqual([4]);
+
+      const empty = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "empty" });
+      expect(store.claimTask(runtime.id)?.id).toBe(empty.id);
+      store.startTask(empty.id);
+      store.completeTask(empty.id, { output: "done", traceEventCount: 0 });
+      expect(store.getTaskTrace(empty.id)?.location).toBe("none");
+      const lost = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "lost" });
+      expect(store.claimTask(runtime.id)?.id).toBe(lost.id);
+      store.markTaskTraceLost(lost.id);
+      expect(store.getTaskTrace(lost.id)?.location).toBe("lost");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.

@@ -443,6 +443,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
   let database: PostgresSyncDatabase;
   let store: MultiremiStore;
   let maxDepth = 0;
+  const controls: { sql: string; invocationDepth: number; callbackDepth: number; inTransaction: boolean }[] = [];
 
   beforeAll(async () => {
     admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
@@ -452,12 +453,31 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
     database = new PostgresSyncDatabase(url.toString());
     const original = database.transaction.bind(database);
     let depth = 0;
+    let invocationDepth = 0;
+    let callbackDepth = 0;
+    const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+    const execute = target.execute.bind(database);
+    target.execute = (sql, params) => {
+      const command = sql.trim().toUpperCase();
+      if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+        controls.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+      }
+      return execute(sql, params);
+    };
     (database as unknown as { transaction: unknown }).transaction = (fn: () => unknown) => {
-      const run = original(fn);
+      const run = original(() => {
+        callbackDepth++;
+        try { return fn(); } finally { callbackDepth--; }
+      });
       return () => {
-        depth++;
-        maxDepth = Math.max(maxDepth, depth);
-        try { return run(); } finally { depth--; }
+        // MUL-402 cmt_gestk2r6imjh (c): count outer BEGIN ownership, not SAVEPOINT nesting.
+        const topLevel = !database.inTransaction;
+        invocationDepth++;
+        if (topLevel) maxDepth = Math.max(maxDepth, ++depth);
+        try { return run(); } finally {
+          invocationDepth--;
+          if (topLevel) depth--;
+        }
       };
     };
     store = new MultiremiStore(database);
@@ -472,8 +492,42 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
   });
 
   it("runs the acceptance flow without nested transactions", async () => {
+    controls.length = 0;
     await exerciseDecisions(store);
     expect(maxDepth).toBe(1);
+    let outerOpen = false;
+    const savepoints: string[] = [];
+    expect(controls.some((control) => control.sql === "BEGIN")).toBe(true);
+    for (const control of controls) {
+      const detail = `PG transaction control: ${control.sql}`;
+      if (control.sql === "BEGIN") {
+        expect(outerOpen, detail).toBe(false);
+        expect(control.inTransaction, detail).toBe(false);
+        expect(control.invocationDepth, detail).toBe(1);
+        expect(control.callbackDepth, detail).toBe(0);
+        outerOpen = true;
+      } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.invocationDepth, detail).toBe(1);
+        expect(control.callbackDepth, detail).toBe(0);
+        expect(savepoints, detail).toHaveLength(0);
+        outerOpen = false;
+      } else {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.invocationDepth, detail).toBeGreaterThan(1);
+        expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+        const name = control.sql.split(" ").at(-1)!;
+        if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+        else {
+          expect(savepoints.at(-1), detail).toBe(name);
+          if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+        }
+      }
+    }
+    expect(outerOpen).toBe(false);
+    expect(savepoints).toHaveLength(0);
   });
 
   it("windows recently answered decisions by answered_at and exposes history", async () => {

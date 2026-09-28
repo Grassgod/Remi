@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 785,
+    "routeCount": 787,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 559,
+      "compat": 561,
       "root": 14
     },
-    "getRoutes": 332,
-    "getRoutesWithBody": 329,
+    "getRoutes": 334,
+    "getRoutesWithBody": 331,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -388,6 +388,7 @@
     "GET /api/sessions/:sessionId/log/locate",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
+    "GET /api/shares/:token/tasks/:task_id/trace",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -399,6 +400,7 @@
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
+    "GET /api/tasks/:id/trace",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
@@ -1156,6 +1158,7 @@
     "GET /api/sessions/:sessionId/log/locate",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
+    "GET /api/shares/:token/tasks/:task_id/trace",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -1167,6 +1170,7 @@
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
+    "GET /api/tasks/:id/trace",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
@@ -12424,6 +12428,17 @@
             "allowed": true
           },
           {
+            "id": "share.trace.read",
+            "command": "remi share trace read",
+            "capability": "share.trace.read",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "share.view",
             "command": "remi share view",
             "capability": "share.view",
@@ -12721,17 +12736,6 @@
             "allowed": true
           },
           {
-            "id": "task.message.list",
-            "command": "remi task message list",
-            "capability": "task.message.list",
-            "outputs": [
-              "table",
-              "json",
-              "jsonl"
-            ],
-            "allowed": true
-          },
-          {
             "id": "task.messages",
             "command": "remi issue run-messages",
             "capability": "task.messages",
@@ -12801,6 +12805,17 @@
             "id": "task.steer.list",
             "command": "remi task steer list",
             "capability": "task.steer.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.trace.read",
+            "command": "remi task trace read",
+            "capability": "task.trace.read",
             "outputs": [
               "table",
               "json",
@@ -22667,6 +22682,8 @@
             "seq": 1,
             "created_at": "<timestamp>"
           },
+          "tool_call_count": 0,
+          "event_count": 1,
           "message_type_histogram": [
             {
               "type": "assistant",
@@ -23799,6 +23816,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/shares/:token/tasks/:task_id/trace",
+      "route": "GET /api/shares/:token/tasks/:task_id/trace",
+      "path": "/api/shares/awt_1ut6x0i244sp2mewms/tasks/tsk_snapshot/trace",
+      "status": 401,
+      "body": {
+        "error": "login required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/skills",
       "route": "GET /api/skills",
       "path": "/api/skills",
@@ -24022,6 +24048,8 @@
             "seq": 1,
             "created_at": "<timestamp>"
           },
+          "tool_call_count": 0,
+          "event_count": 1,
           "message_type_histogram": [
             {
               "type": "assistant",
@@ -24070,6 +24098,25 @@
       "status": 200,
       "body": {
         "messages": []
+      }
+    },
+    {
+      "key": "get-sweep GET /api/tasks/:id/trace",
+      "route": "GET /api/tasks/:id/trace",
+      "path": "/api/tasks/tsk_snapshot/trace",
+      "status": 200,
+      "body": {
+        "events": [],
+        "next_after_seq": 0,
+        "head": 0,
+        "eof": true,
+        "closed": false,
+        "source": "daemon",
+        "state": "unreachable",
+        "reason": "daemon_unreachable",
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "retryable": true
       }
     },
     {
