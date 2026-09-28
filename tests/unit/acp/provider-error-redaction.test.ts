@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { inspect } from "node:util";
 import { AcpProvider, AcpRpcError, AcpSessionFailureError, redactProviderErrorText } from "@acp/index.js";
-import { classifyDaemonTaskFailure, TaskFailureReason } from "@multiremi/task-failure.js";
+import { classifyDaemonTaskFailure, classifyTaskFailure, TaskFailureReason } from "@multiremi/task-failure.js";
 
 const marker = () => `privacy_${crypto.randomUUID().replaceAll("-", "")}`;
 const failure = (title: string, details?: string) => ({
@@ -81,6 +81,66 @@ describe("provider error privacy", () => {
       expect(result.includes(value)).toBe(false);
       expect(result.includes("503")).toBe(true);
     }
+  });
+
+  const shortCredentialStatuses = [
+    [401, TaskFailureReason.AgentProviderAuthOrAccess],
+    [404, TaskFailureReason.AgentModelNotFoundOrUnavailable],
+    [429, TaskFailureReason.AgentProviderCapacityOrRateLimit],
+    [503, TaskFailureReason.AgentProviderServerError],
+  ] as const;
+  for (const entry of ["text", "generic", "codex", "claude"] as const) {
+    it.each(shortCredentialStatuses)(`preserves HTTP %s with short credentials through ${entry}`, (status, reason) => {
+      const text = `unexpected status ${status} from gateway, request id: req-1234, model: model-true`;
+      const safe = redactProviderErrorText(text, ["1", "true", "503", "404", "429", "   true   "]);
+      if (entry === "text") {
+        expect(safe === text).toBe(true);
+      } else {
+        const classify = entry === "generic" ? classifyTaskFailure : (value: string) => classifyDaemonTaskFailure(entry, value);
+        expect(classify(text)).toBe(reason);
+        expect(classify(safe)).toBe(classify(text));
+      }
+    });
+  }
+
+  it("skips every exact representation when the trimmed credential has fewer than eight characters", () => {
+    const short = "short+?";
+    const padded = `   ${short}   `;
+    for (const value of [short, padded, encodeURIComponent(short), encodeURIComponent(padded),
+      Buffer.from(short).toString("base64"), Buffer.from(short).toString("base64url"),
+      Buffer.from(padded).toString("base64"), Buffer.from(padded).toString("base64url")]) {
+      const text = `upstream detail ${value}`;
+      expect(redactProviderErrorText(text, [padded]) === text).toBe(true);
+    }
+  });
+
+  it("still redacts an eight-character credential and its exact representations", () => {
+    const secret = `${marker().slice(-7)}+`;
+    for (const value of [secret, encodeURIComponent(secret),
+      Buffer.from(secret).toString("base64"), Buffer.from(secret).toString("base64url")]) {
+      const result = redactProviderErrorText(`upstream detail ${value}`, [`   ${secret}   `]);
+      expect(result.includes(value)).toBe(false);
+    }
+  });
+
+  it("keeps pattern-based redaction for short values and encoded or hyphenated field names", () => {
+    const value = marker().slice(-1);
+    for (const prefix of ["Bearer ", "Basic ", "api%5Fkey=", "x-api_key="]) {
+      expect(redactProviderErrorText(`${prefix}${value}`).endsWith("[REDACTED]")).toBe(true);
+    }
+  });
+
+  it.each([
+    ["alphanumeric", () => "abc123".repeat(33_334).slice(0, 200_000)],
+    ["hyphenated", () => "ab-".repeat(66_667).slice(0, 200_000)],
+    ["percent-encoded", () => "%41".repeat(66_667).slice(0, 200_000)],
+  ] as const)("redacts a 200k %s run within the synchronous time budget", (_label, makeText) => {
+    const text = makeText();
+    const startedAt = performance.now();
+    const result = redactProviderErrorText(text);
+    const elapsedMs = performance.now() - startedAt;
+    expect(result === text).toBe(true);
+    expect(elapsedMs).toBeLessThan(500);
   });
 
   it("is idempotent and tolerates malformed URL escapes and credential Unicode", () => {

@@ -39,6 +39,8 @@ export function readSessionFailure(meta: unknown, credentials: readonly string[]
 export function redactProviderErrorText(text: string, credentials: readonly string[] = []): string {
   const values = new Set<string>();
   for (const credential of credentials) {
+    // Avoid replacing common short values inside status codes and request IDs.
+    if (credential.trim().length < 8) continue;
     for (const value of new Set([credential, credential.trim()])) {
       if (!value) continue;
       values.add(value);
@@ -56,7 +58,7 @@ export function redactProviderErrorText(text: string, credentials: readonly stri
     text = text.split(value).join("[REDACTED]");
   }
   // Decode credential names only, leaving URLs and diagnostic text intact.
-  text = text.replace(/(?:[a-z0-9_-]|%[0-9a-f]{2})+(?=["']?\s*[:=])/gi, (key) => {
+  text = text.replace(/(?<![a-z0-9_%-])(?:[a-z0-9_-]|%[0-9a-f]{2})+(?=["']?\s*[:=])/gi, (key) => {
     let decoded = key;
     try { decoded = decodeURIComponent(key); } catch { /* Leave malformed names alone. */ }
     return /^(?:api[_-]?key|auth[_-]?token|access[_-]?token|key|token|password|secret|session|sid|sessionid)$/i.test(decoded)
@@ -68,7 +70,7 @@ export function redactProviderErrorText(text: string, credentials: readonly stri
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/\bsk-[a-z0-9_-]+/gi, "[REDACTED]")
     .replace(/\b(?:ghp|gho)_[a-z0-9]{4,}\b/gi, "[REDACTED]")
-    .replace(/(?<![/:.@])\b[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]")
+    .replace(/(?<![a-z0-9_/:.@-])[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]")
     .replace(/(\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|key|token|password|secret|session|sid|sessionid)\b["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,;&}]+)/gi, "$1[REDACTED]");
 }
 
