@@ -733,6 +733,16 @@ min_version, last_error }`：
 
 失败来源就是 `multiremi_runtime_update_requests.status = failed` 的 error 字段。
 
+该字段只从数据库推导，不读取 v2 会话注册表。成功的 `hello` 将协议版本与 CLI 版本写入
+runtime 的可空 `daemon_protocol_version` 列与既有 `metadata.cli_version`；旧行的空值按 v1 读。
+HTTP 升级探测不覆盖最近一次成功协商的版本。当前 v2 且 CLI 达标时为 `ok`；否则优先查看
+CLI 升级请求：pending/running 为 `upgrade_pending`，最近一次 failed 为 `upgrade_failed`，
+其余为 `rejected`。ACP/agent 更新失败不算协议升级失败。平台汇总按 daemon 去重计数，
+失败优先于待升级，未排队的 `rejected` 也计入待升级。
+
+迁移只给 runtime 表新增一个可空列，不回填、不修改升级请求表。旧版代码不读取该列即可回退，
+无需删除列；切换与回滚核对见 [v2 切换清单](deploy/daemon-v2-cutover.md)。
+
 ### 7.6 回滚
 
 分两个时点。**B 删表之前**：服务端回退到 v1 镜像后，v2 daemon 进入 `upgrade_wait`，
