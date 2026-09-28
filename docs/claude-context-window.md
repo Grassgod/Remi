@@ -46,6 +46,8 @@ in `_meta.claudeCode.options.model`. The session's CLI environment receives
 `ANTHROPIC_CUSTOM_MODEL_OPTION=<model>[1m]` through
 `_meta.claudeCode.options.env`, independently of SDK settings. This creates an
 exact custom row even for older models absent from the current Claude Code menu.
+Warm `session/load` receives the same metadata and session environment; otherwise
+the bridge rebuilds from the archived model and loses the custom row.
 
 Remi then selects `<model>[1m]` with `session/set_config_option`. Selection
 succeeds when the chosen value ends in `[1m]`, or when the chosen custom row's
@@ -55,9 +57,13 @@ row, not proof of the gateway's actual capacity.
 
 If configuration fails, or the bridge chooses a standard row, Remi logs
 `[acp_model_context_fallback]` with the original model, selection and reason,
-selects the ordinary model, and continues. If the process died, its error is
-propagated. Success and fallback are both remembered, so another turn in the
-same pooled session does not repeat the request or warning. Resuming or loading
+attempts the ordinary model, and reads back the actual selection. A missing
+ordinary row is skipped with a warning, as for other standard model selections;
+if the requested standard model is not confirmed, the fallback warning names
+the actual model instead of claiming a standard context window. The task
+continues. If the process died, its error is propagated. Attempts are cached
+separately from the actual model, so another turn in the same pooled session
+does not repeat the 1M request or warning. Resuming or loading
 a different session applies the declaration once again. Model selection can
 reset effort; Remi reads the current effort before applying the requested level.
 
@@ -88,6 +94,10 @@ Selecting a synthesized startup row may trigger a network confirmation; a
 failed confirmation can surface as JSON-RPC `-32603`. Removing unsolicited
 1M selection avoids that path for undeclared models. Historical timing alone
 does not prove the cause of each of the four Fable failures.
+Ordinary model selection can also require confirmation. Session-only diagnostics
+on the pinned bridge reported `opus[1m]` immediately after a fresh Fable startup,
+then the requested Fable row after an explicit ordinary-model selection. A
+different current row is not evidence that this selection can be safely skipped.
 
 The new provider was also smoke-tested with these pinned versions, without
 sending prompts: Opus 5.5 enabled selected `claude-opus-5-5[1m]`, disabled

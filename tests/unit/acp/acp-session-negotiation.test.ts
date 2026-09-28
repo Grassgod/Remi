@@ -41,6 +41,7 @@ interface AgentProfile {
   ignoreCustomModelOption?: boolean;
   normalizeCustomModelOption?: boolean;
   synthesizeStartupModel?: boolean;
+  archivedModels?: Record<string, string>;
   ignoreEffortChange?: boolean;
 }
 
@@ -161,13 +162,15 @@ const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 let sessionSeq = 0;
 let configOptions = PROFILE.configOptions;
 const rl = readline.createInterface({ input: process.stdin });
-const adoptSession = (params) => {
+const adoptSession = (params, loading = false) => {
   configOptions = PROFILE.configOptions.map(o => ({ ...o }));
   const startup = params._meta?.claudeCode?.options?.model;
-  if (startup && PROFILE.synthesizeStartupModel) {
-    configOptions = configOptions.map(o => o.id === "model" && !o.options.some(item => item.value === startup)
-      ? { ...o, options: [...o.options, { value: startup, name: startup }] } : o);
+  const model = startup || (loading ? (PROFILE.archivedModels || {})[params.sessionId] : undefined);
+  if (model && PROFILE.synthesizeStartupModel) {
+    configOptions = configOptions.map(o => o.id === "model" && !o.options.some(item => item.value === model)
+      ? { ...o, options: [...o.options, { value: model, name: model }] } : o);
   }
+  if (loading && model) configOptions = configOptions.map(o => o.id === "model" ? { ...o, currentValue: model } : o);
   const custom = params._meta?.claudeCode?.options?.env?.ANTHROPIC_CUSTOM_MODEL_OPTION;
   if (custom && !PROFILE.ignoreCustomModelOption) {
     const value = PROFILE.normalizeCustomModelOption ? custom.replace(/\\[1m\\]$/i, "") : custom;
@@ -189,7 +192,9 @@ rl.on("line", (line) => {
     case "session/resume":
       adoptSession(msg.params);
       return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
-    case "session/load": return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
+    case "session/load":
+      adoptSession(msg.params, true);
+      return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
     case "session/set_mode": return ok({});
     case "session/set_config_option": {
       if (PROFILE.ignoreEffortChange && configOptions.some((o) => o.id === msg.params.configId && o.category === "thought_level")) {
@@ -532,6 +537,56 @@ describe("Claude 1M session negotiation", () => {
     } finally { await provider.close(); }
   });
 
+  it("retains the requested custom model when a warm load rebuilds an archived Opus 5.5 session", async () => {
+    const agent = fakeAgent({ ...profile(), archivedModels: { "saved-opus-5-5": "opus[1m]" } });
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(),
+      model: "claude-opus-5", claudeOneMillionModels: ["claude-opus-5"],
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const initial = await (provider as any)._ensureSession("load");
+      expect(initial.configOptions.find((o: SessionConfigOption) => o.category === "model").currentValue).toBe("claude-opus-5[1m]");
+      const loaded = await (provider as any)._ensureSession("load", { sessionId: "saved-opus-5-5" });
+      expect(loaded.configOptions.find((o: SessionConfigOption) => o.category === "model").currentValue).toBe("claude-opus-5[1m]");
+      expect(loaded.appliedModel).toBe("claude-opus-5[1m]");
+      expect(only(agent.requests(), "session/load")[0]!.params._meta).toEqual(only(agent.requests(), "session/new")[0]!.params._meta);
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual([
+        "claude-opus-5[1m]", "claude-opus-5[1m]",
+      ]);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+      expect(warn.mock.calls.some(([message]) => String(message).includes("[acp_model_context_fallback]"))).toBe(false);
+    } finally { await provider.close(); warn.mockRestore(); }
+  });
+
+  it("reports an unavailable standard fallback honestly without retrying the declaration", async () => {
+    const agent = fakeAgent({
+      ...profile(), synthesizeStartupModel: false,
+      configOptions: [{
+        id: "model", name: "Model", category: "model", type: "select", currentValue: "opus[1m]",
+        options: [{ value: "opus[1m]", name: "Opus 5.5" }],
+      }, CLAUDE_CONFIG_OPTIONS[1]!],
+      modelErrors: { "claude-opus-5[1m]": { code: -32603, message: "Internal error" } },
+    });
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(),
+      model: "claude-opus-5", claudeOneMillionModels: ["claude-opus-5"],
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await drain(provider.sendStream("hi", { chatId: "fallback" }));
+      await drain(provider.sendStream("again", { chatId: "fallback" }));
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual(["claude-opus-5[1m]"]);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
+      expect((provider as any)._pool.get("fallback").appliedModel).toBe("opus[1m]");
+      const fallbacks = warn.mock.calls.filter(([message]) => String(message).includes("[acp_model_context_fallback]"));
+      expect(fallbacks).toHaveLength(1);
+      expect(String(fallbacks[0]![0])).toContain('actual="opus[1m]"');
+      expect(String(fallbacks[0]![0])).toContain("standard model not confirmed");
+      expect(String(fallbacks[0]![0])).not.toContain("running with the standard context window");
+    } finally { await provider.close(); warn.mockRestore(); }
+  });
+
   it.each([
     { code: -32602, message: "Invalid value for config option model" },
     { code: -32603, message: 'Could not confirm model "claude-opus-5" with the API' },
@@ -575,6 +630,9 @@ describe("Claude 1M session negotiation", () => {
       const fallbacks = warn.mock.calls.filter(([message]) => String(message).includes("[acp_model_context_fallback]"));
       expect(fallbacks).toHaveLength(1);
       expect(String(fallbacks[0]![0])).toContain("selected: haiku");
+      expect(String(fallbacks[0]![0])).toContain('actual="haiku"');
+      expect(String(fallbacks[0]![0])).toContain("standard model not confirmed");
+      expect((provider as any)._pool.get("haiku").appliedModel).toBe("haiku");
       expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
     } finally { await provider.close(); warn.mockRestore(); }
   });

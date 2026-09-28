@@ -249,6 +249,8 @@ interface PoolEntry {
   customModelOption: string | null;
   /** Values currently in force, so a re-apply is only sent when they change. */
   appliedModel: string | null;
+  /** Last requested model, including an unsuccessful but already attempted declaration. */
+  attemptedModel: string | null;
   appliedContext: string | null;
   appliedEffort: string | null;
   /** Last permission mode we logged about, so a fallback is reported once per session. */
@@ -770,6 +772,15 @@ export class AcpProvider implements Provider {
       throw new Error("Codex Agent Plugins require an isolated CODEX_HOME");
     }
 
+    const sessionMeta = this._adapter.buildSessionMeta({
+      model,
+      claudeEnv: customModelOption ? { ANTHROPIC_CUSTOM_MODEL_OPTION: customModelOption } : undefined,
+      claudeSettings: this._options.claudeSettings,
+      allowedTools: options?.allowedTools ?? this._options.allowedTools,
+      systemPrompt: options?.systemPrompt,
+      pluginPaths,
+    } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
+
     const existing = this._pool.get(chatId);
     if (existing) {
       const stale =
@@ -801,7 +812,13 @@ export class AcpProvider implements Provider {
         try {
           if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
             this._sessionToChatId.delete(existing.acpSessionId);
-            const result = await existing.client.loadSession(options.sessionId, cwd, mcpServers);
+            const addDirs = absoluteAdditionalDirectories(options.addDirs, this._adapter.agentType);
+            const officialAddDirs = !!existing.client.initializeResult?.agentCapabilities?.sessionCapabilities?.additionalDirectories;
+            const meta = addDirs.length && !officialAddDirs
+              ? { ...(sessionMeta ?? {}), additionalRoots: addDirs } : sessionMeta;
+            const result = await existing.client.loadSession(options.sessionId, cwd, mcpServers, {
+              additionalDirectories: officialAddDirs ? addDirs : undefined, _meta: meta,
+            });
             existing.acpSessionId = result.sessionId;
             this._adoptSessionState(existing, result);
             this._sessionToChatId.set(existing.acpSessionId, chatId);
@@ -828,15 +845,6 @@ export class AcpProvider implements Provider {
     }
     if (this._options.env) Object.assign(env, this._options.env);
     if (codexHome) env.CODEX_HOME = codexHome;
-
-    const sessionMeta = this._adapter.buildSessionMeta({
-      model,
-      claudeEnv: customModelOption ? { ANTHROPIC_CUSTOM_MODEL_OPTION: customModelOption } : undefined,
-      claudeSettings: this._options.claudeSettings,
-      allowedTools: options?.allowedTools ?? this._options.allowedTools,
-      systemPrompt: options?.systemPrompt,
-      pluginPaths,
-    } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const client = new AcpClient({
       inheritProcessGroup: this._options.inheritProcessGroup,
@@ -891,6 +899,7 @@ export class AcpProvider implements Provider {
         codexHome,
         customModelOption,
         appliedModel: null,
+        attemptedModel: null,
         appliedContext: null,
         appliedEffort: null,
         warnedPermissionMode: null,
@@ -917,9 +926,8 @@ export class AcpProvider implements Provider {
     entry.configOptions = result.configOptions;
     entry.models = result.models;
     // Apply the declaration once even when new/resume/load already selected the ID.
-    entry.appliedModel = this._adapter.agentType === "claude"
-      ? null
-      : currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY);
+    entry.appliedModel = currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY) ?? result.models?.currentModelId ?? null;
+    entry.attemptedModel = this._adapter.agentType === "claude" ? null : entry.appliedModel;
     entry.appliedContext = null;
     entry.appliedEffort = currentConfigValue(result.configOptions, EFFORT_OPTION_CATEGORY);
   }
@@ -970,24 +978,28 @@ export class AcpProvider implements Provider {
   }
 
   private async _applyModel(entry: PoolEntry, model: string): Promise<void> {
-    if (model === entry.appliedModel && entry.appliedContext === entry.customModelOption) return;
+    if (model === entry.attemptedModel && entry.appliedContext === entry.customModelOption) return;
     if (entry.customModelOption) {
       try {
         await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, entry.customModelOption);
       } catch (error) {
         if (!entry.client.alive) throw error;
         const reason = error instanceof Error ? error.message : String(error);
+        const applied = await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model);
+        const actual = currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) ?? entry.models?.currentModelId ?? null;
         console.warn(
           `[acp_model_context_fallback] claude: model="${model}", selection="${entry.customModelOption}": ${reason}; ` +
-            "running with the standard context window",
+            `actual="${actual ?? "unknown"}"; ` +
+            (applied && actual === model ? "running with the standard context window"
+              : "standard model not confirmed; keeping the agent's actual selection"),
         );
-        await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model);
       }
     } else if (!await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model)) {
       return;
     }
-    // Remember fallback too, and re-read effort after either model selection.
-    entry.appliedModel = model;
+    // Cache the attempt separately: a skipped fallback must not claim the requested model was applied.
+    entry.appliedModel = currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) ?? entry.models?.currentModelId ?? null;
+    entry.attemptedModel = model;
     entry.appliedContext = entry.customModelOption;
     entry.appliedEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
   }

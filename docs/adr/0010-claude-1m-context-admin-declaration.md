@@ -70,7 +70,12 @@ subprocess environment, so "process-level env" is not a sharing problem here.
    `[1m]`, or the selected row's description contains the injected ID (the
    Fable normalization above). Any error, or a non-1M selection, logs one
    `[acp_model_context_fallback]` warning, re-selects the plain model and
-   continues. A dead bridge process rethrows. The custom option value is part
+   reads back the actual selection. If the plain row cannot be selected, it
+   keeps the bridge's actual model and reports that value without claiming a
+   standard window; the attempt is cached separately from the actual model.
+   The task continues, matching ordinary out-of-menu model behavior.
+   Warm load receives the same startup metadata and session env as new/resume.
+   A dead bridge process rethrows. The custom option value is part
    of the pool entry's staleness key, so a model change recreates the process.
 4. **Explicit `[1m]` in the Agent model stays strict** (pass through, fail if
    the bridge does not land on a 1M lane). The former automatic-selection

@@ -534,6 +534,7 @@ export interface LoadSessionParams {
   cwd: string;
   mcpServers: McpServerConfig[];
   additionalDirectories?: string[];
+  _meta?: NewSessionMeta;
 }
 
 export interface CloseSessionParams {
