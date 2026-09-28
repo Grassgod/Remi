@@ -8,6 +8,11 @@ import { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 
 const databases: Database[] = [];
+const cardFields: DaemonTaskCompletionFields = {
+  trace: { head: 9, event_count: 2, closed: true, tool_call_count: 1,
+    type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
+  final_reply_md: null, model: null,
+};
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
   const db = new Database(":memory:"); databases.push(db);
@@ -73,32 +78,93 @@ describe("v2 reports", () => {
     });
   }
 
-  it("validates card fields before terminal effects, preserving sparse historical trace heads", async () => {
+  for (const type of ["task.complete", "task.fail"]) {
+    for (const missing of ["trace", "final_reply_md", "model"]) {
+      it(`keeps ${type} effective with missing ${missing}, a blank card and a task-scoped warning`, async () => {
+        const { store, task, runtime } = fixture();
+        store.startTask(task.id);
+        const fields: Record<string, unknown> = { ...cardFields };
+        delete fields[missing];
+        const received: unknown[] = [];
+        const closed: unknown[] = [];
+        const warning = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          expect(await reportFrame(store, type, { task_id: task.id, ...fields }, {
+            runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
+            onTraceClosed: (...args) => closed.push(args),
+          })).toEqual({ ok: true });
+          expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+          expect(received).toEqual([{ id: task.id, value: null }]);
+          expect(closed).toEqual([]);
+          expect(warning.mock.calls).toEqual([[expect.stringContaining("missing round-card fields"), { taskId: task.id }]]);
+        } finally { warning.mockRestore(); }
+      });
+    }
+
+    it(`degrades malformed card fields without blocking ${type} or exposing raw trace downstream`, async () => {
+      const error = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const [field, patch] of [
+          ["trace", { trace: { ...cardFields.trace, head: -1 } }],
+          ["trace", { trace: { ...cardFields.trace, event_count: 1.5 } }],
+          ["trace", { trace: { ...cardFields.trace, closed: false } }],
+          ["trace", { trace: { ...cardFields.trace, tool_call_count: "1" } }],
+          ["trace", { trace: { ...cardFields.trace, type_histogram: [{ type: "text", tool: null, count: -1 }] } }],
+          ["trace", { trace: { ...cardFields.trace, type_histogram: [{ type: "text", tool: 1, count: 1 }] } }],
+          ["final_reply_md", { final_reply_md: 3 }], ["model", { model: { provider: "claude" } }],
+        ] as const) {
+          const { store, task, runtime } = fixture();
+          store.startTask(task.id);
+          const received: unknown[] = [];
+          const closed: unknown[] = [];
+          error.mockClear();
+          expect(await reportFrame(store, type, { task_id: task.id, ...cardFields, ...patch }, {
+            runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
+            onTraceClosed: (...args) => closed.push(args),
+          })).toEqual({ ok: true });
+          expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+          expect(received).toEqual([{ id: task.id, value: null }]);
+          expect(closed).toEqual([]);
+          expect(error.mock.calls).toEqual([[expect.stringContaining("malformed round-card field"), { taskId: task.id, field }]]);
+        }
+      } finally { error.mockRestore(); }
+    });
+
+    it(`keeps frame-level rejections side-effect free for ${type}`, async () => {
+      const { store, task, runtime } = fixture();
+      store.startTask(task.id);
+      store.registerRuntime({ id: "other", provider: "claude", name: "other", daemonId: "other-daemon" });
+      const complete = spyOn(store, "completeTask");
+      const fail = spyOn(store, "failTask");
+      const received: unknown[] = [];
+      const closed: unknown[] = [];
+      try {
+        for (const [taskId, runtimeId, code] of [["", runtime.id, "invalid_report"],
+          ["missing", runtime.id, "task_not_found"], [task.id, "other", "authority_revoked"]]) {
+          expect(await reportFrame(store, type, { task_id: taskId, ...cardFields }, {
+            runtimeId, onRoundCard: (...args) => received.push(args), onTraceClosed: (...args) => closed.push(args),
+          })).toEqual({ ok: false, code, retryable: false });
+        }
+        expect(store.getTask(task.id)?.status).toBe("running");
+        expect(complete).not.toHaveBeenCalled();
+        expect(fail).not.toHaveBeenCalled();
+        expect(received).toEqual([]);
+        expect(closed).toEqual([]);
+      } finally { complete.mockRestore(); fail.mockRestore(); }
+    });
+  }
+
+  it("passes validated sparse historical trace heads to downstream hooks", async () => {
     const { store, task, runtime } = fixture();
     store.startTask(task.id);
-    const fields = { trace: { head: 9, event_count: 2, closed: true, tool_call_count: 1,
-      type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
-      final_reply_md: null, model: null };
     const received: unknown[] = [];
-    for (const patch of [
-      { trace: { ...fields.trace, head: -1 } },
-      { trace: { ...fields.trace, event_count: 1.5 } },
-      { trace: { ...fields.trace, closed: false } },
-      { trace: { ...fields.trace, tool_call_count: "1" } },
-      { trace: { ...fields.trace, type_histogram: [{ type: "text", tool: null, count: -1 }] } },
-      { trace: { ...fields.trace, type_histogram: [{ type: "text", tool: 1, count: 1 }] } },
-      { final_reply_md: 3 }, { model: { provider: "claude" } },
-    ]) {
-      expect(await reportFrame(store, "task.complete", { task_id: task.id, ...fields, ...patch }, {
-        runtimeId: runtime.id, onRoundCard: (_taskId, value) => received.push(value),
-      })).toEqual({ ok: false, code: "invalid_report", retryable: false });
-      expect(store.getTask(task.id)?.status).toBe("running");
-      expect(received).toEqual([]);
-    }
-    expect(await reportFrame(store, "task.complete", { task_id: task.id, ...fields }, {
+    const closed: unknown[] = [];
+    expect(await reportFrame(store, "task.complete", { task_id: task.id, ...cardFields }, {
       runtimeId: runtime.id, onRoundCard: (_taskId, value) => received.push(value),
+      onTraceClosed: (...args) => closed.push(args),
     })).toEqual({ ok: true });
-    expect(received).toEqual([fields]);
+    expect(received).toEqual([cardFields]);
+    expect(closed).toEqual([[task.id, 9, runtime.id]]);
   });
 
   it("reuses the task write methods, preserves usage and prompt idempotency, and absorbs terminal replays", async () => {

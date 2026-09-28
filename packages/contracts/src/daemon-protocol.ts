@@ -389,7 +389,11 @@ export interface DaemonTaskCompletionModel {
   model: string;
 }
 
-/** Fields `task.complete` and `task.fail` add to the existing report payloads. */
+/**
+ * Fields `task.complete` and `task.fail` add to the existing report payloads.
+ * Daemons must send them; servers tolerate missing or malformed card metadata
+ * with a blank card so that it can never block the terminal state transition.
+ */
 export interface DaemonTaskCompletionFields {
   trace: DaemonTaskCompletionTrace;
   /** Markdown of the turn's final answer, or null when the turn produced none. */

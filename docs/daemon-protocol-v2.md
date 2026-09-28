@@ -579,7 +579,7 @@ model: { provider: string; model: string } | null;                // 最后一�
 - `type_histogram` 按 `(type, tool)` 分桶，`tool` 只在 `tool_use` / `tool_result` 上非空（A11）；
   organizer 今天就是这么算的（`api/helpers/organizer.ts:52-58`），只按 type 会让它丢掉工具维度。
 - `final_reply_md` 由 `deriveFinalReply(events)` 产出，规则见 §5.4c。服务端收到即写轮次卡；
-  daemon 缺字段（同版上线，不应发生）时卡片留空并打日志，不去读 trace 补算。
+  字段缺失或畸形时，终态照常生效，卡片留空并打日志；卡片字段永不阻塞终态。不去读 trace 补算。
 - `output` 字段保持原样：它是全部顶层 text 的拼接（`worker/daemon.ts:4416`），不随本改动变化。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**回填的历史 trace 是稀疏的**，
   `head ≠ event_count`（A11）。

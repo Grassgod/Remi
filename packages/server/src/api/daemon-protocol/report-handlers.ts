@@ -43,23 +43,27 @@ const terminal = (status: string): boolean => ["completed", "failed", "cancelled
 
 function completionFields(p: Record<string, unknown>, taskId: string): DaemonTaskCompletionFields | null {
   const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
+  const malformed = (field: keyof DaemonTaskCompletionFields): null => {
+    log.error("Terminal report has a malformed round-card field", { taskId, field });
+    return null;
+  };
   if (p.trace !== undefined) {
-    if (!p.trace || typeof p.trace !== "object" || Array.isArray(p.trace)) reject();
+    if (!p.trace || typeof p.trace !== "object" || Array.isArray(p.trace)) return malformed("trace");
     const trace = p.trace as Record<string, unknown>;
     if (!count(trace.head) || !count(trace.event_count) || trace.closed !== true || !count(trace.tool_call_count)
       || !Array.isArray(trace.type_histogram) || !trace.type_histogram.every((bucket: unknown) => {
         if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) return false;
         const b = bucket as Record<string, unknown>;
         return typeof b.type === "string" && (b.tool === null || typeof b.tool === "string") && count(b.count);
-      })) reject();
+      })) return malformed("trace");
   }
-  if (p.final_reply_md !== undefined && p.final_reply_md !== null && typeof p.final_reply_md !== "string") reject();
+  if (p.final_reply_md !== undefined && p.final_reply_md !== null && typeof p.final_reply_md !== "string") return malformed("final_reply_md");
   if (p.model !== undefined && p.model !== null) {
     if (typeof p.model !== "object" || Array.isArray(p.model)
       || typeof (p.model as Record<string, unknown>).provider !== "string"
-      || typeof (p.model as Record<string, unknown>).model !== "string") reject();
+      || typeof (p.model as Record<string, unknown>).model !== "string") return malformed("model");
   }
-  // Old terminal rows may lack card fields. Keep §5.4b's blank-card fallback, never read trace here.
+  // Card metadata must never block a terminal report. Never read trace to fill a blank card.
   if (p.trace === undefined || p.final_reply_md === undefined || p.model === undefined) {
     log.warn("Terminal report is missing round-card fields", { taskId });
     return null;
@@ -176,9 +180,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           // MUL-402: 写轮次卡
           onRoundCard(taskId, fields);
         }
-        if (isCompletion && p.trace) {
-          const trace = p.trace as { head?: unknown; closed?: unknown };
-          if (trace.closed === true && Number.isSafeInteger(trace.head) && (trace.head as number) >= 0) onTraceClosed?.(taskId, trace.head as number, task.runtimeId!);
+        if (isCompletion && fields?.trace) {
+          onTraceClosed?.(taskId, fields.trace.head, task.runtimeId!);
         }
         return { ok: true };
       }
