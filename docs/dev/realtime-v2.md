@@ -46,6 +46,10 @@ trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts]
 
 `stream.ack.gap` 与 `stream.gap` 不是同一件事：前者是订阅建立时环尾已追不回，后者是订阅期间掉队。
 
+浏览器 handler 通过 `subscribeWithSink` 接入真实 Hub，读取 socket 的 `getBufferedAmount()`，
+将运行中的缺口（含晚到 revision）发送为 `stream.gap`。Bun 的 `drain` 回调恢复该 socket 的订阅；
+ack 发送前的 data 和 gap 按到达顺序缓冲，ack 后才发给客户端。
+
 ## 订阅鉴权
 
 `startMultiremiServer` 的两个 socket handler 与健康路由使用同一个真实 `HubImpl`。

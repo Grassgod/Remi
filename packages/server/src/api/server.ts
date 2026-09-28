@@ -1206,6 +1206,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           ts: new Date().toISOString(),
         }));
       },
+      drain(ws) {
+        if (ws.data.kind === "browser") {
+          const handler = ws.data.streamEndpoint === "trace" ? traceStreams : browserStreams;
+          handler.notifyDrain(ws);
+        }
+      },
       close(ws) {
         realtimeState.connections = Math.max(0, realtimeState.connections - 1);
         if (ws.data.kind === "daemon") unregisterDaemonWebSocketClient(daemonWebSockets, ws);
