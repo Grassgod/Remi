@@ -68,6 +68,7 @@ import type {
   CreateRuntimeCommandInput,
   CreateRuntimeUpdateInput,
   MultiremiAgent,
+  MultiremiIssueWorkspace,
   MultiremiAgentPluginRuntimeState,
   MultiremiDaemonHeartbeatAck,
   MultiremiRuntime,
@@ -162,16 +163,29 @@ export class RuntimeRegistrationIdentityConflictError extends Error {
   }
 }
 
+export interface RuntimeDeleteOptions {
+  abandonIssueWorkspaces?: boolean;
+}
+
+export interface RuntimeIssueWorkspaceImpact {
+  id: string;
+  key: string;
+  title: string;
+  status: MultiremiIssueWorkspace["status"];
+}
+
 export type StrictRuntimeDeleteResult =
-  | { status: "deleted" }
+  | { status: "deleted"; issueWorkspacesAbandoned: number }
   | { status: "not_found" }
   | { status: "active_agents"; activeAgents: MultiremiAgent[] }
   | { status: "active_tasks" }
+  | { status: "active_issue_workspaces"; issues: RuntimeIssueWorkspaceImpact[] }
   | { status: "daemon_last_runtime"; daemonId: string };
 
 export type ArchiveAgentsAndDeleteRuntimeResult =
-  | { status: "ok"; agentsArchived: number; tasksCancelled: number }
+  | { status: "ok"; agentsArchived: number; tasksCancelled: number; issueWorkspacesAbandoned: number }
   | { status: "plan_changed"; activeAgents: MultiremiAgent[] }
+  | { status: "active_issue_workspaces"; issues: RuntimeIssueWorkspaceImpact[] }
   | { status: "daemon_last_runtime"; daemonId: string };
 
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
@@ -709,7 +723,7 @@ export class RuntimesRepo {
   /** Caller owns the Runtime workspace lifecycle and Plugin locks. */
   private deleteRuntimeWithinTransaction(
     id: string,
-    options: { repoolQueuedTasks?: boolean } = {},
+    options: RuntimeDeleteOptions & { repoolQueuedTasks?: boolean } = {},
   ): boolean {
     if (!this.getRuntime(id)) return false;
     if (this.ctx.db.query("SELECT id FROM multiremi_agents WHERE runtime_id = ? LIMIT 1").get(id)) return false;
@@ -718,6 +732,7 @@ export class RuntimesRepo {
     // is safely re-pooled below; work already owned by a daemon must be handled
     // explicitly by the confirmed cascade path instead of being orphaned.
     if (this.hasInFlightTasksForRuntime(id) || this.hasUnrepoolableQueuedTasksForRuntime(id)) return false;
+    if (!options.abandonIssueWorkspaces && this.listActiveIssueWorkspaces(id).length) return false;
     const now = nowIso();
     if (options.repoolQueuedTasks !== false) this.repoolQueuedTasksForRuntime(id);
     // A concierge whose host machine is going away must not stay enabled: an
@@ -728,12 +743,18 @@ export class RuntimesRepo {
     // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
     // FK enforcement disabled. Keep every runtime reference explicit here so
     // all delete paths have identical behavior.
+    if (options.abandonIssueWorkspaces) {
+      this.ctx.db.run(
+        `UPDATE multiremi_issue_workspaces
+         SET status = 'cleaned', runtime_id = NULL, cleaned_at = ?, updated_at = ?
+         WHERE runtime_id = ? AND status != 'cleaned'`,
+        [now, now, id],
+      );
+    }
     this.ctx.db.run(
       `UPDATE multiremi_issue_workspaces
-       SET runtime_id = NULL,
-           status = CASE WHEN status = 'cleaned' THEN status ELSE 'runtime_offline' END,
-           updated_at = ?
-       WHERE runtime_id = ?`,
+       SET runtime_id = NULL, updated_at = ?
+       WHERE runtime_id = ? AND status = 'cleaned'`,
       [now, id],
     );
     this.ctx.db.run(
@@ -819,8 +840,18 @@ export class RuntimesRepo {
     }
   }
 
-  /** The daemon id a task is bound to by a local_directory resource, or null. */
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
+  private listActiveIssueWorkspaces(runtimeId: string): RuntimeIssueWorkspaceImpact[] {
+    return this.ctx.db.query(
+      `SELECT iw.issue_id AS id, iw.issue_key AS key,
+              COALESCE(i.title, iw.issue_key) AS title, iw.status
+       FROM multiremi_issue_workspaces iw
+       LEFT JOIN multiremi_issues i ON i.id = iw.issue_id
+       WHERE iw.runtime_id = ? AND iw.status != 'cleaned'
+       ORDER BY iw.issue_key, iw.issue_id`,
+    ).all(runtimeId) as RuntimeIssueWorkspaceImpact[];
+  }
+
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
     const initial = this.getRuntime(id);
     if (!initial) return { status: "not_found" };
     let clearedProjects: Array<{ id: string; workspaceId: string; updatedAt: string }> = [];
@@ -840,14 +871,18 @@ export class RuntimesRepo {
         || this.hasUnrepoolableQueuedTasksForRuntime(id)
         || this.hasActiveTasksForAgents(archivedAgentIds)
       ) return { status: "active_tasks" as const };
+      const issues = this.listActiveIssueWorkspaces(id);
+      if (issues.length && !options.abandonIssueWorkspaces) {
+        return { status: "active_issue_workspaces" as const, issues };
+      }
       if (this.isLastManagedDaemonRuntime(current)) {
         return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
       }
       this.pauseAutopilotsByAgentIds(archivedAgentIds);
       clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
-      const deleted = this.deleteRuntimeWithinTransaction(id);
+      const deleted = this.deleteRuntimeWithinTransaction(id, options);
       if (!deleted) throw new Error(`Runtime changed during deletion: ${id}`);
-      return { status: "deleted" as const };
+      return { status: "deleted" as const, issueWorkspacesAbandoned: options.abandonIssueWorkspaces ? issues.length : 0 };
     })();
     this.publishClearedProjectDefaults(clearedProjects);
     return result;
@@ -856,6 +891,7 @@ export class RuntimesRepo {
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
     const initial = this.getRuntime(id);
     if (!initial) throw new Error(`Runtime not found: ${id}`);
@@ -870,6 +906,10 @@ export class RuntimesRepo {
       const activeAgents = this.ctx.agents().listActiveAgentsByRuntime(id);
       if (!activeAgentSetMatches(activeAgents, expected)) {
         return { status: "plan_changed" as const, activeAgents };
+      }
+      const issues = this.listActiveIssueWorkspaces(id);
+      if (issues.length && !options.abandonIssueWorkspaces) {
+        return { status: "active_issue_workspaces" as const, issues };
       }
       if (this.isLastManagedDaemonRuntime(current)) {
         return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
@@ -890,9 +930,10 @@ export class RuntimesRepo {
       this.pauseAutopilotsByAgentIds([...activeAgentIds, ...this.listArchivedAgentIdsByRuntime(id)]);
       const agentsArchived = activeAgentIds.length;
       clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
-      const deleted = this.deleteRuntimeWithinTransaction(id);
+      const deleted = this.deleteRuntimeWithinTransaction(id, options);
       if (!deleted) throw new Error(`Runtime not found: ${id}`);
-      return { status: "ok" as const, agentsArchived, tasksCancelled };
+      return { status: "ok" as const, agentsArchived, tasksCancelled,
+        issueWorkspacesAbandoned: options.abandonIssueWorkspaces ? issues.length : 0 };
     })();
     this.publishClearedProjectDefaults(clearedProjects);
     return result;

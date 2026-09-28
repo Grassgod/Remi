@@ -102,6 +102,7 @@ import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
+  type RuntimeDeleteOptions,
 } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   DaemonProfilesRepo,
@@ -2802,15 +2803,16 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
-    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
+    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id, options);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
-    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
+    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds, options);
   }
 
   mergeRuntimeInto(
