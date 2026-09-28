@@ -19,7 +19,7 @@
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
@@ -43,11 +43,20 @@ const WORKSPACE_ROW_LOCK = /UPDATE\s+multiremi_workspaces\s+SET\s+updated_at\s*=
 const READ_ONLY_STATEMENT = /^\s*(?:SELECT|PRAGMA|EXPLAIN|WITH\s+[\s\S]*?SELECT)\b/i;
 
 class LockRecordingDatabase implements SqlDatabase {
-  readonly trace: Array<{ cls: LockClass; key: string }> = [];
-  constructor(private readonly inner: Database) {}
+  readonly trace: Array<{ cls: LockClass; key: string; depth: number }> = [];
+  // Like the sentinel, nested calls share their outermost transaction frame.
+  readonly frames: Array<LockRecordingDatabase["trace"]> = [];
+  private depth = 0;
+  constructor(private readonly inner: SqlDatabase) {}
+
+  get currentDepth(): number {
+    return this.depth;
+  }
 
   private record(cls: LockClass, key: string): void {
-    this.trace.push({ cls, key });
+    const entry = { cls, key, depth: this.depth };
+    this.trace.push(entry);
+    if (this.depth > 0) this.frames[this.frames.length - 1]!.push(entry);
   }
 
   private classify(sql: string, kind: "read" | "write"): void {
@@ -60,12 +69,24 @@ class LockRecordingDatabase implements SqlDatabase {
   }
 
   query(sql: string): SqlStatement {
-    this.classify(sql, "read");
-    return this.inner.query(sql);
+    return this.statement(sql, this.inner.query(sql));
   }
   prepare(sql: string): SqlStatement {
-    this.classify(sql, "read");
-    return this.inner.prepare(sql);
+    return this.statement(sql, this.inner.prepare(sql));
+  }
+  private statement(sql: string, statement: SqlStatement): SqlStatement {
+    return new Proxy(statement, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target);
+        if (["get", "all", "run", "values"].includes(String(property))) {
+          return (...args: unknown[]) => {
+            this.classify(sql, "write");
+            return value.apply(target, args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
   }
   run(sql: string, ...params: unknown[]) {
     this.classify(sql, "write");
@@ -76,13 +97,23 @@ class LockRecordingDatabase implements SqlDatabase {
     this.inner.exec(sql);
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
-    return this.inner.transaction(fn) as (...args: any[]) => T;
+    return this.inner.transaction((...args: any[]) => {
+      const outermost = this.depth === 0;
+      if (outermost) this.frames.push([]);
+      this.depth += 1;
+      try {
+        return fn(...args);
+      } finally {
+        this.depth -= 1;
+      }
+    }) as (...args: any[]) => T;
   }
   get inTransaction(): boolean {
-    return this.inner.inTransaction;
+    return this.inner.inTransaction === true;
   }
   advisoryXactLock(key: string): void {
     this.record("N", key);
+    this.inner.advisoryXactLock?.(key);
   }
   close(): void {
     this.inner.close();
@@ -171,21 +202,40 @@ function firstAcquisitions(trace: LockRecordingDatabase["trace"]): LockRecording
  */
 function assertPath(
   label: string,
-  trace: LockRecordingDatabase["trace"],
+  recorder: LockRecordingDatabase,
   required: readonly LockClass[],
 ): void {
-  const present = new Set(trace.map((entry) => entry.cls));
-  const missing = required.filter((cls) => !present.has(cls));
-  if (missing.length > 0) {
-    const detail = trace.length
-      ? trace.map((e) => `${e.cls} ${e.key}`).join("\n  ")
+  const matches = recorder.frames.filter((frame) => {
+    const present = new Set(frame.map((entry) => entry.cls));
+    return required.every((cls) => present.has(cls));
+  });
+  if (matches.length === 0) {
+    const detail = recorder.trace.length
+      ? recorder.trace.map((e) => `${e.cls} ${e.key}`).join("\n  ")
       : "(no locks recorded)";
+    const seen = recorder.frames.map((frame) => [...new Set(frame.map((e) => e.cls))].join(","));
     throw new Error(
-      `${label} is missing required lock(s) ${missing.join(", ")}; ` +
-        `recorded: ${[...present].join(", ") || "(none)"}\n  ${detail}`,
+      `${label} has no transaction that took all required lock(s) ${required.join(", ")}; ` +
+        `per-transaction classes: ${seen.join(" | ") || "(none)"}\n  ${detail}`,
     );
   }
-  assertMonotonic(label, trace);
+  // Every transaction the path opened must itself be monotonic; a path that
+  // opens its own transaction (MUL-409's automatic start does) asserts on the
+  // frames, not on a concatenation of them.
+  for (const frame of recorder.frames) assertMonotonic(label, frame);
+}
+
+function assertFrames(
+  label: string,
+  recorder: LockRecordingDatabase,
+  expected: readonly (readonly LockClass[])[],
+): void {
+  expect(recorder.frames.length).toBe(expected.length);
+  recorder.frames.forEach((frame, index) => {
+    assertMonotonic(`${label} transaction ${index + 1}`, frame);
+    expect(firstAcquisitions(frame).map((entry) => entry.cls)).toEqual([...expected[index]!]);
+    expect(frame.every((entry) => entry.depth === 1)).toBe(true);
+  });
 }
 
 function assertMonotonic(label: string, trace: LockRecordingDatabase["trace"]): void {
@@ -206,6 +256,7 @@ function assertMonotonic(label: string, trace: LockRecordingDatabase["trace"]): 
 
 function clear(recorder: LockRecordingDatabase): void {
   recorder.trace.length = 0;
+  recorder.frames.length = 0;
 }
 
 /** One ingested messaging-core message, so the outcome service has a target. */
@@ -283,14 +334,14 @@ describe("MUL-405 per-path lock order", () => {
     const { store, recorder } = freshStore();
     clear(recorder);
     store.createIssue({ title: "direct", workspaceId: "local" });
-    assertPath("direct createIssue", recorder.trace, ["W", "N"]);
+    assertPath("direct createIssue", recorder, ["W", "N"]);
   });
 
   it("quick-create: W -> N", () => {
     const { store, recorder, agentId } = scaffold();
     clear(recorder);
     store.quickCreateIssue({ prompt: "quick create path", workspaceId: "local", agentId });
-    assertPath("quickCreateIssue", recorder.trace, ["W", "N"]);
+    assertPath("quickCreateIssue", recorder, ["W", "N"]);
   });
 
   it("Feishu bot message: W -> N -> sender row", () => {
@@ -309,7 +360,7 @@ describe("MUL-405 per-path lock order", () => {
       senderOpenId: "ou_lock_paths",
       text: "register the sender",
     });
-    assertPath("submitFeishuBotMessage", recorder.trace, ["W", "N", "D"]);
+    assertPath("submitFeishuBotMessage", recorder, ["W", "N", "D"]);
   });
 
   it("Autopilot create_issue: W -> N -> autopilot row", () => {
@@ -323,7 +374,7 @@ describe("MUL-405 per-path lock order", () => {
     });
     clear(recorder);
     store.runAutopilot(autopilot.id);
-    assertPath("runAutopilot(create_issue)", recorder.trace, ["W", "N", "D"]);
+    assertPath("runAutopilot(create_issue)", recorder, ["W", "N", "D"]);
   });
 
   it("setSenderAllowed: W -> N -> sender row -> audit", () => {
@@ -341,7 +392,7 @@ describe("MUL-405 per-path lock order", () => {
     const sender = store.listFeishuBotSenders("local")[0]!;
     clear(recorder);
     store.setFeishuBotSenderAllowed("local", sender.id, true, "local");
-    assertPath("setSenderAllowed", recorder.trace, ["W", "N", "D"]);
+    assertPath("setSenderAllowed", recorder, ["W", "N", "D"]);
   });
 
   it("recordAudit standalone: W -> N", () => {
@@ -350,7 +401,7 @@ describe("MUL-405 per-path lock order", () => {
     store.recordFeishuBotAudit("local", "updated", { actorId: "local", details: { probe: true } });
     // QA round 3: this case used to assert monotonicity only, so deleting the W
     // from recordAuditWithinTransaction left all eleven cases green.
-    assertPath("recordFeishuBotAudit", recorder.trace, ["W", "N", "D"]);
+    assertPath("recordFeishuBotAudit", recorder, ["W", "N", "D"]);
   });
 
   it("createPinnedItem: W -> N", () => {
@@ -363,7 +414,7 @@ describe("MUL-405 per-path lock order", () => {
       itemType: "issue",
       itemId: issue.id,
     });
-    assertPath("createPinnedItem", recorder.trace, ["W", "N", "D"]);
+    assertPath("createPinnedItem", recorder, ["W", "N", "D"]);
   });
 
   it("messaging outcomes createIssue: W -> N -> message row", () => {
@@ -372,7 +423,7 @@ describe("MUL-405 per-path lock order", () => {
     seedMessaging(store, ref);
     clear(recorder);
     store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Outcome Issue" });
-    assertPath("messagingOutcomes.createIssue", recorder.trace, ["W", "N", "D"]);
+    assertPath("messagingOutcomes.createIssue", recorder, ["W", "N", "D"]);
   });
 
   it("messaging outcomes approveProposal: W -> N -> message row", () => {
@@ -388,7 +439,7 @@ describe("MUL-405 per-path lock order", () => {
     store.messagingOutcomes.approveProposal(proposal.proposal!.id, {
       workspaceId: "local", approvedBy: member.id,
     });
-    assertPath("messagingOutcomes.approveProposal", recorder.trace, ["W", "N", "D"]);
+    assertPath("messagingOutcomes.approveProposal", recorder, ["W", "N", "D"]);
   });
 
   it("Feishu ingest createIssueOutcome: W -> N -> message row", () => {
@@ -396,7 +447,7 @@ describe("MUL-405 per-path lock order", () => {
     const { messageId } = seedFeishuIngest(store);
     clear(recorder);
     store.createFeishuIssueOutcome(messageId, { workspaceId: "local", title: "Ingest Issue" });
-    assertPath("createFeishuIssueOutcome", recorder.trace, ["W", "N", "D"]);
+    assertPath("createFeishuIssueOutcome", recorder, ["W", "N", "D"]);
   });
 
   it("Feishu ingest approveIssueProposal: W -> N -> message row", () => {
@@ -411,7 +462,7 @@ describe("MUL-405 per-path lock order", () => {
     store.approveFeishuIssueProposal(proposal.proposal!.id, {
       workspaceId: "local", approvedBy: member.id,
     });
-    assertPath("approveFeishuIssueProposal", recorder.trace, ["W", "N", "D"]);
+    assertPath("approveFeishuIssueProposal", recorder, ["W", "N", "D"]);
   });
 
   it("archiveAgent: W -> N -> agent row -> Feishu audit", () => {
@@ -420,7 +471,7 @@ describe("MUL-405 per-path lock order", () => {
     // (QA round 3 found it running W -> D -> N).
     clear(recorder);
     store.archiveAgent(agentId);
-    assertPath("archiveAgent", recorder.trace, ["W", "N", "D"]);
+    assertPath("archiveAgent", recorder, ["W", "N", "D"]);
   });
 
   it("Runtime cascade delete: W -> N -> config row -> Feishu audit", () => {
@@ -435,7 +486,7 @@ describe("MUL-405 per-path lock order", () => {
     clear(recorder);
     const result = store.deleteRuntimeWithArchivedAgentCleanup(runtimeId);
     expect(result.status).toBe("deleted");
-    assertPath("deleteRuntimeWithArchivedAgentCleanup", recorder.trace, ["W", "N", "D"]);
+    assertPath("deleteRuntimeWithArchivedAgentCleanup", recorder, ["W", "N", "D"]);
   });
 
   it("updateIssueWithinTransaction: W -> issue row, and it takes no number lock", () => {
@@ -448,7 +499,7 @@ describe("MUL-405 per-path lock order", () => {
     const project = store.createProject({ title: "Lock paths project", workspaceId: "local" });
     clear(recorder);
     store.updateIssue(issue.id, { projectId: project.id });
-    assertPath("updateIssue(projectId)", recorder.trace, ["W", "D"]);
+    assertPath("updateIssue(projectId)", recorder, ["W", "D"]);
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
   });
 
@@ -463,7 +514,7 @@ describe("MUL-405 per-path lock order", () => {
     // The `UPDATE ... SET id = id` row lock is the first acquisition; this path
     // does not write the Feishu audit trail or create a child Issue, so N must
     // not appear.
-    assertPath("grantParentDone", recorder.trace, ["D"]);
+    assertPath("grantParentDone", recorder, ["D"]);
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
     expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
   });
@@ -477,8 +528,151 @@ describe("MUL-405 per-path lock order", () => {
     store.grantParentDone(issue.id, "local");
     clear(recorder);
     store.revokeParentDone(issue.id, "local");
-    assertPath("revokeParentDone", recorder.trace, ["D"]);
+    assertPath("revokeParentDone", recorder, ["D"]);
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
     expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
   });
+
+  // ── MUL-409 (main bbc964c9): the dependency gate's new transaction paths ──
+  //
+  // Each one is checked for a number lock before it is classified: none of them
+  // creates an Issue or writes the Feishu audit trail, so N must NOT appear and
+  // the required set is {W, D} (or {D} where the path takes only the Issue row).
+
+  it("MUL-409 forced start: W -> issue row -> round, no number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Forced dependent", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+      blockedBy: [prereq.id],
+    });
+    clear(recorder);
+    // The member override flips backlog -> todo despite the unmet prerequisite.
+    store.updateIssue(dependent.id, {
+      status: "todo", force: true, actorType: "member", actorId: "local",
+    });
+    assertPath("MUL-409 forced start", recorder, ["W", "D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+  });
+
+  it("MUL-409 automatic start: W -> issue row -> round, no number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Auto dependent", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+      blockedBy: [prereq.id],
+    });
+    clear(recorder);
+    store.updateIssue(prereq.id, { status: "done" });
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+    assertFrames("MUL-409 automatic start", recorder, [["D"], ["W", "D"]]);
+    assertPath("MUL-409 automatic start", recorder, ["W", "D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+  });
+
+  it("MUL-409 session task creation: W -> participant row -> task, no number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const issue = store.createIssue({
+      title: "Session task host", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+    });
+    const session = store.createIssueSession(issue.id, { title: "Lane" });
+    clear(recorder);
+    store.createSessionTask(session.id, { agentId, prompt: "session round" });
+    // before the merge this was D (participant INSERT) -> W; the sentinel caught
+    // it on MUL-409's own Postgres probe.
+    assertPath("MUL-409 session task", recorder, ["W", "D"]);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+  });
+
+  it("MUL-409 standalone dependency write: D only, no workspace or number lock", () => {
+    const { store, recorder, agentId } = freshStoreWithAgent();
+    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Dependency writer", workspaceId: "local",
+      assigneeType: "agent", assigneeId: agentId,
+    });
+    clear(recorder);
+    store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
+    // This entry point opens its own transaction for the edge row alone: it
+    // reads both Issues, writes `multiremi_issue_dependencies` (D) and never
+    // takes the workspace row lock or a number lock.
+    assertPath("MUL-409 createIssueDependency", recorder, ["D"]);
+    assertFrames("MUL-409 createIssueDependency", recorder, [["D"]]);
+    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
+    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
+  });
+
+  it("MUL-409 messaging outcome joins its creation owner: W -> N -> D", () => {
+    const { store, recorder } = freshStore();
+    const ref = { connectionId: "conn_owner_lock", externalMessageId: "msg_owner_lock" };
+    seedMessaging(store, ref);
+    const original = store.messaging.recordOutcomeWithinTransaction;
+    const depths: number[] = [];
+    store.messaging.recordOutcomeWithinTransaction = function (input) {
+      depths.push(recorder.currentDepth);
+      return original.call(this, input);
+    };
+    clear(recorder);
+    try {
+      expect(store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Owner outcome" }).created).toBe(true);
+    } finally {
+      store.messaging.recordOutcomeWithinTransaction = original;
+    }
+    expect(depths).toEqual([1]);
+    assertPath("MUL-409 messaging owner", recorder, ["W", "N", "D"]);
+    assertFrames("MUL-409 messaging owner", recorder, [["W", "N", "D"]]);
+    expect(store.messaging.listOutcomes(ref.connectionId, ref.externalMessageId)).toHaveLength(1);
+  });
+});
+
+it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic start and dependency transaction frames", async () => {
+  const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL!;
+  const database = `mul405_frames_${process.pid}_${Date.now()}`;
+  const admin = new Bun.SQL(adminUrl, { max: 1 });
+  await admin.unsafe(`CREATE DATABASE ${database}`);
+  const url = new URL(adminUrl);
+  url.pathname = `/${database}`;
+  const pg = new PostgresSyncDatabase(url.toString());
+  const recorder = new LockRecordingDatabase(pg);
+  // Preserve instanceof/dialect: auto-start must exercise its actual PG row lock.
+  const recordedMethods = new Set(["query", "prepare", "run", "exec", "transaction", "advisoryXactLock"]);
+  const recordedPg = new Proxy(pg, {
+    get(target, property) {
+      const owner = recordedMethods.has(String(property)) ? recorder : target;
+      const value = Reflect.get(owner, property, owner);
+      return typeof value === "function" ? value.bind(owner) : value;
+    },
+  });
+  try {
+    const store = new MultiremiStore(recordedPg);
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "PG frame owner", provider: "codex", workspaceId: "local" });
+    const prerequisite = store.createIssue({ title: "PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "PG dependent", assigneeType: "agent", assigneeId: agent.id, status: "backlog",
+    });
+    clear(recorder);
+    pg.resetTransactionDepthStats();
+    store.createIssueDependency(dependent.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+    assertFrames("PG createIssueDependency", recorder, [["D"]]);
+    expect(pg.maxTransactionDepth).toBe(1);
+    console.info("MUL-409 PG dependency frames", JSON.stringify(recorder.frames.map(firstAcquisitions)));
+
+    clear(recorder);
+    pg.resetTransactionDepthStats();
+    store.updateIssue(prerequisite.id, { status: "done" });
+    assertFrames("PG automatic start", recorder, [["D"], ["W", "D"]]);
+    expect(pg.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+    console.info("MUL-409 PG automatic-start frames", JSON.stringify(recorder.frames.map(firstAcquisitions)));
+  } finally {
+    pg.close();
+    await admin.unsafe(`DROP DATABASE ${database} WITH (FORCE)`);
+    await admin.end();
+  }
 });
