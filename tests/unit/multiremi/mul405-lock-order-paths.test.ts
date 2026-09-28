@@ -20,27 +20,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { PostgresSyncDatabase, type SqlDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
+import { classifyLockOrderStatement, type LockOrderClass } from "@multiremi/store/lock-order-sentinel.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 
-type LockClass = "W" | "N" | "D";
-
-/** `UPDATE multiremi_workspaces SET updated_at = updated_at ...` — the W lock. */
-const WORKSPACE_ROW_LOCK = /UPDATE\s+multiremi_workspaces\s+SET\s+updated_at\s*=\s*updated_at/i;
-/**
- * D is any non-read write inside the transaction, which is also the rule the
- * whole-suite sentinel uses (`packages/server/src/store/lock-order-sentinel.ts`).
- *
- * Broad on purpose: PostgreSQL takes a row lock for an INSERT or an UPDATE, so
- * every domain write is a D acquisition regardless of whether it was written to
- * be a lock. Narrowing this to the known no-op lock statements is exactly how
- * the earlier version missed `archiveAgent` writing `UPDATE multiremi_agents`
- * before the audit number lock.
- */
-const READ_ONLY_STATEMENT = /^\s*(?:SELECT|PRAGMA|EXPLAIN|WITH\s+[\s\S]*?SELECT)\b/i;
+type LockClass = LockOrderClass;
 
 class LockRecordingDatabase implements SqlDatabase {
   readonly trace: Array<{ cls: LockClass; key: string; depth: number }> = [];
@@ -59,13 +46,10 @@ class LockRecordingDatabase implements SqlDatabase {
     if (this.depth > 0) this.frames[this.frames.length - 1]!.push(entry);
   }
 
-  private classify(sql: string, kind: "read" | "write"): void {
-    if (WORKSPACE_ROW_LOCK.test(sql)) {
-      this.record("W", "workspace-lifecycle");
-      return;
+  private classify(sql: string): void {
+    for (const cls of classifyLockOrderStatement(sql)) {
+      this.record(cls, cls === "W" ? "workspace-lifecycle" : sql.replace(/\s+/g, " ").slice(0, 80));
     }
-    if (READ_ONLY_STATEMENT.test(sql)) return;
-    if (kind === "write") this.record("D", sql.replace(/\s+/g, " ").slice(0, 80));
   }
 
   query(sql: string): SqlStatement {
@@ -80,7 +64,7 @@ class LockRecordingDatabase implements SqlDatabase {
         const value = Reflect.get(target, property, target);
         if (["get", "all", "run", "values"].includes(String(property))) {
           return (...args: unknown[]) => {
-            this.classify(sql, "write");
+            this.classify(sql);
             return value.apply(target, args);
           };
         }
@@ -89,11 +73,11 @@ class LockRecordingDatabase implements SqlDatabase {
     });
   }
   run(sql: string, ...params: unknown[]) {
-    this.classify(sql, "write");
+    this.classify(sql);
     return this.inner.run(sql, ...params as never[]);
   }
   exec(sql: string): void {
-    this.classify(sql, "write");
+    this.classify(sql);
     this.inner.exec(sql);
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
@@ -120,12 +104,22 @@ class LockRecordingDatabase implements SqlDatabase {
   }
 }
 
-let openDbs: Database[] = [];
+let openDbs: Array<Database | PostgresSyncDatabase> = [];
+let pgDatabases: string[] = [];
 let previousEncryptionKey: string | undefined;
 
 afterEach(() => {
   for (const db of openDbs) db.close();
   openDbs = [];
+  if (pgDatabases.length) {
+    const admin = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
+    try {
+      for (const name of pgDatabases) admin.exec(`DROP DATABASE ${name} WITH (FORCE)`);
+    } finally {
+      admin.close();
+      pgDatabases = [];
+    }
+  }
   if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
 });
@@ -133,10 +127,29 @@ afterEach(() => {
 function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase } {
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
-  const db = new Database(":memory:");
+  let db: Database | PostgresSyncDatabase;
+  const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
+  if (adminUrl) {
+    const name = `mul405_path_${process.pid}_${Date.now()}_${pgDatabases.length}`;
+    const admin = new PostgresSyncDatabase(adminUrl);
+    try { admin.exec(`CREATE DATABASE ${name}`); } finally { admin.close(); }
+    pgDatabases.push(name);
+    const url = new URL(adminUrl);
+    url.pathname = `/${name}`;
+    db = new PostgresSyncDatabase(url.toString());
+  } else db = new Database(":memory:");
   openDbs.push(db);
   const recorder = new LockRecordingDatabase(db);
-  const store = new MultiremiStore(recorder as unknown as SqlDatabase);
+  // Reuse QA's native-PG proxy: preserve instanceof/dialect and afterCommit.
+  const recordedMethods = new Set(["query", "prepare", "run", "exec", "transaction", "advisoryXactLock"]);
+  const recordedDb = db instanceof PostgresSyncDatabase ? new Proxy(db, {
+    get(target, property) {
+      const owner = recordedMethods.has(String(property)) ? recorder : target;
+      const value = Reflect.get(owner, property, owner);
+      return typeof value === "function" ? value.bind(owner) : value;
+    },
+  }) : recorder;
+  const store = new MultiremiStore(recordedDb);
   store.ensureLocalWorkspace();
   return { store, recorder };
 }

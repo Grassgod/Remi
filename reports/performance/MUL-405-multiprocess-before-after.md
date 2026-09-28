@@ -5,7 +5,7 @@
 - 生成时间：2026-09-27
 - 改前树：`43d75571e736293b1300fabf1c54c2d03302de57`（本分支的父提交，`git archive` 导出，未含本 PR 改动）
 - 改后树：`1f5b282a`（本分支，工作树实测）
-- 被测实现指纹：`migrations.ts` sha256 `dc170fea18fde68f1abe30b62c823f4e941da9f02b85ee0a59ff115967218267`、`db/postgres.ts` sha256 `075e740bf4882adcbb02225fe7314812d5072909e18374e79cb40bbe510d8411`。两份报告 JSON 都记了这两个字段；复核时先比对，再决定数字是否仍然描述当前代码。
+- 改后被测实现指纹：`migrations.ts` sha256 `dc170fea18fde68f1abe30b62c823f4e941da9f02b85ee0a59ff115967218267`、`db/postgres.ts` sha256 `075e740bf4882adcbb02225fe7314812d5072909e18374e79cb40bbe510d8411`。这两个字段只记录在 after JSON，before JSON 没有实现指纹字段，改前版本以本节的固定基线提交及当时导出树为准；复核 after 时先比对指纹，再决定数字是否仍然描述当前代码。
 - 运行机器：linux x64，64 vCPU
 - Bun：1.3.14
 - 数据库：**真实 PostgreSQL 15.19**（Debian `15.19-0+deb12u1`），本机无 Docker，按仓库 wiki 的 `guides/postgresql-without-docker-in-agent-container.md` 用 `apt-get download` + 嵌套 user namespace 起在 `127.0.0.1:5442`
@@ -28,7 +28,7 @@
 |---|---|---|
 | 冷库 2 进程并发 `runMigrations`，20 轮 | **20/20 轮失败（失败率 100%）** | **0/20 轮失败（失败率 0%）** |
 | 同库 2 进程各 `createIssue` 200 次 | 400 次调用成功，但只产生 **348 个不同编号**，**52 个重复** | **400 个编号全部唯一，0 个重复，0 次失败** |
-| 并发迁移单轮墙钟 p50 / p95 | 2900 ms / 3016 ms | 3931 ms / 4092 ms |
+| 并发迁移单轮墙钟 p50 / p95 | 2900 ms / 3016 ms | 4011 ms / 4163 ms |
 
 改前 20 轮的失败样本（每轮先到的进程都撞在同一个 catalog 冲突上）：
 
@@ -41,7 +41,7 @@ SQL: CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (id TEXT PRIMARY KEY
 
 ## 迁移变慢是预期结果，不是回归
 
-p50 从 2900 ms 升到 3931 ms，增量约 1 秒，正是第二个进程在等第一个跑完。这段等待是**本次修复的目的**：改前它不等待，而是直接失败并让容器起不来。迁移只在启动时跑一次，单进程下的耗时没有变化。
+p50 从 2900 ms 升到 4011 ms，增量约 1.1 秒，正是第二个进程在等第一个跑完。这段等待是**本次修复的目的**：改前它不等待，而是直接失败并让容器起不来。迁移只在启动时跑一次，单进程下的耗时没有变化。
 
 ## 锁本身的互斥性（`--part lock`）
 
@@ -493,3 +493,69 @@ tsc、架构、文档、CLI checker 和路由快照仍通过。最终完整目�
 这个代码合并结果。另校正 409 深度统计接口残留的“没有 SAVEPOINT”旧注释，
 明确本分支的嵌套实现使用 SAVEPOINT，但 409 的 owner 路径仍断言深度 1；
 此次仅改注释，不改事务边界或执行行为。
+
+## 第六轮返工：锁定 SELECT 分类（R1）
+
+QA `cmt_rhu9radskp6o` 的负控证明原哨兵漏记真实行锁：原生 PG
+先执行 Issue `SELECT ... FOR UPDATE`，再取 W，仍然提交；automatic start
+后移 W 的变异也未被旧分类器检出。本轮按缺陷修复，不改变 W→N→D 契约。
+
+先合 `origin/main = 60c057be`，合并提交 `c8379505`，无文本冲突。
+自动合并保留 395 的 status-pages 只读快照、456 的委派返回语义及 405 的
+取锁与提交后事件队列。没有修改已由 QA 确认的业务路径事务边界。
+
+`store/lock-order-sentinel.ts` 导出共用 `classifyLockOrderStatement`，
+逐路径记录器直接调用它。分类器按 token 与查询作用域解析锁定 SELECT，
+处理四种锁强度、OF 列表/别名、NOWAIT/SKIP LOCKED、大小写、换行、
+FROM/JOIN、CTE 与子查询；跳过字面量和注释。workspace 行锁记 W，其他
+表的行锁记 D，N 仍由 advisory API 记账。既有写语句的分类保持不变；
+`SET TRANSACTION` 只设置事务特性，没有行锁，也不记账。
+普通 SELECT、SQLite PRAGMA 仍是纯读。没有增加业务路径白名单或例外。
+
+OF 只锁所列引用；未列 OF 时锁当前查询的 FROM/JOIN 表，外层锁子句不
+向 WITH 查询传播，CTE 自己的锁子句仍记账。这一语义对照
+[PostgreSQL SELECT locking clause](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE)。
+
+分类器正式单测为 **74 pass / 0 fail**（50 个具名边界用例，以及
+4 种强度 × 3 种等待选项 × 2 种表类的 24 个用例）。原生 PG 正负控复用
+QA 的独立连接 NOWAIT 证据，覆盖四种强度及 OF 的两种目标：
+修复前 **5 pass / 5 fail**，修复后 **10 pass / 0 fail**。
+观察连接有自己的短事务帧；不关闭哨兵，也不让不同连接的锁混入同一帧。
+
+所有 21 条既有逐路径断言保持，在配置 PG 时复用 QA 的原生 PG 代理，
+保留 instanceof/dialect、afterCommit 与事务统计；未配置 PG 时仍用 SQLite。
+automatic start 的真实 PG 首次帧现在明确为 `T1 D → COMMIT`、
+`T2 W → D(SELECT FOR UPDATE) → COMMIT`，最大事务深度仍为 1。
+
+### 两项变异
+
+| 变异 | 结果 |
+|---|---|
+| 将 automatic start 的 W 移到 Issue 锁定 SELECT 后 | `automatic start\|real PG`：0 pass / 2 fail；哨兵报告 D→W |
+| 将共用分类器恢复成忽略全部 SELECT | 原生 PG：5 pass / 5 fail；负控报 `Received function did not throw` |
+
+第一项的实际失败 trace：
+
+```text
+MUL-405 lock order violated: first W acquisition comes after a higher class
+D SELECT id FROM multiremi_issues WHERE id = ? FOR UPDATE
+W UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?
+```
+
+第二项的失败信息：
+
+```text
+Expected substring: "MUL-405 lock order violated"
+Received function did not throw
+```
+
+两项各自还原；分类器与 issues-repo 的 SHA-256 与变异前固定检查点完全
+一致，issues-repo 没有非 merge diff。还原后分类器、原生正负控、逐路径三
+文件合计 **106 pass / 0 fail**。本轮最终 head 的串行 PG/SQLite 全量、
+新增违例检查和 CI 数字见 MUL-405 第六轮交付评论，不复用前几轮结果。
+
+### 早期报告勘误
+
+本报告早期改后迁移 p50/p95 已按原 after JSON 校正为 **4011/4163 ms**，
+并明确 migrations/postgres 两个实现指纹只存在于 after JSON。原始 JSON、
+20 轮参数与固定基线没有改动，也未将本轮或 QA 的时延混入早期对比。
