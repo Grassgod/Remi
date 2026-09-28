@@ -44,7 +44,6 @@ export interface SqlDatabase {
    * backend rather than probing.
    */
   readonly dialect?: SqlDatabaseDialect;
-  readonly inTransaction?: boolean;
   query(sql: string): SqlStatement;
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
@@ -52,14 +51,17 @@ export interface SqlDatabase {
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
   /**
    * True while a `transaction()` callback is open. `BEGIN` cannot nest on
-   * either backend, so a helper that may run inside or outside a transaction
-   * checks this instead of guessing from its call site.
+   * either backend (a nested `transaction()` runs as a SAVEPOINT on both), so a
+   * helper that may run inside or outside a transaction checks this instead of
+   * guessing from its call site.
    */
   readonly inTransaction?: boolean;
   /**
-   * Deepest `transaction()` nesting seen by this handle. Postgres has no
-   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
-   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   * Deepest top-level `transaction()` (outer `BEGIN`) nesting seen by this
+   * handle. A nested `transaction()` is a SAVEPOINT inside the outer unit
+   * (MUL-426, cmt_ces3m03jimtd) and is not counted (MUL-402 rulings
+   * cmt_78bx01xhb75x, cmt_gestk2r6imjh); a path whose contract is "one atomic
+   * unit" asserts this is 1.
    */
   readonly maxTransactionDepth?: number;
   close(): void;
@@ -391,10 +393,11 @@ export class PostgresSyncDatabase implements SqlDatabase {
     }
   }
   /**
-   * Deepest nesting reached so far. A caller that must stay a single atomic
-   * unit (issue creation, for example) opens its transaction only when it does
-   * not already own one and then checks this is 1, because a nested `BEGIN`
-   * cannot be rolled back independently on this bridge.
+   * Deepest top-level nesting reached so far. A caller that must stay a single
+   * atomic unit (issue creation, for example) opens its transaction only when it
+   * does not already own one and then checks this is 1. Only the outer `BEGIN`
+   * counts: a nested `transaction()` is a SAVEPOINT that commits or rolls back
+   * with the outer unit (MUL-402 rulings cmt_78bx01xhb75x, cmt_gestk2r6imjh).
    */
   get maxTransactionDepth(): number {
     return this.peakTransactionDepth;
