@@ -69,7 +69,7 @@
 
 ## 分页副作用实测
 
-最终 head `8a24e769` 用本任务独立的 PostgreSQL15.19、Bun1.3.14 loopback 实例重测。相同脚本/fixture、同版本PG，两进程分别导入 main `b95dd2fa` 和本PR实现，warmup3+n31，交替执行顺序，p95为nearest-rank；额外p95为31个成对after-before值。原始每对数据在 [measurements.json](MUL-398-c1-measurements.json)。
+产品代码测量 head `8a24e769` 用本任务独立的 PostgreSQL15.19、Bun1.3.14 loopback 实例重测。后续提交只更新报告；相同脚本/fixture、同版本PG，两进程分别导入 main `b95dd2fa` 和本PR实现，warmup3+n31，交替执行顺序，p95为nearest-rank；额外p95为31个成对after-before值。原始每对数据在 [measurements.json](MUL-398-c1-measurements.json)。
 
 daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计589,822 B（>512 KiB）；降级事件本身只带task_id/seq_start/seq_end，不把巨大正文塞回引用。两侧始终交付N个browser帧，页大小8，消息 SELECT=ceil(N/8)。总桥调用还包含每页scope/identity查询，故不是仅消息SELECT数。
 
