@@ -38,6 +38,7 @@ export function MyIssuesPage() {
   const sortBy = useStore(myIssuesViewStore, (s) => s.sortBy);
   const sortDirection = useStore(myIssuesViewStore, (s) => s.sortDirection);
   const agentRunningFilter = useStore(myIssuesViewStore, (s) => s.agentRunningFilter);
+  const showSubIssues = useStore(myIssuesViewStore, (s) => s.showSubIssues);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
 
   const sort = useMemo(
@@ -73,24 +74,24 @@ export function MyIssuesPage() {
   // Direct member assignment is intentionally excluded — that is the
   // `assigned` tab's semantics.
   const filter: MyIssuesFilter = useMemo(() => {
-    if (!user) return {};
+    if (!user) return { top_level_only: !showSubIssues };
     switch (scope) {
       case "assigned":
-        return { assignee_id: user.id };
+        return { assignee_id: user.id, top_level_only: !showSubIssues };
       case "created":
-        return { creator_id: user.id };
+        return { creator_id: user.id, top_level_only: !showSubIssues };
       case "agents":
-        return { involves_user_id: user.id };
+        return { involves_user_id: user.id, top_level_only: !showSubIssues };
       case "all":
         // "All" is the union of the three single-relation filters above;
         // the per-relation user id is plumbed through `userId` to
         // myIssue*Options. The filter object stays empty so it carries
         // no narrowing of its own.
-        return {};
+        return { top_level_only: !showSubIssues };
       default:
-        return { assignee_id: user.id };
+        return { assignee_id: user.id, top_level_only: !showSubIssues };
     }
-  }, [scope, user]);
+  }, [scope, user, showSubIssues]);
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(
     () => ({

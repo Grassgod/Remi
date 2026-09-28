@@ -626,6 +626,7 @@ describe("MUL-400 E3 — surfaces", () => {
     const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
     const waiting = store.createIssue({ title: "Waiting", status: "backlog", parentIssueId: parent.id, blockedBy: [prereq.id] });
     const active = store.createIssue({ title: "Active", status: "in_progress", parentIssueId: parent.id });
+    store.createIssue({ title: "Unscheduled backlog", status: "backlog", parentIssueId: parent.id });
 
     const children = await (await app.request(`/api/issues/${parent.id}/children`)).json() as { issues: Array<Record<string, unknown>> };
     expect(children.issues.find((row) => row.id === waiting.id)!.blocked_by).toEqual([prereq.key]);
@@ -639,11 +640,12 @@ describe("MUL-400 E3 — surfaces", () => {
     expect(detail.waitingOn.unmet).toHaveLength(1);
 
     const progress = await (await app.request("/api/issues/child-progress")).json() as {
-      progress: Array<{ parentIssueId: string; waiting: number; active: number }>;
+      progress: Array<{ parentIssueId: string; total: number; waiting: number; active: number }>;
     };
     const parentRow = progress.progress.find((row) => row.parentIssueId === parent.id)!;
     expect(parentRow.waiting).toBe(1);
     expect(parentRow.active).toBe(1);
+    expect(parentRow.total).toBe(3);
   });
 
   it("filters lists by parent_id and top_level_only", async () => {

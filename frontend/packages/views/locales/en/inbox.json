@@ -30,6 +30,8 @@
     "mark_group_read": "Mark group as read",
     "mark_done_tooltip": "Mark as done",
     "archive_tooltip": "Archive",
+    "expand_group": "Expand notifications",
+    "collapse_group": "Collapse notifications",
     "feishu_source": "Feishu message",
     "time": {
       "just_now": "just now",
@@ -73,7 +75,9 @@
     "feishu_message_notification": "Feishu message",
     "feishu_reply_draft": "Feishu reply draft",
     "feishu_issue_proposal": "Feishu issue proposal",
-    "feishu_ingest_connection_alert": "Feishu ingestion alert"
+    "feishu_ingest_connection_alert": "Feishu ingestion alert",
+    "child_issue_terminal": "Sub-issue update",
+    "decision_requested": "Decision requested"
   },
   "labels": {
     "set_status_to": "Set status to",

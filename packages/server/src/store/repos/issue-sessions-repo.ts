@@ -2,7 +2,7 @@
 // results), extracted verbatim from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
-import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
@@ -648,7 +648,7 @@ export class IssueSessionsRepo {
           assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
           assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
           assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
-          parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+          parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         }, childStatusChanges, deferredEvents);
       })();
     } catch (err) {

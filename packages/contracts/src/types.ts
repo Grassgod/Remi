@@ -1589,6 +1589,20 @@ export interface MultiremiTask {
   /** Return task that has claimed this delegated task's terminal report. */
   delegationReturnTaskId: string | null;
   delegation_return_task_id?: string | null;
+  /** MUL-400 E2b: the Issue Session the delegator was in when it dispatched
+   *  this task. The terminal report returns there, not to the task's own
+   *  Session, so a cross-issue delegation calls the leader back home. */
+  delegatedFromIssueSessionId: string | null;
+  delegated_from_issue_session_id?: string | null;
+  /** MUL-400 E2b: why a task-token dispatch was NOT recorded as a delegation.
+   *  Read at terminal time to explain the silence instead of dropping it. */
+  delegationSkipReason: string | null;
+  delegation_skip_reason?: string | null;
+  /** MUL-400 E2b server-owned origin of a notification round. `child_status`
+   *  marks the E2 parent wake-up, so the delegation-return de-duplication can
+   *  tell a server wake round apart from an agent's manual wake-up task. */
+  wakeSource: string | null;
+  wake_source?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This
@@ -1868,6 +1882,15 @@ export interface CreateTaskInput {
   delegation_id?: string | null;
   delegatedByAgentId?: string | null;
   delegated_by_agent_id?: string | null;
+  /** MUL-400 E2b server-internal return landing point and skip audit. Public
+   *  task creation strips both; only the task-token route sets them. */
+  delegatedFromIssueSessionId?: string | null;
+  delegated_from_issue_session_id?: string | null;
+  delegationSkipReason?: string | null;
+  delegation_skip_reason?: string | null;
+  /** Server-internal; the task-token route strips both spellings. */
+  wakeSource?: string | null;
+  wake_source?: string | null;
   /** Public dispatch hint. The API validates the referenced delegated task and
    * derives its lineage; callers cannot provide a delegation ID directly. */
   continueTaskId?: string | null;
@@ -2530,6 +2553,12 @@ export interface ListIssuesInput {
   offset?: number;
 }
 
+export interface IssueStatusPages {
+  groups: Record<string, { issues: MultiremiIssue[]; total: number; has_more: boolean }>;
+  /** Workspace-wide count, independent of the page's status/assignee/project filters. */
+  archived_total?: number;
+}
+
 export interface AssignIssueInput {
   assigneeType?: MultiremiAssigneeType | null;
   assignee_type?: MultiremiAssigneeType | null;
@@ -2898,6 +2927,9 @@ export interface MultiremiInboxItem {
   workspace_id?: string;
   issueId: string | null;
   issue_id?: string | null;
+  issue_parent_id?: string | null;
+  issue_parent_key?: string | null;
+  issue_parent_title?: string | null;
   memberId: string;
   member_id?: string;
   recipientType: string;
