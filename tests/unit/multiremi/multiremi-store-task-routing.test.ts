@@ -1621,6 +1621,44 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(firstRuntime.id)?.id).toBe(task.id);
   });
 
+  it("MUL-467 never creates an orphaned workspace on deletion and releases its task after explicit abandonment", () => {
+    const store = createStore();
+    const source = store.registerRuntime({ id: "rt_mul467_source", name: "source", provider: "codex" });
+    const target = store.registerRuntime({ id: "rt_mul467_target", name: "target", provider: "codex" });
+    const agent = store.createAgent({ name: "Recovery", provider: "codex" });
+    const issue = store.createIssue({ title: "Deletion invariant" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: source.id, rootPath: "/tmp/mul467",
+      branchName: `agent/${issue.key}`, status: "dirty" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
+    expect(store.deleteRuntime(source.id)).toBe(false);
+    expect(store.deleteRuntimeWithArchivedAgentCleanup(source.id).status).toBe("active_issue_workspaces");
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ status: "dirty", runtimeId: source.id });
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.claimTask(target.id)).toBeNull();
+    expect(store.deleteRuntimeWithArchivedAgentCleanup(source.id, { abandonIssueWorkspaces: true })).toEqual({
+      status: "deleted", issueWorkspacesAbandoned: 1,
+    });
+    expect(db!.query("SELECT issue_id FROM multiremi_issue_workspaces WHERE status != 'cleaned' AND runtime_id IS NULL").all()).toEqual([]);
+    expect(store.claimTask(target.id)?.id).toBe(task.id);
+  });
+
+  it("MUL-467 gives historical orphaned workspaces a concrete recovery command and restores claiming", () => {
+    const store = createStore();
+    const source = store.registerRuntime({ id: "rt_mul467_legacy", name: "legacy", provider: "codex" });
+    const target = store.registerRuntime({ id: "rt_mul467_recovery", name: "recovery", provider: "codex" });
+    const agent = store.createAgent({ name: "Legacy recovery", provider: "codex" });
+    const issue = store.createIssue({ title: "Historical orphan" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: source.id, rootPath: "/tmp/mul467-legacy",
+      branchName: `agent/${issue.key}`, status: "ready" });
+    db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL, status = 'runtime_offline' WHERE issue_id = ?", [issue.id]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "resume" });
+    expect(store.claimTask(target.id)).toBeNull();
+    store.refreshQueuedCapabilityWaitReasons(Date.now() + 120_000);
+    expect(store.getTask(task.id)?.waitReason).toContain(`remi issue workspace abandon ${issue.id} --yes`);
+    expect(store.abandonIssueWorkspace(issue.id, "local").status).toBe("abandoned");
+    expect(store.claimTask(target.id)?.id).toBe(task.id);
+  });
+
   it("lets another provider on the same daemon continue a persistent Issue workspace", () => {
     const store = createStore();
     const claude = store.registerRuntime({

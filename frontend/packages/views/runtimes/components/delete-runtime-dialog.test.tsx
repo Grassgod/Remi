@@ -53,13 +53,14 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
   useDeleteRuntime: () => ({
     isPending: false,
     mutate: vi.fn(),
-    mutateAsync: (...args: unknown[]) => apiDeleteRuntime(...args),
+    mutateAsync: (vars: { runtimeId: string; abandonIssueWorkspaces?: boolean }) =>
+      apiDeleteRuntime(vars.runtimeId, vars.abandonIssueWorkspaces ?? false),
   }),
   useArchiveAgentsAndDeleteRuntime: () => ({
     isPending: false,
     mutate: vi.fn(),
-    mutateAsync: (vars: { runtimeId: string; expectedActiveAgentIds: string[] }) =>
-      apiArchiveAgentsAndDeleteRuntime(vars.runtimeId, vars.expectedActiveAgentIds),
+    mutateAsync: (vars: { runtimeId: string; expectedActiveAgentIds: string[]; abandonIssueWorkspaces?: boolean }) =>
+      apiArchiveAgentsAndDeleteRuntime(vars.runtimeId, vars.expectedActiveAgentIds, vars.abandonIssueWorkspaces ?? false),
   }),
 }));
 
@@ -200,6 +201,55 @@ function renderDialog(opts: {
 }
 
 describe("DeleteRuntimeDialog", () => {
+  it("lists blocking Issue workspaces and requires explicit abandonment for strict deletion", async () => {
+    apiDeleteRuntime.mockRejectedValueOnce(new ApiError("active workspaces", 409, {
+      code: "runtime_has_active_issue_workspaces",
+      issues: [{ id: "issue-1", key: "MUL-467", title: "Runtime workspace recovery", status: "dirty" }],
+    })).mockResolvedValueOnce({ status: "ok", issue_workspaces_abandoned: 1 });
+    const { onDeleted } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
+    await screen.findByText("MUL-467");
+    expect(screen.getByText("Runtime workspace recovery")).toBeInTheDocument();
+    expect(screen.getByText("(dirty)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete runtime" })).toBeDisabled();
+    expect(onDeleted).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce());
+    expect(apiDeleteRuntime).toHaveBeenLastCalledWith("rt-1", true);
+  });
+
+  it("requires both Agent and workspace confirmations after a cascade refusal", async () => {
+    apiArchiveAgentsAndDeleteRuntime.mockRejectedValueOnce(new ApiError("active workspaces", 409, {
+      code: "runtime_has_active_issue_workspaces",
+      issues: [{ id: "issue-1", key: "MUL-467", title: "Keep files", status: "in_use" }],
+    })).mockResolvedValueOnce({ status: "ok", agents_archived: 1, tasks_cancelled: 0, issue_workspaces_abandoned: 1 });
+    const { onDeleted } = renderDialog({ cachedAgents: [makeAgent("a-1", { name: "Alpha" })] });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: /Archive 1 agent and delete runtime/ }));
+    await screen.findByText("MUL-467");
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes).toHaveLength(2);
+    const confirm = screen.getByRole("button", { name: /Archive 1 agent and delete runtime/ });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(checkboxes[0]!);
+    expect(confirm).toBeDisabled();
+    fireEvent.click(checkboxes[1]!);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledOnce());
+    expect(apiArchiveAgentsAndDeleteRuntime).toHaveBeenLastCalledWith("rt-1", ["a-1"], true);
+  });
+
+  it("does not treat a malformed workspace conflict as permission to abandon", async () => {
+    apiDeleteRuntime.mockRejectedValueOnce(new ApiError("malformed workspaces", 409, {
+      code: "runtime_has_active_issue_workspaces", issues: [{ id: 42 }],
+    }));
+    const { onDeleted } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
+    await waitFor(() => expect(apiDeleteRuntime).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -245,7 +295,7 @@ describe("DeleteRuntimeDialog", () => {
       expect(apiArchiveAgentsAndDeleteRuntime).toHaveBeenCalledWith("rt-1", [
         "a-1",
         "a-2",
-      ]),
+      ], false),
     );
   });
 

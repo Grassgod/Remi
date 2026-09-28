@@ -3170,6 +3170,10 @@ runMigrations(this.db);
     return this.issueWorkspaces.get(issueId);
   }
 
+  abandonIssueWorkspace(issueId: string, workspaceId: string) {
+    return this.issueWorkspaces.abandon(issueId, workspaceId);
+  }
+
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
     return this.issueWorkspaces.report(input);
   }

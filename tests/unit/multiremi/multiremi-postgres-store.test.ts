@@ -2145,9 +2145,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
     store.updateAgent(agent.id, { runtimeId: null });
-    expect(store.deleteRuntime(newRuntime.id)).toBeTrue();
+    expect(store.deleteRuntime(newRuntime.id)).toBeFalse();
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: newRuntime.id, status: "ready" });
+    expect(store.deleteRuntimeWithArchivedAgentCleanup(newRuntime.id, { abandonIssueWorkspaces: true })).toEqual({
+      status: "deleted", issueWorkspacesAbandoned: 1,
+    });
     expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
-    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "runtime_offline" });
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "cleaned" });
     for (const table of [
       "multiremi_agent_plugin_runtime_states",
       "multiremi_runtime_models",
