@@ -2858,9 +2858,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
     expect(skipped).toHaveLength(1);
     expect(String(skipped[0]?.body ?? "")).toContain("No runnable agent");
-    // Fix round 4: there is no "release" step any more — the whole attempt
-    // (claim included) rolls back, so the dependent never left `backlog` and has
-    // nothing to release. The skip is the only durable trace.
+    // An unavailable owner is decided under the lock before the claim, so the
+    // dependent stays in backlog and the business skip is the durable trace.
     expect(skipped[0]?.data).toMatchObject({ reason: "dispatch_failed" });
     expect(skipped[0]?.data ?? {}).not.toHaveProperty("claimReleased");
     // And the retry really works once the owner is fixed.
@@ -3178,10 +3177,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ).all(dependent.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([]);
     expect(store.getIssue(dependent.id)?.status).toBe("backlog");
-    // The prerequisite's `done` is what committed; the dependent's own attempt is
-    // what rolled back. So the surviving state is "backlog, prerequisites now
-    // satisfied, no round" — the shape a public assign can pick up (asserted
-    // below), not the pre-fix "backlog with a queued round".
+    // The prerequisite's `done` committed while the dependent's attempt rolled
+    // back. The surviving backlog with no round is recovered by the check below.
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(0);
     const auto = db.query(
       "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
