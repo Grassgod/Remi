@@ -1299,6 +1299,202 @@ describe("Issue workspace GC", () => {
   });
 });
 
+describe("Chat and one-shot Task workspace GC", () => {
+  type Subject = { kind: "chat" | "task"; id: string };
+  const OLD = "2000-01-01T00:00:00.000Z";
+  const HOUR = 60 * 60 * 1000;
+
+  function subjectOptions(
+    root: string,
+    client: WorkspaceGcClient,
+    ensured: Array<[Subject, string, boolean]>,
+    archive: ReturnType<typeof archiveBinding> | null,
+    overrides: Partial<Parameters<typeof runWorkspaceGcOnce>[0]> = {},
+  ): Parameters<typeof runWorkspaceGcOnce>[0] {
+    return {
+      root,
+      ttlMs: HOUR,
+      orphanTtlMs: HOUR,
+      client,
+      runtimeId: "rt_1",
+      requireSessionArchive: true,
+      ensureSessionArchive: async (subject, workspaceDir, forceFreshSnapshot) => {
+        ensured.push([subject, workspaceDir, forceFreshSnapshot]);
+        return archive;
+      },
+      now: Date.now() + 1_000,
+      ...overrides,
+    };
+  }
+
+  for (const subject of [
+    { kind: "chat", id: "cs_gc", workDir: "chats", gcMeta: { kind: "chat", task_id: "tsk_chat_turn", chat_session_id: "cs_gc" } },
+    { kind: "task", id: "tsk_gc", workDir: "tasks", gcMeta: { kind: "quick_create", task_id: "tsk_gc" } },
+  ] as const) {
+    const terminal = (at: string) => {
+      const client = gcClient();
+      if (subject.kind === "chat") client.getChatSessionGcCheck = async () => ({ status: "archived", updated_at: at });
+      else client.getTaskGcCheck = async () => ({ status: "completed", completed_at: at });
+      return client;
+    };
+    const dirs = (root: string) => [
+      subjectDir(root, join(subject.workDir, subject.id), subject.gcMeta),
+      subjectDir(root, join(".runtime", subject.id), subject.gcMeta),
+    ];
+
+    it(`keeps a terminal ${subject.kind} past TTL while no Session archive is ready`, async () => {
+      const root = tempRoot();
+      const [workDir, runtimeRoot] = dirs(root);
+      const ensured: Array<[Subject, string, boolean]> = [];
+
+      expect(await runWorkspaceGcOnce(subjectOptions(root, terminal(OLD), ensured, null)))
+        .toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+      expect(existsSync(workDir!)).toBe(true);
+      expect(existsSync(runtimeRoot!)).toBe(true);
+      expect(ensured.map(([ensuredSubject]) => ensuredSubject)).toEqual([
+        { kind: subject.kind, id: subject.id },
+        { kind: subject.kind, id: subject.id },
+      ]);
+      // Without an archive hook the required barrier cannot be crossed either.
+      expect(await runWorkspaceGcOnce({
+        ...subjectOptions(root, terminal(OLD), ensured, null),
+        ensureSessionArchive: undefined,
+      })).toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+      expect(existsSync(workDir!)).toBe(true);
+    });
+
+    it(`keeps a terminal ${subject.kind} with a ready archive until its TTL passes`, async () => {
+      const root = tempRoot();
+      const [workDir, runtimeRoot] = dirs(root);
+      const ensured: Array<[Subject, string, boolean]> = [];
+
+      expect(await runWorkspaceGcOnce(subjectOptions(root, terminal(new Date().toISOString()), ensured, archiveBinding())))
+        .toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+      expect(existsSync(workDir!)).toBe(true);
+      expect(existsSync(runtimeRoot!)).toBe(true);
+      // Not yet eligible, so no archive is prepared on every sweep.
+      expect(ensured).toEqual([]);
+    });
+
+    it(`cleans a terminal ${subject.kind} past TTL against a fresh-verified ready archive`, async () => {
+      const root = tempRoot();
+      const [workDir, runtimeRoot] = dirs(root);
+      const ensured: Array<[Subject, string, boolean]> = [];
+      const cleaned: string[] = [];
+
+      expect(await runWorkspaceGcOnce(subjectOptions(root, gcClientWith(terminal(OLD), { cleaned }), ensured, archiveBinding())))
+        .toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
+      expect(existsSync(workDir!)).toBe(false);
+      expect(existsSync(runtimeRoot!)).toBe(false);
+      expect(ensured.map(([ensuredSubject, dir, fresh]) => [ensuredSubject, dir, fresh]).sort()).toEqual([
+        [{ kind: subject.kind, id: subject.id }, runtimeRoot, true],
+        [{ kind: subject.kind, id: subject.id }, workDir, true],
+      ].sort());
+      // A Chat/Task archive is never reported as an Issue cleaned state.
+      expect(cleaned).toEqual([]);
+    });
+
+    it(`routes a ${subject.kind} the server no longer knows through the orphan TTL`, async () => {
+      const root = tempRoot();
+      const [workDir, runtimeRoot] = dirs(root);
+      const ensured: Array<[Subject, string, boolean]> = [];
+      const client = gcClient();
+      const notFound = async () => { throw new Error(`HTTP 404: ${subject.kind} not found`); };
+      if (subject.kind === "chat") client.getChatSessionGcCheck = notFound;
+      else client.getTaskGcCheck = notFound;
+
+      expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, archiveBinding())))
+        .toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+      expect(existsSync(workDir!)).toBe(true);
+      expect(existsSync(runtimeRoot!)).toBe(true);
+
+      const old = new Date(Date.now() - 2 * HOUR);
+      fs.utimesSync(workDir!, old, old);
+      fs.utimesSync(runtimeRoot!, old, old);
+      expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, null)))
+        .toEqual({ cleaned: 0, orphaned: 2, skipped: 0 });
+      expect(existsSync(workDir!)).toBe(false);
+      expect(existsSync(runtimeRoot!)).toBe(false);
+      expect(ensured).toEqual([]);
+    });
+
+    it(`does not treat a 404 from the ${subject.kind} archive barrier as an orphan`, async () => {
+      const root = tempRoot();
+      const [workDir, runtimeRoot] = dirs(root);
+      const old = new Date(Date.now() - 2 * HOUR);
+      fs.utimesSync(workDir!, old, old);
+      fs.utimesSync(runtimeRoot!, old, old);
+      const errors: string[] = [];
+
+      expect(await runWorkspaceGcOnce({
+        ...subjectOptions(root, terminal(OLD), [], null),
+        ensureSessionArchive: async () => { throw new Error("HTTP 404: Session archive scope not found"); },
+        onError: (path) => errors.push(path),
+      })).toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+      expect(existsSync(workDir!)).toBe(true);
+      expect(existsSync(runtimeRoot!)).toBe(true);
+      expect(errors.sort()).toEqual([runtimeRoot, workDir].sort());
+    });
+  }
+
+  it("never deletes a Chat or one-shot Task that is not terminal", async () => {
+    const root = tempRoot();
+    const chatDir = subjectDir(root, join("chats", "cs_live"), { kind: "chat", chat_session_id: "cs_live" });
+    const taskDirs = ["queued", "dispatched", "running", "waiting_input"].map((status) =>
+      subjectDir(root, join(".runtime", `tsk_${status}`), { kind: "quick_create", task_id: `tsk_${status}` }));
+    const client = gcClient();
+    client.getChatSessionGcCheck = async () => ({ status: "active", updated_at: OLD });
+    client.getTaskGcCheck = async (taskId) => ({ status: taskId.slice(4), completed_at: OLD });
+    const ensured: Array<[Subject, string, boolean]> = [];
+
+    expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, archiveBinding(), {
+      ttlMs: 0,
+      orphanTtlMs: 0,
+    }))).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 + taskDirs.length });
+    for (const dir of [chatDir, ...taskDirs]) expect(existsSync(dir)).toBe(true);
+    expect(ensured).toEqual([]);
+  });
+
+  it("applies the one-shot Task archive barrier to a terminal autopilot run", async () => {
+    const root = tempRoot();
+    const meta = { kind: "autopilot_run", task_id: "tsk_run", autopilot_run_id: "run_1" };
+    const workDir = subjectDir(root, join("tasks", "tsk_run"), meta);
+    const runtimeRoot = subjectDir(root, join(".runtime", "tsk_run"), meta);
+    const client = gcClient();
+    client.getAutopilotRunGcCheck = async () => ({ status: "completed", completed_at: OLD });
+    let taskStatus = "running";
+    client.getTaskGcCheck = async () => ({ status: taskStatus, completed_at: OLD });
+    const ensured: Array<[Subject, string, boolean]> = [];
+
+    expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, archiveBinding())))
+      .toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+    taskStatus = "failed";
+    expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, null)))
+      .toEqual({ cleaned: 0, orphaned: 0, skipped: 2 });
+    expect(existsSync(workDir)).toBe(true);
+    expect(existsSync(runtimeRoot)).toBe(true);
+    expect(await runWorkspaceGcOnce(subjectOptions(root, client, ensured, archiveBinding())))
+      .toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
+    expect(existsSync(workDir)).toBe(false);
+    expect(existsSync(runtimeRoot)).toBe(false);
+    expect(new Set(ensured.map(([subject]) => JSON.stringify(subject)))).toEqual(new Set([
+      JSON.stringify({ kind: "task", id: "tsk_run" }),
+    ]));
+  });
+});
+
+function subjectDir(root: string, relativeDir: string, meta: Record<string, string | undefined>): string {
+  const dir = join(root, relativeDir);
+  mkdirSync(join(dir, ".multiremi"), { recursive: true });
+  writeFileSync(join(dir, ".multiremi", "gc.json"), JSON.stringify({ version: 1, workspace_id: "local", ...meta }));
+  writeFileSync(join(dir, "history.jsonl"), "{}\n");
+  return dir;
+}
+
+function gcClientWith(base: WorkspaceGcClient, options: { cleaned: string[] }): WorkspaceGcClient {
+  return { ...base, reportIssueWorkspaceCleaned: async (issueId) => { options.cleaned.push(issueId); } };
+}
+
 function tempRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "multiremi-issue-gc-"));
   roots.push(root);

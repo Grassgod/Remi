@@ -864,7 +864,17 @@ describe("Bun Multiremi daemon smoke", () => {
         "home",
       );
       expect(providerOptions[0]?.env?.CLAUDE_CONFIG_DIR).toBe(temporaryProviderHome);
-      expect(existsSync(temporaryProviderHome)).toBe(false);
+      // The one-shot runtime root stays for archive-backed GC; reaching the
+      // terminal state archives it exactly once under the task subject.
+      expect(existsSync(temporaryProviderHome)).toBe(true);
+      expect(store.listSessionArchivesForSubject("task", task.id)).toMatchObject([{
+        subjectKind: "task",
+        subjectId: task.id,
+        issueId: null,
+        runtimeId: expectedRuntimeId,
+        status: "ready",
+        metadata: { source: ".runtime" },
+      }]);
       const injectedToken = providerOptions[0].env?.MULTIREMI_TOKEN;
       expect(injectedToken).toStartWith("mat_");
       expect(injectedToken).not.toBe(daemonToken.token);
@@ -1017,7 +1027,7 @@ describe("Bun Multiremi daemon smoke", () => {
       .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
   });
 
-  it("reconciles, materializes and cleans a direct task Agent Plugin runtime", async () => {
+  it("reconciles, materializes and retains a direct task Agent Plugin runtime for archive-backed GC", async () => {
     const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-");
     const userRepo = join(root, "user-repo");
     const workspacesRoot = join(root, "workspaces");
@@ -1060,6 +1070,8 @@ describe("Bun Multiremi daemon smoke", () => {
         workspacesRoot,
         repoCacheRoot: join(root, ".repo-cache"),
         pluginCacheRoot: join(root, ".plugin-cache"),
+        gcEnabled: false,
+        gcTtlMs: 0,
         agentPluginProviderPreflight: async () => {},
         providerFactory: (options) => {
           providerPluginPaths = options.pluginPaths ?? [];
@@ -1099,8 +1111,12 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendPluginFingerprint).toBe(store.getTask(task.id)?.executionFingerprint!);
       expect(pluginBody).toBe("# Runtime proof\n");
       expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
-      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(false);
+      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(true);
+      expect(store.listSessionArchivesForSubject("task", task.id)).toMatchObject([{ status: "ready" }]);
       expect(existsSync(join(root, ".plugin-cache", plugin.activeVersion!.artifactDigest, "payload"))).toBe(true);
+      // Workspace GC, not task completion, reclaims the terminal task's runtime.
+      expect(await daemon.runGcOnce()).toMatchObject({ cleaned: 2, orphaned: 0 });
+      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(false);
     } finally {
       server.stop(true);
     }
@@ -2442,8 +2458,10 @@ describe("Bun Multiremi daemon smoke", () => {
       writeFileSync(join(orphanDir, "note.txt"), "stale orphan\n");
       const oldDate = new Date(Date.now() - 10_000);
       utimesSync(orphanDir, oldDate, oldDate);
+      // A Chat the server no longer knows is an orphan: removed only past the orphan TTL.
+      utimesSync(chatDir, oldDate, oldDate);
 
-      expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 1, skipped: 1 });
+      expect(await daemon.runGcOnce()).toEqual({ cleaned: 1, orphaned: 2, skipped: 1 });
       expect(existsSync(completedDir)).toBe(false);
       expect(existsSync(chatDir)).toBe(false);
       expect(existsSync(orphanDir)).toBe(false);
@@ -2513,8 +2531,12 @@ describe("Bun Multiremi daemon smoke", () => {
       const oldIso = new Date(Date.now() - 10_000).toISOString();
       db!.run("UPDATE multiremi_autopilot_runs SET completed_at = ? WHERE id = ?", [oldIso, run.id]);
 
-      expect(await daemon.runGcOnce()).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+      // The run's work dir and its task's `.runtime/<task id>` both wait for the
+      // task's archive barrier.
+      expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
       expect(existsSync(taskDir)).toBe(false);
+      expect(existsSync(join(workspacesRoot, ".runtime", run.taskId!))).toBe(false);
+      expect(store.listSessionArchivesForSubject("task", run.taskId!)).toMatchObject([{ status: "ready" }]);
     } finally {
       server.stop(true);
     }

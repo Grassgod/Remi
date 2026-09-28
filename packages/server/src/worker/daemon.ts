@@ -96,6 +96,7 @@ import {
   type TaskFailureReasonValue,
 } from "./task-failure.js";
 import { executeRuntimeCommand } from "./runtime-command.js";
+import { ensureSubjectSessionArchive, type SubjectSessionArchiveSubject } from "./subject-session-archive.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   writeTaskContext,
@@ -112,7 +113,6 @@ import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.j
 import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/readonly-code.js";
 import {
   assertIssueSessionNativeCodexOAuth,
-  cleanupTemporaryTaskProviderHome,
   cleanupTaskPrivateTempDirectory,
   ensureProviderHomeDirectory,
   prepareIssueExecutionDirectory,
@@ -121,6 +121,7 @@ import {
   prepareIssueSessionProviderHome,
   resolveIssueRuntimeStateRoot,
   resolveTaskProviderHome,
+  subjectRuntimeStateRoot,
   prepareTaskPrivateTempDirectory,
   type TaskPrivateTempDirectory,
   type IssueSessionProviderHome,
@@ -141,7 +142,6 @@ import {
   pluginSetupRequired,
 } from "@daemon/agent-runtime/agent-plugins/reconciler.js";
 import {
-  cleanupNonIssueTaskPluginRuntime,
   materializeTaskPlugins,
   prepareCodexPluginReadinessRuntime,
   resolveTaskPluginRuntimeBase,
@@ -2766,6 +2766,9 @@ export class MultiremiDaemon {
         requireIssueSessionArchive: this.options.gcRequireArchive,
         ensureIssueSessionArchive: (issueId, workspaceDir, forceFreshSnapshot) =>
           this.ensureIssueSessionArchive(issueId, workspaceDir, forceFreshSnapshot),
+        requireSessionArchive: this.options.gcRequireArchive,
+        ensureSessionArchive: (subject, workspaceDir, forceFreshSnapshot) =>
+          this.ensureSubjectSessionArchive(subject, workspaceDir, forceFreshSnapshot),
         assertRootOwner: () => this.assertWorkspaceRootOwner(),
         hasDirtyGitWorktree: (workspaceDir) =>
           this.gitWorktreeInspector.hasDirtyWorktree(workspaceDir),
@@ -3013,6 +3016,22 @@ export class MultiremiDaemon {
       );
     }
     return true;
+  }
+
+  /** Serialize the GC barrier and the task-end archive of one Chat / one-shot Task. */
+  private ensureSubjectSessionArchive(
+    subject: SubjectSessionArchiveSubject,
+    workspaceDir: string,
+    forceFreshSnapshot: boolean,
+  ): Promise<MultiremiIssueWorkspaceArchiveBinding | null> {
+    return this.issueWorkspaceLifecycleLocks.runExclusive(`session-archive:${subject.kind}:${subject.id}`, () =>
+      ensureSubjectSessionArchive({
+        client: this.client,
+        runtimeId: this.options.runtimeId,
+        workspacesRoot: this.options.workspacesRoot,
+        maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
+        assertRootOwner: () => this.assertWorkspaceRootOwner(),
+      }, subject, workspaceDir, forceFreshSnapshot));
   }
 
   restartRequested(): boolean {
@@ -3558,22 +3577,15 @@ export class MultiremiDaemon {
       ).catch((error) => {
         log.warn(`Failed to clean task private temp for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
       });
-      if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
-        await cleanupNonIssueTaskPluginRuntime(
-          task,
-          this.options.workspacesRoot,
-          () => this.assertWorkspaceRootOwner(),
-        ).catch((error) => {
-          log.warn(`Failed to clean task Plugin runtime for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+      if (!task.issueId && !task.chatSessionId && (providerHome?.temporaryTaskRoot || pluginRuntimeBase)) {
+        // The one-shot task is terminal here. Its `.runtime/<task id>` stays for
+        // workspace GC, which deletes it only past TTL against a ready archive;
+        // archive it once now so that history is saved without waiting for GC.
+        const runtimeRoot = subjectRuntimeStateRoot(this.options.workspacesRoot, task.id);
+        await this.ensureSubjectSessionArchive({ kind: "task", id: task.id }, runtimeRoot, false).catch((error) => {
+          log.warn(`Failed to archive task Session history for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
-      await cleanupTemporaryTaskProviderHome(
-        providerHome,
-        this.options.workspacesRoot,
-        () => this.assertWorkspaceRootOwner(),
-      ).catch((error) => {
-        log.warn(`Failed to clean task provider home for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
-      });
       resolvedWorkDir?.release?.();
       releaseIssueWorkspaceLifecycle?.();
       this.activeTaskAborts.delete(abort);
