@@ -281,6 +281,7 @@ async function main(): Promise<void> {
       summaryIntervalMs: 60_000,
       summaryTopRoutes: 10,
       bufferCapacity: 64,
+      role: "all",
     },
   });
 
