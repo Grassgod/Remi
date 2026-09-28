@@ -114,6 +114,10 @@
     "toast_failed": "프로젝트를 만들지 못했습니다"
   },
   "create_issue": {
+    "add_prerequisite": "선행 이슈",
+    "prerequisite_chip": "{{identifier}} 이후",
+    "remove_prerequisite": "선행 이슈 {{identifier}} 제거",
+    "prerequisite_picker_description": "선행 이슈 검색",
     "sr_manual": "새 이슈",
     "sr_agent": "빠른 이슈 생성",
     "manual_breadcrumb": "직접 만들기",

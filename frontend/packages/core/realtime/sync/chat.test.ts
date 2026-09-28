@@ -2,6 +2,7 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingTask, ChatSession } from "../../types";
 import { chatKeys, pendingChatTasksOptions } from "../../chat/queries";
+import { issueKeys } from "../../issues/queries";
 import { applyChatDoneToCache, createChatHandlers } from "./chat";
 
 vi.mock("../../platform/workspace-storage", () => ({ getCurrentWsId: () => "ws-1" }));
@@ -60,6 +61,26 @@ describe("chat queue realtime", () => {
       task_id: "task-1", status: "running", wait_reason: null, queued_tasks: [queued],
     });
   });
+
+  it.each(["task:awaiting_human", "task:running"] as const)(
+    "invalidates issue decision surfaces when %s changes a subtree human request",
+    event => {
+      qc.setQueryData(issueKeys.detail("ws-1", "parent-1"), { id: "parent-1" });
+      qc.setQueryData(issueKeys.decisions("ws-1", "parent-1"), { count: 1 });
+      qc.setQueryData(issueKeys.detail("ws-2", "parent-2"), { id: "parent-2" });
+
+      handlers[event]?.({
+        task_id: "task-issue",
+        agent_id: "agent-1",
+        issue_id: "child-1",
+        status: event === "task:running" ? "running" : "awaiting_human",
+      });
+
+      expect(qc.getQueryState(issueKeys.detail("ws-1", "parent-1"))?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(issueKeys.decisions("ws-1", "parent-1"))?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(issueKeys.detail("ws-2", "parent-2"))?.isInvalidated).toBe(false);
+    },
+  );
 
   it("writes preparation progress only to the matching pending head", () => {
     handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "正在准备项目仓库…" });

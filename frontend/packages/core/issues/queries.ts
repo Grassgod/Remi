@@ -68,6 +68,12 @@ export const issueKeys = {
     [...issueKeys.projectGanttAll(wsId), projectId] as const,
   detail: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "detail", id] as const,
+  detailAll: (wsId: string) =>
+    [...issueKeys.all(wsId), "detail"] as const,
+  decisions: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "decisions", id] as const,
+  decisionsAll: (wsId: string) =>
+    [...issueKeys.all(wsId), "decisions"] as const,
   generated: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "generated", id] as const,
   /** Prefix for every per-Issue workspace checkout, regardless of workspace. */
@@ -76,6 +82,8 @@ export const issueKeys = {
     [...issueKeys.workspacesAll(), issueId] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
+  dependencies: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "dependencies", id] as const,
   /** Prefix for invalidating all batched-children queries in a workspace. */
   childrenByParentsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "children-by-parents"] as const,
@@ -497,6 +505,13 @@ export function issueDetailOptions(wsId: string, id: string) {
   });
 }
 
+export function issueDecisionsOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.decisions(wsId, id),
+    queryFn: () => api.listIssueDecisions(id),
+  });
+}
+
 export function generatedIssuesOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.generated(wsId, id),
@@ -538,6 +553,13 @@ export function childIssuesOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.children(wsId, id),
     queryFn: () => api.listChildIssues(id).then((r) => r.issues),
+  });
+}
+
+export function issueDependenciesOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.dependencies(wsId, id),
+    queryFn: () => api.listIssueDependencies(id),
   });
 }
 

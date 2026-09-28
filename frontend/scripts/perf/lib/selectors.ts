@@ -148,9 +148,12 @@ export function issueRowSelector(mode: SelectorMode, issueId: string): string {
  * Inbox rows. Contract mode wraps the row in `data-perf-item="inbox"` and keeps
  * its inner link/button; legacy rows are the focusable role=button divs.
  */
-export function inboxRowSelector(mode: SelectorMode): string {
+export function inboxRowSelector(mode: SelectorMode, inboxItemId?: string): string {
   if (mode === "legacy") return LEGACY.inboxRow;
-  return `${CONTRACT.item("inbox")} a, ${CONTRACT.item("inbox")} [role="button"], ${CONTRACT.item("inbox")}`;
+  const row = `${CONTRACT.item("inbox")}${inboxItemId
+    ? `[data-perf-key="${cssEscape(inboxItemId)}"]`
+    : ""}`;
+  return `${row} a, ${row} [role="button"], ${row}`;
 }
 
 export interface AnchorPlan {

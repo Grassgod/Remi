@@ -30,6 +30,7 @@ import {
 import {
   CONTRACT,
   inboxDomRowIndex,
+  inboxRowSelector,
   isEntryFailure,
   LEGACY,
   profileFor,
@@ -959,6 +960,9 @@ describe("selectors", () => {
   it("builds both tables for the same targets", () => {
     expect(issueRowSelector("legacy", "iss_1")).toBe('[data-slot="sidebar-inset"] a[href$="/issues/iss_1"]');
     expect(issueRowSelector("contract", "iss_1")).toBe('[data-perf-item="issue"][data-perf-key="iss_1"] a');
+    expect(inboxRowSelector("contract", "inb_1")).toBe(
+      '[data-perf-item="inbox"][data-perf-key="inb_1"] a, [data-perf-item="inbox"][data-perf-key="inb_1"] [role="button"], [data-perf-item="inbox"][data-perf-key="inb_1"]',
+    );
   });
 
   it("falls back to the heading rule where legacy has no stable hook", () => {
