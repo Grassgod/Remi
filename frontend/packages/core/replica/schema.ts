@@ -14,6 +14,12 @@
  * | `row_heights` | measured heights, keyed per variant and width bucket |
  * | `meta` | schema version and `user_id`, i.e. the two cleanup triggers |
  *
+ * `heads.head_seq` is nullable on purpose: `NULL` means "an ack has arrived but no
+ * row has been written yet", which is different from seq 0 (a real seq for an
+ * empty session) and from having no row at all. Coercing it to 0 is what makes a
+ * stale window look fresh, because the next comparison is against the server's
+ * own head.
+ *
  * `ranges` is what makes `head` meaningful: `head` is the newest contiguous run,
  * not the newest row, so the table stores coverage explicitly instead of the
  * reader inferring it from the rows it happens to see (a deleted hidden marker
@@ -57,7 +63,7 @@ CREATE TABLE IF NOT EXISTS ranges (
 
 CREATE TABLE IF NOT EXISTS heads (
   session_id  TEXT    PRIMARY KEY,
-  head_seq    INTEGER NOT NULL,
+  head_seq    INTEGER,
   log_version INTEGER,
   synced_at   TEXT    NOT NULL
 );

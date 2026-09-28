@@ -82,6 +82,12 @@ export async function openReplicaStorage(
     return { storage: new MemoryReplicaStorage(), storageKind: "memory", degraded: null };
   }
   try {
+    // Checked before the wasm build is loaded, because that is the decision the
+    // plan describes ("无 OPFS"): whether this scope has the OPFS entry point at
+    // all. The VFS would refuse a moment later with a less specific error.
+    if (typeof (globalThis as { navigator?: Navigator }).navigator?.storage?.getDirectory !== "function") {
+      return { storage: new MemoryReplicaStorage(), storageKind: "memory", degraded: "OPFS is unavailable in this scope" };
+    }
     const sqlite3 = await sqlite3InitModule();
     const util = (await sqlite3.installOpfsSAHPoolVfs({
       name: SAH_POOL_NAME,
@@ -110,12 +116,31 @@ export class ReplicaWorkerHost {
   private identity: { userId: string; workspaceId: string } = { userId: "", workspaceId: "" };
   /** The database file this Worker opened; empty until `init`. */
   private databaseName = "";
+  /**
+   * Serializes requests.
+   *
+   * `init` awaits wasm startup, so without this an `open` posted right after it
+   * would run against a null engine and be reported as "before init" — the
+   * leader's very first two messages. A chain also keeps two frame batches from
+   * interleaving their SQLite writes.
+   */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: ReplicaWorkerOptions) {}
 
   /** Which storage actually opened; `null` before `init`. */
   get storage(): ReplicaWorkerStorage | null {
     return this.storageKind;
+  }
+
+  /** Enqueue one request; responses keep their order. */
+  enqueue(request: ReplicaWorkerRequest): Promise<void> {
+    const next = this.queue.then(() => this.handle(request));
+    // The chain must survive a rejected link, or one failure would stop every
+    // later request; `handle` already reports errors, so this only guards the
+    // chain itself.
+    this.queue = next.catch(() => {});
+    return next;
   }
 
   async handle(request: ReplicaWorkerRequest): Promise<void> {
@@ -152,6 +177,9 @@ export class ReplicaWorkerHost {
             head: engine.snapshot(request.sessionId).head,
             fresh: engine.isFresh(request.sessionId),
             cleared: opened.cleared?.reason ?? null,
+            // The window a previous leader left on disk, so a takeover paints
+            // immediately instead of waiting for the socket's replay.
+            entries: [...engine.snapshot(request.sessionId).entries],
           });
           return;
         }
@@ -170,6 +198,7 @@ export class ReplicaWorkerHost {
             head: view.head,
             fresh: view.fresh,
             missing,
+            entries: [...view.entries],
           });
           return;
         }
@@ -195,6 +224,7 @@ export class ReplicaWorkerHost {
             head: view.head,
             fresh: view.fresh,
             missing: null,
+            entries: [...view.entries],
           });
           return;
         }
@@ -246,7 +276,7 @@ export class ReplicaWorkerHost {
 export function installReplicaWorkerScope(scope: { onmessage: ((event: MessageEvent) => void) | null; postMessage: (message: unknown) => void } = self as never): void {
   const host = new ReplicaWorkerHost({});
   scope.onmessage = (event: MessageEvent) => {
-    void host.handle(event.data as ReplicaWorkerRequest);
+    void host.enqueue(event.data as ReplicaWorkerRequest);
   };
 }
 

@@ -1,0 +1,139 @@
+{
+  "generatedAt": "2026-09-28T01:34:26.304Z",
+  "head": "6fc85a1c05cbfb3d724b1e6814ffc72cb8d93692",
+  "checks": [
+    {
+      "name": "three-tabs: exactly one leader",
+      "ok": true,
+      "detail": "1 leaders of 3 pages"
+    },
+    {
+      "name": "three-tabs: exactly one subscription",
+      "ok": true,
+      "detail": "1 active server subscriptions"
+    },
+    {
+      "name": "three-tabs: all three pages hold identical entries",
+      "ok": true,
+      "detail": "120 entries on each page, heads 120, 120, 120 (server head 120)"
+    },
+    {
+      "name": "three-tabs: the leader holds the OPFS database",
+      "ok": true,
+      "detail": "leader storage opfs"
+    },
+    {
+      "name": "handoff: a surviving page takes over within 1s",
+      "ok": true,
+      "detail": "took 51ms",
+      "ms": 51
+    },
+    {
+      "name": "handoff: the new leader's head is continuous",
+      "ok": true,
+      "detail": "head 120 -> 120, entries 120 -> 120"
+    },
+    {
+      "name": "handoff: the new leader resumes instead of re-reading the tail",
+      "ok": true,
+      "detail": "0 /log reads after the handoff: none"
+    },
+    {
+      "name": "handoff: the surviving pages hold the same head",
+      "ok": true,
+      "detail": "heads 120, 120 (was 120)"
+    },
+    {
+      "name": "offline-catch-up: head matches within 2s of the socket returning",
+      "ok": true,
+      "detail": "head 170 of 170, fresh true, 594ms after the append (budget 2000ms)",
+      "ms": 594
+    },
+    {
+      "name": "offline-catch-up: no full /log read",
+      "ok": true,
+      "detail": "0 reads, ranges none"
+    },
+    {
+      "name": "offline-catch-up: the resume cursor is the stored head + 1",
+      "ok": true,
+      "detail": "subscribe from_seq values 1, 1, 1, 121 (local head was 120, server head 120 -> 170)"
+    },
+    {
+      "name": "offline-catch-up: all three pages converge on the new head",
+      "ok": true,
+      "detail": "heads 170, 170, 170"
+    },
+    {
+      "name": "patch-in-place: the row updates without a second row",
+      "ok": true,
+      "detail": "seq 5 revision 1 -> 2 body \"edited body\", 170 rows (was 170)"
+    },
+    {
+      "name": "patch-in-place: every tab saw the edit",
+      "ok": true,
+      "detail": "revisions 2, 2, 2"
+    },
+    {
+      "name": "opfs-off: every tab subscribes for itself (documented fallback)",
+      "ok": true,
+      "detail": "3 leaders, 3 active server subscriptions"
+    },
+    {
+      "name": "opfs-off: all three pages hold identical entries",
+      "ok": true,
+      "detail": "170 entries on each page, heads 170, 170, 170 (server head 170)"
+    },
+    {
+      "name": "opfs-off: every page reports the memory fallback",
+      "ok": true,
+      "detail": "storages memory, memory, memory, degraded true, true, true"
+    },
+    {
+      "name": "opfs-off: the fallback still reaches the server head",
+      "ok": true,
+      "detail": "heads 170, 170, 170 (server 170)"
+    },
+    {
+      "name": "offline-catch-up: head matches within 2s of the socket returning",
+      "ok": true,
+      "detail": "head 220 of 220, fresh true, 8ms after the append (budget 2000ms)",
+      "ms": 8
+    },
+    {
+      "name": "offline-catch-up: no full /log read",
+      "ok": true,
+      "detail": "0 reads, ranges none"
+    },
+    {
+      "name": "offline-catch-up: the resume cursor is the stored head + 1",
+      "ok": true,
+      "detail": "subscribe from_seq values 1, 1, 1, 121, 1, 1, 1, 1, 1, 1, 1, 171 (local head was 170, server head 170 -> 220)"
+    },
+    {
+      "name": "opfs-off: the fallback still keeps one subscription per tab after a reconnect",
+      "ok": true,
+      "detail": "3 active server subscriptions"
+    },
+    {
+      "name": "offline-catch-up: all three pages converge on the new head",
+      "ok": true,
+      "detail": "heads 220, 220, 220"
+    },
+    {
+      "name": "patch-in-place: the row updates without a second row",
+      "ok": true,
+      "detail": "seq 5 revision 2 -> 3 body \"edited body\", 220 rows (was 220)"
+    },
+    {
+      "name": "patch-in-place: every tab saw the edit",
+      "ok": true,
+      "detail": "revisions 3, 3, 3"
+    }
+  ],
+  "summary": {
+    "total": 25,
+    "passed": 25,
+    "failed": 0
+  }
+}

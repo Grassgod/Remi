@@ -174,6 +174,55 @@ describe("SQL replica storage", () => {
     engine.close();
   });
 
+  test("an ack never adopts the server's head as the replica's own", async () => {
+    // The regression this pins: the ack arrives before the frames it announces, so
+    // storing `ack.head_seq` as the local head makes the very next freshness check
+    // compare the server's number with itself and call a stale window fresh.
+    const { storage } = await openSqlStorage();
+    const engine = new ReplicaEngine(storage);
+    engine.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    engine.ack("sess_1", { stream: "log", id: "sess_1", first_seq: 1, head_seq: 170, log_version: 7, gap: null });
+
+    expect(storage.readState("sess_1").head).toBeNull();
+    expect(engine.isFresh("sess_1")).toBe(false);
+
+    engine.frames("sess_1", [entryFrame(1), entryFrame(2)]);
+    expect(engine.isFresh("sess_1")).toBe(false);
+    expect(storage.readState("sess_1").head).toBe(2);
+
+    // Only when the replica actually reaches the announced head does it become fresh.
+    engine.frames("sess_1", Array.from({ length: 168 }, (_, index) => entryFrame(index + 3)));
+    expect(engine.isFresh("sess_1")).toBe(true);
+    storage.close();
+  });
+
+  test("a live frame advances the server head freshness compares against", async () => {
+    // The offline catch-up shape: the ack is older than the frames, so a
+    // freshness check that only ever looked at the ack would call a caught-up
+    // replica stale — the plan's "之后每收一帧都成立".
+    const { storage } = await openSqlStorage();
+    const engine = new ReplicaEngine(storage);
+    engine.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    engine.ack("sess_1", { stream: "log", id: "sess_1", first_seq: 1, head_seq: 2, log_version: 7, gap: null });
+    engine.frames("sess_1", [entryFrame(1), entryFrame(2)]);
+    expect(engine.isFresh("sess_1")).toBe(true);
+
+    // 50 rows arrive with no new ack, as a reconnect's replay does.
+    engine.frames(
+      "sess_1",
+      Array.from({ length: 50 }, (_, index) => entryFrame(index + 3)),
+    );
+    expect(engine.isFresh("sess_1")).toBe(true);
+    expect(storage.readState("sess_1").head).toBe(52);
+
+    // And a frame that lands above a hole does not make it fresh.
+    engine.frames("sess_1", [entryFrame(60)]);
+    expect(engine.isFresh("sess_1")).toBe(false);
+    engine.frames("sess_1", Array.from({ length: 7 }, (_, index) => entryFrame(index + 53)));
+    expect(engine.isFresh("sess_1")).toBe(true);
+    storage.close();
+  });
+
   test("every statement the engine runs is in the shared SQL map", () => {
     // A statement spelled inline in one place and not in `schema.ts` is how the
     // Worker and the tests silently diverge; this pins the set.

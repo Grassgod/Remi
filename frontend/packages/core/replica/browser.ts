@@ -68,6 +68,14 @@ export interface BrowserReplica {
   /** Show a session; refcounted on the leader and announced from a follower. */
   open(sessionId: string): void;
   close(sessionId: string): void;
+  /**
+   * Re-subscribe an open session after the socket reconnected.
+   *
+   * The plan's catch-up path: the page re-establishes the socket, then asks the
+   * replica for the position it already holds, so the replay is the missing tail
+   * and not the whole log.
+   */
+  resubscribe(sessionId: string): void;
   /** A deep link or a scroll window: fetch through the read route and store it. */
   loadWindow(sessionId: string, range: HubSeqRange): Promise<void>;
   /** Feed the socket's frames and acks. */
@@ -106,182 +114,234 @@ export async function openBrowserReplica(options: BrowserReplicaOptions): Promis
   const env = options.env ?? {};
   const { locks: hasLocks } = replicaCapabilities(env);
   const view = new ReplicaView();
+
+  // No Web Locks or no OPFS: every tab runs its own replica. The plan's fallback,
+  // and the protocol is unchanged — only the sharing and the hot start are gone.
+  //
+  // OPFS is checked on the *page* too, because a page that lacks it cannot expect
+  // its Worker to have it; the Worker checks again regardless, since a page can
+  // have the API and still be refused (private mode, a denied store).
+  if (!hasLocks || !replicaCapabilities(env).opfs) {
+    options.onDegraded?.(
+      !hasLocks
+        ? "navigator.locks unavailable; running a per-tab memory replica"
+        : "OPFS unavailable; running a per-tab memory replica",
+    );
+    return createMemoryTabsReplica(options, view);
+  }
+
   const channel = env.broadcastChannel
     ? new env.broadcastChannel(REPLICA_CHANNEL)
     : typeof BroadcastChannel === "function"
       ? new BroadcastChannel(REPLICA_CHANNEL)
       : null;
-  const broadcast = (message: ReplicaChannelMessage) => {
-    channel?.postMessage(message);
-  };
-
-  // No Web Locks: every tab runs its own replica. The plan's fallback, and the
-  // protocol is unchanged — only the sharing is gone.
-  if (!hasLocks) {
-    options.onDegraded?.("navigator.locks unavailable; running a per-tab memory replica");
-    return createMemoryTabsReplica(options, view);
-  }
-
-  const follower = new ReplicaFollower({
-    view,
-    broadcast,
-    requestWindow: (input) => broadcast({ type: "replica:query", ...input }),
-  });
-  if (channel) {
-    channel.onmessage = (event: MessageEvent) => {
-      const message = event.data as ReplicaChannelMessage;
-      // A tab must not act on its own broadcast: the leader would open a session
-      // twice and the refcount would never fall back to zero.
-      if (message.type === "replica:leader" && message.tabId === options.tabId) return;
-      follower.handle(message);
-    };
-  }
-
-  const elected = await electLeader(options, env, view, broadcast);
-  if (elected) return elected;
-
-  return followerReplica(follower, view, channel);
-}
-
-interface LeaderSession {
-  leader: ReplicaLeader;
-  bridge: WorkerBridge;
-  storage: "opfs" | "memory";
-  degraded: boolean;
+  const facade = new ReplicaFacade(options, env, view, channel);
+  facade.start();
+  return facade;
 }
 
 /**
- * Try to take the lock.
+ * One tab's replica, which is a follower until the Web Lock is granted.
  *
- * A tab that does not get it resolves to null immediately: the winner holds the
- * lock for its whole life, so there is no later moment at which the loser could
- * win it. Web Locks queues the next waiter when the holder goes away, which is
- * how a *different* invocation of this function — the takeover tab — becomes the
- * leader on the next render.
+ * The role is deliberately mutable. A tab that is not the leader must still be
+ * able to *become* the leader when the holder's tab goes away: `navigator.locks`
+ * grants the queued request at that moment, and the tab that was reading through
+ * the BroadcastChannel switches to owning the Worker and the subscription. Making
+ * the role immutable would either block the first paint on a lock a dying tab
+ * still holds, or lose the handoff entirely.
  */
-async function electLeader(
-  options: BrowserReplicaOptions,
-  env: BrowserReplicaEnv,
-  view: ReplicaView,
-  broadcast: (message: ReplicaChannelMessage) => void,
-): Promise<BrowserReplica | null> {
-  const locks = env.locks ?? (globalThis.navigator as Navigator | undefined)?.locks;
-  if (!locks) return null;
+class ReplicaFacade implements BrowserReplica {
+  private leader: LeaderSession | null = null;
+  private readonly follower: ReplicaFollower;
+  private readonly wanted = new Set<string>();
+  /** Sockets/tabs seen since the last `replica:leader`, to detect a new holder. */
+  private lastLeaderTabId: string | null = null;
+  private degradedReason: string | null = null;
+  private disposed = false;
 
-  let granted = false;
-  const began = new Promise<void>((resolve) => {
+  constructor(
+    private readonly options: BrowserReplicaOptions,
+    private readonly env: BrowserReplicaEnv,
+    private readonly view: ReplicaView,
+    private readonly channel: BroadcastChannel | null,
+  ) {
+    this.follower = new ReplicaFollower({
+      view,
+      broadcast: (message) => this.broadcast(message),
+      requestWindow: (input) => this.broadcast({ type: "replica:query", ...input }),
+    });
+    if (channel) {
+      channel.onmessage = (event: MessageEvent) => {
+        const message = event.data as ReplicaChannelMessage;
+        // A tab must not act on its own broadcast: the leader would open a
+        // session twice and the refcount would never reach zero.
+        if (message.type === "replica:leader" && message.tabId === this.options.tabId) return;
+        if (message.type === "replica:leader") this.lastLeaderTabId = message.tabId;
+
+        // The role decides how an incoming message is handled, not the message:
+        //   * a leader must ANSWER the read requests and record the open/close
+        //     announcements the other tabs make — feed them to a follower and it
+        //     would ask itself for a window through a channel nobody is
+        //     listening to on the other end;
+        //   * a follower must SEND those requests and consume the answers.
+        if (this.leader) {
+          this.handleAsLeader(message);
+          return;
+        }
+        this.follower.handle(message);
+      };
+    }
+  }
+
+  /** The leader side of the channel protocol. */
+  private handleAsLeader(message: ReplicaChannelMessage): void {
+    const leader = this.leader;
+    if (!leader) return;
+    switch (message.type) {
+      case "replica:open": {
+        // Another tab is showing this session; refcount it so the subscription
+        // outlives whichever tab is in front.
+        leader.leader.open(message.sessionId);
+        return;
+      }
+      case "replica:close": {
+        leader.leader.close(message.sessionId);
+        return;
+      }
+      case "replica:query": {
+        const view = leader.leader.window(message.sessionId, message.from, message.to);
+        this.broadcast({
+          type: "replica:window",
+          requestId: message.requestId,
+          sessionId: message.sessionId,
+          entries: view.entries,
+          snapshot: { head: view.head, fresh: view.fresh, ready: view.ready },
+        });
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Queue for the lock and, when it is granted, become the leader.
+   *
+   * One request, no probe: `navigator.locks.request` keeps the promise pending
+   * until the lock is free, so the same call both wins an uncontended lock
+   * immediately and becomes the takeover path when the holder's tab dies. The
+   * callback never returns while the tab lives, which is what holds the lock.
+   */
+  start(): void {
+    const locks = this.env.locks ?? (globalThis.navigator as Navigator | undefined)?.locks;
+    if (!locks) return;
     void locks
-      .request(replicaLockName(options.userId, options.workspaceId), { mode: "exclusive" }, async () => {
-        granted = true;
-        resolve();
+      .request(replicaLockName(this.options.userId, this.options.workspaceId), { mode: "exclusive" }, async () => {
+        if (this.disposed) return;
+        await this.becomeLeader();
         await new Promise<never>(() => {});
       })
-      .catch(() => resolve());
-  });
-  // `navigator.locks.request` resolves its grant in a later task even when the
-  // lock is free, so the winner is known after exactly that one task.
-  await began;
-  if (!granted) return null;
+      .catch(() => {
+        // A rejected lock request means this tab never leads; it stays a follower,
+        // which is the safe side of the split.
+      });
+  }
 
-  const session = await startLeader(options, env, view, broadcast);
-  return leaderReplica(session, view);
-}
+  private async becomeLeader(): Promise<void> {
+    const session = await startLeader(this.options, this.env, this.view, (message) => this.broadcast(message), this.wanted);
+    this.leader = session;
+    this.degradedReason = session.degraded ? "leader opened without OPFS" : null;
+    this.broadcast({ type: "replica:leader", tabId: this.options.tabId, sessions: [...this.wanted] });
+    // Every session this tab is showing must be subscribed by *somebody*; the tab
+    // that just took over is now that somebody.
+    for (const sessionId of this.wanted) this.leader.leader.open(sessionId);
+  }
 
-/** Wire the Worker (or a same-thread bridge) and start the leader loop. */
-async function startLeader(
-  options: BrowserReplicaOptions,
-  env: BrowserReplicaEnv,
-  view: ReplicaView,
-  broadcast: (message: ReplicaChannelMessage) => void,
-): Promise<LeaderSession> {
-  const bridge = createWorkerBridge(options, env);
-  let storage: "opfs" | "memory" = env.createWorker && (env.hasOpfs ?? true) ? "opfs" : "memory";
-  let degraded = false;
+  get port(): SessionReplicaPort {
+    return this.leader ? this.view : this.follower;
+  }
 
-  const leader = new ReplicaLeader({
-    userId: options.userId,
-    workspaceId: options.workspaceId,
-    tabId: options.tabId,
-    subscription: { subscribe: options.subscribe, unsubscribe: options.unsubscribe },
-    readRange: options.readRange,
-    worker: bridge,
-    broadcast,
-    view,
-    onDegraded: (reason) => {
-      if (!reason) return;
-      degraded = true;
-      options.onDegraded?.(reason);
-    },
-    onCleared: options.onCleared,
-  });
-  bridge.onMessage((message) => {
-    if (message.type === "ready") {
-      storage = message.storage;
-      degraded = message.degraded !== null;
-      if (message.degraded) options.onDegraded?.(message.degraded);
+  open(sessionId: string): void {
+    if (this.wanted.has(sessionId)) return;
+    this.wanted.add(sessionId);
+    if (this.leader) {
+      this.leader.leader.open(sessionId);
+      return;
     }
-  });
-  // `run()` never settles while the tab lives, so it is not awaited: the leader
-  // is holding the lock from the moment its callback ran.
-  void leader.run();
-  bridge.postMessage({ type: "init", userId: options.userId, workspaceId: options.workspaceId, storage: "opfs" });
+    // A follower's interest is announced over the channel; the leader refcounts
+    // it and subscribes once, for every tab showing the session.
+    this.broadcast({ type: "replica:open", sessionId });
+    this.follower.getSnapshot(sessionId);
+  }
 
-  return { leader, bridge, storage, degraded };
-}
+  close(sessionId: string): void {
+    if (!this.wanted.delete(sessionId)) return;
+    if (this.leader) {
+      this.leader.leader.close(sessionId);
+      return;
+    }
+    this.follower.close(sessionId);
+  }
 
-function leaderReplica(session: LeaderSession, view: ReplicaView): BrowserReplica {
-  return {
-    port: view,
-    open: (sessionId) => session.leader.open(sessionId),
-    close: (sessionId) => session.leader.close(sessionId),
-    loadWindow: (sessionId, range) => session.leader.loadWindow(sessionId, range),
-    frames: (sessionId, frames) => session.leader.frames(sessionId, frames),
-    ack: (sessionId, ack) => session.leader.ack(sessionId, ack),
-    clear: (reason) => session.leader.clear(reason),
-    isLeader: true,
-    get storage() {
-      return session.storage;
-    },
-    get degraded() {
-      return session.degraded;
-    },
-    dispose: () => {
-      session.leader.dispose();
-      session.bridge.terminate?.();
-    },
-  };
-}
+  resubscribe(sessionId: string): void {
+    // Only the leader holds the socket, so only the leader re-subscribes; a
+    // follower's window arrives through the channel either way.
+    this.leader?.leader.resubscribe(sessionId);
+  }
 
-function followerReplica(
-  follower: ReplicaFollower,
-  view: ReplicaView,
-  channel: BroadcastChannel | null,
-): BrowserReplica {
-  return {
-    port: follower,
-    open: (sessionId) => {
-      // A follower's first read is what announces its interest; `getSnapshot`
-      // does that so a caller that only opens never races the window query.
-      follower.getSnapshot(sessionId);
-    },
-    close: (sessionId) => follower.close(sessionId),
-    loadWindow: async (sessionId, range) => follower.request(sessionId, range),
-    frames: () => {
-      // A follower leads no subscription; frames arrive at the leader only.
-    },
-    ack: () => {
-      // Same: acks answer the leader's subscribe.
-    },
-    clear: () => {
-      // A follower cannot delete the database; the leader's `replica:cleared`
-      // broadcast is what drops every tab's cache.
-      view.dropAll();
-    },
-    isLeader: false,
-    storage: null,
-    degraded: false,
-    dispose: () => channel?.close(),
-  };
+  async loadWindow(sessionId: string, range: HubSeqRange): Promise<void> {
+    if (this.leader) {
+      await this.leader.leader.loadWindow(sessionId, range);
+      return;
+    }
+    this.follower.request(sessionId, range);
+  }
+
+  frames(sessionId: string, frames: readonly HubFrame[]): void {
+    this.leader?.leader.frames(sessionId, frames);
+  }
+
+  ack(sessionId: string, ack: HubStreamAckPayload): void {
+    this.leader?.leader.ack(sessionId, ack);
+  }
+
+  clear(reason: ReplicaClearEvent["reason"]): void {
+    if (this.leader) {
+      this.leader.leader.clear(reason);
+      return;
+    }
+    // A follower cannot delete the database; the leader's `replica:cleared`
+    // broadcast is what drops every tab's cache.
+    this.view.dropAll();
+  }
+
+  get isLeader(): boolean {
+    return this.leader !== null;
+  }
+
+  get storage(): "opfs" | "memory" | null {
+    return this.leader?.storage ?? null;
+  }
+
+  get degraded(): boolean {
+    return this.degradedReason !== null;
+  }
+
+  /** The tab that held the lock when this tab last heard from one, for diagnostics. */
+  get leaderTabId(): string | null {
+    return this.lastLeaderTabId;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.leader?.leader.dispose();
+    this.leader?.bridge.terminate?.();
+    this.channel?.close();
+  }
+
+  broadcast(message: ReplicaChannelMessage): void {
+    this.channel?.postMessage(message);
+  }
 }
 
 /** A replica with no lock and no Worker: same protocol, per tab, in memory. */
@@ -311,6 +371,11 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
       if (!openSessions.delete(sessionId)) return;
       options.unsubscribe(sessionId);
     },
+    resubscribe: (sessionId) => {
+      if (!openSessions.has(sessionId)) return;
+      // Same rule as the shared path: the cursor is the stored head, never 1.
+      options.subscribe(sessionId, engine.resumeFrom(sessionId));
+    },
     loadWindow: async (sessionId, range) => {
       const entries = await options.readRange(sessionId, range);
       engine.writeWindow(sessionId, entries, range);
@@ -333,6 +398,78 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
     degraded: true,
     dispose: () => engine.close(),
   };
+}
+
+interface LeaderSession {
+  leader: ReplicaLeader;
+  bridge: WorkerBridge;
+  storage: "opfs" | "memory";
+  degraded: boolean;
+}
+
+/**
+ * Try to take the lock.
+ *
+ * A tab that does not get it resolves to null immediately: the winner holds the
+ * lock for its whole life, so there is no later moment at which the loser could
+ * win it. Web Locks queues the next waiter when the holder goes away, which is
+ * how a *different* invocation of this function — the takeover tab — becomes the
+ * leader on the next render.
+ */
+async function startLeader(
+  options: BrowserReplicaOptions,
+  env: BrowserReplicaEnv,
+  view: ReplicaView,
+  broadcast: (message: ReplicaChannelMessage) => void,
+  wanted: ReadonlySet<string>,
+): Promise<LeaderSession> {
+  const bridge = createWorkerBridge(options, env);
+  let storage: "opfs" | "memory" = "opfs";
+  let degraded = false;
+
+  const leader = new ReplicaLeader({
+    userId: options.userId,
+    workspaceId: options.workspaceId,
+    tabId: options.tabId,
+    subscription: { subscribe: options.subscribe, unsubscribe: options.unsubscribe },
+    readRange: options.readRange,
+    worker: bridge,
+    broadcast,
+    view,
+    onDegraded: (reason) => {
+      if (!reason) return;
+      degraded = true;
+      options.onDegraded?.(reason);
+    },
+    onCleared: options.onCleared,
+  });
+  bridge.onMessage((message) => {
+    if (message.type === "ready") {
+      // `ready` is the Worker's answer to `init`; it names the storage that
+      // actually opened, which is how a browser that refuses OPFS is reported
+      // without a second capability probe.
+      storage = message.storage;
+      degraded = message.degraded !== null;
+      if (message.degraded) options.onDegraded?.(message.degraded);
+      return;
+    }
+    // Everything else drives the state machine: `opened` subscribes, `backfill`
+    // reads through the route, `appended` broadcasts and fills its hole.
+    leader.handleWorkerMessage(message);
+  });
+  // The Worker needs its engine before any other request; `ReplicaWorkerHost.
+  // enqueue` serializes, so the `open` calls that follow `becomeLeader` are
+  // handled after this one.
+  bridge.postMessage({
+    type: "init",
+    userId: options.userId,
+    workspaceId: options.workspaceId,
+    // The Worker checks the capability itself as well; this only records the
+    // intent, so a forced `memory` in a test is honoured.
+    storage: env.hasOpfs === false ? "memory" : "opfs",
+  });
+  void wanted;
+  return { leader, bridge, storage, degraded };
 }
 
 interface WorkerBridge {
@@ -410,6 +547,7 @@ function handleInline(
           head: snapshot.head,
           fresh: snapshot.fresh,
           cleared: opened.cleared?.reason ?? null,
+          entries: [...snapshot.entries],
         },
       ];
     }
@@ -427,6 +565,7 @@ function handleInline(
           head: snapshot.head,
           fresh: snapshot.fresh,
           missing,
+          entries: [...snapshot.entries],
         },
       ];
     }
@@ -441,6 +580,7 @@ function handleInline(
           head: snapshot.head,
           fresh: snapshot.fresh,
           missing: null,
+          entries: [...snapshot.entries],
         },
       ];
     }

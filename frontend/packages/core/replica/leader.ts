@@ -1,22 +1,20 @@
 /**
- * Leader election and session refcounting (MUL-403 C7 §1, §3, §7).
+ * The leader half of the replica: refcounts and the backfill loop (MUL-403 C7
+ * §1, §3, §7).
  *
- * `navigator.locks.request(lockName, {mode: "exclusive"}, …)` is held for the
- * tab's whole life: the callback returns a promise that never settles, so the
- * lock is released exactly when the tab goes away and Chromium's lock queue wakes
- * the next holder. Measured handoff — next leader acquires the lock, reopens
- * SQLite and re-subscribes — is ~130 ms inside one browser context, inside the
- * plan's one-second budget.
+ * The lock itself is taken by `ReplicaFacade` in `browser.ts`, because the tab
+ * that wins it may already have been reading as a follower; this class starts
+ * once the tab knows it leads.
  *
  * Refcounting is what makes "只有 1 页在订阅" true: a session is subscribed while at
- * least one tab has announced it open, and unsubscribed when the last one says
- * close. The set of open sessions is what a new leader re-subscribes from each
- * session's stored head; the plan requires that head to be contiguous, so
- * resuming from it can never skip a row.
+ * least one tab has it open, and unsubscribed when the last one closes it. The
+ * set of open sessions is what a new leader re-subscribes from each session's
+ * stored head; the plan requires that head to be contiguous, so resuming from it
+ * can never skip a row.
  */
 
 import type { HubFrame, HubSeqRange, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
-import { replicaLockName, type ReplicaChannelMessage } from "./channel";
+import type { ReplicaChannelMessage } from "./channel";
 import type { SessionLogEntry } from "./port";
 import type { ReplicaWorkerRequest, ReplicaWorkerResponse } from "./worker-protocol";
 
@@ -29,6 +27,13 @@ export interface ReplicaSubscription {
 
 /** The page-side view the leader keeps in sync with the Worker. */
 export interface LeaderView {
+  /** The current window, read synchronously (the port's contract). */
+  snapshot(sessionId: string): {
+    entries: readonly SessionLogEntry[];
+    head: number | null;
+    fresh: boolean;
+    ready: boolean;
+  };
   setWindow(
     sessionId: string,
     entries: readonly SessionLogEntry[],
@@ -64,8 +69,7 @@ export interface ReplicaLeaderOptions {
 }
 
 /**
- * The leader half of the replica: refcounts, the backfill loop, and the
- * re-subscribe after a handoff.
+ * The leader half of the replica.
  *
  * Every mutation goes through the Worker — one write path — and every read a
  * reader tab asks for is answered from the leader's view, so no tab but the
@@ -87,29 +91,6 @@ export class ReplicaLeader {
   constructor(private readonly options: ReplicaLeaderOptions) {}
 
   /**
-   * Hold the lock for the tab's life.
-   *
-   * The promise inside the callback never settles on purpose: Web Locks releases
-   * on the callback's promise settling, and a leader that returned early would
-   * hand the lock to the next tab while its Worker still had the database open
-   * (which `opfs-sahpool` answers with `NoModificationAllowedError`, since the
-   * access handles are exclusive per origin).
-   */
-  async run(): Promise<void> {
-    const locks = globalThis.navigator?.locks;
-    if (!locks) throw new Error("replica leader requires navigator.locks");
-    await locks.request(replicaLockName(this.options.userId, this.options.workspaceId), { mode: "exclusive" }, async () => {
-      this.disposers.push(
-        this.options.worker.onMessage((message) => {
-          void this.onWorkerMessage(message);
-        }),
-      );
-      this.options.broadcast({ type: "replica:leader", tabId: this.options.tabId, sessions: [...this.openCounts.keys()] });
-      await new Promise<never>(() => {});
-    });
-  }
-
-  /**
    * A tab announces it is showing a session.
    *
    * The first announcement subscribes, later ones only bump the count — the
@@ -119,7 +100,22 @@ export class ReplicaLeader {
     const count = this.openCounts.get(sessionId) ?? 0;
     this.openCounts.set(sessionId, count + 1);
     if (count > 0) return;
-    this.options.worker.postMessage({ type: "open", sessionId });
+    this.post({ type: "open", sessionId });
+  }
+
+  /**
+   * Re-run step 1 for a session the page still has open.
+   *
+   * This is the reconnect path, and the plan spells it out: 重连即回到第 1 步，因为
+   * `from_seq` 来自库. The socket handshake is re-done by the page, so it asks the
+   * leader to open the session again; the Worker answers with `fromSeq` computed
+   * from the stored head, and only the frames above it are re-sent. Asking for
+   * `1` here is the bug this method exists to prevent — it would re-read the whole
+   * log on every reconnect and still call the result fresh.
+   */
+  resubscribe(sessionId: string): void {
+    if (!this.openCounts.has(sessionId)) return;
+    this.post({ type: "open", sessionId });
   }
 
   /** The last close unsubscribes; an earlier one just decrements. */
@@ -136,12 +132,12 @@ export class ReplicaLeader {
   /** Frames from the page's socket, forwarded to the Worker unread. */
   frames(sessionId: string, frames: readonly HubFrame[]): void {
     if (frames.length === 0) return;
-    this.options.worker.postMessage({ type: "frames", sessionId, frames });
+    this.post({ type: "frames", sessionId, frames });
   }
 
   /** A `stream.ack`, forwarded so the Worker decides reset vs gap. */
   ack(sessionId: string, ack: HubStreamAckPayload): void {
-    this.options.worker.postMessage({ type: "ack", sessionId, ack });
+    this.post({ type: "ack", sessionId, ack });
   }
 
   /** Fetch a window through the read route and store it (deep link / gap / SSR seed). */
@@ -149,14 +145,50 @@ export class ReplicaLeader {
     await this.backfill(sessionId, range);
   }
 
+  /**
+   * The window a reader tab asked for.
+   *
+   * Answered from the leader's view, which the Worker keeps in step: the port's
+   * reads are synchronous, so a follower's request can only be served from
+   * something already in memory. A request outside the view (a deep link into rows
+   * the leader never read) is served by `loadWindow` first, which is the one path
+   * that touches the read route.
+   */
+  window(sessionId: string, from: number, to: number): {
+    entries: SessionLogEntry[];
+    head: number | null;
+    fresh: boolean;
+    ready: boolean;
+  } {
+    const snapshot = this.options.view.snapshot(sessionId);
+    return {
+      entries: snapshot.entries.filter((entry) => entry.seq >= from && entry.seq <= to),
+      head: snapshot.head,
+      fresh: snapshot.fresh,
+      ready: snapshot.ready,
+    };
+  }
+
   /** Row heights, written through the Worker so the leader stays the only writer. */
   writeRowHeight(sessionId: string, seq: number, key: string, height: number): void {
-    this.options.worker.postMessage({ type: "writeHeight", sessionId, seq, key, height });
+    this.post({ type: "writeHeight", sessionId, seq, key, height });
   }
 
   /** Drop everything: logout, a user mismatch or a schema upgrade. */
   clear(reason: "logout" | "user_mismatch" | "schema_upgrade"): void {
-    this.options.worker.postMessage({ type: "clear", reason });
+    this.post({ type: "clear", reason });
+  }
+
+  /**
+   * Feed one Worker response back into the leader.
+   *
+   * The Worker's answers are what advance the state machine — `opened` triggers
+   * the subscribe, `backfill` triggers the read, `appended` broadcasts and fills
+   * the hole it exposed — so this is the leader's public input, wired by
+   * `browser.ts` to the Worker's `onMessage`.
+   */
+  handleWorkerMessage(message: ReplicaWorkerResponse): void {
+    void this.onWorkerMessage(message);
   }
 
   /** Sessions this leader holds, for the handoff announcement. */
@@ -184,6 +216,14 @@ export class ReplicaLeader {
       }
       case "opened": {
         if (message.cleared) this.clearAndBroadcast(message.cleared);
+        // Paint what the database already held before the socket answers: on a
+        // takeover this is the previous leader's window, and showing it is what
+        // keeps the handoff from flashing an empty list.
+        this.options.view.setWindow(message.sessionId, message.entries, {
+          head: message.head,
+          fresh: message.fresh,
+          ready: message.entries.length > 0 || message.head !== null,
+        });
         // Step 1: subscribe from the head the database reached. On a handoff this
         // is the resume point, which is why the head has to be contiguous.
         this.options.subscription.subscribe(message.sessionId, message.fromSeq);
@@ -196,7 +236,14 @@ export class ReplicaLeader {
         return;
       }
       case "appended": {
-        this.options.view.updateFreshness(message.sessionId, message.fresh);
+        this.options.view.setWindow(message.sessionId, message.entries, {
+          head: message.head,
+          fresh: message.fresh,
+          // Rows arrived, so the replica has answered for this session: the
+          // `dataReady` gate `useAnchoredReveal` takes must open even when the
+          // window is still short of the head.
+          ready: true,
+        });
         this.options.broadcast({
           type: "replica:appended",
           sessionId: message.sessionId,
@@ -232,6 +279,17 @@ export class ReplicaLeader {
     }
   }
 
+  /**
+   * Post to the Worker.
+   *
+   * No queue here: the Worker serializes its own requests (`ReplicaWorkerHost.
+   * enqueue`), so an `open` posted right after `init` is handled after the engine
+   * exists without this side having to know when that happens.
+   */
+  private post(request: ReplicaWorkerRequest): void {
+    this.options.worker.postMessage(request);
+  }
+
   private clearAndBroadcast(reason: "logout" | "user_mismatch" | "schema_upgrade"): void {
     this.options.view.dropAll();
     this.options.onCleared?.(reason);
@@ -250,7 +308,7 @@ export class ReplicaLeader {
     this.inFlight.add(sessionId);
     try {
       const entries = await this.options.readRange(sessionId, range);
-      this.options.worker.postMessage({ type: "writeWindow", sessionId, entries, range });
+      this.post({ type: "writeWindow", sessionId, entries, range });
     } finally {
       this.inFlight.delete(sessionId);
     }

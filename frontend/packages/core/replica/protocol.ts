@@ -346,9 +346,18 @@ export function decideAck(ack: HubStreamAckPayload, current: ReplicaState): AckD
 /**
  * Freshness (protocol step 6): equal `log_version` **and** equal `head_seq`.
  *
+ * The two sides of the comparison are different objects on purpose:
+ *
+ * - `ackHeadSeq` is the **server's** head, from the ack. It is what the replica
+ *   has to reach. It is never stored as the replica's own head — doing that is
+ *   the bug that makes an ack sent before a frame batch mark a stale window
+ *   fresh, because the server's number would then be compared with itself;
+ * - `state.head` is the replica's newest *contiguous* seq, and it only moves when
+ *   rows are actually written.
+ *
  * `head_seq` alone cannot see an in-place update — a patched row keeps its seq —
- * which is exactly why the ack carries both numbers. A replica that has never
- * received an ack is not fresh, however complete its window looks.
+ * which is why the ack carries `log_version` too, and a replica that has never
+ * received an ack is not fresh however complete its window looks.
  */
 export function computeFresh(input: {
   state: ReplicaState;

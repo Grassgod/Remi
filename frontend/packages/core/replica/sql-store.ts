@@ -66,11 +66,13 @@ export class SqlReplicaStorage implements ReplicaStorage {
   }
 
   readState(sessionId: string): ReplicaState {
-    const head = this.statement(SQL.selectHead).get<{ head_seq: number; log_version: number | null }>([sessionId]);
+    const head = this.statement(SQL.selectHead).get<{ head_seq: number | null; log_version: number | null }>([sessionId]);
     const ranges = this.statement(SQL.selectRanges).all<{ from_seq: number; to_seq: number }>([sessionId]);
     return {
       ranges: normalizeRanges(ranges.map((row) => ({ from: row.from_seq, to: row.to_seq }))),
-      head: head ? head.head_seq : null,
+      // `undefined` and `null` both mean "no head": the column is nullable and a
+      // driver may hand back either.
+      head: head?.head_seq ?? null,
       logVersion: head ? (head.log_version ?? null) : null,
       synced: head !== null,
     };
@@ -84,7 +86,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
     for (const range of state.ranges) {
       this.statement(SQL.insertRange).run([sessionId, range.from, range.to]);
     }
-    this.statement(SQL.upsertHead).run([sessionId, state.head ?? 0, state.logVersion, now]);
+    this.statement(SQL.upsertHead).run([sessionId, state.head, state.logVersion, now]);
   }
 
   upsertEntries(entries: readonly SessionLogEntry[]): void {

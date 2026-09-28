@@ -101,6 +101,7 @@ export class ReplicaEngine {
   }
 
   /** Drop one session's rows (a `log_version` change, step 2). */
+
   resetSession(sessionId: string): void {
     this.storage.clearSession(sessionId);
     this.acks.delete(sessionId);
@@ -124,14 +125,21 @@ export class ReplicaEngine {
       this.storage.clearSession(sessionId);
     }
 
-    // The ack's head is the server's, and freshness compares the replica's
-    // contiguous head against it; recording it here is what makes the very first
-    // ack able to produce a verdict instead of "unknown".
+    // The server's head is kept here, *not* written into the replica's head: the
+    // replica's head is what it has actually written, and conflating the two is
+    // how an ack that arrives before its frames would mark a stale window fresh.
     this.acks.set(sessionId, {
       headSeq: ack.head_seq,
       logVersion: decision.state.logVersion,
     });
-    this.storage.writeState(sessionId, decision.state, this.now());
+    // A reset drops the rows, so the stored head has to go with them; otherwise
+    // the replica would claim to hold seqs it just deleted. And the server's head
+    // never becomes the local head: the replica only claims what it has written.
+    this.storage.writeState(
+      sessionId,
+      decision.reset ? { ...decision.state, head: null } : { ...decision.state, head: current.head },
+      this.now(),
+    );
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
 
@@ -150,6 +158,20 @@ export class ReplicaEngine {
     const state = this.storage.readState(sessionId);
     const entries = this.storage.readEntries(sessionId);
     const result = applyFrames({ frames, state, entries });
+
+    // The server's head advances with a live frame.
+    //
+    // A frame proves the server had reached that seq when it sent it, and the hub
+    // does not hold frames back — so the highest seq a batch carries is the
+    // server's head as of that batch. Without this the ack's number would be the
+    // *only* thing freshness compares against, and a replica that received
+    // everything after the ack would still report `fresh: false` (the plan's
+    // 「之后每收一帧都成立」).
+    const highestFrameSeq = frames.reduce((highest, frame) => (frame.seq > highest ? frame.seq : highest), 0);
+    const known = this.acks.get(sessionId);
+    if (highestFrameSeq > (known?.headSeq ?? 0)) {
+      this.acks.set(sessionId, { headSeq: highestFrameSeq, logVersion: known?.logVersion ?? state.logVersion });
+    }
 
     if (result.upserts.length > 0) this.storage.upsertEntries(result.upserts);
     if (result.deletes.length > 0) this.storage.deleteEntries(sessionId, result.deletes);

@@ -110,6 +110,8 @@ export interface ReplicaWorkerOpenedMessage {
   fresh: boolean;
   /** Set when `open` had to wipe the database (user mismatch / schema upgrade). */
   cleared: "logout" | "user_mismatch" | "schema_upgrade" | null;
+  /** The window the database already held — what a takeover paints before replay. */
+  entries: SessionLogEntry[];
 }
 
 export interface ReplicaWorkerBackfillMessage {
@@ -127,6 +129,15 @@ export interface ReplicaWorkerAppendedMessage {
   fresh: boolean;
   /** The hole the batch exposed; the leader backfills it before anything else. */
   missing: HubSeqRange | null;
+  /**
+   * The window the replica now holds.
+   *
+   * Carried with the answer rather than requiring a follow-up `window` request,
+   * because the page's port is synchronous: the list reads `getSnapshot` on the
+   * next render, and a second round trip would show the stale window for a frame.
+   * The plan describes the same shape (`{entries, head_seq, fresh}` after a write).
+   */
+  entries: SessionLogEntry[];
 }
 
 export interface ReplicaWorkerWindowResultMessage {

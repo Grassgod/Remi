@@ -32,6 +32,16 @@ export class ReplicaView implements SessionReplicaPort {
   private readonly snapshots = new Map<string, SessionReplicaSnapshot & { entries: SessionLogEntry[] }>();
   private readonly listeners = new Map<string, Set<() => void>>();
 
+  /** The leader's own synchronous read, the same object `getSnapshot` returns. */
+  snapshot(sessionId: string): {
+    entries: readonly SessionLogEntry[];
+    head: number | null;
+    fresh: boolean;
+    ready: boolean;
+  } {
+    return this.getSnapshot(sessionId);
+  }
+
   getSnapshot(sessionId: string): SessionReplicaSnapshot & { entries: readonly SessionLogEntry[] } {
     const cached = this.snapshots.get(sessionId);
     if (cached) return cached;
