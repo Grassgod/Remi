@@ -55,21 +55,53 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }
 
     async function credentials(source: string, target: string) {
-      const app = createMultiremiApp({ store, authToken: "mul476-test-root" });
-      async function member(both: boolean) {
-        const user = store.getOrCreateUser({ email: `${source}-${both}@example.test`, name: both ? "Both workspaces" : "Source only" });
-        for (const workspaceId of both ? [source, target] : [source]) {
-          store.createWorkspaceMember({ workspaceId, userId: user.id, name: user.name, role: "member" });
+      const app = createMultiremiApp({ store, authToken: "mul476-test-root", shareSecret: "mul476-test-share" });
+      async function member(both: boolean, home = source) {
+        const user = store.getOrCreateUser({ email: `${home}-${both}@example.test`, name: both ? "Both workspaces" : "One workspace" });
+        let memberId = "";
+        for (const workspaceId of both ? [source, target] : [home]) {
+          const row = store.createWorkspaceMember({ workspaceId, userId: user.id, name: user.name, role: "member" });
+          if (workspaceId === home) memberId = row.id;
         }
-        return (await store.createAccessToken({ type: "pat", workspaceId: source, userId: user.id, name: "Workspace boundary test" })).token;
+        const token = (await store.createAccessToken({ type: "pat", workspaceId: home, userId: user.id, name: "Workspace boundary test" })).token;
+        return { token, memberId, userId: user.id };
       }
       const sourceOnly = await member(false);
       const both = await member(true);
+      const targetOnly = await member(false, target);
       const request = (token: string, path: string, method: string, body?: unknown) => app.request(path, {
         method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-      return { app, sourceOnly, both, root: "mul476-test-root", request };
+      return { app, sourceOnly: sourceOnly.token, both: both.token, targetOnly: targetOnly.token,
+        sourceMember: sourceOnly.memberId, targetMember: targetOnly.memberId, bothUser: both.userId,
+        root: "mul476-test-root", request };
+    }
+
+    async function legacyTree(reverse: boolean) {
+      const { source, target } = workspaces(reverse);
+      const auth = await credentials(source, target);
+      const parent = store.createIssue({ title: `PRIVATE parent ${source}`, workspaceId: source, status: "todo", createdBy: auth.bothUser });
+      const agent = store.createAgent({ name: "Child agent", provider: "codex", workspaceId: source });
+      const child = store.createIssue({ title: "Visible child", workspaceId: source, parentIssueId: parent.id,
+        assigneeType: "agent", assigneeId: agent.id, createdBy: auth.bothUser });
+      const task = store.createTask({ agentId: agent.id, issueId: child.id, workspaceId: source, prompt: "Child work" });
+      const taskToken = (await store.createTaskAccessToken(task, store.getWorkspaceMember(auth.sourceMember)!.userId!)).token;
+      db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, parent.id]);
+      return { source, target, auth, parent, child, agent, task, taskToken };
+    }
+
+    async function read(auth: Awaited<ReturnType<typeof credentials>>, token: string, path: string) {
+      const response = await auth.request(token, path, "GET");
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json();
+    }
+
+    async function shareBundle(auth: Awaited<ReturnType<typeof credentials>>, token: string, issueId: string) {
+      const response = await auth.request(auth.both, `/api/issues/${issueId}/share`, "POST", {});
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      return read(auth, token, `/api/shares/${encodeURIComponent(body.share.token)}`);
     }
 
     for (const reverse of [false, true]) {
@@ -242,6 +274,160 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           })).status).toBe(404);
           expect(store.getIssue(leaf.id)?.workspaceId).toBe(source);
         }
+      });
+
+      it(`${direction}: W8 HTTP refuses foreign parent creation, re-parenting and dependency insertion`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const issue = store.createIssue({ title: "Local issue", workspaceId: source });
+        const foreign = store.createIssue({ title: "Foreign issue", workspaceId: target });
+        for (const prefix of ["/api/issues", "/api/multiremi/issues"]) {
+          for (const [path, method, body] of [
+            [prefix, "POST", { title: "Invalid child", workspace_id: source, parent_issue_id: foreign.id }],
+            [`${prefix}/${issue.id}`, "PATCH", { parent_issue_id: foreign.id }],
+            [`${prefix}/${issue.id}/dependencies`, "POST", { depends_on_issue_id: foreign.id, type: "related" }],
+          ] as const) {
+            const response = await auth.request(auth.both, path, method, body);
+            expect(response.status).toBe(400);
+          }
+        }
+        expect(store.getIssue(issue.id)?.parentIssueId).toBeNull();
+        expect(store.listIssueDependencies(issue.id)).toEqual([]);
+      });
+
+      it(`${direction}: R1 legacy foreign children, dependencies and human requests are absent over HTTP`, async () => {
+        const { source, target, auth, parent, child, task } = await legacyTree(reverse);
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [source, parent.id]);
+        const oldDecision = store.createIssueDecision(child.id, { kind: "question", title: "PRIVATE old decision" }, {
+          type: "member", id: auth.sourceMember, taskId: null,
+        });
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, parent.id]);
+        store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { message: "PRIVATE child question" } });
+        const peer = store.createIssue({ title: "PRIVATE prerequisite", workspaceId: source });
+        db.run(`INSERT INTO multiremi_issue_dependencies (id, workspace_id, issue_id, depends_on_issue_id, type, created_at)
+          VALUES (?, ?, ?, ?, 'blocked_by', ?)`, [`legacy_${child.id}`, source, parent.id, peer.id, new Date().toISOString()]);
+        const detail = await read(auth, auth.targetOnly, `/api/multiremi/issues/${parent.id}`);
+        expect(detail.children).toEqual([]);
+        expect(detail.issue.children).toEqual([]);
+        expect(detail.issue.child_count).toBe(0);
+        expect(detail.dependencies).toEqual([]);
+        expect(detail.issue.waiting_on).toEqual([]);
+        expect(detail.waiting_on.prerequisites).toEqual([]);
+        for (const prefix of ["/api/issues", "/api/multiremi/issues"]) {
+          const children = await read(auth, auth.targetOnly, `${prefix}/${parent.id}/children`);
+          expect(children.issues).toEqual([]);
+          const dependencies = await read(auth, auth.targetOnly, `${prefix}/${parent.id}/dependencies`);
+          expect(dependencies.dependencies).toEqual([]);
+          const multi = await read(auth, auth.targetOnly, `${prefix}/children?parent_ids=${parent.id}`);
+          expect(JSON.stringify(multi)).not.toContain(child.title);
+        }
+        const decisions = await read(auth, auth.targetOnly, `/api/issues/${parent.id}/decisions`);
+        expect(decisions.waiting_on_human).toEqual([]);
+        expect(store.getIssueDecision(parent.id, oldDecision.id)).toBeNull();
+        expect(store.countPendingIssueDecisions(parent.id)).toBe(0);
+        expect((await read(auth, auth.targetOnly, `/api/issues/${parent.id}`)).pending_decision_count).toBe(0);
+        expect((await shareBundle(auth, auth.sourceOnly, child.id)).parent_issue).toBeNull();
+        expect((await shareBundle(auth, auth.targetOnly, parent.id)).children).toEqual([]);
+        expect(store.listChildIssueProgress(target)).toEqual([]);
+      });
+
+      it(`${direction}: R2 closing a legacy foreign child emits no parent comments, rounds, inbox or workspace events`, async () => {
+        const { target, auth, parent, child } = await legacyTree(reverse);
+        const owner = store.createAgent({ name: "Parent owner", provider: "codex", workspaceId: target, ownerId: auth.targetMember });
+        db.run("UPDATE multiremi_issues SET assignee_type = 'agent', assignee_id = ? WHERE id = ?", [owner.id, parent.id]);
+        store.addIssueSubscriber(parent.id, auth.targetMember);
+        const before = store.getIssue(parent.id);
+        const comments = store.listIssueComments(parent.id);
+        const inbox = store.listInboxItems(auth.targetMember, target);
+        const events: string[] = [];
+        const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
+        try {
+          const response = await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, "PATCH", { status: "done" });
+          expect(response.status, await response.clone().text()).toBe(200);
+          expect(store.getIssue(child.id)?.status).toBe("done");
+          expect(store.getIssue(parent.id)).toEqual(before);
+          expect(store.listIssueComments(parent.id)).toEqual(comments);
+          expect(store.listTasksForIssue(parent.id)).toEqual([]);
+          expect(store.listInboxItems(auth.targetMember, target)).toEqual(inbox);
+          expect(store.listIssueActivity(parent.id).filter((row) => row.type === "parent_status_derived")).toEqual([]);
+          expect(events).toEqual([]);
+        } finally { stop(); }
+      });
+
+      it(`${direction}: R3 a task decision with a legacy foreign parent escalates on its own source issue`, async () => {
+        const { source, target, auth, parent, child, taskToken } = await legacyTree(reverse);
+        const events: string[] = [];
+        const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
+        try {
+          const response = await auth.request(taskToken, `/api/issues/${child.id}/decisions`, "POST", {
+            kind: "question", title: "PRIVATE source decision", body: "PRIVATE body",
+          });
+          expect(response.status, await response.clone().text()).toBe(201);
+          expect((await response.json()).decision).toMatchObject({ workspaceId: source, issueId: child.id, status: "escalated" });
+          expect((await read(auth, auth.targetOnly, `/api/issues/${parent.id}/decisions`)).waiting_on_human).toEqual([]);
+          expect(store.listTasksForIssue(parent.id)).toEqual([]);
+          expect(store.listInboxItems(auth.targetMember, target)).toEqual([]);
+          expect(events).toEqual([]);
+        } finally { stop(); }
+      });
+
+      it(`${direction}: R4 legacy foreign dependencies neither reveal prerequisites nor automatically start another workspace`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        for (const type of ["blocked_by", "blocks"] as const) {
+          const prerequisite = store.createIssue({ title: "PRIVATE prerequisite", workspaceId: source });
+          const owner = store.createAgent({ name: "Dependent owner", provider: "codex", workspaceId: target });
+          const dependent = store.createIssue({ title: "Waiting dependent", workspaceId: target, status: "backlog",
+            assigneeType: "agent", assigneeId: owner.id });
+          const [a, b] = type === "blocks" ? [prerequisite.id, dependent.id] : [dependent.id, prerequisite.id];
+          db.run(`INSERT INTO multiremi_issue_dependencies (id, workspace_id, issue_id, depends_on_issue_id, type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)`, [`legacy_${dependent.id}`, target, a, b, type, new Date().toISOString()]);
+          expect(store.listUnmetPrerequisites(dependent.id)).toEqual([]);
+          const detail = await read(auth, auth.targetOnly, `/api/multiremi/issues/${dependent.id}`);
+          expect(detail.dependencies).toEqual([]);
+          expect(detail.issue.waiting_on).toEqual([]);
+          const events: string[] = [];
+          const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
+          try {
+            const response = await auth.request(auth.sourceOnly, `/api/issues/${prerequisite.id}`, "PATCH", { status: "done" });
+            expect(response.status).toBe(200);
+            expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+            expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+            expect(events).toEqual([]);
+          } finally { stop(); }
+        }
+      });
+
+      it(`${direction}: R5 behavior change: legacy foreign children no longer prevent the parent from finishing`, async () => {
+        const { auth, parent, child } = await legacyTree(reverse);
+        const response = await auth.request(auth.targetOnly, `/api/issues/${parent.id}`, "PATCH", { status: "done" });
+        expect(response.status, await response.clone().text()).toBe(200);
+        expect(store.getIssue(parent.id)?.status).toBe("done");
+        expect(store.getIssue(child.id)?.status).toBe("todo");
+        expect(store.hasChildIssues(parent.id)).toBe(false);
+        expect(store.countOpenChildIssues(parent.id)).toBe(0);
+      });
+
+      it(`${direction}: R6 child detail, lists, inbox and share bundle omit the foreign parent's title, key and status`, async () => {
+        const { source, auth, parent, child, agent } = await legacyTree(reverse);
+        store.addIssueSubscriber(child.id, auth.sourceMember);
+        store.createIssueComment(child.id, { authorType: "agent", authorId: agent.id,
+          body: `Visible child update [@Reviewer](mention://member/${auth.sourceMember})` });
+        expect(store.listInboxItems(auth.sourceMember, source)).toHaveLength(1);
+        for (const path of [`/api/issues/${child.id}`, `/api/multiremi/issues/${child.id}`,
+          `/api/issues?workspace_id=${source}`, `/api/multiremi/issues?workspace_id=${source}`,
+          `/api/inbox?workspace_id=${source}`, `/api/multiremi/inbox?workspace_id=${source}`]) {
+          const body = await read(auth, auth.sourceOnly, path);
+          expect(JSON.stringify(body)).not.toContain(parent.title);
+          expect(JSON.stringify(body)).not.toContain(parent.key);
+          const text = JSON.stringify(body);
+          expect(text).not.toMatch(/"parent_(title|key|status)":"/);
+        }
+        const bundle = await shareBundle(auth, auth.sourceOnly, child.id);
+        expect(bundle.parent_issue).toBeNull();
+        expect(bundle.issue.parent_issue_id).toBe(parent.id);
+        expect(JSON.stringify(bundle)).not.toContain(parent.title);
+        expect(JSON.stringify(bundle)).not.toContain(parent.key);
       });
     }
   });

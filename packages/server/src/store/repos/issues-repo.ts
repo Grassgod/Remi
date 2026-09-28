@@ -258,6 +258,8 @@ function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProg
  * `blocked_by` prerequisite — "the platform is holding this one for me". The
  * subquery mirrors {@link IssuesRepo.listUnmetPrerequisites} for the whole
  * workspace in one statement instead of hydrating every child.
+ * MUL-476: relation reads treat parents, children and dependencies in another
+ * workspace as absent. Move integrity checks deliberately use the raw rows.
  */
 const CHILD_PROGRESS_SELECT = `SELECT child.parent_issue_id, COUNT(*) AS total,
               SUM(CASE WHEN child.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
@@ -270,7 +272,12 @@ const CHILD_PROGRESS_SELECT = `SELECT child.parent_issue_id, COUNT(*) AS total,
                       WHEN d.type = 'blocks' THEN d.issue_id
                       ELSE d.depends_on_issue_id
                     END
+                    JOIN multiremi_issues dependent ON dependent.id = CASE
+                      WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id
+                    END
                     WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
+                      AND d.workspace_id = dependent.workspace_id
+                      AND prereq.workspace_id = dependent.workspace_id
                   ) THEN 1 ELSE 0 END) AS waiting,
               SUM(CASE WHEN child.status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
        FROM multiremi_issues child
@@ -495,7 +502,10 @@ export class IssuesRepo {
 
   getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_decisions WHERE id = ? AND issue_id = ?",
+      `SELECT d.* FROM multiremi_issue_decisions d
+       JOIN multiremi_issues target ON target.id = d.issue_id AND target.workspace_id = d.workspace_id
+       JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
+       WHERE d.id = ? AND d.issue_id = ?`,
     ).get(decisionId, issueId) as Row | null;
     return row ? toIssueDecision(row) : null;
   }
@@ -503,12 +513,16 @@ export class IssuesRepo {
   countPendingIssueDecisions(issueId: string): number {
     const row = this.ctx.db.query(
       `SELECT
-        (SELECT COUNT(*) FROM multiremi_issue_decisions WHERE issue_id = ? AND status = 'escalated') +
+        (SELECT COUNT(*) FROM multiremi_issue_decisions d
+          JOIN multiremi_issues target ON target.id = d.issue_id AND target.workspace_id = d.workspace_id
+          JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
+          WHERE d.issue_id = ? AND d.status = 'escalated') +
         (SELECT COUNT(*) FROM multiremi_task_human_requests h
           JOIN multiremi_tasks t ON t.id = h.task_id
           JOIN multiremi_issues i ON i.id = t.issue_id
-          WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)) AS total`,
-    ).get(issueId, issueId, issueId) as { total: number } | null;
+          WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)
+            AND i.workspace_id = (SELECT workspace_id FROM multiremi_issues WHERE id = ?)) AS total`,
+    ).get(issueId, issueId, issueId, issueId) as { total: number } | null;
     return Number(row?.total ?? 0);
   }
 
@@ -517,20 +531,26 @@ export class IssuesRepo {
     // applied in SQL. QA round 1: slicing an all-statuses list by created_at
     // dropped just-answered old rows; the window must follow answered_at.
     const open = (status: "pending" | "escalated") => (this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_decisions WHERE issue_id = ? AND status = ? ORDER BY created_at DESC, id DESC",
+      `SELECT d.* FROM multiremi_issue_decisions d
+       JOIN multiremi_issues target ON target.id = d.issue_id AND target.workspace_id = d.workspace_id
+       JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
+       WHERE d.issue_id = ? AND d.status = ? ORDER BY d.created_at DESC, d.id DESC`,
     ).all(issueId, status) as Row[]).map(toIssueDecision);
     const answered = (this.ctx.db.query(
-      `SELECT * FROM multiremi_issue_decisions
-       WHERE issue_id = ? AND status = 'answered'
-       ORDER BY answered_at DESC NULLS LAST, id DESC LIMIT ?`,
+      `SELECT d.* FROM multiremi_issue_decisions d
+       JOIN multiremi_issues target ON target.id = d.issue_id AND target.workspace_id = d.workspace_id
+       JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
+       WHERE d.issue_id = ? AND d.status = 'answered'
+       ORDER BY d.answered_at DESC NULLS LAST, d.id DESC LIMIT ?`,
     ).all(issueId, DECISION_ANSWERED_LIMIT) as Row[]).map(toIssueDecision);
     const requests = this.ctx.db.query(
       `SELECT h.id, h.kind, h.payload, h.status, h.created_at, t.issue_id, t.id AS task_id
        FROM multiremi_task_human_requests h
        JOIN multiremi_tasks t ON t.id = h.task_id
        JOIN multiremi_issues i ON i.id = t.issue_id
-       WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)`,
-    ).all(issueId, issueId) as Row[];
+       WHERE h.status = 'pending' AND (i.id = ? OR i.parent_issue_id = ?)
+         AND i.workspace_id = (SELECT workspace_id FROM multiremi_issues WHERE id = ?)`,
+    ).all(issueId, issueId, issueId) as Row[];
     const waiting_on_human: MultiremiIssueDecisionEntry[] = open("escalated")
       .map((decision) => decisionEntry(decision, "waiting_on_human"));
     for (const row of requests) {
@@ -572,8 +592,7 @@ export class IssuesRepo {
     const created = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(source.workspaceId);
       const currentSource = this.getIssue(source.id)!;
-      const parent = currentSource.parentIssueId ? this.getIssue(currentSource.parentIssueId) : null;
-      if (currentSource.parentIssueId && !parent) throw new IssueDecisionError(409, "parent issue not found");
+      const parent = this.sameWorkspaceParent(currentSource);
       const target = parent ?? currentSource;
       const owner = parent ? this.decisionOwner(parent) : null;
       const status = !parent || !owner || kind === "production_change" ? "escalated" : "pending";
@@ -913,11 +932,12 @@ export class IssuesRepo {
     // the plan names alongside status change and re-parenting. The caller
     // replays its derived transition and queue after the insert commits.
     if (parentIssueId && parentStatusGuardEnabled()) {
-      const parent = this.getIssue(parentIssueId);
+      const child = this.getIssue(id)!;
+      const parent = this.sameWorkspaceParent(child);
       if (parent) {
         // This method owns no transaction of its own; the caller's queue is the
         // one that is (or will be) drained after the insert commits.
-        this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
+        this.rederiveParentStatus(parent, child, childStatusChanges, deferredEvents);
       }
     }
     if (sourceIssueId) {
@@ -1660,10 +1680,17 @@ export class IssuesRepo {
     return match ? extractSearchSnippet(String(match.body ?? ""), query) : null;
   }
 
+  private sameWorkspaceParent(issue: MultiremiIssue): MultiremiIssue | null {
+    const parent = issue.parentIssueId ? this.getIssue(issue.parentIssueId) : null;
+    return parent?.workspaceId === issue.workspaceId ? parent : null;
+  }
+
   listChildIssues(parentIssueId: string): MultiremiIssue[] {
     if (!this.hasIssue(parentIssueId)) throw new Error(`Issue not found: ${parentIssueId}`);
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_issues WHERE parent_issue_id = ? ORDER BY position ASC, created_at DESC",
+      `SELECT child.* FROM multiremi_issues child
+       JOIN multiremi_issues parent ON parent.id = child.parent_issue_id AND parent.workspace_id = child.workspace_id
+       WHERE child.parent_issue_id = ? ORDER BY child.position ASC, child.created_at DESC`,
     ).all(parentIssueId) as Row[];
     return rows.map((row) => this.hydrateIssue(toIssue(row)));
   }
@@ -1694,8 +1721,9 @@ export class IssuesRepo {
    */
   countOpenChildIssues(parentIssueId: string): number {
     const row = this.ctx.db.query(
-      `SELECT COUNT(*) AS open_children FROM multiremi_issues
-       WHERE parent_issue_id = ? AND status NOT IN ('done', 'cancelled')`,
+      `SELECT COUNT(*) AS open_children FROM multiremi_issues child
+       JOIN multiremi_issues parent ON parent.id = child.parent_issue_id AND parent.workspace_id = child.workspace_id
+       WHERE child.parent_issue_id = ? AND child.status NOT IN ('done', 'cancelled')`,
     ).get(parentIssueId) as { open_children?: unknown } | null;
     return Number(row?.open_children ?? 0);
   }
@@ -1777,7 +1805,9 @@ export class IssuesRepo {
    */
   hasChildIssues(issueId: string): boolean {
     return this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
+      `SELECT 1 AS present FROM multiremi_issues child
+       JOIN multiremi_issues parent ON parent.id = child.parent_issue_id AND parent.workspace_id = child.workspace_id
+       WHERE child.parent_issue_id = ? LIMIT 1`,
     ).get(issueId) != null;
   }
 
@@ -1856,9 +1886,10 @@ export class IssuesRepo {
     if (!parent) return { satisfied: false, lastChildClosedAt: null };
     if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
     const lastChild = this.ctx.db.query(
-      `SELECT MAX(COALESCE(completed_at, updated_at)) AS closed_at
-       FROM multiremi_issues
-       WHERE parent_issue_id = ? AND status IN ('done', 'cancelled')`,
+      `SELECT MAX(COALESCE(child.completed_at, child.updated_at)) AS closed_at
+       FROM multiremi_issues child
+       JOIN multiremi_issues parent ON parent.id = child.parent_issue_id AND parent.workspace_id = child.workspace_id
+       WHERE child.parent_issue_id = ? AND child.status IN ('done', 'cancelled')`,
     ).get(parentIssueId) as { closed_at?: unknown } | null;
     const lastChildClosedAt = nullableString(lastChild?.closed_at);
     const openChildren = this.countOpenChildIssues(parentIssueId);
@@ -1924,8 +1955,13 @@ export class IssuesRepo {
          WHEN d.type = 'blocks' THEN d.issue_id
          ELSE d.depends_on_issue_id
        END
+       JOIN multiremi_issues dependent ON dependent.id = CASE
+         WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id
+       END
        WHERE d.type IN ('blocked_by', 'blocks')
          AND CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END = ?
+         AND d.workspace_id = dependent.workspace_id
+         AND prereq.workspace_id = dependent.workspace_id
        ORDER BY d.created_at ASC, d.id ASC`,
     ).all(issueId) as Row[];
     return rows.map((row) => ({
@@ -2005,9 +2041,11 @@ export class IssuesRepo {
 
   private listIssueDependencyViews(issueId: string): MultiremiIssueDependencyView[] {
     const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_issue_dependencies
-       WHERE issue_id = ? OR depends_on_issue_id = ?
-       ORDER BY created_at ASC, id ASC`,
+      `SELECT d.* FROM multiremi_issue_dependencies d
+       JOIN multiremi_issues a ON a.id = d.issue_id AND a.workspace_id = d.workspace_id
+       JOIN multiremi_issues b ON b.id = d.depends_on_issue_id AND b.workspace_id = a.workspace_id
+       WHERE d.issue_id = ? OR d.depends_on_issue_id = ?
+       ORDER BY d.created_at ASC, d.id ASC`,
     ).all(issueId, issueId) as Row[];
     return rows.map((row) => this.issueDependencyView(
       this.hydrateIssueDependency(toIssueDependency(row)),
@@ -2230,8 +2268,10 @@ export class IssuesRepo {
    */
   private directPrerequisitesOf(issueId: string): string[] {
     const rows = this.ctx.db.query(
-      `SELECT issue_id, depends_on_issue_id, type FROM multiremi_issue_dependencies
-       WHERE depends_on_issue_id = ? OR issue_id = ?`,
+      `SELECT d.issue_id, d.depends_on_issue_id, d.type FROM multiremi_issue_dependencies d
+       JOIN multiremi_issues a ON a.id = d.issue_id AND a.workspace_id = d.workspace_id
+       JOIN multiremi_issues b ON b.id = d.depends_on_issue_id AND b.workspace_id = a.workspace_id
+       WHERE d.depends_on_issue_id = ? OR d.issue_id = ?`,
     ).all(issueId, issueId) as Row[];
     const prerequisites = new Set<string>();
     for (const row of rows) {
@@ -2248,13 +2288,12 @@ export class IssuesRepo {
   private issueAncestorChain(issueId: string): MultiremiIssue[] {
     const ancestors: MultiremiIssue[] = [];
     const seen = new Set<string>();
-    let cursor = this.getIssue(issueId)?.parentIssueId ?? null;
-    while (cursor && !seen.has(cursor) && ancestors.length < 200) {
-      seen.add(cursor);
-      const parent = this.getIssue(cursor);
-      if (!parent) break;
+    const issue = this.getIssue(issueId);
+    let parent = issue ? this.sameWorkspaceParent(issue) : null;
+    while (parent && !seen.has(parent.id) && ancestors.length < 200) {
+      seen.add(parent.id);
       ancestors.push(parent);
-      cursor = parent.parentIssueId;
+      parent = this.sameWorkspaceParent(parent);
     }
     return ancestors;
   }
@@ -2435,7 +2474,7 @@ export class IssuesRepo {
       if (!project) throw new Error(`Project not found: ${nextProjectId}`);
       if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
     }
-    if (nextParentIssueId) {
+    if (nextParentIssueId && hasAnyField(input, "parentIssueId", "parent_issue_id")) {
       const parent = this.getIssue(nextParentIssueId);
       if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
       if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
@@ -2682,7 +2721,7 @@ export class IssuesRepo {
       // event for the family it LEFT, so the old parent re-derives as well. The
       // new parent is covered by the hook above.
       if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
-        const oldParent = this.getIssue(previous.parentIssueId);
+        const oldParent = this.sameWorkspaceParent(previous);
         if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
       }
     } catch (err) {
@@ -2946,14 +2985,13 @@ export class IssuesRepo {
     const dependencyNested: ChildStatusChangeCollector = [];
     const dependencyEvents = createCommitEventQueue();
     this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, dependencyNested, dependencyEvents, readinessLines);
-    if (!issue.parentIssueId) {
+    const parent = this.sameWorkspaceParent(issue);
+    if (!parent) {
       // No parent report to fold into: the dependency side stands alone.
       this.ctx.emitCommitEvents(dependencyEvents);
       this.ctx.tasks().runCollectedChildStatusChanges(dependencyNested);
       return;
     }
-    const parent = this.getIssue(issue.parentIssueId);
-    if (!parent) return;
 
     const entered = previous.status !== issue.status;
     const reported = entered ? childTerminalOutcome(issue.status) : null;
@@ -3112,7 +3150,7 @@ export class IssuesRepo {
     dependent: MultiremiIssue,
     satisfiedBy: MultiremiIssue,
   ): string | null {
-    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
+    const parent = this.sameWorkspaceParent(dependent);
     const line = `${dependent.key}: all prerequisites are done (${satisfiedBy.key}); it has no agent owner, so assign one or move it to todo to run it.`;
     if (parent && parent.id === satisfiedBy.parentIssueId) {
       // Same parent as the prerequisite: the dependent already carries the
@@ -3270,9 +3308,11 @@ export class IssuesRepo {
    */
   private listDependencyDependents(issueId: string): MultiremiIssue[] {
     const rows = this.ctx.db.query(
-      `SELECT id, issue_id, depends_on_issue_id, type FROM multiremi_issue_dependencies
-       WHERE (depends_on_issue_id = ? OR issue_id = ?) AND type IN ('blocked_by', 'blocks')
-       ORDER BY created_at ASC, id ASC`,
+      `SELECT d.id, d.issue_id, d.depends_on_issue_id, d.type FROM multiremi_issue_dependencies d
+       JOIN multiremi_issues a ON a.id = d.issue_id AND a.workspace_id = d.workspace_id
+       JOIN multiremi_issues b ON b.id = d.depends_on_issue_id AND b.workspace_id = a.workspace_id
+       WHERE (d.depends_on_issue_id = ? OR d.issue_id = ?) AND d.type IN ('blocked_by', 'blocks')
+       ORDER BY d.created_at ASC, d.id ASC`,
     ).all(issueId, issueId) as Row[];
     const seen = new Set<string>();
     const dependents: MultiremiIssue[] = [];
@@ -3583,7 +3623,7 @@ export class IssuesRepo {
     nested: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): void {
-    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
+    const parent = this.sameWorkspaceParent(dependent);
     const summary = `${dependent.key}: ${prerequisite.key} ${prerequisiteStatusSentence(prerequisite.status)}`;
     const details = {
       prerequisiteIssueId: prerequisite.id,
@@ -6568,14 +6608,16 @@ export class IssuesRepo {
   private isIssueInDelegationTree(sourceIssue: MultiremiIssue, targetIssue: MultiremiIssue): boolean {
     if (sourceIssue.id === targetIssue.id) return true;
     const allowedRoots = new Set<string>([sourceIssue.id]);
-    if (sourceIssue.parentIssueId) allowedRoots.add(sourceIssue.parentIssueId);
+    const sourceParent = this.sameWorkspaceParent(sourceIssue);
+    if (sourceParent) allowedRoots.add(sourceParent.id);
     const seen = new Set<string>();
     let cursor: string | null = targetIssue.id;
     for (let depth = 0; cursor && depth <= DELEGATION_TREE_MAX_DEPTH; depth += 1) {
       if (allowedRoots.has(cursor)) return true;
       if (seen.has(cursor)) return false;
       seen.add(cursor);
-      cursor = this.getIssue(cursor)?.parentIssueId ?? null;
+      const current = this.getIssue(cursor);
+      cursor = current ? this.sameWorkspaceParent(current)?.id ?? null : null;
     }
     return false;
   }

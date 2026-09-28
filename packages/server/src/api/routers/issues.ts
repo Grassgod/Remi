@@ -787,6 +787,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       // routes. Without this the native route surfaced them as 500.
       const dependencyResponse = issueDependencyErrorResponse(c, err);
       if (dependencyResponse) return dependencyResponse;
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
       throw err;
     }
     let task = null;
