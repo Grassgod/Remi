@@ -5,7 +5,7 @@
 | 单号 | MUL-474（父单 MUL-383 的 S8e） |
 | 基线 main | `1bb060fb`（开工前确认的 head） |
 | after head | 第一轮 `d78f9430`（merge main 到 `d6714966`）；第二轮返工后为 `065c66b2`（merge main 到 `1653b038`） |
-| 第一轮复核 | QA 不通过，证据 `cmt_riedojckre5q`（写为 `cmt_rieodjckre5q`） |
+| 第一轮复核 | QA 不通过，证据 `cmt_rieodjckre5q` |
 | 数据库 | 真实 PostgreSQL 18.4，`PostgresSyncDatabase`（Worker + SharedArrayBuffer + `Atomics.wait`），每次运行新建一次性库并删除 |
 | 采集脚本 | `tests/manual/bench-daemon-task-poll.ts` |
 | fixture | `tests/fixtures/multiremi/daemon-task-poll-fixture.ts`，prompt 131,072 B，一条 Feishu 回执投递，第二个 Runtime + 独立 daemon token |
