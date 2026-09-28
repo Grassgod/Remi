@@ -562,15 +562,31 @@ export class RuntimesRepo {
    */
   listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
     const rows = this.ctx.db.query(
-      `SELECT runtime.*, profile.display_name AS daemon_display_name
+      `SELECT runtime.*, profile.display_name AS daemon_display_name,
+              latest.status AS cli_update_status, latest.error AS cli_update_error
        FROM multiremi_runtimes runtime
        LEFT JOIN multiremi_daemon_profiles profile
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
+       LEFT JOIN (
+         SELECT runtime_id, status, error,
+                ROW_NUMBER() OVER (
+                  PARTITION BY runtime_id
+                  ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                           created_at DESC, updated_at DESC, id DESC
+                ) AS update_rank
+         FROM multiremi_runtime_update_requests
+         WHERE scope = 'cli' AND runtime_id IN (
+           SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?
+         )
+       ) latest ON latest.runtime_id = runtime.id AND latest.update_rank = 1
        WHERE COALESCE(runtime.workspace_id, 'local') = ?
        ORDER BY runtime.updated_at DESC, runtime.id DESC`,
-    ).all(workspaceId) as Row[];
-    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId);
+    ).all(workspaceId, workspaceId) as Row[];
+    const latestUpdateByRuntime = new Map(rows.map(row => [String(row.id), row.cli_update_status == null
+      ? null
+      : { status: String(row.cli_update_status), error: row.cli_update_error == null ? null : String(row.cli_update_error) }]));
+    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId, latestUpdateByRuntime);
   }
 
   /**
@@ -579,7 +595,10 @@ export class RuntimesRepo {
    * List usage uses the existing parser on one workspace-scoped task read.
    * Single-runtime reads keep their existing PostgreSQL settled-usage cache.
    */
-  private hydrateRuntimes(runtimes: MultiremiRuntime[], workspaceId: string): MultiremiRuntime[] {
+  private hydrateRuntimes(
+    runtimes: MultiremiRuntime[], workspaceId: string,
+    latestUpdateByRuntime: Map<string, { status: string; error: string | null } | null>,
+  ): MultiremiRuntime[] {
     if (!runtimes.length) return [];
     const groupsByRuntime = new Map<string, string[]>();
     const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
@@ -623,19 +642,6 @@ export class RuntimesRepo {
       models.push(toRuntimeModel(row));
       modelsByRuntime.set(runtimeId, models);
     }
-    const updateRows = this.ctx.db.query(
-      `SELECT runtime_id, status, error FROM (
-         SELECT runtime_id, status, error,
-                ROW_NUMBER() OVER (
-                  PARTITION BY runtime_id
-                  ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
-                           created_at DESC, updated_at DESC, id DESC
-                ) AS rank
-         FROM multiremi_runtime_update_requests
-         WHERE scope = 'cli' AND runtime_id IN (${workspaceRuntimes})
-       ) WHERE rank = 1`,
-    ).all(workspaceId) as Array<{ runtime_id: string; status: string; error: string | null }>;
-    const latestUpdateByRuntime = new Map(updateRows.map(row => [row.runtime_id, row]));
     return runtimes.map((runtime) => withRuntimeLiveness({
       ...runtime,
       ...(usageByRuntime.get(runtime.id) ?? {

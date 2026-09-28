@@ -5,7 +5,7 @@ import { createPr2Harness, capturePr2Responses, capturePr2QueryCounts } from "..
 
 const fixtureDir = `${import.meta.dir}/../../fixtures/multiremi`;
 
-it("matches the pre-PR2 wire response golden byte for byte", async () => {
+it("matches the protocol-aware wire response golden byte for byte", async () => {
   expect(`${JSON.stringify(await capturePr2Responses(), null, 2)}\n`)
     .toBe(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-golden.json`, "utf8"));
 }, 20000);
