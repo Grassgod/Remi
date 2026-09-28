@@ -2950,6 +2950,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       },
     });
 
+    // Earlier cases in this shared database leave pending system events behind.
+    // With v2-B's added cases they outnumber dispatch's default batch of 25, and
+    // the oldest-first claim would never reach this event (MUL-402 sync, (x)).
+    db.run("UPDATE multiremi_system_events SET status = 'processed' WHERE status = 'pending' AND workspace_id <> ?", [ws]);
     store.updateIssue(issue.id, { status: "done" });
     const [run] = store.dispatchPendingSystemEvents();
     expect(run).toMatchObject({ issueId: issue.id, source: "system_event", status: "running" });
