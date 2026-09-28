@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { version as fixtureVersion } from "../../../package.json";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
@@ -9,6 +13,7 @@ import { multiremiVersion } from "@multiremi/version.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
+import { TestMultiremiDaemon, injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -172,5 +177,40 @@ describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
       console.log = log;
       variables.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
     }
+  });
+
+  it("the version fixture advertises one release during registration, pre-hello input and hello", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mul418-version-fixture-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const b = bed();
+    const token = await b.store.createAccessToken({ name: "Version fixture", type: "daemon", workspaceId: "local", daemonId: "dmn_upgrade", userId: "local" });
+    const server = startMultiremiServer({ store: b.store, authToken: "fixture-version-master", scheduler: null, backgroundJobs: false, hostname: "127.0.0.1", port: 0 });
+    cleanups.push(async () => { await waitFor(() => server.pendingRequests === 0, "version fixture requests drain"); void server.stop(true); });
+    let registeredVersion: unknown;
+    const record = b.store.recordDaemonProtocol.bind(b.store);
+    const hello = spyOn(b.store, "recordDaemonProtocol").mockImplementation((...args) => {
+      registeredVersion = b.store.getRuntimeLite(args[0])?.metadata.cli_version;
+      record(...args);
+    });
+    cleanups.push(() => hello.mockRestore());
+    let upgrades = 0;
+    const daemon = new TestMultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: "dmn_upgrade", runtimeId: b.runtime.id,
+      runtimeName: "Version fixture", provider: "claude", workspaceId: "local", daemonPort: 0,
+      workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"), pluginCacheRoot: join(root, "plugins"),
+      outboxPath: ":memory:", gcEnabled: false, pollIntervalMs: 25,
+      updateRunner: async () => { upgrades++; throw new Error("fixture must not run an implicit upgrade"); },
+      providerFactory: () => ({ async *sendStream() {}, getLastResponse: () => ({ text: "", sessionId: "fixture" }) }),
+    });
+    cleanups.push(() => daemon.stopAndDrainTestWork());
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
+    void daemon.start();
+    await waitFor(() => daemon.daemonProtocolClient().connectionState() === "connected", "fixture hello after startup input");
+    expect(registeredVersion).toBe(fixtureVersion);
+    expect(b.store.getRuntime(b.runtime.id)?.protocol).toMatchObject({ version: 2, state: "ok" });
+    expect(b.store.getRuntimeLite(b.runtime.id)?.metadata.cli_version).toBe(fixtureVersion);
+    expect(upgrades).toBe(0);
+    expect(b.rows()).toEqual([]);
   });
 });

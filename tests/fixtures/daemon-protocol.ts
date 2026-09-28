@@ -7,12 +7,19 @@ export class TestMultiremiDaemon extends MultiremiDaemon {
   private testRun: Promise<void> | null = null;
   private readonly testRequests = new Set<Promise<unknown>>();
   constructor(options: MultiremiDaemonOptions) {
+    const cliVersion = options.protocolClientOptions?.cliVersion ?? version;
     super({
       ...options,
-      protocolClientOptions: { cliVersion: version, ...options.protocolClientOptions },
+      protocolClientOptions: { ...options.protocolClientOptions, cliVersion },
     });
-    // The legacy steer feed stops its timer without awaiting its final HTTP read.
     const client = (this as unknown as { client: MultiremiDaemonClient }).client;
+    // Registration and hello must advertise the same fixture release, including
+    // the startup input injected before hello can be sent.
+    const registerRuntime = client.registerRuntime.bind(client);
+    client.registerRuntime = input => registerRuntime({ ...input, metadata: { ...input.metadata, version: cliVersion, cli_version: cliVersion } });
+    const registerDaemonRuntime = client.registerDaemonRuntime.bind(client);
+    client.registerDaemonRuntime = input => registerDaemonRuntime({ ...input, cliVersion, runtime: { ...input.runtime, version: cliVersion } });
+    // The legacy steer feed stops its timer without awaiting its final HTTP read.
     const listSteers = client.listPendingTaskSteerMessages.bind(client);
     client.listPendingTaskSteerMessages = (...args) => {
       const request = listSteers(...args);
