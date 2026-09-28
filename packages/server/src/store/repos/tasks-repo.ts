@@ -2663,6 +2663,15 @@ export class TasksRepo {
     });
   }
 
+  taskOfferRetryDeadlines(runtimeId: string): Array<{ taskId: string; runtimeId: string | null; at: string }> {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime) return [];
+    const rows = this.ctx.db.query(`SELECT id, runtime_id, next_retry_at FROM multiremi_tasks
+      WHERE workspace_id = ? AND status = 'queued' AND next_retry_at IS NOT NULL
+        AND (runtime_id = ? OR runtime_id IS NULL)`).all(runtime.workspaceId ?? "local", runtimeId) as Row[];
+    return rows.map(row => ({ taskId: String(row.id), runtimeId: nullableString(row.runtime_id), at: String(row.next_retry_at) }));
+  }
+
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
     const excludedAgentIds = new Set<string>();
     const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();

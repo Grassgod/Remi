@@ -104,6 +104,8 @@ export class DaemonProtocolLayer {
     this.metrics?.flush();
   }
 
+  recordOfferSweepRecovery(): void { this.metrics?.recordOfferSweepRecovery(); }
+
   stop(): void {
     this.metrics?.stop();
     for (const hooks of this.sessionHooks) hooks.stop?.();

@@ -872,7 +872,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const unsubscribeTaskEnqueued = store.onTaskEnqueued((task) => {
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, "task:queued", task);
     // MUL-462: 换成实时扇出
-    offers.kick(task.runtimeId);
+    offers.enqueued(task);
   });
   const unsubscribeTaskEvent = store.onTaskEvent((event) => {
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
@@ -886,6 +886,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
     notifyBrowserWorkspaceEvent(browserWebSockets, browserUserWebSockets, browserScopeWebSockets, event);
+    if (event.type === "daemon:models_updated") {
+      // MUL-462: 换成实时扇出
+      offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
+    } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
+      // MUL-462: 换成实时扇出
+      offers.kickWorkspace(event.workspaceId);
+    }
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,

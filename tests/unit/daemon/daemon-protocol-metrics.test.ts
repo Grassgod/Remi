@@ -119,7 +119,7 @@ describe("MUL-417 ws_minute_summary — aggregation", () => {
       samples: [sample({ totalMs: 10 })],
     });
     expect(Object.keys(summary).sort()).toEqual([
-      "dropped", "event", "frames", "ts", "types", "window_ms",
+      "dropped", "event", "frames", "offer_sweep_recovered", "ts", "types", "window_ms",
     ]);
     expect(summary.dropped).toBe(3);
   });
@@ -192,9 +192,10 @@ describe("MUL-417 ws_minute_summary — timer", () => {
     expect(summaryLines).toHaveLength(1);
     const summary = JSON.parse(summaryLines[0]!) as Record<string, unknown>;
     expect(Object.keys(summary).sort()).toEqual([
-      "dropped", "event", "frames", "ts", "types", "window_ms",
+      "dropped", "event", "frames", "offer_sweep_recovered", "ts", "types", "window_ms",
     ]);
     expect(summary.frames).toBe(1);
+    expect(summary.offer_sweep_recovered).toBe(0);
     expect(summary.types).toEqual([{
       type: "hb",
       direction: "uplink",
@@ -217,6 +218,15 @@ describe("MUL-417 ws_minute_summary — timer", () => {
     const summary = JSON.parse(lines.at(-1)!) as Record<string, unknown>;
     expect(summary).toMatchObject({ event: "ws_minute_summary", frames: 0, types: [] });
     runtime!.stop();
+  });
+
+  it("counts sweep-recovered offers in the current metrics window only", async () => {
+    const runtime = startWsFrameMetricsSummary(OPTIONS)!;
+    try {
+      runtime.recordOfferSweepRecovery(); runtime.recordOfferSweepRecovery();
+      const lines = await captureConsoleLog(() => { runtime.flush(); runtime.flush(); });
+      expect(lines.map(line => JSON.parse(line).offer_sweep_recovered)).toEqual([2, 0]);
+    } finally { runtime.stop(); }
   });
 
   it("reports no process-level DB field, because api_minute_summary already owns that total", async () => {

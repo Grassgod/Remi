@@ -310,8 +310,17 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 ### 3.1 offer / accept / reject 取代 claim
 
-服务端每 runtime 一个常驻单飞泵（沿用 `preparingClaims` 的单飞思想），触发源四个：
+服务端每 runtime 一个常驻单飞泵（沿用 `preparingClaims` 的单飞思想），基础触发源四个：
 `onTaskEnqueued`、任务终态或 reject 释放容量、`hb` 报告的 `active_task_count` 变化、`hello`。
+另由 `daemon:models_updated` 的模型能力变化、Agent / Plugin 就绪 / Runtime / Project 路由配置变化、
+30 s reject 冷却到期、延迟重试的 `next_retry_at` 到期、断连后未 start 的 accept 租约 90 s 恢复到期触发。
+Chat 恢复、Issue workspace 归属/清理、维护 drain 释放都在写入后触发；drain 租约到期另有定时触发。
+终态释放 Agent 或执行 lane 容量时唤醒同 workspace 的在线 runtime，不只唤醒原 runtime。
+跨进程的写后事件统一经 MUL-462 实时扇出；v2 连接层不直接订阅 Store。
+
+每个在线 runtime 每 `DAEMON_OFFER_SWEEP_MS`（60 s）兜底 `kick` 一次；泵正在运行、等应答、
+等窗口恢复或冷却中则跳过。扫描派出任务意味着遗漏了直接触发，必须记带 task id 的 warn，
+并计入 `ws_minute_summary.offer_sweep_recovered`。普通测试默认将扫描间隔设为很大，仅扫描专测开启。
 
 泵每次跑现有 `store.claimTask(runtimeId)`：选任务、置 `dispatched`、**只 hydrate 选中的任务**
 （MUL-389 的原样保留），把今天 claim 响应的内容（含 `auth_token`）作为 `task.offer` 载荷推出。

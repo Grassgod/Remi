@@ -1,6 +1,6 @@
 import { DAEMON_OFFER_COOLDOWN_MS, DAEMON_OFFER_TIMEOUT_MS } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
+import type { MultiremiTask, MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
 import type { ProjectKnowledgeServiceContract } from "@multiremi/project-knowledge/service.js";
 import type { RepositoryWikiServiceContract } from "@multiremi/repository-wiki/service.js";
@@ -11,6 +11,8 @@ import { systemClock, type DaemonProtocolClock, type DaemonProtocolTimer } from 
 import type { DaemonProtocolLayer } from "./index.js";
 import { DaemonProtocolSession } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
+
+export const DAEMON_OFFER_SWEEP_MS = 60_000;
 
 export async function prepareTaskOffer(store: MultiremiStore, task: MultiremiTaskWithAgent,
   project: ProjectKnowledgeServiceContract, repository: RepositoryWikiServiceContract): Promise<Record<string, unknown> | null> {
@@ -41,6 +43,7 @@ interface RuntimePump {
   preparing: string | null;
   pending: { taskId: string; session: DaemonProtocolSession; seq: number; timer: DaemonProtocolTimer } | null;
   accepted: Set<string>;
+  sweep: boolean;
 }
 
 /** The database is the queue; memory holds only leases, deadlines and single-flight state. */
@@ -49,23 +52,36 @@ export class DaemonTaskOffers {
   private readonly clock: DaemonProtocolClock;
   private readonly heartbeatCounts = new Map<string, number>();
   private stopped = false;
+  private sweepTimer: DaemonProtocolTimer | null = null;
+  private readonly retryTimers = new Map<string, DaemonProtocolTimer>();
 
   constructor(private readonly options: {
     store: MultiremiStore;
     layer: DaemonProtocolLayer;
     prepare(task: MultiremiTaskWithAgent): Promise<Record<string, unknown> | null>;
     clock?: DaemonProtocolClock;
+    sweepMs?: number;
   }) {
     this.clock = options.clock ?? systemClock;
     options.layer.registerSessionHooks({
       stop: () => {
         this.stopped = true;
+        if (this.sweepTimer !== null) this.clock.clearTimeout(this.sweepTimer);
+        for (const timer of this.retryTimers.values()) this.clock.clearTimeout(timer);
+        this.retryTimers.clear();
         for (const pump of this.pumps.values()) {
           if (pump.cooldownTimer !== null) this.clock.clearTimeout(pump.cooldownTimer);
           if (pump.pending) this.clock.clearTimeout(pump.pending.timer);
         }
       },
-      hello: session => { for (const rt of session.runtimeIds) this.kick(rt); },
+      hello: session => {
+        for (const rt of session.runtimeIds) {
+          for (const retry of options.store.taskOfferRetryDeadlines(rt)) {
+            if (Date.parse(retry.at) > this.clock.now()) this.scheduleRetry(retry.taskId, retry.runtimeId, Date.parse(retry.at));
+          }
+          this.kick(rt);
+        }
+      },
       heartbeat: (session, hb) => {
         const count = hb.payload.active_task_count;
         if (typeof count !== "number" || this.heartbeatCounts.get(session.sessionId) === count) return;
@@ -78,22 +94,37 @@ export class DaemonTaskOffers {
       close: session => this.closed(session),
     });
     options.layer.registerBestEffortHandler("runtime.ready", (frame, session) => this.ready(frame, session));
+    const sweepMs = options.sweepMs ?? (process.env.NODE_ENV === "test" ? 2_147_483_647 : DAEMON_OFFER_SWEEP_MS);
+    const sweep = () => {
+      if (this.stopped) return;
+      for (const session of options.layer.registry.listSessions()) {
+        for (const rt of session.runtimeIds) this.kick(rt, true);
+      }
+      this.sweepTimer = this.clock.setTimeout(sweep, sweepMs);
+      (this.sweepTimer as ReturnType<typeof setTimeout>).unref?.();
+    };
+    this.sweepTimer = this.clock.setTimeout(sweep, sweepMs);
+    (this.sweepTimer as ReturnType<typeof setTimeout>).unref?.();
   }
 
-  kick(runtimeId?: string | null): void {
+  kick(runtimeId?: string | null, sweep = false): void {
     if (this.stopped) return;
     if (!runtimeId) {
-      for (const session of this.options.layer.registry.listSessions()) for (const rt of session.runtimeIds) this.kick(rt);
+      for (const session of this.options.layer.registry.listSessions()) for (const rt of session.runtimeIds) this.kick(rt, sweep);
       return;
     }
     const pump = this.pump(runtimeId);
+    if (sweep && (pump.running || pump.waiting || pump.pending || this.clock.now() < pump.cooldownUntil)) return;
+    pump.sweep = sweep;
     pump.dirty = true;
     if (pump.running || pump.waiting || pump.pending || this.clock.now() < pump.cooldownUntil) return;
     // hello's callback precedes welcome. Start on the next microtask, after the handshake commits.
     const run = Promise.resolve().then(async () => {
       do {
         pump.dirty = false;
-        await this.run(runtimeId, pump);
+        const fromSweep = pump.sweep;
+        pump.sweep = false;
+        await this.run(runtimeId, pump, fromSweep);
       } while (pump.dirty && !pump.waiting && !pump.pending && this.clock.now() >= pump.cooldownUntil);
     }).catch(error => {
       console.warn(JSON.stringify({ event: "daemon_offer_failed", runtime_id: runtimeId,
@@ -103,17 +134,48 @@ export class DaemonTaskOffers {
     this.options.layer.trackBackground(run);
   }
 
+  kickWorkspace(workspaceId: string): void {
+    for (const session of this.options.layer.registry.listSessions()) {
+      for (const rt of session.runtimeIds) {
+        if ((this.options.store.getRuntimeLite(rt)?.workspaceId ?? "local") === workspaceId) this.kick(rt);
+      }
+    }
+  }
+
+  enqueued(task: MultiremiTask): void {
+    this.kick(task.runtimeId);
+    if (!task.nextRetryAt) return;
+    this.scheduleRetry(task.id, task.runtimeId, Date.parse(task.nextRetryAt));
+  }
+
+  private scheduleRetry(taskId: string, runtimeId: string | null, deadline: number): void {
+    const previous = this.retryTimers.get(taskId);
+    if (previous !== undefined) this.clock.clearTimeout(previous);
+    if (!Number.isFinite(deadline)) return;
+    const timer = this.clock.setTimeout(() => {
+      this.retryTimers.delete(taskId);
+      this.kick(runtimeId);
+    }, Math.max(0, deadline - this.clock.now()));
+    (timer as ReturnType<typeof setTimeout>).unref?.();
+    this.retryTimers.set(taskId, timer);
+  }
+
   terminal(taskId: string, runtimeId: string | null): void {
+    const timer = this.retryTimers.get(taskId);
+    if (timer !== undefined) this.clock.clearTimeout(timer);
+    this.retryTimers.delete(taskId);
     this.options.store.releaseTaskOfferLease(taskId);
     if (runtimeId) this.pumps.get(runtimeId)?.accepted.delete(taskId);
-    this.kick(runtimeId);
+    const task = this.options.store.getTaskIdentity(taskId);
+    if (task) this.kickWorkspace(task.workspaceId);
+    else this.kick(runtimeId);
   }
 
   private pump(runtimeId: string): RuntimePump {
     let pump = this.pumps.get(runtimeId);
     if (!pump) {
       pump = { running: null, dirty: false, waiting: false, cooldownUntil: 0, cooldownTimer: null,
-        preparing: null, pending: null, accepted: new Set() };
+        preparing: null, pending: null, accepted: new Set(), sweep: false };
       this.pumps.set(runtimeId, pump);
     }
     return pump;
@@ -124,10 +186,15 @@ export class DaemonTaskOffers {
     return session instanceof DaemonProtocolSession && session.isHandshakeComplete && !session.isClosed ? session : null;
   }
 
-  private async run(runtimeId: string, pump: RuntimePump): Promise<void> {
+  private async run(runtimeId: string, pump: RuntimePump, fromSweep: boolean): Promise<void> {
     const { store } = this.options;
     const session = this.session(runtimeId);
     if (this.stopped || !session || pump.pending || this.clock.now() < pump.cooldownUntil) return;
+    const maintenance = store.getPlatformMaintenance();
+    if (maintenance.mode === "draining") {
+      if (maintenance.expiresAt) this.scheduleRetry("platform-drain", null, Date.parse(maintenance.expiresAt));
+      return;
+    }
     const task = store.claimTask(runtimeId, { supportsBinarySkillFiles: true });
     if (!task) return;
     pump.preparing = task.id;
@@ -150,9 +217,17 @@ export class DaemonTaskOffers {
         return;
       }
       store.recordTaskOffered(task.id, runtimeId, new Date(this.clock.now()).toISOString());
+      if (fromSweep) {
+        console.warn(JSON.stringify({ event: "daemon_offer_sweep_recovered", runtime_id: runtimeId, task_id: task.id }));
+        this.options.layer.recordOfferSweepRecovery();
+      }
       const timer = this.clock.setTimeout(() => this.rescind(runtimeId, pump, task.id), DAEMON_OFFER_TIMEOUT_MS);
       (timer as ReturnType<typeof setTimeout>).unref?.();
       pump.pending = { taskId: task.id, session, seq: sent.seq, timer };
+    } catch (error) {
+      const current = store.getTaskIdentity(task.id);
+      if (current?.status === "dispatched" && current.runtimeId === runtimeId) this.rescind(runtimeId, pump, task.id);
+      throw error;
     } finally { pump.preparing = null; }
   }
 
@@ -203,7 +278,13 @@ export class DaemonTaskOffers {
       pump.waiting = false;
       const taskId = pump.pending?.session === session ? pump.pending.taskId : pump.preparing;
       if (taskId) this.rescind(runtimeId, pump, taskId);
-      for (const id of pump.accepted) this.options.store.releaseTaskOfferLease(id);
+      for (const id of pump.accepted) {
+        this.options.store.releaseTaskOfferLease(id);
+        const task = this.options.store.getTask(id);
+        if (task?.status === "dispatched" && task.dispatchedAt) {
+          this.scheduleRetry(id, runtimeId, Date.parse(task.dispatchedAt) + 90_000);
+        }
+      }
       pump.accepted.clear();
     }
   }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, setSystemTime } from "bun:test";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
@@ -12,7 +12,7 @@ afterEach(async () => {
   resetMultiremiTestEnv();
 });
 
-function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<string, unknown> | null>, runtimeCount = 1) {
+function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<string, unknown> | null>, runtimeCount = 1, sweepMs = 2_147_483_647) {
   const store = createLocalStore();
   const runtimeIds = Array.from({ length: runtimeCount }, (_, index) => {
     const id = `rt_offer_${index}`;
@@ -25,7 +25,7 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
   const clock = new ManualDaemonProtocolClock(Date.now());
   const layer = new DaemonProtocolLayer({ store });
   layers.push(layer);
-  const offers = new DaemonTaskOffers({ store, layer, clock,
+  const offers = new DaemonTaskOffers({ store, layer, clock, sweepMs,
     prepare: prepare ?? (async task => ({ id: task.id, prompt: task.prompt, runtime_id: task.runtimeId, auth_token: "fixture-capability" })) });
   const frames: Record<string, any>[] = [];
   let sendStatus: number | null = null;
@@ -48,6 +48,30 @@ function fixture(prepare?: (task: MultiremiTaskWithAgent) => Promise<Record<stri
 }
 
 describe("A-3 task offers", () => {
+  it("keeps the sweep disabled by default so a missing direct trigger remains observable", async () => {
+    const h = fixture(); await h.hello(); h.task();
+    h.clock.advance(60_000); await h.layer.drain();
+    expect(h.offered()).toHaveLength(0);
+  });
+
+  it("sweeps online runtimes at 60s, records recovered work and skips a pending offer", async () => {
+    const h = fixture(undefined, 1, 60_000); await h.hello(); const task = h.task();
+    const metric = spyOn(h.layer, "recordOfferSweepRecovery");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      h.clock.advance(59_999); await h.layer.drain(); expect(h.offered()).toHaveLength(0);
+      h.clock.advance(1); await h.layer.drain();
+      expect(h.offered()[0]!.p.id).toBe(task.id); expect(metric).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
+        event: "daemon_offer_sweep_recovered", runtime_id: h.runtimeIds[0], task_id: task.id,
+      });
+      h.offers.kick(h.runtimeIds[0], true); await h.layer.drain();
+      expect(h.offered()).toHaveLength(1); expect(metric).toHaveBeenCalledTimes(1);
+      h.layer.stop(); h.clock.advance(60_000); await h.layer.drain();
+      expect(h.offered()).toHaveLength(1);
+    } finally { metric.mockRestore(); warn.mockRestore(); }
+  });
+
   it("hello offers the existing queue, with the claim payload and capability intact", async () => {
     const h = fixture(); const task = h.task(); await h.hello();
     expect(h.offered()).toHaveLength(1);
@@ -69,6 +93,43 @@ describe("A-3 task offers", () => {
     expect(calls).toBe(1); expect(h.offered()).toHaveLength(1);
   });
 
+  it("requeues a failed preparation and does not leave the runtime waiting for an unsent offer", async () => {
+    let failed = true;
+    const h = fixture(async task => { if (failed) throw new Error("fixture preparation failure"); return { id: task.id }; });
+    const task = h.task(); const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await h.hello(); expect(h.store.getTask(task.id)?.status).toBe("queued");
+      expect(h.offered()).toHaveLength(0); failed = false;
+      h.clock.advance(30_000); await h.layer.drain();
+      expect(h.offered()[0]!.p.id).toBe(task.id);
+    } finally { warn.mockRestore(); }
+  });
+
+  it("wakes another runtime when a shared Agent concurrency slot becomes free", async () => {
+    const h = fixture(undefined, 2);
+    const agent = h.store.createAgent({ name: "shared agent", provider: "claude", maxConcurrentTasks: 1 });
+    const first = h.store.createTask({ agentId: agent.id, runtimeId: h.runtimeIds[0], prompt: "first" });
+    const next = h.store.createTask({ agentId: agent.id, runtimeId: h.runtimeIds[1], prompt: "next" });
+    await h.hello(); expect(h.offered()).toHaveLength(1); await h.accept();
+    h.store.startTask(first.id); h.store.completeTask(first.id, { output: "done" });
+    h.offers.terminal(first.id, h.runtimeIds[0]!); await h.layer.drain();
+    expect(h.offered().at(-1)!.p.id).toBe(next.id);
+    expect(h.offered().at(-1)!.rt).toBe(h.runtimeIds[1]);
+  });
+
+  it("reconstructs delayed retry wakeups at hello without the sweep or a changed heartbeat", async () => {
+    const h = fixture(); const now = h.clock.now();
+    setSystemTime(now);
+    try {
+      const task = h.store.createTask({ agentId: h.store.listAgents()[0]!.id, prompt: "delayed retry",
+        nextRetryAt: new Date(now + 10_000).toISOString() });
+      await h.hello(); expect(h.offered()).toHaveLength(0);
+      setSystemTime(now + 9_999); h.clock.advance(9_999); await h.layer.drain(); expect(h.offered()).toHaveLength(0);
+      setSystemTime(now + 10_000); h.clock.advance(1); await h.layer.drain();
+      expect(h.offered()[0]!.p.id).toBe(task.id);
+    } finally { setSystemTime(); }
+  });
+
   it("offers on enqueue and on a terminal report freeing capacity", async () => {
     const h = fixture(); await h.hello();
     const first = h.task(); h.offers.kick(h.runtimeIds[0]); await h.layer.drain(); await h.accept();
@@ -77,6 +138,21 @@ describe("A-3 task offers", () => {
     expect(h.offered()).toHaveLength(1);
     h.store.completeTask(first.id, { output: "done" }); h.offers.terminal(first.id, h.runtimeIds[0]!); await h.layer.drain();
     expect(h.offered().at(-1)!.p.id).toBe(next.id);
+  });
+
+  it("keeps work queued during platform drain and wakes at the lease deadline without a sweep", async () => {
+    const h = fixture(); const now = h.clock.now();
+    setSystemTime(now);
+    try {
+      h.store.beginPlatformDrain({ operationId: "offer-drain", ttlMs: 10_000 });
+      const task = h.task(); await h.hello();
+      expect(h.store.getTask(task.id)?.status).toBe("queued");
+      expect(h.offered()).toHaveLength(0);
+      setSystemTime(now + 9_999); h.clock.advance(9_999); await h.layer.drain();
+      expect(h.offered()).toHaveLength(0);
+      setSystemTime(now + 10_001); h.clock.advance(2); await h.layer.drain();
+      expect(h.offered()[0]!.p.id).toBe(task.id);
+    } finally { setSystemTime(); }
   });
 
   it("kicks on a changed heartbeat count, not on an unchanged count", async () => {
