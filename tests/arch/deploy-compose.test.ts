@@ -5,7 +5,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { parse } from "yaml";
+import { isTerminalPlatformOperationStatus } from "@multiremi/store/repos/platform-operations-repo.js";
+import type { MultiremiPlatformOperationStatus } from "@multiremi/contracts/types.js";
 
 const repoRoot = resolve(import.meta.dir, "../..");
 const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.application.yml"), "utf8")) as {
@@ -226,6 +230,52 @@ describe("application compose stack", () => {
     expect(gateIndex).toBeGreaterThan(-1);
     expect(countIndex).toBeGreaterThan(gateIndex);
     expect(verify).toMatch(/NOT RESTORED: nginx config does not parse/u);
+  });
+
+  test("the split pre-check never calls platform status", () => {
+    const section = splitSection(deployReadme);
+    expect(section).not.toContain("remi platform status");
+    expect(section).not.toContain("without writing anything");
+  });
+
+  test("the split pre-check reads the operation list with the maximum limit", () => {
+    const section = splitSection(deployReadme);
+    expect(section).toContain("remi platform operation list --output json --limit 100");
+    expect(section).toContain("multiremi_access_tokens.last_used_at");
+    expect(section).toContain("set -o pipefail");
+  });
+
+  test("the documented non-terminal statuses equal the complement of TERMINAL_STATUSES", () => {
+    const section = splitSection(deployReadme);
+    const body = section.match(/python3 -c "([\s\S]*?)\n  "/u)?.[1];
+    expect(body, "operation pre-check Python script").toBeDefined();
+    const python = spawnSync("python3", ["-c", [
+      "import ast,json,sys,textwrap",
+      "tree=ast.parse(textwrap.dedent(sys.stdin.read()))",
+      "sets={n.targets[0].id:sorted(ast.literal_eval(n.value)) for n in tree.body",
+      "      if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name)",
+      "      and n.targets[0].id in ('terminal','non_terminal')}",
+      "print(json.dumps(sets))",
+    ].join("\n")], { input: body!.replaceAll('\\"', '"'), encoding: "utf8" });
+    expect(python.status, python.stderr).toBe(0);
+    const documented = JSON.parse(python.stdout) as { terminal: string[]; non_terminal: string[] };
+
+    // Parse the contract so adding a status without updating the README is red.
+    const source = ts.createSourceFile("types.ts",
+      readFileSync(resolve(repoRoot, "packages/contracts/src/types.ts"), "utf8"),
+      ts.ScriptTarget.Latest, true);
+    const declaration = source.statements.find((node): node is ts.TypeAliasDeclaration =>
+      ts.isTypeAliasDeclaration(node) && node.name.text === "MultiremiPlatformOperationStatus");
+    expect(declaration && ts.isUnionTypeNode(declaration.type)).toBe(true);
+    const states = (declaration!.type as ts.UnionTypeNode).types.map((node) => {
+      if (!ts.isLiteralTypeNode(node) || !ts.isStringLiteral(node.literal)) {
+        throw new Error("Platform operation statuses must be string literals");
+      }
+      return node.literal.text as MultiremiPlatformOperationStatus;
+    });
+    expect(documented.terminal).toEqual(states.filter(isTerminalPlatformOperationStatus).sort());
+    expect(documented.non_terminal).toEqual(states.filter((status) => !isTerminalPlatformOperationStatus(status)).sort());
+    expect(section).toContain("packages/server/src/store/repos/platform-operations-repo.ts");
   });
 
   test("grants no container the Docker socket or host control", () => {

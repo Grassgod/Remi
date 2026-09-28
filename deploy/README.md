@@ -366,30 +366,57 @@ rollback below:
   time, so this runbook does not run at all while one is queued or in flight:
   the steps below edit the same Compose env file the updater rewrites
   (`writeImageEnv`, see "What the updater rewrites"), and an update landing in
-  the middle of a manual edit can interleave with it. The read-only check is
-  `remi platform status`, which reports the active operation and the drain
-  state without writing anything:
+  the middle of a manual edit can interleave with it. The pre-check is
+  `remi platform operation list`: its GET `/api/multiremi/platform/operations`
+  calls `PlatformOperationsRepo.list()`, a pure SELECT, without the maintenance
+  getter. The pre-check must not trigger any business or platform state writes.
+  Authentication bookkeeping for an already authenticated request (the access
+  token's `multiremi_access_tokens.last_used_at`) is excluded from that rule,
+  consistent with the group's read-only timing probes on 209.
 
   ```bash
-  remi platform status --output json | python3 -c "
+  set -o pipefail
+  remi platform operation list --output json --limit 100 | python3 -c "
   import json,sys
-  d=json.load(sys.stdin)
-  op=d.get('activeOperation')
-  print('activeOperation:', 'none' if op is None else f\"{op['id']} {op['kind']} {op['status']}\")
-  print('maintenance:', d['maintenance']['mode'])
+  terminal = {'succeeded', 'failed', 'cancelled', 'rolled_back'}
+  non_terminal = {'queued', 'preparing', 'pulling', 'draining', 'switching', 'restarting', 'verifying', 'rolling_back'}
+  operations = json.load(sys.stdin)['operations']
+  if not isinstance(operations, list):
+      sys.exit('STOP: invalid operations response')
+  active = [op for op in operations if op['status'] not in terminal]
+  for op in active:
+      print(f\"activeOperation: {op['id']} {op['kind']} {op['status']}\")
+  if active:
+      sys.exit(1)
+  if len(operations) >= 100:
+      sys.exit('STOP: full operation list; cannot prove the window is idle')
+  print('activeOperation: none')
   "
   # expected, every time before and during the switch:
   #   activeOperation: none
-  #   maintenance: normal
+  #   exit code 0; any nonzero exit code means do not start
   ```
 
-  `activeOperation` is the operations row holding `active_slot = 1`
-  (`packages/server/src/store/repos/platform-operations-repo.ts:214-219`), i.e.
-  exactly the set of queued/preparing/pulling/draining/switching/restarting/
-  verifying operations the updater can be working on. A non-`none` value, or
-  `maintenance: draining`, means stop and wait. Also avoid 04:00 (the release
-  build) and 07:00 (the daily image swap): the window above already excludes
-  both.
+  `terminal` mirrors `TERMINAL_STATUSES` in
+  `packages/server/src/store/repos/platform-operations-repo.ts`.
+  `non_terminal` is its complement in `MultiremiPlatformOperationStatus`
+  (`packages/contracts/src/types.ts`), including `rolling_back`: these are the
+  `active_slot = 1` operations the updater may be handling. Any status outside
+  `terminal` means stop and wait, including an unknown future status. The list
+  uses the server's maximum limit of 100 recent operations; a full response is
+  rejected because it could omit an older active operation. Invalid JSON, a
+  failed CLI request, or any nonzero exit code also means do not start.
+
+  Do not read maintenance for this pre-check. Drain belongs to an active
+  operation; with none active, a residual expired drain is recovered by the
+  daemon's next heartbeat under the lease rule
+  (`packages/server/src/api/routers/daemon.ts:433-435`). That write is the
+  platform's own activity, not a side effect triggered by this pre-check. With
+  no active operation, no additional drain check is needed. If drain state must
+  be inspected, first ship a genuinely side-effect-free SELECT-only peek (a
+  server change and release), or obtain separate authorization from He Huajie
+  for maintenance writes. Also avoid 04:00 (the release build) and 07:00 (the
+  daily image swap): the window above already excludes both.
 - A release whose API image understands `MULTIREMI_API_ROLE`, `MULTIREMI_PEER_URL`
   and `MULTIREMI_PEER_SECRET` is already deployed, and `api_minute_summary` in
   the API logs carries a `pid`, so the two processes are distinguishable.
@@ -418,7 +445,7 @@ rollback below:
 
 ### Stage A: route the traffic
 
-Re-run the `remi platform status` check from the prerequisites immediately before
+Re-run the `remi platform operation list` check from the prerequisites immediately before
 starting, and again before each of the steps that touches a container or the
 Compose files (steps 2, 3, 4, 5 and 7).
 
@@ -534,7 +561,7 @@ Compose files (steps 2, 3, 4, 5 and 7).
 
 ### Stage B: add the guard
 
-Re-run the `remi platform status` check from the prerequisites first; do not
+Re-run the `remi platform operation list` check from the prerequisites first; do not
 start while an operation is queued or in flight.
 
 Run this only after stage A has been stable for the agreed observation window
@@ -559,8 +586,8 @@ being served by the wrong process.
 
 ### Rollback
 
-Re-run the `remi platform status` check from the prerequisites before starting
-Full return below.
+Re-run the `remi platform operation list` check from the prerequisites before each
+stage B rollback, stage A rollback, and Full return below.
 
 > **Precondition: rolling back the MUL-405 image requires a completed Full
 > return, not just the two stage rollbacks.** Run the stage B rollback, the stage
@@ -701,8 +728,11 @@ docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" \
 Confirm the four single-process checks before rolling back the MUL-405 image (or
 declaring the return complete). `COMPOSE_PROJECT` is the Compose project name for
 this installation: it is `multiremi-platform-app`, from the `name:` key at the
-top of `compose.application.yml` (a `-p` flag or the directory name would
-override it; this runbook passes neither, so the `name:` key wins).
+top of `compose.application.yml`. Per the [official project-name precedence](https://docs.docker.com/compose/how-tos/project-name/),
+only `-p` or `COMPOSE_PROJECT_NAME` overrides top-level `name:`; the directory
+name has lower priority. This runbook passes no `-p` and never sets
+`COMPOSE_PROJECT_NAME`, so the `name:` key wins. Confirm no inherited
+`COMPOSE_PROJECT_NAME` is set before starting.
 
 ```bash
 COMPOSE_PROJECT=multiremi-platform-app
@@ -743,16 +773,17 @@ docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" --profile split \
 
 To restore the previous updater binary instead (only if the updater itself
 misbehaves), copy the file back from `bin/pre-<tag>.<rand>/` and restart
-`remi-platform-updater`; that is 2 commands and no edit. No database change is
-involved at any layer, so no data layer needs rolling back.
+`remi-platform-updater`; that is 2 commands and no edit. No business or platform
+state write is triggered by these rollback steps, so no data layer needs rolling
+back; the pre-check's authentication bookkeeping follows the exception above.
 
 ### Rehearsal checklist (MUL-463 stage 2, non-209)
 
 Rehearse the whole sequence on a non-production host before touching the real
 installation, and record these alongside the timings:
 
-- the `remi platform status` output taken before each transition, showing
-  `activeOperation: none` and `maintenance: normal` for the whole rehearsal
+- the `remi platform operation list` pre-check output taken before each transition,
+  showing `activeOperation: none` and exit code 0 throughout the rehearsal
   window - this is the quiet-window evidence that a queued or in-flight release
   did not interleave with the manual edits;
 - the wall-clock start and end of the window used, to show it fell inside
