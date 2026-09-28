@@ -167,6 +167,30 @@ describe("v2 reports", () => {
     expect(closed).toEqual([[task.id, 9, runtime.id]]);
   });
 
+  for (const [type, initialStatus] of [
+    ["task.complete", "running"], ["task.fail", "dispatched"],
+    ["task.fail", "running"], ["task.fail", "waiting_local_directory"],
+  ] as const) {
+    it(`calls the round-card hook once for ${type} from ${initialStatus}, despite two replays`, async () => {
+      const { store, task, runtime } = fixture();
+      if (initialStatus === "running") store.startTask(task.id);
+      if (initialStatus === "waiting_local_directory") store.markTaskWaitingLocalDirectory(task.id, "fixture");
+      expect(store.getTask(task.id)?.status).toBe(initialStatus);
+      const received: unknown[] = [];
+      const write = spyOn(store, type === "task.complete" ? "completeTask" : "failTask");
+      try {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          expect(await reportFrame(store, type, { task_id: task.id, output: "done", error: "failed", ...cardFields }, {
+            runtimeId: runtime.id, onRoundCard: (id, fields) => received.push({ id, fields }),
+          })).toEqual({ ok: true });
+        }
+        expect(store.getTask(task.id)?.status).toBe(type === "task.complete" ? "completed" : "failed");
+        expect(write).toHaveBeenCalledTimes(1);
+        expect(received).toEqual([{ id: task.id, fields: cardFields }]);
+      } finally { write.mockRestore(); }
+    });
+  }
+
   it("reuses the task write methods, preserves usage and prompt idempotency, and absorbs terminal replays", async () => {
     const { store, task, report } = fixture();
     expect(await report("task.start")).toEqual({ ok: true });

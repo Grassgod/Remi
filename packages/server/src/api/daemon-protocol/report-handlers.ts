@@ -103,6 +103,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const task = authorizeReportTask(store, session, taskId, frame.rt);
         const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
         const fields = isCompletion ? completionFields(p, taskId) : null;
+        let terminalTransitioned = false;
         switch (frame.type) {
           case "task.start":
             if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
@@ -168,16 +169,20 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
                 if (error instanceof TaskSteerPendingError) return { ok: false, code: "steer_pending", retryable: false };
                 throw error;
               }
+              terminalTransitioned = true;
             }
             break;
           case "task.fail":
-            if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) store.failTask(taskId, {
-              error: string(p.error) || "Task failed", sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
+            if (["dispatched", "running", "waiting_local_directory"].includes(task.status)) {
+              store.failTask(taskId, {
+                error: string(p.error) || "Task failed", sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
+              terminalTransitioned = true;
+            }
             break;
           default: reject();
         }
-        if (isCompletion) {
-          // MUL-402: 写轮次卡
+        if (terminalTransitioned) {
+          // MUL-402: 写轮次卡。只在首次终态转换时调用；接入写卡时须与终态转换同事务，或自行按 task 幂等。
           onRoundCard(taskId, fields);
         }
         if (isCompletion && fields?.trace) {
