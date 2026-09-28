@@ -414,6 +414,166 @@ async function runRedispatchThenDrainSnapshotCase(store: MultiremiStore): Promis
   });
 }
 
+async function runSkippedManualWakeCancellationSnapshotCase(
+  store: MultiremiStore,
+  withInRunComment: boolean,
+): Promise<void> {
+  const daemonId = `mul456-f3-skip-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const childTask = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched the work." });
+    await startThroughDaemon(base, credentials.daemon, childTask, f.workerRuntime.id);
+
+    let inRunCommentId: string | null = null;
+    const childToken = await store.createTaskAccessToken(childTask, "local");
+    if (withInRunComment) {
+      const posted = await requestJson(base, `/api/multiremi/issues/${f.child.id}/comments`, childToken.token,
+        { body: "In-run result A", issue_session_id: childTask.issueSessionId }, 201);
+      inRunCommentId = posted.comment.id;
+      const beforeDispatch = new Date(Date.parse(store.getTask(childTask.id)!.dispatchedAt!) - 1_000).toISOString();
+      rawDb(store).run(
+        "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
+        [beforeDispatch, beforeDispatch, inRunCommentId],
+      );
+    }
+    const manualResponse = await requestJson(base, "/api/multiremi/tasks", childToken.token, {
+      agentId: f.leader.id,
+      issueId: f.parent.id,
+      issueSessionId: f.leaderSession.id,
+      prompt: "Manual wake through the generic task endpoint.",
+    }, 201);
+    const manual = store.getTask(manualResponse.task.id)!;
+    expect(manual.parentTaskId).toBe(childTask.id);
+    expect(manual.delegationSkipReason).toBe("source_not_squad_leader");
+
+    const selects = countResultCommentSelectsForTask(store, childTask.id);
+    await requestJson(base, `/api/daemon/tasks/${childTask.id}/complete`, credentials.daemon,
+      { output: "Automatic result comment C" });
+    expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(manual.id);
+    const bridge = () => store.listSessionEvents(f.leaderSession.id)
+      .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
+    const bridgeBeforeCancel = JSON.stringify(bridge());
+    const automaticComment = store.listIssueComments(f.child.id)
+      .find((comment) => comment.taskId === childTask.id && comment.id !== inRunCommentId)!;
+    expect(selects.count()).toBe(1);
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
+
+    await requestJson(base, `/api/tasks/${manual.id}/cancel`, credentials.member);
+    const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+    expect(replacement.id).not.toBe(manual.id);
+    expect(replacement.prompt).toContain(inRunCommentId
+      ? `Result comment: ${inRunCommentId}`
+      : "Result comment: none at completion");
+    expect(replacement.prompt).not.toContain(`Result comment: ${automaticComment.id}`);
+    expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
+    expect(selects.count()).toBe(1);
+    expect(store.listIssueActivity(f.parent.id).some((activity) =>
+      activity.type === "delegation_return_skipped"
+      && (activity.data as Record<string, unknown>).sourceTaskId === manual.id
+      && (activity.data as Record<string, unknown>).reason === "source_not_squad_leader"
+    )).toBe(true);
+  });
+}
+
+async function runSameIssueResultCommentParityCase(store: MultiremiStore): Promise<void> {
+  const daemonId = `mul456-f3-same-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const delegated = await dispatchThroughHttp(base, store, f.leaderTask, f.parent, f.worker.id);
+    expect(delegated.issueSessionId).toBe(f.leaderSession.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched the work." });
+    await startThroughDaemon(base, credentials.daemon, delegated, f.workerRuntime.id);
+
+    const selects = countResultCommentSelectsForTask(store, delegated.id);
+    await requestJson(base, `/api/daemon/tasks/${delegated.id}/complete`, credentials.daemon,
+      { output: "Same-issue terminal result." });
+    const firstReturn = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
+    const expectedPrompt = [
+      "Worker completed a task you delegated.",
+      "Read the latest Session Updates and terminal reports, then continue owning the parent task.",
+      "Treat this as one result in the current round. Check the latest Session Updates or `remi context` for other delegated tasks that are still queued or running.",
+      "If delegated tasks remain active, continue coordinating and report only meaningful progress, blockers, or decisions needed from the user; do not publish the round delivery summary yet.",
+      "Once every delegated task in the current round is completed, failed, or cancelled, validate the combined result and publish one round delivery summary. A later user follow-up starts a new round and may have its own summary.",
+      "Do not repeat work that the teammate already completed.",
+      "",
+      "## Terminal Report: Worker",
+      `Source task: ${delegated.id}`,
+      "Status: completed",
+      `Delegation: ${delegated.delegationId}`,
+      "",
+      "Same-issue terminal result.",
+    ].join("\n");
+    expect(firstReturn.prompt).toBe(expectedPrompt);
+    expect(firstReturn.prompt).not.toContain("Result comment:");
+    expect(firstReturn.prompt).not.toContain("Issue:");
+    expect(selects.count()).toBe(0);
+    expect(store.listSessionEvents(f.leaderSession.id)
+      .filter((event) => event.kind === "delegation_report" && event.taskId === delegated.id)).toHaveLength(0);
+
+    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    const replacement = store.getTask(store.getTask(delegated.id)!.delegationReturnTaskId!)!;
+    expect(replacement.id).not.toBe(firstReturn.id);
+    expect(replacement.prompt).toBe(expectedPrompt);
+    expect(replacement.prompt).not.toContain("Result comment:");
+    expect(selects.count()).toBe(0);
+  });
+}
+
+async function runDelegateWakeupCoverageStillDrainsHistoryCase(store: MultiremiStore): Promise<void> {
+  const daemonId = `mul456-f3-covered-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const historical = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    const trigger = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched two tasks." });
+    await startThroughDaemon(base, credentials.daemon, historical, f.workerRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${historical.id}/complete`, credentials.daemon,
+      { output: "Historical report." });
+    const firstReturn = store.getTask(store.getTask(historical.id)!.delegationReturnTaskId!)!;
+
+    store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
+    const supervisor = store.createAgent({ name: "Drain supervisor", provider: "claude", role: "supervisor" });
+    store.setAgentSupervisor(supervisor.id, true);
+    const patrol = store.createIssue({ title: "Drain patrol", status: "in_progress" });
+    const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
+    const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
+    const redispatched = await requestJson(base, `/api/tasks/${firstReturn.id}/redispatch`,
+      supervisorToken.token, { reason: "Leave the historical report for the next common drain." }, 202);
+    const replacement = store.getTask(redispatched.replacement_task.id)!;
+    expect(store.getTask(historical.id)?.delegationReturnTaskId).toBeNull();
+
+    await startThroughDaemon(base, credentials.daemon, trigger, f.workerRuntime.id);
+    const triggerToken = await store.createTaskAccessToken(trigger, "local");
+    const response = await requestJson(base, "/api/multiremi/tasks", triggerToken.token, {
+      agentId: f.leader.id,
+      issueId: f.parent.id,
+      issueSessionId: f.leaderSession.id,
+      prompt: "Manual wake for the current delegated task.",
+    }, 201);
+    const coveringTask = store.getTask(response.task.id)!;
+
+    await requestJson(base, `/api/daemon/tasks/${trigger.id}/complete`, credentials.daemon,
+      { output: "Trigger report." });
+    expect(store.getTask(trigger.id)?.delegationReturnTaskId).toBe(coveringTask.id);
+    expect(store.getTask(historical.id)?.delegationReturnTaskId).toBe(replacement.id);
+    expect(store.listIssueActivity(f.child.id).some((activity) =>
+      activity.type === "delegation_return_skipped"
+      && (activity.data as Record<string, unknown>).sourceTaskId === trigger.id
+      && (activity.data as Record<string, unknown>).reason === "covered_by_delegate_wakeup"
+    )).toBe(true);
+  });
+}
+
 for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 result comment resolved once (${backend})`, () => {
     it("uses one id for the bridge metadata and the prompt even when a later comment lands mid-transaction", async () => {
@@ -500,7 +660,25 @@ for (const backend of ["sqlite", "postgres"] as const) {
           await runCancelledReturnSnapshotCase(store, withInRunComment);
         });
       }, PG_TEST_TIMEOUT);
+
+      it(`drains the terminal ${withInRunComment ? "comment A" : "null"} snapshot after a skipped generic wake is cancelled`, async () => {
+        await withStore(backend, async (store) => {
+          await runSkippedManualWakeCancellationSnapshotCase(store, withInRunComment);
+        });
+      }, PG_TEST_TIMEOUT);
     }
+
+    it("keeps same-issue report assembly on the main behavior without result-comment reads", async () => {
+      await withStore(backend, async (store) => {
+        await runSameIssueResultCommentParityCase(store);
+      });
+    }, PG_TEST_TIMEOUT);
+
+    it("drains historical sources when the terminal trigger is covered by a delegate wake-up", async () => {
+      await withStore(backend, async (store) => {
+        await runDelegateWakeupCoverageStillDrainsHistoryCase(store);
+      });
+    }, PG_TEST_TIMEOUT);
 
     it("reuses the null snapshot after a queued E2 coverage round is cancelled", async () => {
       await withStore(backend, async (store) => {

@@ -296,6 +296,7 @@ interface DelegationTerminalReport {
   source: MultiremiTask;
   sourceAgentName: string;
   sourceIssueKey: string | null;
+  crossIssue: boolean;
   resultCommentId: string | null;
   terminalStatus: "completed" | "failed" | "cancelled";
   terminalBody: string | null;
@@ -3739,17 +3740,40 @@ export class TasksRepo {
     const hasDelegationId = Boolean(delegationId);
     const hasDelegator = Boolean(delegatedByAgentId);
     const terminalStatus = input.terminalStatus ?? null;
-    if (terminalStatus && source.delegationSkipReason) {
-      this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
-        source.delegationSkipReason as DelegationSkipReason, {}, deferredEvents);
-      return { task: null, created: false, covered: false };
-    }
     const returnSessionId = source.delegatedFromIssueSessionId ?? source.issueSessionId;
     // MUL-456 fix round 1: the source's newest result comment is resolved at
     // most once per terminal transaction and shared by the bridge metadata and
     // the return prompt. `undefined` means "not resolved yet"; the drain
     // resolves it when the cross-issue bridge branch did not run.
     let triggerResultCommentId: string | null | undefined;
+    const drainTerminalReturns = (): DelegationWakeupResult => {
+      if (!returnSessionId || !terminalStatus) {
+        return { task: null, created: false, covered: false };
+      }
+      const drained = this.drainDelegationReturnsWithinWorkspaceLock(returnSessionId, {
+        source,
+        terminalStatus,
+        terminalBody: input.terminalBody ?? null,
+        requiredEventSeq,
+        // Only the cross-issue bridge branch below resolves the comment. When it
+        // does not run, the drain decides whether this is a legacy cross-issue
+        // report that needs the compatibility lookup or a same-issue report.
+        ...(triggerResultCommentId === undefined ? {} : { resultCommentId: triggerResultCommentId }),
+      }, childStatusChanges, deferredEvents);
+      const task = drained.taskBySourceId.get(source.id) ?? null;
+      const created = task != null && drained.createdTasks.some((candidate) => candidate.id === task.id);
+      return {
+        task,
+        created,
+        covered: task != null && !created,
+        createdTasks: drained.createdTasks,
+      };
+    };
+    if (terminalStatus && source.delegationSkipReason) {
+      this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
+        source.delegationSkipReason as DelegationSkipReason, {}, deferredEvents);
+      return drainTerminalReturns();
+    }
     if (terminalStatus && hasDelegationId && hasDelegator && source.agentId !== delegatedByAgentId
       && source.delegatedFromIssueSessionId && source.delegatedFromIssueSessionId !== source.issueSessionId) {
       const returnSession = this.ctx.issueSessions().getIssueSession(source.delegatedFromIssueSessionId);
@@ -3793,28 +3817,6 @@ export class TasksRepo {
       });
       requiredEventSeq = bridge.seq;
     }
-    const drainTerminalReturns = (): DelegationWakeupResult => {
-      if (!returnSessionId || !terminalStatus) {
-        return { task: null, created: false, covered: false };
-      }
-      const drained = this.drainDelegationReturnsWithinWorkspaceLock(returnSessionId, {
-        source,
-        terminalStatus,
-        terminalBody: input.terminalBody ?? null,
-        requiredEventSeq,
-        // Only the cross-issue bridge branch above resolves the comment; when it
-        // did not run, the drain resolves it once for this source.
-        ...(triggerResultCommentId === undefined ? {} : { resultCommentId: triggerResultCommentId }),
-      }, childStatusChanges, deferredEvents);
-      const task = drained.taskBySourceId.get(source.id) ?? null;
-      const created = task != null && drained.createdTasks.some((candidate) => candidate.id === task.id);
-      return {
-        task,
-        created,
-        covered: task != null && !created,
-        createdTasks: drained.createdTasks,
-      };
-    };
     if (!hasDelegationId && !hasDelegator) {
       return terminalStatus ? drainTerminalReturns() : { task: null, created: false, covered: false };
     }
@@ -3856,7 +3858,8 @@ export class TasksRepo {
         );
         this.recordDelegationReturnSkipped(source, input, requiredEventSeq,
           "covered_by_delegate_wakeup", { returnTaskId: manual.id }, deferredEvents);
-        return { task: manual, created: false, covered: true };
+        const drained = drainTerminalReturns();
+        return { task: manual, created: false, covered: true, createdTasks: drained.createdTasks };
       }
     }
 
@@ -4026,17 +4029,21 @@ export class TasksRepo {
       const reportMetadata = row.delegation_report_metadata == null
         ? null
         : parseJson<Record<string, unknown>>(row.delegation_report_metadata, {});
+      const crossIssue = source.issueId != null && source.issueId !== returnIssueId;
       const hasResultCommentSnapshot = reportMetadata != null
         && Object.hasOwn(reportMetadata, "result_comment_id");
-      const resultCommentId = hasResultCommentSnapshot
-        ? nullableString(reportMetadata.result_comment_id)
-        : isTrigger && trigger.resultCommentId !== undefined
-          ? trigger.resultCommentId
-          : this.lastDelegationResultCommentId(source);
+      const resultCommentId = !crossIssue
+        ? null
+        : hasResultCommentSnapshot
+          ? nullableString(reportMetadata.result_comment_id)
+          : isTrigger && trigger.resultCommentId !== undefined
+            ? trigger.resultCommentId
+            : this.lastDelegationResultCommentId(source);
       return {
         source,
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,
         sourceIssueKey: source.issueId ? this.ctx.issues().getIssue(source.issueId)?.key ?? null : null,
+        crossIssue,
         resultCommentId,
         terminalStatus,
         terminalBody: isTrigger
@@ -5229,13 +5236,12 @@ function delegationTerminalReportSection(report: DelegationTerminalReport): stri
     `Source task: ${report.source.id}`,
     `Status: ${report.terminalStatus}`,
   ];
-  if (report.source.delegatedFromIssueSessionId
-    && report.source.delegatedFromIssueSessionId !== report.source.issueSessionId) {
+  if (report.crossIssue) {
     lines.push(`Issue: ${report.sourceIssueKey ?? "unknown"} (${report.source.issueId})`);
+    lines.push(report.resultCommentId
+      ? `Result comment: ${report.resultCommentId}`
+      : "Result comment: none at completion (the final reply is posted as a comment after this report; result text follows)");
   }
-  lines.push(report.resultCommentId
-    ? `Result comment: ${report.resultCommentId}`
-    : "Result comment: none at completion (the final reply is posted as a comment after this report; result text follows)");
   lines.push(`Delegation: ${report.source.delegationId ?? "none"}`);
   if (!body) return lines.join("\n");
   const chars = Array.from(body);

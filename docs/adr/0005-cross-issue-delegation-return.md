@@ -73,7 +73,10 @@ Two further behaviours were decided with the fix's reviewers:
    (`delegator_unavailable`, `delegator_issue_closed`, `delegator_session_missing`)
    or a rejected dispatch writes `delegation_return_skipped` with its reason on
    the source issue, and on the dispatcher's issue as well whenever the two
-   differ and the dispatcher can be expected to act on it.
+   differ and the dispatcher can be expected to act on it. The current terminal
+   task's own skip or coverage audit does not suppress the Session-wide drain:
+   after recording that audit, every valid return Session still drains older
+   terminal sources whose coverage pointer was cleared.
 
 5. **Manual wake-ups suppress the automatic return.** If the delegate already
    created a task for the delegator with `parent_task_id = source.id` in the
@@ -116,30 +119,30 @@ Two further behaviours were decided with the fix's reviewers:
    the D2 ruling. Both chains therefore race for the same queued round and only
    one wake survives.
 
-7. **The result comment id is resolved once.** `result_comment_id` is the
-   newest comment on the target issue whose `task_id` is the source task, read
-   inside the terminal transaction. Exactly one such SELECT runs per terminal
-   transaction: the value resolved for the bridge metadata is threaded into the
-   return-prompt construction, so the two cannot disagree even if a later
-   comment commits in between (comment writes do not take the workspace
-   lifecycle lock). That bridge value is the source task's terminal snapshot:
-   every later drain reads it from the newest `delegation_report` event, and a
-   present `result_comment_id: null` is authoritative rather than a reason to
-   query comments again. The newest event is used to match the drain's existing
-   maximum-event-sequence coverage rule and the bridge writer's existing
-   latest-event lookup if historical data contains duplicate reports. A report
-   without the metadata key falls back to the legacy latest-comment lookup for
-   compatibility. Such a missing snapshot can still occur for same-issue
-   delegations, which use their terminal task event rather than a cross-issue
-   bridge, and for historical or malformed bridge events created before this
-   contract; new cross-issue terminal reports always include the key. No
-   existing event is rewritten and no fallback value is persisted. It is never
-   back-filled: the automatic result comment is posted after that transaction
-   commits, so a report with no in-run comment carries
-   `result_comment_id: null` and the prompt line
+7. **The cross-issue result comment id is resolved once.** For a cross-issue
+   report, `result_comment_id` is the newest comment on the target issue whose
+   `task_id` is the source task, read inside the terminal transaction. Exactly
+   one such SELECT runs per terminal transaction: the value resolved for the
+   bridge metadata is threaded into the return-prompt construction, so the two
+   cannot disagree even if a later comment commits in between (comment writes
+   do not take the workspace lifecycle lock). That bridge value is the source
+   task's terminal snapshot: every later drain reads it from the newest
+   `delegation_report` event, and a present `result_comment_id: null` is
+   authoritative rather than a reason to query comments again. The newest event
+   is used to match the drain's existing maximum-event-sequence coverage rule
+   and the bridge writer's existing latest-event lookup if historical data
+   contains duplicate reports. A cross-issue report without the metadata key
+   falls back to the legacy latest-comment lookup for compatibility. New
+   cross-issue terminal reports always include the key. No existing event is
+   rewritten and no fallback value is persisted. It is never back-filled: the
+   automatic result comment is posted after that transaction commits, so a
+   report with no in-run comment carries `result_comment_id: null` and the
+   prompt line
    `Result comment: none at completion (the final reply is posted as a comment
    after this report; result text follows)`. The report body is always the task
    result, truncated to 16000 characters, which is the primary content.
+   Same-issue reports keep their pre-MUL-456 assembly: they do not query a
+   result comment and do not render a `Result comment:` line.
 
 8. **The dependency gate is unchanged.** A return task is a self-delegation
    (`delegation_id` set, `delegated_by_agent_id === agent_id`) and an E2 round
