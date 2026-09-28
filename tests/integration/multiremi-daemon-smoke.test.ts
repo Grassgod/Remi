@@ -9,7 +9,10 @@ import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
+import * as relayHttp from "@shared/relay-http.js";
+import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiRuntimeReregisterGate,
@@ -18,7 +21,6 @@ import {
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
@@ -26,6 +28,21 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 
 let db: Database | null = null;
 let workDir: string | null = null;
+const testDaemons: TestMultiremiDaemon[] = [];
+const testServers: ReturnType<typeof startFixtureServer>[] = [];
+const testLayers: DaemonProtocolLayer[] = [];
+
+class MultiremiDaemon extends TestMultiremiDaemon {
+  constructor(options: MultiremiDaemonOptions) { super(options); testDaemons.push(this); }
+}
+
+function startMultiremiServer(options: Parameters<typeof startFixtureServer>[0]) {
+  const server = startFixtureServer({ ...options, onDaemonProtocol: layer => {
+    testLayers.push(layer); options?.onDaemonProtocol?.(layer);
+  } });
+  testServers.push(server);
+  return server;
+}
 
 /**
  * Pin the provider base homes at an empty temp dir for this file.
@@ -52,7 +69,13 @@ afterAll(() => {
   providerHomeBase = null;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Bun can time out a test without reaching its local finally block.
+  for (const daemon of testDaemons) daemon.stop();
+  for (const daemon of testDaemons.splice(0)) await daemon.stopAndDrainTestWork();
+  for (const layer of testLayers) { layer.closeAll(); await layer.drain(); }
+  for (const server of testServers.splice(0)) server.stop(true);
+  for (const layer of testLayers.splice(0)) await layer.drain();
   db?.close();
   db = null;
   if (workDir) {
@@ -2344,8 +2367,14 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     let providerOptions: AcpProviderOptions | null = null;
+    let daemon: MultiremiDaemon | null = null;
+    const request = relayHttp.publicRelayHttpRequest;
+    const catalog = spyOn(relayHttp, "publicRelayHttpRequest").mockImplementation(async (url, init, options) => {
+      if (new URL(url).hostname === "ai.openremi.fun") return { status: 401, text: "{}" };
+      return request(url, init, options);
+    });
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeName: "codex-home-runtime",
@@ -2385,7 +2414,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(captured?.codexHome).toBe(expectedHome);
       expect(existsSync(join(expectedHome, "auth.json"))).toBe(false);
       expect(existsSync(join(expectedHome, ".multiremi-session-home.json"))).toBe(true);
+      expect(catalog).toHaveBeenCalled();
     } finally {
+      await daemon?.stopAndDrainTestWork();
+      catalog.mockRestore();
       server.stop(true);
     }
   });
