@@ -93,6 +93,10 @@ describe("v2 report reconciliation with real sockets and DB", () => {
         expect(applied.sort()).toEqual([...sent].sort());
         expect(sent.size).toBe(120);
         expect(h.errors).toEqual([]);
+        const reads = [...h.snapshotReadMs].sort((a, b) => a - b);
+        console.info("Report Store snapshot read timings (ms)", JSON.stringify({ injection, count: reads.length,
+          min: reads[0], p50: reads[Math.floor(reads.length * 0.5)], p95: reads[Math.floor(reads.length * 0.95)],
+          max: reads.at(-1), total: reads.reduce((sum, ms) => sum + ms, 0) }));
       } finally {
         complete.mockRestore(); progress.mockRestore(); usageReport.mockRestore();
         for (const reply of faultReplies) reply.mockRestore();

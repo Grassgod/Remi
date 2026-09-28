@@ -65,6 +65,7 @@ export class DaemonProtocolHarness {
   readonly sessions: DaemonProtocolSession[] = [];
   readonly ledger: LedgerEntry[] = [];
   readonly effectiveLedger: LedgerEntry[] = [];
+  readonly snapshotReadMs: number[] = [];
   readonly teardownSteps: string[] = [];
   readonly errors: Error[] = [];
   readonly received: Record<string, any>[] = [];
@@ -73,6 +74,7 @@ export class DaemonProtocolHarness {
   daemons: MultiremiDaemon[] = [];
   private runs: Promise<void>[] = [];
   private readonly serverWork = new Set<Promise<void>>();
+  private readonly clientExchanges = new Set<Promise<unknown>>();
   private disposed = false;
   private runError: unknown;
   private createDaemons!: () => MultiremiDaemon[];
@@ -102,32 +104,40 @@ export class DaemonProtocolHarness {
       h.apiRole = options.apiRole ?? "all";
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
-      h.createDaemons = () => instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map((provider, index) => ({
-        serverUrl: h.url, token: token.token, ...(options.omitDaemonId ? {} : { daemonId }), runtimeId: options.runtimeIds?.[index] ?? options.runtimeId,
-        deviceName: "protocol-fixture-device", ...(options.updateRunner ? { updateRunner: options.updateRunner } : {}),
-        runtimeName: "protocol fixture", provider, workspaceId: "local", daemonPort: 0,
-        workspacesRoot: join(h.root, "workspaces"), repoCacheRoot: join(h.root, "repos"),
-        pluginCacheRoot: join(h.root, "plugins"), outboxPath: join(h.root, `${provider}-outbox.db`),
-        outboxBackoffMs: options.outboxBackoffMs,
-        gcEnabled: false, pollIntervalMs: 25, claimIdleMaxMs: 30_000,
-        onReadyChange: ready => { if (ready) options.onReady?.(h.daemons.find(daemon => (daemon as any).options.provider === provider)!, h); },
-        providerFactory: options.providerFactory ?? (() => ({
-          async *sendStream() { yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "fixture" }] } as any; },
-          getLastResponse: () => ({ text: "fixture", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
-          close: async () => {},
-        })),
-        sshMeshManager: { getHeartbeatStatus: () => ({ status: "disabled" }), reconcile: async () => {}, cleanupForRetirement: async () => {} },
-        protocolClientOptions: {
-          cliVersion: options.cliVersion ?? DAEMON_MIN_CLI_VERSION,
-          clock: h.clock, random: () => 0.5, onError: error => h.errors.push(error),
-          onFrame: frame => { h.received.push(frame.raw); },
-          connect: (url, init) => {
-            const socket = new InjectedSocket(url, init, (frame, socket) => options.beforeSend?.(frame, socket, h));
-            h.sockets.push(socket);
-            return socket;
+      h.createDaemons = () => {
+        const daemons = instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map((provider, index) => ({
+          serverUrl: h.url, token: token.token, ...(options.omitDaemonId ? {} : { daemonId }), runtimeId: options.runtimeIds?.[index] ?? options.runtimeId,
+          deviceName: "protocol-fixture-device", ...(options.updateRunner ? { updateRunner: options.updateRunner } : {}),
+          runtimeName: "protocol fixture", provider, workspaceId: "local", daemonPort: 0,
+          workspacesRoot: join(h.root, "workspaces"), repoCacheRoot: join(h.root, "repos"),
+          pluginCacheRoot: join(h.root, "plugins"), outboxPath: join(h.root, `${provider}-outbox.db`),
+          outboxBackoffMs: options.outboxBackoffMs,
+          gcEnabled: false, pollIntervalMs: 25, claimIdleMaxMs: 30_000,
+          onReadyChange: ready => { if (ready) options.onReady?.(h.daemons.find(daemon => (daemon as any).options.provider === provider)!, h); },
+          providerFactory: options.providerFactory ?? (() => ({
+            async *sendStream() { yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "fixture" }] } as any; },
+            getLastResponse: () => ({ text: "fixture", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
+            close: async () => {},
+          })),
+          sshMeshManager: { getHeartbeatStatus: () => ({ status: "disabled" }), reconcile: async () => {}, cleanupForRetirement: async () => {} },
+          protocolClientOptions: {
+            cliVersion: options.cliVersion ?? DAEMON_MIN_CLI_VERSION,
+            clock: h.clock, random: () => 0.5, onError: error => h.errors.push(error),
+            onFrame: frame => { h.received.push(frame.raw); },
+            connect: (url, init) => {
+              const socket = new InjectedSocket(url, init, (frame, socket) => options.beforeSend?.(frame, socket, h));
+              h.sockets.push(socket);
+              return socket;
+            },
           },
-        },
-      })));
+        })));
+        const client = daemons[0]!.daemonProtocolClient();
+        const rpc = client.rpc.bind(client);
+        const event = client.event.bind(client);
+        client.rpc = (...args) => h.trackExchange(rpc(...args));
+        client.event = (...args) => h.trackExchange(event(...args));
+        return daemons;
+      };
       h.daemons = h.createDaemons();
       await options.beforeStart?.(h);
       return h;
@@ -145,7 +155,9 @@ export class DaemonProtocolHarness {
         for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {
           const handle = handlers.get(type)!;
           const state = (id: string) => {
+            const started = performance.now();
             const task = this.store.getTask(id);
+            this.snapshotReadMs.push(performance.now() - started);
             return task ? { status: task.status, result: task.result, usage: task.usage,
               progress: [task.progressSummary, task.progressStep, task.progressTotal] } : null;
           };
@@ -191,8 +203,28 @@ export class DaemonProtocolHarness {
     if (this.runError) throw this.runError;
   }
 
-  async settleHeartbeat(): Promise<void> {
-    await waitFor(() => this.client.diagnostics().pending_rpcs === 0 && this.client.diagnostics().background === 0, "heartbeat and runtime callbacks");
+  private trackExchange<T>(run: Promise<T>): Promise<T> {
+    this.clientExchanges.add(run);
+    void run.then(() => this.clientExchanges.delete(run), () => this.clientExchanges.delete(run));
+    return run;
+  }
+
+  async settleHeartbeat(timeoutMs = 5_000): Promise<void> {
+    // Await actual exchanges and queued lane work, not the 2 s polling default.
+    // The failure deadline matches reporting's 5 s waits and the heartbeat integration suite.
+    const drain = async () => {
+      do {
+        await Promise.allSettled([...this.clientExchanges]);
+        await this.client.drain();
+      } while (this.clientExchanges.size || this.client.diagnostics().background);
+      if (this.client.diagnostics().pending_rpcs) throw new Error("Untracked daemon exchange during heartbeat settlement");
+    };
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      await Promise.race([drain(), new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for heartbeat and runtime callbacks: ${JSON.stringify(this.client.diagnostics())}`)), timeoutMs);
+      })]);
+    } finally { clearTimeout(timer!); }
   }
 
   async stopDaemon(): Promise<void> {

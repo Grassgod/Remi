@@ -59,6 +59,52 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.clock.pendingTimerCount).toBe(0);
   });
 
+  it("settles exchanges and subsequent lane callbacks from their completion promises", async () => {
+    const h = await fixture();
+    await h.startDaemon(); await h.settleHeartbeat();
+    let releaseExchange!: () => void;
+    let exchangeStarted!: () => void;
+    let releaseCallback!: () => void;
+    let callbackStarted!: () => void;
+    const exchangeReady = new Promise<void>(resolve => { exchangeStarted = resolve; });
+    const callbackReady = new Promise<void>(resolve => { callbackStarted = resolve; });
+    const exchangeGate = new Promise<void>(resolve => { releaseExchange = resolve; });
+    const callbackGate = new Promise<void>(resolve => { releaseCallback = resolve; });
+    h.layer.registerRpcHandler("gc.check_task", async () => {
+      exchangeStarted(); await exchangeGate; return { ok: true };
+    });
+    const callback = spyOn((h.daemon as any).protocolLane, "onHeartbeatAck").mockImplementation(async () => {
+      callbackStarted(); await callbackGate;
+    });
+    try {
+      h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+      const exchange = h.client.rpc("gc.check_task", {});
+      await exchangeReady;
+      let settled = false;
+      const settlement = h.settleHeartbeat().then(() => { settled = true; });
+      await Bun.sleep(0);
+      expect(settled).toBe(false);
+      releaseExchange(); await exchange; await callbackReady;
+      expect(settled).toBe(false);
+      releaseCallback(); await settlement;
+      expect(h.client.diagnostics()).toMatchObject({ pending_rpcs: 0, background: 0 });
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally { releaseExchange(); releaseCallback(); callback.mockRestore(); }
+  });
+
+  it("keeps a bounded diagnostic deadline when an exchange has not replied", async () => {
+    const h = await fixture();
+    await h.startDaemon(); await h.settleHeartbeat();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    h.layer.registerRpcHandler("gc.check_task", async () => { await gate; return { ok: true }; });
+    const exchange = h.client.rpc("gc.check_task", {});
+    try {
+      await expect(h.settleHeartbeat(25)).rejects.toThrow("Timed out waiting for heartbeat and runtime callbacks");
+      expect(h.client.diagnostics().pending_rpcs).toBe(1);
+    } finally { release(); await exchange; await h.settleHeartbeat(); }
+  });
+
   it("records task and runtime partition keys with sequence numbers at real API ingress", async () => {
     const h = await fixture();
     await h.startDaemon();
