@@ -82,7 +82,7 @@ export const MESSAGING_INBOX_TYPES: readonly string[] = [
  * Restating the severity here would let the two drift, and the table is the
  * side that other subsystems and the frontend already agree on.
  */
-function inboxSeverity(type: string): "info" | "attention" {
+function inboxSeverity(type: string): "info" | "attention" | "action" {
   const registered = INBOX_ROUTING[type];
   if (!registered) throw new Error(`Unregistered inbox type: ${type}`);
   return registered.severity;
@@ -514,7 +514,7 @@ export class MessagingOutcomeService {
       }
       return { message, outcome: existing, issue, created: false };
     }
-    const issue = this.ctx.issues().createIssue({
+    const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
       priority: input.priority ?? undefined,
@@ -531,7 +531,7 @@ export class MessagingOutcomeService {
         message_url: message.url,
       }],
       createdBy: input.createdBy,
-    }, { childStatusChanges, deferredEvents });
+    }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.repo.recordOutcome({
       workspaceId: input.workspaceId,

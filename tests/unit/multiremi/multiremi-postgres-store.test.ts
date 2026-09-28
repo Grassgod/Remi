@@ -28,6 +28,8 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
+import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js";
+import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
@@ -3173,6 +3175,152 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
   }, 60_000);
 
+  /**
+   * MUL-409 fix round 5 (QA round 4, blocker 1) on Postgres: the member's forced
+   * start is one transaction.
+   *
+   * QA's round-4 probe exited after the status transaction committed and before
+   * the dispatch ran, and found `A=todo` with no task rows while
+   * `dependency_force_started` was already durable. Both seams run the real
+   * store against a real Postgres connection.
+   */
+  it("rolls the forced start back when the process dies before COMMIT (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_force_before", name: "Force before worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Force before owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Force before prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Force before dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    const probe = Bun.spawn([
+      "bun", "run", new URL("./fixtures/postgres-force-start-crash-probe.ts", import.meta.url).pathname,
+      pgDatabaseUrl(TEST_DB), dependent.id, "before-commit",
+    ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: process.env.HOME } });
+    const stdout = await killProbeOnPhase(probe, "after-status-update");
+    expect(stdout).toContain("after-status-update");
+
+    // The status UPDATE died with its transaction: the issue is still waiting
+    // and nothing about the attempt survives.
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(db.query("SELECT status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id)).toEqual([]);
+    const types = (db.query("SELECT type FROM multiremi_issue_activity WHERE issue_id = ?").all(dependent.id) as Array<{ type: string }>)
+      .map((row) => row.type);
+    expect(types).not.toContain("dependency_force_started");
+    expect(types).not.toContain("issue_assigned");
+    expect(store.getIssue(prereq.id)?.status).toBe("in_progress");
+  }, 60_000);
+
+  it("keeps todo plus its round when the process dies after the forced start commits (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_force_after", name: "Force after worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Force after owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Force after prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Force after dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    const probe = Bun.spawn([
+      "bun", "run", new URL("./fixtures/postgres-force-start-crash-probe.ts", import.meta.url).pathname,
+      pgDatabaseUrl(TEST_DB), dependent.id, "after-status-commit", "19",
+    ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: process.env.HOME } });
+    const { stdout, exitCode } = await waitForProbeExit(probe, "after-status-commit");
+    expect(stdout).toContain("after-status-commit");
+    expect(exitCode).toBe(19);
+
+    // The whole forced start committed: `todo` with exactly one queued round and
+    // the override already on record. Only the live notification was lost.
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id)).toEqual([{ status: "queued" }]);
+    const types = (db.query("SELECT type FROM multiremi_issue_activity WHERE issue_id = ?").all(dependent.id) as Array<{ type: string }>)
+      .map((row) => row.type);
+    expect(types).toContain("dependency_force_started");
+    expect(types).toContain("issue_assigned");
+    // The prerequisite is untouched: the member overrode the hold, it did not
+    // satisfy it.
+    expect(store.getIssue(prereq.id)?.status).toBe("in_progress");
+    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  }, 60_000);
+
+  it.each(["status update", "task insert", "issue_assigned", "dependency_force_started"] as const)(
+    "rolls the forced start back when %s fails (PG)",
+    (step) => {
+      const runtime = store.registerRuntime({ id: `rt_force_inj_${step.replace(/ /g, "_")}`, name: "Force injection worker", provider: "claude", maxConcurrency: 4 });
+      const owner = store.createAgent({ name: `Force injection ${step}`, provider: "claude", runtimeId: runtime.id });
+      const prereq = store.createIssue({ title: "Injection prerequisite", status: "in_progress" });
+      const dependent = store.createIssue({
+        title: `Injection dependent ${step}`,
+        status: "backlog",
+        blockedBy: [prereq.id],
+        assigneeType: "agent",
+        assigneeId: owner.id,
+      });
+
+      let injected = false;
+      const fail = (): never => { injected = true; throw new Error(`injected PG failure at ${step}`); };
+      const restore: Array<() => void> = [];
+      const handle = (store as unknown as { ctx: { db: Record<string, unknown> } }).ctx.db;
+      if (step === "status update") {
+        const original = handle.run as (...args: unknown[]) => unknown;
+        handle.run = (...args: unknown[]) => {
+          const sql = String(args[0] ?? "");
+          if (!injected && sql.includes("UPDATE multiremi_issues") && sql.includes("title = ?")) fail();
+          return original.apply(handle, args);
+        };
+        restore.push(() => { handle.run = original; });
+      } else if (step === "task insert") {
+        const original = TasksRepo.prototype.createTaskWithinTransaction;
+        TasksRepo.prototype.createTaskWithinTransaction = function patched(this: TasksRepo, ...args: unknown[]) {
+          if (!injected) fail();
+          return (original as (...inner: unknown[]) => unknown).apply(this, args);
+        } as typeof TasksRepo.prototype.createTaskWithinTransaction;
+        restore.push(() => { TasksRepo.prototype.createTaskWithinTransaction = original; });
+      } else {
+        // Patch the INSTANCE, not the prototype: an earlier case in this file
+        // already replaced `ctx.appendIssueActivity` on the shared store, so a
+        // prototype patch would sit underneath it and never see the call.
+        const ctx = (store as unknown as {
+          ctx: { appendIssueActivity: (...args: unknown[]) => unknown };
+        }).ctx;
+        const original = ctx.appendIssueActivity;
+        ctx.appendIssueActivity = (...args: unknown[]) => {
+          const input = args[1] as { type?: string } | undefined;
+          if (!injected && input?.type === step) fail();
+          return original.apply(ctx, args);
+        };
+        restore.push(() => { ctx.appendIssueActivity = original; });
+      }
+
+      try {
+        expect(() => store.updateIssue(dependent.id, {
+          status: "todo", force: true, actorType: "member", actorId: "mem_local",
+        })).toThrow(/injected PG failure/);
+        expect(injected).toBe(true);
+      } finally {
+        for (const undo of restore.reverse()) undo();
+      }
+
+      // The whole attempt rolled back on the real bridge: back to `backlog`, no
+      // round, no activity, and the prerequisite untouched.
+      expect({
+        step,
+        status: store.getIssue(dependent.id)?.status,
+        tasks: db.query("SELECT status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id),
+        activities: (db.query(
+          "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'issue_assigned')",
+        ).all(dependent.id) as Array<{ type: string }>).map((row) => row.type),
+      }).toEqual({ step, status: "backlog", tasks: [], activities: [] });
+    },
+  );
+
   it("keeps todo plus its round when the process dies after COMMIT (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_after_commit", name: "After commit worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "After commit owner", provider: "claude", runtimeId: runtime.id });
@@ -3271,6 +3419,34 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   }
 
   /**
+   * Await a probe that exits on its own (a real crash), and return what it wrote
+   * plus its exit code. Unlike `killProbeOnPhase` the process is expected to die
+   * by itself; the phase line proves it reached the seam before dying.
+   */
+  async function waitForProbeExit(
+    probe: Bun.Subprocess<"ignore", "pipe", "pipe">,
+    phase: string,
+  ): Promise<{ stdout: string; exitCode: number | null }> {
+    const decoder = new TextDecoder();
+    let stdout = "";
+    const reader = probe.stdout.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        stdout += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const exitCode = await probe.exited;
+    if (!stdout.includes(phase)) {
+      throw new Error(`probe never announced ${phase}; stdout=${stdout}`);
+    }
+    return { stdout, exitCode };
+  }
+
+  /**
    * Await one named phase from a Worker; rejects on its error phase.
    *
    * The listener is attached BEFORE the caller posts the init message: a worker
@@ -3306,14 +3482,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
   }
 
-  it("keeps one round when a forced and an automatic start race on two connections (PG)", async () => {
+  it("keeps exactly one start record when a forced and an automatic start race (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_two_conn", name: "Two connection worker", provider: "claude", maxConcurrency: 8 });
     const owner = store.createAgent({ name: "Two connection owner", provider: "claude", runtimeId: runtime.id });
     const ROUNDS = Number(process.env.MUL409_TWO_CONN_ROUNDS ?? 30);
     const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
-    let doubleDispatched = 0;
-    let doubleStarted = 0;
-    const winners: string[] = [];
+    // Per-attempt invariant, from the QA round 4 ruling: exactly one task row
+    // (every status, cancelled included) and exactly one of the three start
+    // records. Zero and two are both failures.
+    const distribution = { auto: 0, force: 0, member: 0, none: 0, both: 0 };
     const mismatches: Array<Record<string, unknown>> = [];
     for (let round = 0; round < ROUNDS; round++) {
       const prereq = store.createIssue({ title: `Two conn prereq ${round}`, status: "in_progress" });
@@ -3341,38 +3518,54 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workers.forEach((entry) => entry.worker.terminate());
       rmSync(barrierDir, { recursive: true, force: true });
 
-      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ?").all(dependent.id) as Array<{ status: string }>;
-      const activities = db.query(
-        "SELECT type FROM multiremi_issue_activity WHERE issue_id = ? AND type IN ('dependency_force_started', 'dependency_auto_started') ORDER BY created_at ASC",
-      ).all(dependent.id) as Array<{ type: string }>;
-      // The durable invariant: one round, and never both start records. The sum
-      // can legitimately be 0: when the forced PATCH reads the dependent after
-      // the prerequisite's `done` already committed, it is an ordinary status
-      // write rather than an override, so no `dependency_force_started` exists —
-      // and the automatic start lost the claim, so no auto record either.
-      if (rows.length !== 1) doubleDispatched++;
-      if (activities.length > 1) doubleStarted++;
-      if (rows.length !== 1 || activities.length > 1) {
+      // All task rows, cancelled included: a round that was queued and then
+      // cancelled is still evidence that the start ran once.
+      const rows = db.query("SELECT id, status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC")
+        .all(dependent.id) as Array<{ status: string }>;
+      const activityTypes = db.query(
+        "SELECT type, data FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+      ).all(dependent.id) as Array<{ type: string; data: string | null }>;
+      const auto = activityTypes.filter((row) => row.type === "dependency_auto_started").length;
+      const force = activityTypes.filter((row) => row.type === "dependency_force_started").length;
+      // The third kind: the member's own backlog -> todo write, with no
+      // dependency start activity beside it. That is the ruling's "the gate was
+      // already open when the lock was taken" outcome.
+      const member = activityTypes.some((row) => {
+        if (row.type !== "issue_updated") return false;
+        try {
+          const data = JSON.parse(row.data ?? "{}") as Record<string, unknown>;
+          return data.status === "todo";
+        } catch { return false; }
+      });
+      const kind = auto && force ? "both"
+        : auto ? "auto"
+        : force ? "force"
+        : member ? "member"
+        : "none";
+      distribution[kind as keyof typeof distribution] += 1;
+      const rowStatuses = rows.map((row) => row.status);
+      if (rows.length !== 1 || (kind !== "auto" && kind !== "force" && kind !== "member")) {
         mismatches.push({
           round,
+          kind,
           status: store.getIssue(dependent.id)?.status,
-          rows: rows.map((row) => row.status),
-          activities: activities.map((row) => row.type),
+          rows: rowStatuses,
+          auto,
+          force,
+          member,
         });
       }
-      winners.push(activities.map((row) => row.type).join("+") || "none");
     }
-    // The distribution is printed, not asserted: which contender wins is a
-    // genuine race and neither is required. A round with NO start record is a
-    // legitimate outcome — the force PATCH's transaction can read the dependent
-    // after the prerequisite's `done` committed, at which point the gate is
-    // already satisfied, so its write is an ordinary start (no
-    // `dependency_force_started`) and the automatic start then loses the claim
-    // (no `dependency_auto_started`). One round either way.
-    console.log(`[mul409-two-conn] winners=${JSON.stringify(winners)} mismatches=${JSON.stringify(mismatches)}`);
-    // A failure here has to name the shape it saw, not just the count: the two
-    // distinct bugs (a second round, both start records) need different fixes.
-    expect({ doubleDispatched, doubleStarted, mismatches }).toEqual({ doubleDispatched: 0, doubleStarted: 0, mismatches: [] });
+    // The per-kind split is a genuine race and is reported, not asserted. The
+    // counts themselves are the deliverable: the QA round printed 4 rounds with
+    // no start record at all, which this loop now fails on.
+    console.log(`[mul409-two-conn] distribution=${JSON.stringify(distribution)} mismatches=${JSON.stringify(mismatches)}`);
+    expect({ distribution: { ...distribution, none: 0, both: 0 }, mismatches }).toEqual({
+      distribution: { auto: expect.any(Number), force: expect.any(Number), member: expect.any(Number), none: 0, both: 0 },
+      mismatches: [],
+    });
+    // Every round produced a record: the three kinds must account for the run.
+    expect(distribution.auto + distribution.force + distribution.member).toBe(ROUNDS);
   }, 180_000);
 
 });

@@ -2,6 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import type {
+  AssignIssueInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   MultiremiAttachment,
@@ -19,6 +20,7 @@ import type {
   MultiremiSessionResult,
   MultiremiTimelineEntry,
   MultiremiTimelinePage,
+  CreateSessionTaskInput,
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
@@ -51,6 +53,9 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    parent_done_grant_at: issue.parentDoneGrantAt,
+    parent_done_grant_by: issue.parentDoneGrantBy,
+    parent_done_grant_agent_id: issue.parentDoneGrantAgentId,
     issue_kind: issue.issueKind,
     source_issue_id: issue.sourceIssueId,
     project_id: issue.projectId,
@@ -262,14 +267,20 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       return c.json({
         error: err.message,
         code: err.code,
+        reason: err.details.reason ?? "grant_missing",
         ...rejectedIssueIds(err),
       }, 403);
     }
     return c.json({
       error: err.message,
       code: err.code,
-      reason: err.code === "final_summary_missing" ? "final_summary_missing" : "children_open",
+      reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
       open_children: err.details.openChildren ?? 0,
+      // MUL-400 S1c (QA round 1): same shape as the native route — the guard's
+      // structured detail rides under `data.lastChildClosedAt`.
+      ...(err.details.lastChildClosedAt !== undefined
+        ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
+        : {}),
       ...rejectedIssueIds(err),
     }, 409);
   }
@@ -366,9 +377,93 @@ const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
 ] as const;
 
 export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
-  const out: Record<string, unknown> = { ...input };
-  for (const field of SERVER_OWNED_ISSUE_UPDATE_FIELDS) delete out[field];
-  return out as UpdateIssueInput;
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_UPDATE_FIELDS);
+}
+
+/**
+ * MUL-448: lineage the assignment route stamps from the authenticated request.
+ *
+ * Same `??` hazard as above: the route overwrites `parentTaskId`, but a body
+ * that also sends `parent_task_id` leaves the alias to win when the credential
+ * carries no lineage (a member PAT has no source task, so the camelCase stamp
+ * is null and `null ?? body.parent_task_id` picks the forged value up).
+ */
+const SERVER_OWNED_ASSIGN_FIELDS = ["parentTaskId", "parent_task_id"] as const;
+
+export function stripServerOwnedAssignFields(input: AssignIssueInput = {}): AssignIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_ASSIGN_FIELDS);
+}
+
+/**
+ * MUL-448: what the Session task route derives for itself.
+ *
+ * `parentTaskId` comes from the caller's task credential and `sourceEventId`
+ * names the SCM event that authorizes repository scope; neither is a
+ * caller-selectable input on this surface.
+ */
+const SERVER_OWNED_SESSION_TASK_FIELDS = [
+  "parentTaskId",
+  "parent_task_id",
+  "sourceEventId",
+  "source_event_id",
+] as const;
+
+export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput): CreateSessionTaskInput {
+  return stripRequestFields(input, SERVER_OWNED_SESSION_TASK_FIELDS);
+}
+
+/**
+ * MUL-448 B4: caller-supplied creator/requester identities are not accepted.
+ *
+ * The native create route strips `createdBy` / `created_by`, and both
+ * quick-create routes strip `requesterId` / `requester_id`. These routes do not
+ * stamp a credentialed identity, so their result stays aligned with main. The
+ * compatibility `POST /api/issues` route still stamps the credentialed caller
+ * through `withIssueCreateRequestContext`.
+ */
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+
+export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
+}
+
+/**
+ * MUL-448 B3: provenance a credentialed create must not take from the body.
+ *
+ * `sourceIssueId` + `issueKind` are what the compatibility create route matches
+ * on (`findGeneratedIssueByTitle`) to hand back an existing issue instead of
+ * creating one, and `issueKind` alone flips the intake/execution semantics the
+ * generated-issue cache keys on. A member could therefore file an "execution"
+ * naming someone else's intake with the title a real run would use, and the
+ * run's own create would then return that forged issue with no task dispatched.
+ *
+ * The credentialed paths derive both fields from the credential: the compat
+ * route through `withIssueCreateRequestContext` (intake task token only), and
+ * the native route by simply not accepting them. The anonymous compatibility
+ * mode (master token / auth disabled) keeps passing the body through.
+ */
+const SERVER_OWNED_ISSUE_SOURCE_FIELDS = [
+  "sourceIssueId",
+  "source_issue_id",
+  "issueKind",
+  "issue_kind",
+] as const;
+
+export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_SOURCE_FIELDS);
+}
+
+/** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+
+export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);
+}
+
+function stripRequestFields<T extends object>(input: T, fields: readonly string[]): T {
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const field of fields) delete out[field];
+  return out as T;
 }
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
@@ -459,6 +554,7 @@ export function issueDetailCompatibilityResponse(
     ? issue.labels
     : store.listLabelsForExistingIssue(issue.id);
   const response = issueCompatibilityResponse({ ...issue, labels }, { includeLabels: true });
+  response.parent_done_grant = store.issueParentDoneGrantView(issue);
   // `getIssueWithTasks` hangs reactions/attachments off the object; a plain
   // hydrated issue does not, so read them from the store when absent.
   const withExtras = issue as MultiremiIssue & {

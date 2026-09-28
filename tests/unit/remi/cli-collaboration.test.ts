@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile, rm, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { Database } from "bun:sqlite";
+import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import {
   BOOTSTRAP_COMPATIBILITY_PATHS,
@@ -31,6 +34,73 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("runs the five decision commands through the real issue routes", async () => {
+    useCliEnv();
+    const database = new Database(":memory:");
+    try {
+      const store = new MultiremiStore(database);
+      store.ensureLocalWorkspace();
+      const agent = store.createAgent({ name: "Decision CLI owner", provider: "codex" });
+      const parent = store.createIssue({ title: "CLI parent", assigneeType: "agent", assigneeId: agent.id });
+      const child = store.createIssue({ title: "CLI child", parentIssueId: parent.id });
+      const app = createMultiremiApp({ store, authToken: "test-token" });
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init);
+        if (new URL(request.url).pathname === "/api/cli/capabilities") {
+          return Response.json({ commands: ["request", "list", "answer", "escalate", "withdraw"].map((name) => ({
+            id: `issue.decision.${name}`, allowed: true,
+          })) });
+        }
+        return app.request(request);
+      }) as typeof fetch;
+      const run = async (name: string, args: string[]) => {
+        const spec = specById(`issue.decision.${name}`);
+        const output = await capture(() => registryFor([spec]).execute([...spec.path, ...args, "--output", "json"]));
+        return JSON.parse(output.stdout);
+      };
+      const first = await run("request", [child.key, "--kind", "merge", "--title", "Ship it"]);
+      expect(first.decision.status).toBe("pending");
+      const listed = await run("list", [parent.key]);
+      expect(listed.owner_and_answered.pending[0].id).toBe(first.decision.id);
+      const answered = await run("answer", [parent.key, first.decision.id, "--text", "Approved", "--reason", "Reviewed"]);
+      expect(answered.decision.status).toBe("answered");
+      const second = await run("request", [child.key, "--kind", "question", "--title", "Scope?"]);
+      const escalated = await run("escalate", [parent.key, second.decision.id]);
+      expect(escalated.decision.status).toBe("escalated");
+      const third = await run("request", [child.key, "--kind", "criteria", "--title", "Legacy criteria"]);
+      const withdrawn = await run("withdraw", [parent.key, third.decision.id]);
+      expect(withdrawn.decision.status).toBe("withdrawn");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("executes all five issue decision commands against their API routes", async () => {
+    useCliEnv();
+    const cases = [
+      ["issue.decision.request", ["MUL-410", "--kind", "merge", "--title", "Merge?", "--body", "CI green", "--option", "yes", "--option", "no"], "POST", "/api/issues/MUL-410/decisions"],
+      ["issue.decision.list", ["MUL-400"], "GET", "/api/issues/MUL-400/decisions"],
+      ["issue.decision.answer", ["MUL-400", "dcs_1", "--text", "yes", "--reason", "Reviewed", "--overturn", "Recheck QA"], "POST", "/api/issues/MUL-400/decisions/dcs_1/answer"],
+      ["issue.decision.escalate", ["MUL-400", "dcs_1"], "POST", "/api/issues/MUL-400/decisions/dcs_1/escalate"],
+      ["issue.decision.withdraw", ["MUL-400", "dcs_1"], "POST", "/api/issues/MUL-400/decisions/dcs_1/withdraw"],
+    ] as const;
+    for (const [id, args, method, path] of cases) {
+      const spec = specById(id);
+      globalThis.fetch = capabilityFetch(id, async (request) => {
+        expect(request.method).toBe(method);
+        expect(new URL(request.url).pathname).toBe(path);
+        if (id === "issue.decision.request") {
+          expect(await request.json()).toEqual({ kind: "merge", title: "Merge?", body: "CI green", options: ["yes", "no"] });
+        }
+        if (id === "issue.decision.answer") {
+          expect(await request.json()).toEqual({ answer: "yes", reason: "Reviewed", overturn: "Recheck QA" });
+        }
+        return Response.json(id === "issue.decision.list" ? { waiting_on_human: [], owner_and_answered: { pending: [], answered: [] }, count: 0 } : { decision: { id: "dcs_1" } });
+      });
+      await capture(() => registryFor([spec]).execute([...spec.path, ...args, "--output", "json"]));
+    }
+  });
+
   it("forwards project and directory work locations through real Chat and quick-create commands", async () => {
     useCliEnv();
     for (const [command, flag, field] of [
