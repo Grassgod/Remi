@@ -40,7 +40,7 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "tasks.ts → helpers/organizer.ts: organizerTaskInspection",
   }],
   [/GET \/api\/shares\//, {
-    tables: "task_messages */session_events */issue_comments: content, input, output, meta, body, metadata",
+    tables: "task_messages *: content/input/output/meta；session_events *: body/metadata；issue_comments: body",
     shape: "shareResponse 两分支均全量消息；全量 session events/timeline；无 LIMIT",
     caller: "issue-shares.ts: shareResponse",
   }],
@@ -50,12 +50,12 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "issues.ts → IssueSessionsRepo.listSessionEvents",
   }],
   [/\/comments$/, {
-    tables: "multiremi_issue_comments *: content, metadata",
+    tables: "multiremi_issue_comments *: body",
     shape: "集合 SQL 无 LIMIT；CLI filter/slice/hard cap 均在读后",
     caller: "issues.ts → IssuesRepo.listIssueComments",
   }],
   [/\/timeline$/, {
-    tables: "multiremi_issue_comments / multiremi_issue_activity: content, metadata / payload",
+    tables: "multiremi_issue_comments: body；multiremi_issue_activity: body, data",
     shape: "listIssueTimelinePage 有 SQL 行分页；仍含正文，行 LIMIT 不是字节上限",
     caller: "issues.ts → IssuesRepo.listIssueTimelinePage",
   }],
@@ -65,14 +65,14 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "issues.ts → IssueSessionsRepo.listIssueSessionResults",
   }],
   [/\/knowledge\/submissions/, {
-    tables: "multiremi_knowledge_submissions: payload；actor scope 可能取 autopilot_run *",
-    shape: "列表已 LIMIT/投影；单条 getter 含 payload；POST actor 可解析整行 run；保留旧生产候选",
-    caller: "knowledge.ts → KnowledgeSubmissionsRepo / submission actor resolution",
+    tables: "multiremi_knowledge_submissions: body, patch；actor scope 可能取 autopilot_run *",
+    shape: "列表已 LIMIT/投影；单条 getter 含 body/patch；POST actor 可解析整行 run；保留旧生产候选",
+    caller: "knowledge.ts → KnowledgeRepo.listSubmissionsPage/getSubmission；submission actor resolution",
   }],
   [/\/knowledge\/runs/, {
-    tables: "knowledge_compilation_runs / sources / outputs / project_docs: metadata, result_summary, body",
+    tables: "multiremi_knowledge_compilation_runs: result_summary；run_sources: metadata；关联project_docs: body；outputs标量",
     shape: "列表有 LIMIT/投影；详情 sources/outputs 无 LIMIT，关联 docs 可读正文；保留旧生产候选",
-    caller: "knowledge.ts → KnowledgeRepo / KnowledgeCompilationsRepo",
+    caller: "knowledge.ts → KnowledgeRepo.listRunsPage/getRun/listRunSources/listRunOutputs",
   }],
   [/\/repository-wikis$/, {
     tables: "autopilot_runs 标量/条件 payload；repository_wiki_docs 元数据；compilations 八列",
@@ -80,39 +80,39 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "workspaces.ts → repository-wiki-outcome.ts / AutopilotsRepo / RepositoryWikiRepo",
   }],
   [/\/repos\/:repositoryId\/wiki/, {
-    tables: "repository_wiki_docs / revisions: body；knowledge_compilations / autopilot_runs: payload, result, schedule_prompt",
+    tables: "repository_wiki_docs / revisions: body；knowledge_compilation_runs: result_summary；autopilot_runs: payload, result, schedule_prompt",
     shape: "list 常规投影；include_body/legacy/batch/revision/正文和 mutation 辅助读仍可整行或无界；build 还 advance queued runs",
     caller: "workspaces.ts → RepositoryWikiService / AutopilotsRepo.advanceScheduledTargetRuns",
   }],
   [/\/projects\/:id\/(docs|knowledge)|\/project-docs|\/project-knowledge|\/knowledge\/migrate-legacy/, {
-    tables: "multiremi_project_docs / project_doc_revisions: body, tags, refs；compilation sources/outputs metadata",
+    tables: "multiremi_project_docs / project_doc_revisions: body, tags, refs；compilation sources metadata / outputs标量",
     shape: "list/recall/backlinks/migration/revisions 可全量正文；get 为单行正文；写入/发布涉及 get 与 doc graph 读取；无总字节界",
-    caller: "projects.ts / project-knowledge.ts → ProjectsRepo / ProjectKnowledgeService",
+    caller: "projects.ts / knowledge.ts → ProjectsRepo / project-knowledge/service.ts: ProjectKnowledgeService",
   }],
   [/\/autopilots\/[^ ]*deliveries/, {
-    tables: "multiremi_autopilot_webhook_deliveries: raw_body, response/result metadata；autopilot run *",
+    tables: "multiremi_webhook_deliveries: raw_body, response_body, selected_headers, error；autopilot run *",
     shape: "list 行分页，raw_body 可显式包含；get/replay 单行全字段；无正文总字节界",
-    caller: "autopilots.ts → AutopilotsRepo.list/getWebhookDelivery",
+    caller: "autopilots.ts → AutopilotsRepo.listWebhookDeliveries/getWebhookDelivery",
   }],
   [/\/autopilot-runs|\/autopilots|\/scheduler$|\/knowledge\/events\/repository-merged/, {
     tables: "multiremi_autopilot_runs *: payload, result, schedule_prompt；autopilots: prompt, compiled_prompt",
     shape: "run list LIMIT 20/最大100，getter 单行仍带大列；autopilot 集合无字节界；触发/定时目标 queued SELECT * 无 LIMIT",
-    caller: "autopilots.ts / daemon.ts / knowledge.ts → AutopilotsRepo.getRun/listRuns/advanceScheduledTargetRuns",
+    caller: "autopilots.ts / daemon.ts / knowledge.ts → AutopilotsRepo.getAutopilotRun/listAutopilotRuns/advanceScheduledTargetRuns",
   }],
   [/\/cli\/context$/, {
     tables: "autopilot_runs */task_prompts/tasks: payload, result, schedule_prompt, prompt；context metadata",
     shape: "task scope 解析整行 run 与 prompt；单行未等于字节有界",
-    caller: "cli-context.ts → task scope / build context",
+    caller: "cli.ts → task scope / build context / getAutopilotRun",
   }],
   [/\/chat\//, {
-    tables: "multiremi_chat_messages: content/metadata；chat sessions .* + last message；queued task rows",
-    shape: "message/page 为全量 SQL 后 TS slice；POST 构建历史；session 列表含完整 last body；pending-tasks 已投影，仍保守保留",
-    caller: "chats.ts → ChatsRepo / chat dispatch",
+    tables: "multiremi_chat_messages: body/failure_reason；chat sessions .* + last-message excerpt；queued task rows",
+    shape: "message/page 为全量 SQL 后 TS slice；POST 构建历史；session 列表 last body 已 SQL 截240字符；pending-tasks 已投影，缺本轮排除长样本，保守保留",
+    caller: "chat.ts → ChatRepo.listChatMessages/getChatSession/listChatSessions / chat dispatch",
   }],
   [/\/multiremi\/chats/, {
-    tables: "multiremi_chat_messages: content/metadata；chat sessions .* + last message；tasks",
-    shape: "legacy chat bundle/消息/历史读；TS 分页在 SQL 后；session 列表含完整 last body",
-    caller: "chats.ts → ChatsRepo / chat dispatch",
+    tables: "multiremi_chat_messages: body/failure_reason；chat sessions .* + last-message excerpt；tasks",
+    shape: "legacy chat bundle/消息/历史读；TS 分页在 SQL 后；session 列表 last body 已 SQL 截240字符，缺本轮排除长样本，保守保留",
+    caller: "chat.ts → ChatRepo.listChatMessages/getChatSession/listChatSessions / chat dispatch",
   }],
   [/\/prompt$/, {
     tables: "multiremi_task_prompts *: prompt；multiremi_tasks getter",
@@ -125,9 +125,9 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "tasks.ts / daemon.ts / agents.ts → TasksRepo / claim context projection",
   }],
   [/\/issues|\/inbox$/, {
-    tables: "issue/comments/activity/tasks/session context: description, content, metadata, prompt, result, error",
+    tables: "issues: description/metadata；comments: body；activity: body/data；tasks/session context: prompt/result/error",
     shape: "bundle 或任务集合/完整行辅助读；inbox summary 修复不代表 legacy inbox 完整集合字节有界",
-    caller: "issues.ts / inbox.ts → IssuesRepo / InboxService / task hydration",
+    caller: "issues.ts / inbox.ts → IssuesRepo / task hydration",
   }],
 ];
 

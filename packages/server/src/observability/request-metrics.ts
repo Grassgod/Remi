@@ -450,7 +450,7 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "GET /api/chat/sessions/:sessionId/messages/page", // Pagination is after SQL.
   "POST /api/chat/sessions/:sessionId/messages", // Dispatch builds chat history.
   "POST /api/multiremi/chats/:id/messages",
-  "GET /api/chat/sessions", // SELECT chat.* plus complete last-message body.
+  "GET /api/chat/sessions", // Last-message excerpt is projected; retain pending C-2 byte data.
   "GET /api/multiremi/chats",
   "GET /api/chat/sessions/:sessionId",
   "POST /api/chat/sessions", // Initial message/context readbacks.
