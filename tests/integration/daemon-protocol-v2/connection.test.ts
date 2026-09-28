@@ -135,7 +135,10 @@ describe("daemon protocol v2 real connection", () => {
       } });
       await h.startDaemon();
       await waitFor(() => recovering, "orphan recovery after runtime_gone");
-      expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(1);
+      // A-5 refreshes WS identity at registration, before replay/model reports.
+      // Claims still wait for the existing runtime recovery callback below.
+      await waitFor(() => h.ledger.filter(entry => entry.type === "hello").length === 2
+        && h.client.connectionState() === "connected", "registered identity before orphan recovery finishes");
       await Bun.sleep(50);
       const claims = claim.mock.calls.length;
       await Bun.sleep(50);
