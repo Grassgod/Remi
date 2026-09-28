@@ -93,4 +93,46 @@ describe.skipIf(!adminUrl)("C5 outbound schema on real PostgreSQL", () => {
     seed(db);
     verify(db, "postgres");
   });
+
+  it("restores live uniqueness after an archive index-name collision and reuses renamed index definitions", async () => {
+    const name = `${database}_collision`;
+    const admin = new Bun.SQL(adminUrl!, { max: 1 });
+    try { await admin.unsafe(`CREATE DATABASE ${name}`); } finally { await admin.end(); }
+    const url = new URL(adminUrl!);
+    url.pathname = `/${name}`;
+    const restored = new PostgresSyncDatabase(url.toString());
+    try {
+      seed(restored);
+      ensureFeishuOutboundKindsSchema(restored, "postgres");
+      const snapshot = restored.query(`SELECT * FROM ${table} ORDER BY id`).all();
+      restored.exec(`ALTER TABLE ${table} RENAME TO c5_archive;
+        CREATE TABLE ${table} (id TEXT PRIMARY KEY, task_id TEXT UNIQUE, kind TEXT,
+          status TEXT, available_at TEXT, leased_until TEXT, created_at TEXT);
+        INSERT INTO ${table}(id, task_id) VALUES ('restored', 'restored_task');`);
+      ensureFeishuOutboundKindsSchema(restored, "postgres");
+      ensureFeishuOutboundKindsSchema(restored, "postgres");
+      expect(restored.query("SELECT * FROM c5_archive ORDER BY id").all()).toEqual(snapshot);
+      expect(() => restored.run(`INSERT INTO ${table}(id, task_id) VALUES ('duplicate', 'restored_task')`)).toThrow();
+      expect(Number((restored.query(`SELECT COUNT(*) AS n FROM ${table} WHERE task_id = 'restored_task'`).get() as { n: string }).n)).toBe(1);
+      const indexes = () => restored.query(`SELECT indexname, indexdef FROM pg_indexes
+        WHERE schemaname = current_schema() AND tablename = ? ORDER BY indexname`).all(table) as Array<{ indexname: string; indexdef: string }>;
+      const first = indexes();
+      expect(first).toHaveLength(5);
+      const coalesce = first.find(index => index.indexdef.includes("COALESCE"))!;
+      expect(coalesce).toBeDefined();
+      restored.exec(`ALTER INDEX "${coalesce.indexname}" RENAME TO operator_renamed_coalesce`);
+      const renamed = indexes();
+      ensureFeishuOutboundKindsSchema(restored, "postgres");
+      ensureFeishuOutboundKindsSchema(restored, "postgres");
+      expect(indexes()).toEqual(renamed);
+      restored.run(`INSERT INTO ${table}(id, task_id, kind) VALUES ('result', 'restored_task', 'result_card')`);
+      expect(() => restored.run(`INSERT INTO ${table}(id, task_id, kind) VALUES ('duplicate_result', 'restored_task', 'result_card')`)).toThrow();
+      restored.run(`INSERT INTO ${table}(id, task_id, kind, unit_key) VALUES ('historic', 'restored_task', NULL, 'historic_unit')`);
+      expect(() => restored.run(`INSERT INTO ${table}(id, task_id, kind, unit_key) VALUES ('duplicate_historic', 'restored_task', NULL, 'historic_unit')`)).toThrow();
+    } finally {
+      restored.close();
+      const admin = new Bun.SQL(adminUrl!, { max: 1 });
+      try { await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); } finally { await admin.end(); }
+    }
+  });
 });

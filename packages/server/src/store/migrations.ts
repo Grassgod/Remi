@@ -4241,6 +4241,47 @@ function ensureFeishuOutboundKindIndexes(db: SqlDatabase): void {
     ["idx_feishu_outbound_pending_c5", "", "(status, available_at, leased_until, created_at)"],
     ["idx_feishu_outbound_kind_c5", "", "(kind, status, available_at)"],
   ];
+  if (isPostgresDialect(db)) {
+    const keys = [
+      ["task_id", "COALESCE(kind, ''::text)", "COALESCE(unit_key, ''::text)"],
+      ["task_id"],
+      ["status", "available_at", "leased_until", "created_at"],
+      ["kind", "status", "available_at"],
+    ];
+    const carrierPredicate = "((task_id IS NOT NULL) AND ((kind IS NULL) OR (kind = 'cot'::text)) AND (unit_key = ''::text))";
+    type IndexDefinition = { unique: boolean; keys: string[]; predicate: string | null };
+    const liveIndexes = () => db.query(`SELECT i.indisunique AS "unique",
+        to_json(ARRAY(SELECT pg_get_indexdef(i.indexrelid, key, false)
+          FROM generate_series(1, i.indnkeyatts) AS key)) AS keys,
+        pg_get_expr(i.indpred, i.indrelid) AS predicate
+      FROM pg_index i
+      JOIN pg_class t ON t.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_class index_relation ON index_relation.oid = i.indexrelid
+      JOIN pg_am method ON method.oid = index_relation.relam
+      WHERE t.relname = ? AND n.nspname = current_schema()
+        AND i.indisvalid AND i.indisready AND method.amname = 'btree'`).all(table) as IndexDefinition[];
+    const matches = (index: IndexDefinition, position: number) =>
+      index.unique === Boolean(indexes[position]![1])
+      && index.keys.length === keys[position]!.length
+      && index.keys.every((key, column) => key === keys[position]![column])
+      && index.predicate === (position === 1 ? carrierPredicate : null);
+    const existing = liveIndexes();
+    for (const [position, [baseName, unique, definition]] of indexes.entries()) {
+      if (existing.some(index => matches(index, position))) continue;
+      let name = baseName!;
+      for (let version = 2; db.query(`SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = ? AND n.nspname = current_schema()`).get(name); version++) name = `${baseName}_${version}`;
+      // An archive may own the original name. A concurrent collision must fail, not skip creation.
+      db.exec(`CREATE ${unique}INDEX ${name} ON ${table}${definition}`);
+    }
+    const complete = liveIndexes();
+    if (indexes.some((_, position) => !complete.some(index => matches(index, position)))) {
+      throw new Error("C5 outbound migration: live index definitions are incomplete; see docs/feishu-outbound-kind-migration.md");
+    }
+    return;
+  }
   for (const [baseName, unique, definition] of indexes) {
     let name = baseName!;
     if (!isPostgresDialect(db)) {

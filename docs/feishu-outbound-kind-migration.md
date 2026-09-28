@@ -53,6 +53,13 @@ constraint in place. Repeating the migration does not repeat the copy.
 If an operator has restored a legacy live table beside an existing backup,
 SQLite retains another numbered backup instead of overwriting the first one;
 index creation checks the live table, not merely a globally occupied name.
+PostgreSQL checks `pg_index.indrelid` and the valid, ready btree index's key
+expressions, uniqueness and predicate on the live table. An equivalent index is
+reused even if renamed. When an archive or another relation occupies a preferred
+name, C5 creates the missing index with an available numbered suffix and retains
+the archive indexes. It verifies all live definitions before completing the
+transaction; a name collision cannot silently satisfy the migration. Repeated
+migrations reuse these definitions without creating additional indexes.
 
 ## Rollback
 
@@ -83,7 +90,11 @@ over the C5 schema. A physical restore requires a separate approved operation:
    sent, otherwise `failed`), final result message ID, and NULL `kind`; preserve
    all other rows and fields. Recreate the original ordinary index names on
    the live table; archive indexes must be renamed first on PostgreSQL, or use
-   distinct names on SQLite. Verify copied counts, E5 rows and unique keys.
+   distinct names on SQLite. This still applies when restoring the preceding
+   binary and its original index names. When upgrading the restored live table
+   back to C5, renaming archive indexes is optional: C5 chooses available names
+   and checks live definitions automatically. Verify copied counts, E5 rows and
+   unique keys.
 4. Deploy the preceding server and daemon. To undo this restore, stop them and
    swap the retained C5 archive back before running C5. Any new deliveries on
    the legacy table must be exported/reconciled before the swap.
