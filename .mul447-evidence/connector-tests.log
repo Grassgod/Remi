@@ -2,550 +2,552 @@ bun test v1.3.14 (0d9b296a)
 
 tests/unit/multiremi/feishu-task-command-handler.test.ts:
 [hermetic-env] stripped 17 inherited env var(s): CODEX_HOME, INVOCATION_ID, MULTIREMI_AGENT_NAME, MULTIREMI_DAEMON_PORT, MULTIREMI_GIT_CREDENTIAL_TIMEOUT_MS, MULTIREMI_GIT_REPOSITORIES_JSON, MULTIREMI_ISSUE_ID, MULTIREMI_ISSUE_SESSION_ID, MULTIREMI_PROJECT_ID, MULTIREMI_SERVER_URL, MULTIREMI_STATE_DIR, MULTIREMI_TASK_ID, MULTIREMI_TOKEN, MULTIREMI_WORKSPACE_ID, MULTIREMI_WORKSPACE_ROOT, OPENAI_API_KEY, REMI_CLAUDE_AGENT_ACP_DIR
-(pass) Feishu Task command handler > answers /stop without filing new work [251.86ms]
-(pass) Feishu Task command handler > matches commands sent in a group despite the speaker prefix [192.52ms]
-(pass) Feishu Task command handler > answers an unrecognised bare command instead of starting a Task [186.19ms]
-(pass) Feishu Task command handler > renders /status in Chinese and never as a raw status token [192.72ms]
-(pass) Feishu Task command handler > answers retired command names with the unsupported hint [183.28ms]
-(pass) Feishu Task command handler > still submits a slash-prefixed request that is not a bare command [185.96ms]
-(pass) Feishu Task command handler > reports a failure card when the cancel request cannot be made [192.35ms]
-(pass) Feishu Task command handler > refuses an explicit target outside the sender's own candidates [185.08ms]
-(pass) Feishu Task command handler > reports no running task when one cannot be found [187.00ms]
+(pass) Feishu Task command handler > answers /stop without filing new work [242.83ms]
+(pass) Feishu Task command handler > matches commands sent in a group despite the speaker prefix [188.52ms]
+(pass) Feishu Task command handler > answers an unrecognised bare command instead of starting a Task [183.18ms]
+(pass) Feishu Task command handler > renders /status in Chinese and never as a raw status token [206.93ms]
+(pass) Feishu Task command handler > answers retired command names with the unsupported hint [196.39ms]
+(pass) Feishu Task command handler > still submits a slash-prefixed request that is not a bare command [203.95ms]
+(pass) Feishu Task command handler > reports a failure card when the cancel request cannot be made [206.84ms]
+(pass) Feishu Task command handler > refuses an explicit target outside the sender's own candidates [203.78ms]
+(pass) Feishu Task command handler > reports no running task when one cannot be found [198.62ms]
 
 tests/unit/multiremi/multiremi-feishu-bot-task-bridge.test.ts:
-(pass) Feishu bot standard Task bridge > hands an in-flight card to the new connector after the old Runtime lease expires [201.40ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and none prior turn [211.38ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and queued prior turn [204.74ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and completed prior turn [221.23ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and none prior turn [261.84ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and queued prior turn [271.38ms]
-(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and completed prior turn [226.00ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and none prior turn [226.88ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and queued prior turn [236.42ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and completed prior turn [226.26ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and none prior turn [217.82ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and queued prior turn [207.84ms]
-(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and completed prior turn [223.66ms]
-(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back p2p [198.20ms]
-(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back group [192.33ms]
-(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back canonical-topic [204.87ms]
-(pass) Feishu bot standard Task bridge > cold-starts p2p sharing a retained group binding after migration (table FK=false) [250.54ms]
-(pass) Feishu bot standard Task bridge > cold-starts p2p sharing a retained group binding after migration (table FK=true) [243.02ms]
-(pass) Feishu bot standard Task bridge > queues direct, group, and Issue topic replies with the resolved Agent and original conversation [198.20ms]
-(pass) Feishu bot standard Task bridge > keeps successive private results in the same chat binding, including input from an older daemon [190.61ms]
-(pass) Feishu bot standard Task bridge > preserves an explicit private topic instead of moving its reply to the main chat [191.63ms]
-(pass) Feishu bot standard Task bridge > wakes once after a lead round and durably retries the proactive topic reply [278.58ms]
-(pass) Feishu bot standard Task bridge > steers an existing inbound Chat task instead of creating a second round task [222.40ms]
-(pass) Feishu bot standard Task bridge > keeps an already-running private user turn separate when an Issue binding appears [200.40ms]
-(pass) Feishu bot standard Task bridge > waits for delegated work and the leader return before waking the bound Chat [231.47ms]
-(pass) Feishu bot standard Task bridge > switches the bound Chat from bootstrap to delta after the provider session is promoted [216.89ms]
-(pass) Feishu bot standard Task bridge > deduplicates events and steers an active Task in the bound Chat Session [198.61ms]
-(pass) Feishu bot standard Task bridge > admits an unknown sender but checks Issue creation against the dynamic allowlist [186.40ms]
-(pass) Feishu bot standard Task bridge > does not use a known Remi identity as an account approval [242.59ms]
-(pass) Feishu bot standard Task bridge > keeps the Chat Session across a config revision change [201.01ms]
-(pass) Feishu bot standard Task bridge > starts a fresh Chat Session when the configured Agent changes [189.61ms]
-(pass) Feishu bot standard Task bridge > starts a fresh Chat Session when a group route switches Agent [196.35ms]
-(pass) Feishu bot standard Task bridge > keeps one Issue round push on the newest binding after a route switch [203.73ms]
-(pass) Feishu bot standard Task bridge > assigns an automatically created group Issue to the routed Agent [227.43ms]
-(pass) Feishu bot standard Task bridge > reports the bound Chat and latest canonical Task, then clears it on /new [204.54ms]
-(pass) Feishu bot standard Task bridge > cancels and resets every routed binding for one Feishu conversation [198.48ms]
+(pass) Feishu bot standard Task bridge > hands an in-flight card to the new connector after the old Runtime lease expires [208.02ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and none prior turn [209.44ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and queued prior turn [211.13ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=default and completed prior turn [224.77ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and none prior turn [204.87ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and queued prior turn [203.69ms]
+(pass) Feishu bot standard Task bridge > schedules claude -> codex with model=gpt-5.6-sol and completed prior turn [216.74ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and none prior turn [203.64ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and queued prior turn [200.58ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=default and completed prior turn [208.34ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and none prior turn [202.14ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and queued prior turn [206.13ms]
+(pass) Feishu bot standard Task bridge > schedules codex -> claude with model=claude-opus-5 and completed prior turn [218.07ms]
+(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back p2p [185.58ms]
+(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back group [184.03ms]
+(pass) Feishu bot standard Task bridge > rejects shared Chat binding creation and rolls back canonical-topic [185.38ms]
+(pass) Feishu bot standard Task bridge > cold-starts p2p sharing a retained group binding after migration (table FK=false) [261.56ms]
+(pass) Feishu bot standard Task bridge > cold-starts p2p sharing a retained group binding after migration (table FK=true) [279.54ms]
+(pass) Feishu bot standard Task bridge > queues direct, group, and Issue topic replies with the resolved Agent and original conversation [238.21ms]
+(pass) Feishu bot standard Task bridge > keeps successive private results in the same chat binding, including input from an older daemon [217.26ms]
+(pass) Feishu bot standard Task bridge > preserves an explicit private topic instead of moving its reply to the main chat [194.50ms]
+(pass) Feishu bot standard Task bridge > wakes once after a lead round and durably retries the proactive topic reply [287.59ms]
+(pass) Feishu bot standard Task bridge > steers an existing inbound Chat task instead of creating a second round task [227.01ms]
+(pass) Feishu bot standard Task bridge > keeps an already-running private user turn separate when an Issue binding appears [202.83ms]
+(pass) Feishu bot standard Task bridge > waits for delegated work and the leader return before waking the bound Chat [243.46ms]
+(pass) Feishu bot standard Task bridge > switches the bound Chat from bootstrap to delta after the provider session is promoted [228.30ms]
+(pass) Feishu bot standard Task bridge > deduplicates events and steers an active Task in the bound Chat Session [195.13ms]
+(pass) Feishu bot standard Task bridge > admits an unknown sender but checks Issue creation against the dynamic allowlist [196.45ms]
+(pass) Feishu bot standard Task bridge > does not use a known Remi identity as an account approval [199.18ms]
+(pass) Feishu bot standard Task bridge > keeps the Chat Session across a config revision change [203.75ms]
+(pass) Feishu bot standard Task bridge > starts a fresh Chat Session when the configured Agent changes [197.40ms]
+(pass) Feishu bot standard Task bridge > starts a fresh Chat Session when a group route switches Agent [198.72ms]
+(pass) Feishu bot standard Task bridge > keeps one Issue round push on the newest binding after a route switch [226.95ms]
+(pass) Feishu bot standard Task bridge > assigns an automatically created group Issue to the routed Agent [186.54ms]
+(pass) Feishu bot standard Task bridge > reports the bound Chat and latest canonical Task, then clears it on /new [189.94ms]
+(pass) Feishu bot standard Task bridge > cancels and resets every routed binding for one Feishu conversation [192.13ms]
 
 tests/unit/multiremi/feishu-cancel-wire-compat.test.ts:
-(pass) Feishu cancel wire compatibility > falls back to `cancelled` when the server sends no outcome [2.24ms]
-(pass) Feishu cancel wire compatibility > reports none when an old server cancels nothing [0.19ms]
-(pass) Feishu cancel wire compatibility > keeps a discriminated outcome when the server sends one [0.40ms]
-(pass) Feishu cancel wire compatibility > drops an unrecognised free-text reason instead of forwarding it [0.15ms]
-(pass) Feishu cancel wire compatibility > passes through the two known rejection codes [0.19ms]
-(pass) Feishu cancel wire compatibility > treats an unknown outcome as none rather than guessing a stop [0.08ms]
-(pass) Feishu cancel wire compatibility > renders a usable card for every legacy and current response shape [0.82ms]
-(pass) Feishu cancel wire compatibility > never renders an empty card for any response shape [0.56ms]
+(pass) Feishu cancel wire compatibility > falls back to `cancelled` when the server sends no outcome [1.39ms]
+(pass) Feishu cancel wire compatibility > reports none when an old server cancels nothing [0.16ms]
+(pass) Feishu cancel wire compatibility > keeps a discriminated outcome when the server sends one [0.18ms]
+(pass) Feishu cancel wire compatibility > drops an unrecognised free-text reason instead of forwarding it [0.10ms]
+(pass) Feishu cancel wire compatibility > passes through the two known rejection codes [0.15ms]
+(pass) Feishu cancel wire compatibility > treats an unknown outcome as none rather than guessing a stop [0.06ms]
+(pass) Feishu cancel wire compatibility > renders a usable card for every legacy and current response shape [0.72ms]
+(pass) Feishu cancel wire compatibility > never renders an empty card for any response shape [0.45ms]
 (pass) Feishu cancel wire compatibility > sends the optional disambiguation fields only when present [0.30ms]
 
 tests/unit/multiremi/feishu-concierge-host.test.ts:
-(pass) control-plane Feishu concierge host > hosts either co-resident provider without letting a sibling stop or detach its channel [2.64ms]
-(pass) control-plane Feishu concierge host > routes a private Task to the main chat without inventing a thread session key [1.50ms]
-(pass) control-plane Feishu concierge host > opens without a session and reads the final provider session once on closed [1.00ms]
-(pass) control-plane Feishu concierge host > checkpoints a group owner before sending through the existing Task card [0.45ms]
-(pass) control-plane Feishu concierge host > does not send a card when the recipient checkpoint loses its lease [0.24ms]
-(pass) control-plane Feishu concierge host > still sends the report when the saved recipient is absent [0.25ms]
-(pass) control-plane Feishu concierge host > streams an existing proactive Task instead of sending only its final body [0.64ms]
-(pass) control-plane Feishu concierge host > passes the saved presentation checkpoint unchanged to the trace subscription [0.43ms]
-(pass) control-plane Feishu concierge host > applies live no-mention settings to exactly the configured group [0.15ms]
-(pass) control-plane Feishu concierge host > routes proactive delivery through the running connector handle [0.17ms]
-(pass) control-plane Feishu concierge host > routes image uploads through the running connector handle [0.11ms]
-(pass) control-plane Feishu concierge host > admits senders for server-side union_id classification [0.10ms]
-(pass) control-plane Feishu concierge host > refuses to boot without the canonical Task bridge [0.22ms]
-(pass) control-plane Feishu concierge host > hands the assignment's credentials to the channel instead of the machine's env [0.13ms]
-(pass) control-plane Feishu concierge host > reports a channel that dies on its own [0.15ms]
-(pass) control-plane Feishu concierge host > detaches the channel on stop so a handover can complete [0.09ms]
-(pass) control-plane Feishu concierge host > resolves the topic owner into the decision card before sending it [1.10ms]
-(pass) control-plane Feishu concierge host > degrades a rejected decision card to its text twin instead of retrying it [0.61ms]
-(pass) control-plane Feishu concierge host > sends text when the group owner cannot be resolved at all [0.27ms]
-(pass) control-plane Feishu concierge host > sends text for a request the control plane already marked unaddressable [0.25ms]
-(pass) control-plane Feishu concierge host > lets a retryable card failure reach the outbox backoff [0.27ms]
-(pass) control-plane Feishu concierge host > B2: the terminal PATCH carries the real card, never an empty one [0.30ms]
-(pass) control-plane Feishu concierge host > refuses a patch whose body is not a card rather than blanking the message [0.15ms]
-(pass) control-plane Feishu concierge host > B5: the reminder @s the person who was asked [0.21ms]
-(pass) control-plane Feishu concierge host > B5: a reminder with nobody to address is sent without an @ [0.15ms]
-(pass) control-plane Feishu concierge host > B1: a click registers the card so the asked person can answer it [2.90ms]
-[13:21:19] INFO  [multiremi-cli] Re-registered 1 decision card(s) for clicks
-(pass) control-plane Feishu concierge host > B1: a restarted host re-registers the cards it must still answer [1.38ms]
-[13:21:19] INFO  [multiremi-cli] Re-registered 1 decision card(s) for clicks
-(pass) control-plane Feishu concierge host > B1: a request already answered elsewhere is reported, not overwritten [0.54ms]
+(pass) control-plane Feishu concierge host > hosts either co-resident provider without letting a sibling stop or detach its channel [1.84ms]
+(pass) control-plane Feishu concierge host > routes a private Task to the main chat without inventing a thread session key [0.87ms]
+(pass) control-plane Feishu concierge host > opens without a session and reads the final provider session once on closed [0.72ms]
+(pass) control-plane Feishu concierge host > checkpoints a group owner before sending through the existing Task card [0.32ms]
+(pass) control-plane Feishu concierge host > does not send a card when the recipient checkpoint loses its lease [0.21ms]
+(pass) control-plane Feishu concierge host > still sends the report when the saved recipient is absent [0.18ms]
+(pass) control-plane Feishu concierge host > streams an existing proactive Task instead of sending only its final body [0.52ms]
+(pass) control-plane Feishu concierge host > passes the saved presentation checkpoint unchanged to the trace subscription [0.44ms]
+(pass) control-plane Feishu concierge host > applies live no-mention settings to exactly the configured group [0.16ms]
+(pass) control-plane Feishu concierge host > routes proactive delivery through the running connector handle [0.12ms]
+(pass) control-plane Feishu concierge host > routes image uploads through the running connector handle [0.10ms]
+(pass) control-plane Feishu concierge host > admits senders for server-side union_id classification [0.11ms]
+(pass) control-plane Feishu concierge host > refuses to boot without the canonical Task bridge [0.20ms]
+(pass) control-plane Feishu concierge host > hands the assignment's credentials to the channel instead of the machine's env [0.11ms]
+(pass) control-plane Feishu concierge host > reports a channel that dies on its own [0.14ms]
+(pass) control-plane Feishu concierge host > detaches the channel on stop so a handover can complete [0.08ms]
+(pass) control-plane Feishu concierge host > resolves the topic owner into the decision card before sending it [2.11ms]
+(pass) control-plane Feishu concierge host > degrades a rejected decision card to its text twin instead of retrying it [0.90ms]
+(pass) control-plane Feishu concierge host > sends text when the group owner cannot be resolved at all [0.40ms]
+(pass) control-plane Feishu concierge host > sends text for a request the control plane already marked unaddressable [0.28ms]
+(pass) control-plane Feishu concierge host > lets a retryable card failure reach the outbox backoff [0.50ms]
+(pass) control-plane Feishu concierge host > B2: the terminal PATCH carries the real card, never an empty one [0.48ms]
+(pass) control-plane Feishu concierge host > refuses a patch whose body is not a card rather than blanking the message [0.39ms]
+(pass) control-plane Feishu concierge host > B5: the reminder @s the person who was asked [0.25ms]
+(pass) control-plane Feishu concierge host > B5: a reminder with nobody to address is sent without an @ [0.17ms]
+(pass) control-plane Feishu concierge host > B1: a click registers the card so the asked person can answer it [2.30ms]
+[14:08:21] INFO  [multiremi-cli] Re-registered 1 decision card(s) for clicks
+(pass) control-plane Feishu concierge host > B1: a restarted host re-registers the cards it must still answer [0.72ms]
+[14:08:21] INFO  [multiremi-cli] Re-registered 1 decision card(s) for clicks
+(pass) control-plane Feishu concierge host > B1: a request already answered elsewhere is reported, not overwritten [0.33ms]
 
 tests/unit/connectors/feishu-tool-formatters.test.ts:
-(pass) Feishu Bash input summary > keeps a slash-heavy command intact instead of path-compressing it [0.46ms]
-(pass) Feishu Bash input summary > collapses a multiline command to its first line plus a dropped-line count [0.11ms]
-(pass) Feishu Bash input summary > leaves a single-line command unsuffixed, trailing newline included [0.04ms]
-(pass) Feishu Bash input summary > head-truncates a long command without mangling its slashes [0.05ms]
-(pass) Feishu Bash input summary > adds no phantom line count when the command is missing [0.03ms]
-(pass) Feishu Bash input summary > still shortens paths for path-valued tools [0.22ms]
-(pass) Feishu codex collab summaries > detects a collab call by input shape, including the prompt-less wait [0.82ms]
-(pass) Feishu codex collab summaries > summarizes a spawnAgent delegation by its prompt and a wait by counts [0.89ms]
+(pass) Feishu Bash input summary > keeps a slash-heavy command intact instead of path-compressing it [0.27ms]
+(pass) Feishu Bash input summary > collapses a multiline command to its first line plus a dropped-line count [0.04ms]
+(pass) Feishu Bash input summary > leaves a single-line command unsuffixed, trailing newline included [0.02ms]
+(pass) Feishu Bash input summary > head-truncates a long command without mangling its slashes [0.04ms]
+(pass) Feishu Bash input summary > adds no phantom line count when the command is missing [0.02ms]
+(pass) Feishu Bash input summary > still shortens paths for path-valued tools [0.17ms]
+(pass) Feishu codex collab summaries > detects a collab call by input shape, including the prompt-less wait [0.76ms]
+(pass) Feishu codex collab summaries > summarizes a spawnAgent delegation by its prompt and a wait by counts [0.81ms]
 (pass) Feishu codex collab summaries > never leaks a thread id into a one-line summary [0.85ms]
-(pass) Feishu codex collab summaries > summarizes the merged input the card now keeps, not the initial snapshot [0.44ms]
+(pass) Feishu codex collab summaries > summarizes the merged input the card now keeps, not the initial snapshot [0.42ms]
 (pass) Feishu codex collab summaries > gives the wait verb its own card icon [0.03ms]
-(pass) Feishu codex subagent activity > detects the shape and keeps it distinct from collab calls [0.06ms]
+(pass) Feishu codex subagent activity > detects the shape and keeps it distinct from collab calls [0.03ms]
 (pass) Feishu codex subagent activity > summarizes as verb plus subagent name, never the thread id [0.08ms]
-(pass) Feishu codex subagent activity > borrows the agent icon, since the tool name is per-subagent [0.13ms]
+(pass) Feishu codex subagent activity > borrows the agent icon, since the tool name is per-subagent [0.11ms]
 
 tests/unit/connectors/feishu-trace-subscription.test.ts:
-(pass) Feishu trace subscription > resumes from the consumed checkpoint, starting at throughSeq + 1 without duplicates or omissions [2.62ms]
-(pass) Feishu trace subscription > keeps the subscription open while idle and resumes after disconnect using the last consumed sequence [3.11ms]
-(pass) Feishu trace subscription > lets closed finish an empty event stream and releases the subscription [0.30ms]
-(pass) Feishu trace subscription > passes an unknown type and every payload field unchanged through the connector and timeline [0.76ms]
-(pass) Feishu trace subscription > aborts an idle subscription promptly without any status reads [3.40ms]
+(pass) Feishu trace subscription > resumes from the consumed checkpoint, starting at throughSeq + 1 without duplicates or omissions [2.13ms]
+(pass) Feishu trace subscription > keeps the subscription open while idle and resumes after disconnect using the last consumed sequence [3.03ms]
+(pass) Feishu trace subscription > lets closed finish an empty event stream and releases the subscription [0.27ms]
+(pass) Feishu trace subscription > passes an unknown type and every payload field unchanged through the connector and timeline [0.74ms]
+(pass) Feishu trace subscription > aborts an idle subscription promptly without any status reads [1.49ms]
 
 tests/unit/connectors/feishu-cot-checkpoint.test.ts:
-(pass) accepts historical checkpoints and validates optional semantic delivery markers [0.55ms]
+(pass) accepts historical checkpoints and validates optional semantic delivery markers [2.01ms]
 
 tests/unit/connectors/feishu-cot-timeline.test.ts:
-(pass) semantic native CoT timeline > classifies the leading shell operation: rg foo src [0.63ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: /usr/bin/grep -n foo source.ts | head -20 [0.11ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: rg foo src [0.54ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: /usr/bin/grep -n foo source.ts | head -20 [0.10ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: find src -name '*.ts' [0.02ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: cat daemon.log | grep -v INFO [0.03ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: sed -n '1,20p' source.ts [0.03ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: tail -100 daemon.log [0.03ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: cat daemon.log | grep -v INFO [0.05ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: sed -n '1,20p' source.ts [0.04ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: tail -100 daemon.log [0.02ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: remi task get tsk_example | grep -v '^INFO' [0.03ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: ssh runtime 'cat daemon.log | grep -v INFO' [0.06ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: ssh runtime 'cat daemon.log | grep -v INFO' [0.05ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: python3 -c 'print("find")' [0.03ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: echo 'grep cat find' [0.02ms]
-(pass) semantic native CoT timeline > classifies the leading shell operation: bun test tests/find.test.ts [0.03ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: echo 'grep cat find' [0.03ms]
+(pass) semantic native CoT timeline > classifies the leading shell operation: bun test tests/find.test.ts [0.04ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: rg foo src && bun test [0.02ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: cat <<'EOF'
 grep foo
-EOF [0.05ms]
+EOF [0.07ms]
 (pass) semantic native CoT timeline > classifies the leading shell operation: cat daemon.log; bun test [0.01ms]
-(pass) semantic native CoT timeline > retains aiden's native categories for structured tools [0.37ms]
-(pass) semantic native CoT timeline > keeps a delayed shell invocation with a log filter generic in native events [0.85ms]
-(pass) semantic native CoT timeline > distinguishes spawning an agent from reading agent or task metadata [0.04ms]
-(pass) semantic native CoT timeline > waits for delayed ACP args and description instead of permanently naming a shell Bash [0.45ms]
-(pass) semantic native CoT timeline > bounded title buffering never hides a long running command indefinitely [0.22ms]
-(pass) semantic native CoT timeline > recovers both an unacknowledged placeholder and an acknowledged invocation without losing or duplicating it [0.30ms]
-(pass) semantic native CoT timeline > does not treat a partial tool output as completion and only shows a short failure indication [0.20ms]
-(pass) semantic native CoT timeline > keeps narration chronological and passes unknown trace types through verbatim [0.55ms]
-(pass) semantic native CoT timeline > renders plan entries as native list rows without a code panel or duplicate update [0.57ms]
-(pass) semantic native CoT timeline > uses the same native checklist for successful TodoWrite and never shows it as completed before success [0.27ms]
-(pass) semantic native CoT timeline > shows a short failure instead of a successful checklist when TodoWrite fails [0.13ms]
-(pass) semantic native CoT timeline > does not resend an acknowledged plan after restart but sends the next status change [0.16ms]
-(pass) semantic native CoT timeline > bounds a large native list as a whole and explicitly reports omitted entries [3.75ms]
-(pass) semantic native CoT timeline > closes the preceding paragraph before opening a separate waiting message [0.39ms]
-(pass) semantic native CoT timeline > does not equate a child launch acknowledgment or wait call with child completion [0.53ms]
-(pass) semantic native CoT timeline > closes unresolved background work truthfully when the main run ends [0.28ms]
-(pass) semantic native CoT timeline > bounds escaped Unicode labels, args and native plan lists to event limits [12.18ms]
-(pass) semantic native CoT timeline > gives Read a meaningful title and native icon [0.14ms]
+(pass) semantic native CoT timeline > retains aiden's native categories for structured tools [0.35ms]
+(pass) semantic native CoT timeline > keeps a delayed shell invocation with a log filter generic in native events [0.71ms]
+(pass) semantic native CoT timeline > distinguishes spawning an agent from reading agent or task metadata [0.03ms]
+(pass) semantic native CoT timeline > waits for delayed ACP args and description instead of permanently naming a shell Bash [0.34ms]
+(pass) semantic native CoT timeline > bounded title buffering never hides a long running command indefinitely [0.11ms]
+(pass) semantic native CoT timeline > recovers both an unacknowledged placeholder and an acknowledged invocation without losing or duplicating it [0.20ms]
+(pass) semantic native CoT timeline > does not treat a partial tool output as completion and only shows a short failure indication [0.21ms]
+(pass) semantic native CoT timeline > preserves a failed tool result after a checkpoint without replaying the invocation [0.21ms]
+(pass) semantic native CoT timeline > preserves a cancelled tool result after a checkpoint without replaying the invocation [0.09ms]
+(pass) semantic native CoT timeline > keeps narration chronological and passes unknown trace types through verbatim [0.62ms]
+(pass) semantic native CoT timeline > renders plan entries as native list rows without a code panel or duplicate update [0.47ms]
+(pass) semantic native CoT timeline > uses the same native checklist for successful TodoWrite and never shows it as completed before success [0.31ms]
+(pass) semantic native CoT timeline > shows a short failure instead of a successful checklist when TodoWrite fails [0.19ms]
+(pass) semantic native CoT timeline > does not resend an acknowledged plan after restart but sends the next status change [0.21ms]
+(pass) semantic native CoT timeline > bounds a large native list as a whole and explicitly reports omitted entries [3.48ms]
+(pass) semantic native CoT timeline > closes the preceding paragraph before opening a separate waiting message [0.38ms]
+(pass) semantic native CoT timeline > does not equate a child launch acknowledgment or wait call with child completion [0.47ms]
+(pass) semantic native CoT timeline > closes unresolved background work truthfully when the main run ends [0.18ms]
+(pass) semantic native CoT timeline > bounds escaped Unicode labels, args and native plan lists to event limits [12.32ms]
+(pass) semantic native CoT timeline > gives Read a meaningful title and native icon [0.12ms]
 (pass) semantic native CoT timeline > gives Edit a meaningful title and native icon [0.03ms]
-(pass) semantic native CoT timeline > gives Grep a meaningful title and native icon [0.02ms]
-(pass) semantic native CoT timeline > gives Skill a meaningful title and native icon [0.02ms]
+(pass) semantic native CoT timeline > gives Grep a meaningful title and native icon [0.03ms]
+(pass) semantic native CoT timeline > gives Skill a meaningful title and native icon [0.03ms]
 (pass) semantic native CoT timeline > gives ToolSearch a meaningful title and native icon [0.02ms]
-(pass) semantic native CoT timeline > gives Start subagent reviewer a meaningful title and native icon [0.04ms]
+(pass) semantic native CoT timeline > gives Start subagent reviewer a meaningful title and native icon [0.05ms]
 
 tests/unit/connectors/feishu-card-metadata.test.ts:
-(pass) Feishu card execution identity and context > formats compact one-line identities without changing the actual model id [0.97ms]
-(pass) Feishu card execution identity and context > reads selected model state, not effort or default placeholders [0.27ms]
-(pass) Feishu card execution identity and context > uses only valid context snapshots, including zero and missing limits [0.19ms]
-(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a completed Task card [73.77ms]
-(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a failed Task card [68.48ms]
-(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a cancelled Task card [67.93ms]
-(pass) Feishu card execution identity and context > clears context on model switches, and does not keep a stale upper limit [1.10ms]
+(pass) Feishu card execution identity and context > formats compact one-line identities without changing the actual model id [0.88ms]
+(pass) Feishu card execution identity and context > reads selected model state, not effort or default placeholders [0.25ms]
+(pass) Feishu card execution identity and context > uses only valid context snapshots, including zero and missing limits [0.20ms]
+(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a completed Task card [71.52ms]
+(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a failed Task card [67.71ms]
+(pass) Feishu card execution identity and context > keeps latest context, identity and sender in a cancelled Task card [67.90ms]
+(pass) Feishu card execution identity and context > clears context on model switches, and does not keep a stale upper limit [0.88ms]
 (pass) Feishu card execution identity and context > hides billing-only context and does not infer a model for old Tasks [0.47ms]
-(pass) Feishu card execution identity and context > replays a proactive card into its existing message with the same metadata [3.77ms]
-(pass) Feishu card execution identity and context > keeps the original footer icons at completion and hides statistics during legacy progress [1.49ms]
-(pass) Feishu card session identity > labels a card by its provider session and keeps the label stable [0.17ms]
-(pass) Feishu card session identity > substitutes the agent's own name instead of a hardcoded Remi [0.08ms]
-(pass) Feishu card session identity > shows a newborn name until the session exists, and no session label without one [0.08ms]
-(pass) Feishu card session identity > still honours a pre-resolved registry display name [0.03ms]
-(pass) Feishu card session identity > puts the session label in the title and leaves the subtitle to the execution identity [0.57ms]
+(pass) Feishu card execution identity and context > replays a proactive card into its existing message with the same metadata [2.87ms]
+(pass) Feishu card execution identity and context > keeps the original footer icons at completion and hides statistics during legacy progress [1.30ms]
+(pass) Feishu card session identity > labels a card by its provider session and keeps the label stable [0.15ms]
+(pass) Feishu card session identity > substitutes the agent's own name instead of a hardcoded Remi [0.06ms]
+(pass) Feishu card session identity > shows a newborn name until the session exists, and no session label without one [0.06ms]
+(pass) Feishu card session identity > still honours a pre-resolved registry display name [0.02ms]
+(pass) Feishu card session identity > puts the session label in the title and leaves the subtitle to the execution identity [0.39ms]
 
 tests/unit/connectors/feishu-card.test.ts:
-(pass) Feishu final card > preserves final content and stats [0.17ms]
-(pass) Feishu final card > keeps submitted plan panels without keeping the decision form [0.08ms]
-(pass) Feishu final card > uses the shared large feedback input for plan review cards [0.20ms]
-(pass) Feishu final card > renders resolved Feishu image markers as image elements [0.08ms]
-(pass) Feishu card actions > renders ACP tool permission options without choosing a default [0.28ms]
-(pass) Feishu card actions > renders ExitPlanMode feedback as a large multiline input [0.04ms]
+(pass) Feishu final card > preserves final content and stats [0.14ms]
+(pass) Feishu final card > keeps submitted plan panels without keeping the decision form [0.07ms]
+(pass) Feishu final card > uses the shared large feedback input for plan review cards [0.15ms]
+(pass) Feishu final card > renders resolved Feishu image markers as image elements [0.06ms]
+(pass) Feishu card actions > renders ACP tool permission options without choosing a default [0.20ms]
+(pass) Feishu card actions > renders ExitPlanMode feedback as a large multiline input [0.03ms]
 (pass) Feishu card actions > does not guess plan approval options from the first ACP option [0.19ms]
 (pass) Feishu card actions > requires an explicit plan decision [0.13ms]
-[13:21:19] INFO  [card-actions] Registered pending action: amula0anj_1_dngk13 (chat=chat-1)
-[13:21:19] INFO  [card-actions] Resolved action amula0anj_1_dngk13
-(pass) Feishu card actions > resolves generic tool permission selections from form values [0.45ms]
-[13:21:19] INFO  [card-actions] Registered pending action: amula0anj_2_mba34n (chat=chat-1)
-[13:21:19] INFO  [card-actions] Resolved action amula0anj_2_mba34n
-(pass) Feishu card actions > resolves form submissions when Feishu returns the form name [0.19ms]
-[13:21:19] INFO  [card-actions] Registered pending action: amula0anj_3_zxpzo8 (chat=chat-1)
-[13:21:19] INFO  [card-actions] Resolved action amula0anj_3_zxpzo8
-(pass) Feishu card actions > resolves generic tool permission selections from option buttons [0.20ms]
-[13:21:19] INFO  [card-actions] Registered pending action: amula0anj_4_lu4056 (chat=chat-1)
-[13:21:19] INFO  [card-actions] form q0: select={"value":"bun","text":{"content":"bun"}} custom="" type=object
-[13:21:19] INFO  [card-actions] form q1: select=[{"value":"api"},{"value":"web"}] custom="" type=object
-[13:21:19] INFO  [card-actions] form answers: {"Which package manager?":"bun","Which targets?":"api, web"}
-[13:21:19] INFO  [card-actions] Resolved action amula0anj_4_lu4056
-(pass) Feishu card actions > normalizes select object values for AskUserQuestion answers [0.20ms]
+[14:08:22] INFO  [card-actions] Registered pending action: amulbosbs_1_e4yn41 (chat=chat-1)
+[14:08:22] INFO  [card-actions] Resolved action amulbosbs_1_e4yn41
+(pass) Feishu card actions > resolves generic tool permission selections from form values [0.39ms]
+[14:08:22] INFO  [card-actions] Registered pending action: amulbosbt_2_6w9oip (chat=chat-1)
+[14:08:22] INFO  [card-actions] Resolved action amulbosbt_2_6w9oip
+(pass) Feishu card actions > resolves form submissions when Feishu returns the form name [0.11ms]
+[14:08:22] INFO  [card-actions] Registered pending action: amulbosbt_3_20aeq1 (chat=chat-1)
+[14:08:22] INFO  [card-actions] Resolved action amulbosbt_3_20aeq1
+(pass) Feishu card actions > resolves generic tool permission selections from option buttons [0.19ms]
+[14:08:22] INFO  [card-actions] Registered pending action: amulbosbt_4_ws4zd8 (chat=chat-1)
+[14:08:22] INFO  [card-actions] form q0: select={"value":"bun","text":{"content":"bun"}} custom="" type=object
+[14:08:22] INFO  [card-actions] form q1: select=[{"value":"api"},{"value":"web"}] custom="" type=object
+[14:08:22] INFO  [card-actions] form answers: {"Which package manager?":"bun","Which targets?":"api, web"}
+[14:08:22] INFO  [card-actions] Resolved action amulbosbt_4_ws4zd8
+(pass) Feishu card actions > normalizes select object values for AskUserQuestion answers [0.31ms]
 [feishu-card] Card patch failed: Error: patch failed
-(pass) Feishu card actions > fails permission form rendering when the card patch is rejected [604.30ms]
+(pass) Feishu card actions > fails permission form rendering when the card patch is rejected [604.16ms]
 
 tests/unit/connectors/feishu-log-redaction.test.ts:
-(pass) Feishu connector error redaction > preserves diagnostic detail while hashing identifiers and removing credentials [0.81ms]
+(pass) Feishu connector error redaction > preserves diagnostic detail while hashing identifiers and removing credentials [0.76ms]
 
 tests/unit/connectors/feishu-patch-session.test.ts:
-(pass) one patch-only Feishu card transport > adds the sender mention only in the final patch, never in initial or progress cards [1.24ms]
+(pass) one patch-only Feishu card transport > adds the sender mention only in the final patch, never in initial or progress cards [1.08ms]
 (pass) one patch-only Feishu card transport > preserves the sender mention on an error or cancelled reply [0.47ms]
 (pass) one patch-only Feishu card transport > uses the same message JSON and patch path for interactive replies [0.75ms]
-(pass) one patch-only Feishu card transport > uses the same message JSON and patch path for proactive replies [0.34ms]
-(pass) one patch-only Feishu card transport > coalesces text, status and steps into one patch for an ordinary chat [3038.49ms]
-(pass) one patch-only Feishu card transport > serializes progress and final patches and ignores events after close begins [0.76ms]
-(pass) one patch-only Feishu card transport > flushes the latest buffered content at completion without waiting for the interval [0.52ms]
+(pass) one patch-only Feishu card transport > uses the same message JSON and patch path for proactive replies [0.28ms]
+(pass) one patch-only Feishu card transport > coalesces text, status and steps into one patch for an ordinary chat [3036.67ms]
+(pass) one patch-only Feishu card transport > serializes progress and final patches and ignores events after close begins [0.84ms]
+(pass) one patch-only Feishu card transport > flushes the latest buffered content at completion without waiting for the interval [0.48ms]
 (pass) one patch-only Feishu card transport > finishes a legacy card without creating a second pseudo-CoT message [0.42ms]
-(pass) one patch-only Feishu card transport > retries transient failures on the same message and keeps the queue usable [605.15ms]
+(pass) one patch-only Feishu card transport > retries transient failures on the same message and keeps the queue usable [602.72ms]
 (pass) one patch-only Feishu card transport > cannot fall back to native CardKit or select a second transport [0.21ms]
 
 tests/unit/connectors/feishu-client.test.ts:
-(pass) resolveLarkSdkDomain > uses SDK constants for the public Feishu clouds [0.12ms]
-(pass) resolveLarkSdkDomain > uses the full ByteDance origin for the SDK [0.08ms]
+(pass) resolveLarkSdkDomain > uses SDK constants for the public Feishu clouds [0.15ms]
+(pass) resolveLarkSdkDomain > uses the full ByteDance origin for the SDK [0.05ms]
 (pass) resolveLarkSdkDomain > preserves a custom origin and strips trailing slashes [0.03ms]
-(pass) waitForFeishuWSReady > waits for the SDK WebSocket to open [5.83ms]
-(pass) waitForFeishuWSReady > rejects instead of reporting online when the handshake never opens [5.85ms]
+(pass) waitForFeishuWSReady > waits for the SDK WebSocket to open [5.54ms]
+(pass) waitForFeishuWSReady > rejects instead of reporting online when the handshake never opens [4.72ms]
 
 tests/unit/connectors/feishu-proactive-stream.test.ts:
-(pass) durable proactive Task cards > skips already settled human requests when replaying a completed task [2.29ms]
-[13:21:24] INFO  [card-actions] Registered pending action: amula0dyk_5_mgsi1h (chat=oc_group)
-[13:21:24] INFO  [card-actions] Rejected action amula0dyk_5_mgsi1h: Task stream interrupted
-[13:21:24] ERROR [feishu-channel] handleTaskStream error: Error: handover
-(pass) durable proactive Task cards > stops a pending human-request card when its delivery is interrupted [8.99ms]
-[13:21:24] INFO  [card-actions] Registered pending action: amula0dyt_6_7f2t59 (chat=oc_group)
-[13:21:25] INFO  [card-actions] Rejected action amula0dyt_6_7f2t59: Request settled outside this card
-(pass) durable proactive Task cards > continues after a human request is answered outside Feishu [1004.39ms]
-(pass) durable proactive Task cards > shows live tools before completion and keeps one completed tool entry [570.21ms]
-(pass) durable proactive Task cards > replays persisted events into the existing card after a restart without another send [0.79ms]
-[13:21:25] ERROR [feishu-channel] handleTaskStream error: Error: Final card patch failed: patch failure
-(pass) durable proactive Task cards > propagates final card failures so the delivery can be retried [0.99ms]
-(pass) durable proactive Task cards > does not send native messages when persisting the creation intent fails [1.00ms]
+(pass) durable proactive Task cards > skips already settled human requests when replaying a completed task [2.32ms]
+[14:08:26] INFO  [card-actions] Registered pending action: amulbovmz_5_kl2bit (chat=oc_group)
+[14:08:26] INFO  [card-actions] Rejected action amulbovmz_5_kl2bit: Task stream interrupted
+[14:08:26] ERROR [feishu-channel] handleTaskStream error: Error: handover
+(pass) durable proactive Task cards > stops a pending human-request card when its delivery is interrupted [8.33ms]
+[14:08:26] INFO  [card-actions] Registered pending action: amulbovn7_6_aob98b (chat=oc_group)
+[14:08:27] INFO  [card-actions] Rejected action amulbovn7_6_aob98b: Request settled outside this card
+(pass) durable proactive Task cards > continues after a human request is answered outside Feishu [1003.95ms]
+(pass) durable proactive Task cards > shows live tools before completion and keeps one completed tool entry [568.70ms]
+(pass) durable proactive Task cards > replays persisted events into the existing card after a restart without another send [0.76ms]
+[14:08:27] ERROR [feishu-channel] handleTaskStream error: Error: Final card patch failed: patch failure
+(pass) durable proactive Task cards > propagates final card failures so the delivery can be retried [0.72ms]
+(pass) durable proactive Task cards > does not send native messages when persisting the creation intent fails [0.95ms]
 
 tests/unit/connectors/feishu-native-cot.test.ts:
 (pass) native CoT Task presentation > interrupts an unresponsive native API call on handover without sending a result from the old lease [2.01ms]
-(pass) native CoT Task presentation > streams consecutive process deltas into one native message and uses Task elapsed time [69.34ms]
-(pass) native CoT Task presentation > creates native CoT in the origin message's thread and sends only the final answer as a card [69.23ms]
-(pass) native CoT Task presentation > sends private process and result messages to the main chat without creating a topic [69.05ms]
-(pass) native CoT Task presentation > titles the result card with the Task's provider session, substituting the agent's own name [1.27ms]
-(pass) native CoT Task presentation > opens as a newborn before the session is known and adopts the session once a snapshot reports it [0.56ms]
-(pass) native CoT Task presentation > keeps command replies on the plain agent name because they carry no session [0.43ms]
-(pass) native CoT Task presentation > omits thread routing without an origin even when the transport caller requests it [0.13ms]
-(pass) native CoT Task presentation > preserves unthreaded transport creation with replyInThread=undefined [0.11ms]
-(pass) native CoT Task presentation > preserves unthreaded transport creation with replyInThread=false [0.01ms]
-(pass) native CoT Task presentation > a direct answer creates no process message or placeholder [0.48ms]
-(pass) native CoT Task presentation > ends a failed run through the appropriate native lifecycle [69.34ms]
-(pass) native CoT Task presentation > ends a cancelled run through the appropriate native lifecycle [68.01ms]
-(pass) native CoT Task presentation > finishes the result even when explicit native completion is permanently rejected [68.88ms]
-(pass) native CoT Task presentation > closes an older renderer's active display on upgrade without mixing event IDs or losing the answer [1.01ms]
-(pass) native CoT Task presentation > preserves explicit text phases and excludes subagent text from the final answer [68.31ms]
-(pass) native CoT Task presentation > does not replay acknowledged native events after a daemon restart [504.98ms]
-(pass) native CoT Task presentation > resumes an active thread CoT handle without recreating it when completed [68.87ms]
-(pass) native CoT Task presentation > resumes an active thread CoT handle without recreating it when failed [67.93ms]
-(pass) native CoT Task presentation > does not recreate a finished thread CoT or resend its checkpointed result [1.14ms]
-(pass) native CoT Task presentation > stops an ambiguous creating operation and still delivers the result [1.11ms]
-(pass) native CoT Task presentation > stops an ambiguous active operation and still delivers the result [0.66ms]
-(pass) native CoT Task presentation > records a create intent before any send and stops when the checkpoint fails [0.63ms]
-(pass) native CoT Task presentation > has no replay gap between native append acknowledgement and cursor checkpoint [1.56ms]
-(pass) native CoT Task presentation > uses a stable result UUID when send succeeded but the result checkpoint failed [69.36ms]
-(pass) native CoT Task presentation > does not retry permanent CoT rejection and does not swallow the final answer [1.19ms]
-(pass) native CoT Task presentation > a permanent final-card refusal is propagated without retry loops [68.15ms]
-(pass) native CoT Task presentation > splits Unicode/escaped text and rejects oversized native batches locally [293.04ms]
+(pass) native CoT Task presentation > streams consecutive process deltas into one native message and uses Task elapsed time [68.80ms]
+(pass) native CoT Task presentation > creates native CoT in the origin message's thread and sends only the final answer as a card [69.62ms]
+(pass) native CoT Task presentation > sends private process and result messages to the main chat without creating a topic [69.72ms]
+(pass) native CoT Task presentation > titles the result card with the Task's provider session, substituting the agent's own name [1.39ms]
+(pass) native CoT Task presentation > opens as a newborn before the session is known and adopts the session once a snapshot reports it [0.63ms]
+(pass) native CoT Task presentation > keeps command replies on the plain agent name because they carry no session [0.44ms]
+(pass) native CoT Task presentation > omits thread routing without an origin even when the transport caller requests it [0.15ms]
+(pass) native CoT Task presentation > preserves unthreaded transport creation with replyInThread=undefined [0.08ms]
+(pass) native CoT Task presentation > preserves unthreaded transport creation with replyInThread=false [0.02ms]
+(pass) native CoT Task presentation > a direct answer creates no process message or placeholder [0.43ms]
+(pass) native CoT Task presentation > ends a failed run through the appropriate native lifecycle [69.46ms]
+(pass) native CoT Task presentation > ends a cancelled run through the appropriate native lifecycle [68.37ms]
+(pass) native CoT Task presentation > finishes the result even when explicit native completion is permanently rejected [68.50ms]
+(pass) native CoT Task presentation > closes an older renderer's active display on upgrade without mixing event IDs or losing the answer [2.02ms]
+(pass) native CoT Task presentation > preserves explicit text phases and excludes subagent text from the final answer [69.00ms]
+(pass) native CoT Task presentation > does not replay acknowledged native events after a daemon restart [505.76ms]
+(pass) native CoT Task presentation > resumes an active thread CoT handle without recreating it when completed [69.07ms]
+(pass) native CoT Task presentation > resumes an active thread CoT handle without recreating it when failed [68.56ms]
+(pass) native CoT Task presentation > does not recreate a finished thread CoT or resend its checkpointed result [1.16ms]
+(pass) native CoT Task presentation > stops an ambiguous creating operation and still delivers the result [0.91ms]
+(pass) native CoT Task presentation > stops an ambiguous active operation and still delivers the result [0.54ms]
+(pass) native CoT Task presentation > records a create intent before any send and stops when the checkpoint fails [0.50ms]
+(pass) native CoT Task presentation > has no replay gap between native append acknowledgement and cursor checkpoint [1.13ms]
+(pass) native CoT Task presentation > uses a stable result UUID when send succeeded but the result checkpoint failed [68.71ms]
+(pass) native CoT Task presentation > does not retry permanent CoT rejection and does not swallow the final answer [1.25ms]
+(pass) native CoT Task presentation > a permanent final-card refusal is propagated without retry loops [67.84ms]
+(pass) native CoT Task presentation > splits Unicode/escaped text and rejects oversized native batches locally [285.96ms]
 
 tests/unit/connectors/feishu-menu-sync.test.ts:
-(pass) Feishu bot menu publisher > validates a dry run without requesting a token or publishing [0.71ms]
-(pass) Feishu bot menu publisher > names the failing endpoint when the gateway answers with a non-JSON body [0.91ms]
-(pass) Feishu bot menu publisher > gives up on a stalled Feishu call instead of hanging the publish [27.49ms]
-[13:21:27] INFO  [menu-sync] synced personalized menu (1 items)
-(pass) Feishu bot menu publisher > keeps the resolved identifier type when publishing personalized menus [0.61ms]
+(pass) Feishu bot menu publisher > validates a dry run without requesting a token or publishing [0.64ms]
+(pass) Feishu bot menu publisher > names the failing endpoint when the gateway answers with a non-JSON body [0.97ms]
+(pass) Feishu bot menu publisher > gives up on a stalled Feishu call instead of hanging the publish [27.81ms]
+[14:08:29] INFO  [menu-sync] synced personalized menu (1 items)
+(pass) Feishu bot menu publisher > keeps the resolved identifier type when publishing personalized menus [0.75ms]
 
 tests/unit/connectors/feishu-proactive-mention.test.ts:
 (pass) proactive Feishu mention resolution > requests the owner in the sending bot's open_id namespace [0.63ms]
-(pass) proactive Feishu mention resolution > uses a new owner for a new notification but never re-resolves a checkpoint [0.32ms]
-(pass) proactive Feishu mention resolution > does not query for explicit recipients, none, or a saved no-mention outcome [0.17ms]
-(pass) proactive Feishu mention resolution > fails closed on unknown wire policies and malformed mention IDs [0.15ms]
-(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":99991672} [0.18ms]
-(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":0,"data":{}} [0.02ms]
-(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":0,"data":{"owner_id":"ou_owner","owner_id_type":"union_id"}} [0.01ms]
+(pass) proactive Feishu mention resolution > uses a new owner for a new notification but never re-resolves a checkpoint [0.18ms]
+(pass) proactive Feishu mention resolution > does not query for explicit recipients, none, or a saved no-mention outcome [0.11ms]
+(pass) proactive Feishu mention resolution > fails closed on unknown wire policies and malformed mention IDs [0.10ms]
+(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":99991672} [0.11ms]
+(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":0,"data":{}} [0.01ms]
+(pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":0,"data":{"owner_id":"ou_owner","owner_id_type":"union_id"}}
 (pass) proactive Feishu mention resolution > omits invalid/unavailable owners without preventing delivery: {"code":0,"data":{"owner_id":"all","owner_id_type":"open_id"}}
-(pass) proactive Feishu mention resolution > bounds lookup latency and never logs SDK credentials [5.74ms]
-(pass) proactive Feishu mention resolution > does not turn an aborted delivery into a no-mention send [0.32ms]
+(pass) proactive Feishu mention resolution > bounds lookup latency and never logs SDK credentials [5.53ms]
+(pass) proactive Feishu mention resolution > does not turn an aborted delivery into a no-mention send [0.18ms]
 
 tests/unit/connectors/feishu-attachments.test.ts:
-(pass) Feishu incoming attachments > sanitizes paths and controls, keeps extensions, and bounds UTF-8 filenames [0.59ms]
-(pass) Feishu incoming attachments > hands off media bytes without local paths and gives collisions distinct names [0.54ms]
-(pass) Feishu incoming attachments > keeps a rich post usable when it includes more images than the submit API accepts [0.49ms]
-(pass) Feishu incoming attachments > stops reading an oversized stream before consuming the remaining bytes [1.01ms]
-(pass) Feishu incoming attachments > keeps oversized and failed downloads visible without creating empty attachments [0.96ms]
-(pass) Feishu incoming attachments > does not attempt to download stickers [0.11ms]
+(pass) Feishu incoming attachments > sanitizes paths and controls, keeps extensions, and bounds UTF-8 filenames [0.52ms]
+(pass) Feishu incoming attachments > hands off media bytes without local paths and gives collisions distinct names [0.41ms]
+(pass) Feishu incoming attachments > keeps a rich post usable when it includes more images than the submit API accepts [0.32ms]
+(pass) Feishu incoming attachments > stops reading an oversized stream before consuming the remaining bytes [0.85ms]
+(pass) Feishu incoming attachments > keeps oversized and failed downloads visible without creating empty attachments [0.84ms]
+(pass) Feishu incoming attachments > does not attempt to download stickers [0.10ms]
 (pass) Feishu incoming attachments > downloads the video resource rather than its poster and preserves its MIME [0.19ms]
-(pass) Feishu outbound media routing > sends a 10485759-byte PNG via image without altering the attachment [17.61ms]
-(pass) Feishu outbound media routing > sends a 10485760-byte PNG via image without altering the attachment [13.65ms]
-(pass) Feishu outbound media routing > sends a 10485761-byte PNG via file without altering the attachment [14.84ms]
-(pass) Feishu outbound media routing > sends a 15728640-byte PNG via file without altering the attachment [22.18ms]
-(pass) Feishu outbound media routing > sends a 20971520-byte PNG via file without altering the attachment [25.34ms]
-(pass) Feishu outbound media routing > uploads PNG as an image and HTML/SVG as files [0.92ms]
-(pass) Feishu outbound media routing > does not send a file when the lease expires during upload [0.23ms]
-(pass) Feishu outbound media routing > sends direct images and threaded files with stable deduplication IDs [0.20ms]
+(pass) Feishu outbound media routing > sends a 10485759-byte PNG via image without altering the attachment [14.17ms]
+(pass) Feishu outbound media routing > sends a 10485760-byte PNG via image without altering the attachment [10.97ms]
+(pass) Feishu outbound media routing > sends a 10485761-byte PNG via file without altering the attachment [11.78ms]
+(pass) Feishu outbound media routing > sends a 15728640-byte PNG via file without altering the attachment [19.46ms]
+(pass) Feishu outbound media routing > sends a 20971520-byte PNG via file without altering the attachment [22.26ms]
+(pass) Feishu outbound media routing > uploads PNG as an image and HTML/SVG as files [0.88ms]
+(pass) Feishu outbound media routing > does not send a file when the lease expires during upload [0.31ms]
+(pass) Feishu outbound media routing > sends direct images and threaded files with stable deduplication IDs [0.30ms]
 
 tests/unit/connectors/feishu-sender-mention.test.ts:
-(pass) Feishu card sender mention > does not present static response billing as current context [0.60ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > carries the group message sender through the Task channel into the card footer [3.42ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > uses each message's sender rather than a previous participant [0.81ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > does not invent a mention for p2p with sender "ou_alice" [0.39ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > does not invent a mention for group with sender "" [0.30ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > does not invent a mention for group with sender "all" [0.19ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > does not invent a mention for group with sender "ou_x><at id=all" [0.16ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > also forwards the sender in the legacy ACP reply path [0.78ms]
-[13:21:27] INFO  [feishu] received message from Sender: Any progress?
-(pass) Feishu card sender mention > forwards the sender to static card replies without another notification [0.19ms]
+(pass) Feishu card sender mention > does not present static response billing as current context [0.46ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > carries the group message sender through the Task channel into the card footer [2.59ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > uses each message's sender rather than a previous participant [0.69ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > does not invent a mention for p2p with sender "ou_alice" [0.34ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > does not invent a mention for group with sender "" [0.21ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > does not invent a mention for group with sender "all" [0.17ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > does not invent a mention for group with sender "ou_x><at id=all" [0.15ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > also forwards the sender in the legacy ACP reply path [0.69ms]
+[14:08:29] INFO  [feishu] received message from Sender: Any progress?
+(pass) Feishu card sender mention > forwards the sender to static card replies without another notification [0.17ms]
 
 tests/unit/connectors/feishu-task-interaction.test.ts:
-(pass) standalone Task interactions > does not expose unusable buttons when the group recipient could not be resolved [0.33ms]
-(pass) standalone Task interactions > returns within the callback deadline and patches only after the original submission succeeds [2003.15ms]
-(pass) standalone Task interactions > renders one neutral checkbox row per option, per-question custom text and one submit [0.63ms]
-(pass) standalone Task interactions > combines selected answers with custom text and validates every question [0.21ms]
-(pass) standalone Task interactions > persists allow on the original request before returning a non-interactive receipt [0.57ms]
-(pass) standalone Task interactions > persists deny on the original request before returning a non-interactive receipt [0.09ms]
-(pass) standalone Task interactions > rejects another operator, chat, message, app or button without resolving the Task [0.35ms]
-(pass) standalone Task interactions > two simultaneous decisions commit only the first one [0.34ms]
-(pass) standalone Task interactions > rehydrates a saved request message and patches a responded receipt after restart [1.91ms]
-(pass) standalone Task interactions > rehydrates a saved request message and patches a timeout receipt after restart [0.44ms]
+(pass) standalone Task interactions > does not expose unusable buttons when the group recipient could not be resolved [0.27ms]
+(pass) standalone Task interactions > returns within the callback deadline and patches only after the original submission succeeds [2005.70ms]
+(pass) standalone Task interactions > renders one neutral checkbox row per option, per-question custom text and one submit [0.70ms]
+(pass) standalone Task interactions > combines selected answers with custom text and validates every question [0.28ms]
+(pass) standalone Task interactions > persists allow on the original request before returning a non-interactive receipt [0.61ms]
+(pass) standalone Task interactions > persists deny on the original request before returning a non-interactive receipt [0.10ms]
+(pass) standalone Task interactions > rejects another operator, chat, message, app or button without resolving the Task [0.41ms]
+(pass) standalone Task interactions > two simultaneous decisions commit only the first one [0.35ms]
+(pass) standalone Task interactions > rehydrates a saved request message and patches a responded receipt after restart [2.08ms]
+(pass) standalone Task interactions > rehydrates a saved request message and patches a timeout receipt after restart [0.49ms]
 (pass) standalone Task interactions > rehydrates a saved request message and patches a cancelled receipt after restart [0.24ms]
-(pass) standalone Task interactions > restores the original pending card and submits all answers through its original Task [822.35ms]
-(pass) standalone Task interactions > finishes a saved native waiting step after restart without repeating the card or waiting announcement [69.52ms]
-(pass) standalone Task interactions > accepts a visible card's response even while the native waiting update is blocked [822.55ms]
-(pass) standalone Task interactions > gives the request card, its receipt and the result card one shared session title [823.39ms]
-(pass) standalone Task interactions > escapes receipt text so a custom answer cannot inject a mention [0.32ms]
+(pass) standalone Task interactions > restores the original pending card and submits all answers through its original Task [820.83ms]
+(pass) standalone Task interactions > finishes a saved native waiting step after restart without repeating the card or waiting announcement [69.07ms]
+(pass) standalone Task interactions > accepts a visible card's response even while the native waiting update is blocked [821.78ms]
+(pass) standalone Task interactions > gives the request card, its receipt and the result card one shared session title [822.93ms]
+(pass) standalone Task interactions > escapes receipt text so a custom answer cannot inject a mention [0.30ms]
 
 tests/unit/connectors/feishu-receive.test.ts:
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] received message from Alice: {"file_key":"file_video","image_key":"img_poster","file_name":"原生视频.mp4","durati
-(pass) Feishu media Task handoff > receives native media events and hands the video bytes to the Task [2.70ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] received message from Alice: {"file_key":"sticker_key"}
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] received message from Alice: {"file_key":"file_video","image_key":"img_poster","file_name":"原生视频.mp4","durati
+(pass) Feishu media Task handoff > receives native media events and hands the video bytes to the Task [2.43ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] received message from Alice: {"file_key":"sticker_key"}
 [表情]
-(pass) Feishu media Task handoff > passes an admitted sticker through the complete receive and connector pipeline [0.50ms]
-(pass) Feishu workspace membership admission > imports receive without logging or reading a persisted dedup cache [293.25ms]
-[13:21:32] INFO  [feishu] loaded 1 dedup entries from cache
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] loaded 2 dedup entries from cache
-(pass) Feishu workspace membership admission > loads persisted dedup lazily, rejects duplicates, and keeps expiry and persistence working [1.45ms]
-(pass) Feishu workspace membership admission > refuses to connect when no membership authorizer was injected [0.17ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu workspace membership admission > allows a workspace member in a p2p chat [0.32ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu workspace membership admission > resolves the sender with basic_batch and preserves cross-app identity fields [0.37ms]
-(pass) Feishu workspace membership admission > keeps sender lookup diagnostics while redacting identifiers and credentials [0.53ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
+(pass) Feishu media Task handoff > passes an admitted sticker through the complete receive and connector pipeline [0.44ms]
+(pass) Feishu workspace membership admission > imports receive without logging or reading a persisted dedup cache [287.58ms]
+[14:08:34] INFO  [feishu] loaded 1 dedup entries from cache
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] loaded 2 dedup entries from cache
+(pass) Feishu workspace membership admission > loads persisted dedup lazily, rejects duplicates, and keeps expiry and persistence working [1.21ms]
+(pass) Feishu workspace membership admission > refuses to connect when no membership authorizer was injected [0.16ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu workspace membership admission > allows a workspace member in a p2p chat [0.26ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu workspace membership admission > resolves the sender with basic_batch and preserves cross-app identity fields [0.30ms]
+(pass) Feishu workspace membership admission > keeps sender lookup diagnostics while redacting identifiers and credentials [0.56ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
 (pass) Feishu workspace membership admission > allows a workspace member in an admitted group [0.37ms]
-(pass) Feishu workspace membership admission > silently rejects ordinary group chatter before group policy and sender resolution [0.36ms]
-[13:21:32] WARN  [feishu] workspace membership denied
-[13:21:32] WARN  [feishu] dropped group message message_id=gate-non-member-mention-1390676-1790601692315-10 chat_hash=da58e63f reason=not_member
-(pass) Feishu workspace membership admission > notifies a non-member who mentions the bot in a group [0.32ms]
-[13:21:32] WARN  [feishu] workspace membership denied
-[13:21:32] WARN  [feishu] dropped group message message_id=gate-non-member-command-1390676-1790601692315-11 chat_hash=da58e63f reason=not_member
-(pass) Feishu workspace membership admission > notifies a non-member who sends a slash command in a group [0.16ms]
-[13:21:32] WARN  [feishu] workspace membership denied
-(pass) Feishu workspace membership admission > rejects an unknown external user without entering the message pipeline [0.19ms]
-[13:21:32] WARN  [feishu] workspace membership denied
-(pass) Feishu workspace membership admission > rejects a missing sender open id without calling the membership lookup [0.17ms]
-(pass) Feishu workspace membership admission > fails closed and reports an unavailable gate when membership lookup throws [0.35ms]
-(pass) Feishu workspace membership admission > uses user-visible denial text without exposing identifiers [0.09ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] dropped group message message_id=unbound-chat-1390676-1790601692316-17 chat_hash=0a3d9a08 reason=not_mentioned
-(pass) Feishu group message routing > admits both new messages and thread replies in the configured group without a mention [0.48ms]
-[13:21:32] INFO  [feishu] dropped group message message_id=bot-loop-1390676-1790601692316-18 chat_hash=37a4ec15 reason=bot_message
-[13:21:32] INFO  [feishu] dropped group message message_id=other-bot-1390676-1790601692316-19 chat_hash=37a4ec15 reason=bot_message
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] dropped group message message_id=directed-1390676-1790601692316-20 chat_hash=37a4ec15 reason=directed_at_others
-(pass) Feishu group message routing > does not respond to bot output or mentions of others in a no-mention group [0.31ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu group message routing > admits a bot mention when the production-default group policy returns null [0.20ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu group message routing > admits a slash command when the production-default group policy returns null [0.15ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] dropped group message message_id=group-chatter-1390676-1790601692317-23 chat_hash=eb8055bc reason=not_mentioned
+(pass) Feishu workspace membership admission > silently rejects ordinary group chatter before group policy and sender resolution [0.34ms]
+[14:08:34] WARN  [feishu] workspace membership denied
+[14:08:34] WARN  [feishu] dropped group message message_id=gate-non-member-mention-1513933-1790604514554-10 chat_hash=da58e63f reason=not_member
+(pass) Feishu workspace membership admission > notifies a non-member who mentions the bot in a group [0.31ms]
+[14:08:34] WARN  [feishu] workspace membership denied
+[14:08:34] WARN  [feishu] dropped group message message_id=gate-non-member-command-1513933-1790604514555-11 chat_hash=da58e63f reason=not_member
+(pass) Feishu workspace membership admission > notifies a non-member who sends a slash command in a group [0.19ms]
+[14:08:34] WARN  [feishu] workspace membership denied
+(pass) Feishu workspace membership admission > rejects an unknown external user without entering the message pipeline [0.14ms]
+[14:08:34] WARN  [feishu] workspace membership denied
+(pass) Feishu workspace membership admission > rejects a missing sender open id without calling the membership lookup [0.12ms]
+(pass) Feishu workspace membership admission > fails closed and reports an unavailable gate when membership lookup throws [0.46ms]
+(pass) Feishu workspace membership admission > uses user-visible denial text without exposing identifiers [0.08ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] dropped group message message_id=unbound-chat-1513933-1790604514556-17 chat_hash=0a3d9a08 reason=not_mentioned
+(pass) Feishu group message routing > admits both new messages and thread replies in the configured group without a mention [0.52ms]
+[14:08:34] INFO  [feishu] dropped group message message_id=bot-loop-1513933-1790604514556-18 chat_hash=37a4ec15 reason=bot_message
+[14:08:34] INFO  [feishu] dropped group message message_id=other-bot-1513933-1790604514556-19 chat_hash=37a4ec15 reason=bot_message
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] dropped group message message_id=directed-1513933-1790604514556-20 chat_hash=37a4ec15 reason=directed_at_others
+(pass) Feishu group message routing > does not respond to bot output or mentions of others in a no-mention group [0.39ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu group message routing > admits a bot mention when the production-default group policy returns null [0.23ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu group message routing > admits a slash command when the production-default group policy returns null [0.14ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] dropped group message message_id=group-chatter-1513933-1790604514557-23 chat_hash=eb8055bc reason=not_mentioned
 (pass) Feishu group message routing > drops ordinary group chatter without sending a denial card or resolving the sender [0.19ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-[13:21:32] INFO  [feishu] dropped group message message_id=group-other-mention-1390676-1790601692317-24 chat_hash=80433cd2 reason=directed_at_others
-(pass) Feishu group message routing > drops a group message directed at someone other than the bot [0.15ms]
-[13:21:32] WARN  [feishu] workspace membership denied
-[13:21:32] WARN  [feishu] dropped group message message_id=group-non-member-regression-1390676-1790601692317-25 chat_hash=88991871 reason=not_member
-(pass) Feishu group message routing > denies a non-member bot mention before sender resolution [0.20ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu group message routing > waits for bot identity before classifying an early group mention [0.45ms]
-(pass) Feishu group message routing > logs dropped group messages with a hash and no raw identity [0.26ms]
-(pass) Feishu group message routing > logs an unresolved bot identity without exposing raw identifiers [0.21ms]
-[13:21:32] INFO  [feishu] workspace membership allowed
-(pass) Feishu group message routing > keeps p2p messages independent of bot identity and group policy [0.14ms]
-[13:21:32] INFO  [feishu] bot identity resolved attempt=4
-(pass) Feishu bot identity readiness > retries with 1s/2s/4s backoff and bypasses the probe cache [0.34ms]
-(pass) Feishu bot identity readiness > reports final probe failure as degraded without logging credentials [0.21ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+[14:08:34] INFO  [feishu] dropped group message message_id=group-other-mention-1513933-1790604514557-24 chat_hash=80433cd2 reason=directed_at_others
+(pass) Feishu group message routing > drops a group message directed at someone other than the bot [0.14ms]
+[14:08:34] WARN  [feishu] workspace membership denied
+[14:08:34] WARN  [feishu] dropped group message message_id=group-non-member-regression-1513933-1790604514557-25 chat_hash=88991871 reason=not_member
+(pass) Feishu group message routing > denies a non-member bot mention before sender resolution [0.19ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu group message routing > waits for bot identity before classifying an early group mention [0.48ms]
+(pass) Feishu group message routing > logs dropped group messages with a hash and no raw identity [0.23ms]
+(pass) Feishu group message routing > logs an unresolved bot identity without exposing raw identifiers [0.24ms]
+[14:08:34] INFO  [feishu] workspace membership allowed
+(pass) Feishu group message routing > keeps p2p messages independent of bot identity and group policy [0.23ms]
+[14:08:34] INFO  [feishu] bot identity resolved attempt=4
+(pass) Feishu bot identity readiness > retries with 1s/2s/4s backoff and bypasses the probe cache [0.46ms]
+(pass) Feishu bot identity readiness > reports final probe failure as degraded without logging credentials [0.18ms]
 
 tests/unit/connectors/feishu-message-receipt.test.ts:
-(pass) persistent Feishu message receipts > clears the working receipt on success without adding DONE or changing unrelated reactions [0.85ms]
-(pass) persistent Feishu message receipts > keeps thinking when cleanup fails and clears it on retry without accepting a late received state [451.85ms]
-(pass) persistent Feishu message receipts > still acknowledges failure before replacing THINKING and leaves the old state on a failed replacement [453.41ms]
-(pass) persistent Feishu message receipts > cleans up a legacy DONE receipt when a completed delivery is reconciled [0.56ms]
-[13:21:33] INFO  [feishu] received message from ou_user: Hello
-(pass) persistent Feishu message receipts > does not clear an incoming receipt when a durable handler only queues the reply [0.54ms]
-(pass) persistent Feishu message receipts > reconciles completed receipts for the initial and later steer messages after result delivery [1.45ms]
-(pass) persistent Feishu message receipts > reconciles failed receipts for the initial and later steer messages after result delivery [0.53ms]
-(pass) persistent Feishu message receipts > reconciles cancelled receipts for the initial and later steer messages after result delivery [0.52ms]
-[13:21:33] INFO  [feishu] received message from ou_user: Hello
-(pass) persistent Feishu message receipts > keeps thinking through queue handoff and a plain-answer wait without fabricating CoT [1.61ms]
-(pass) persistent Feishu message receipts > waits for the result card acknowledgement before removing THINKING [0.82ms]
-(pass) persistent Feishu message receipts > retries a failed final receipt using the checkpointed result and sends no second card [452.34ms]
-(pass) persistent Feishu message receipts > does not restore THINKING when resuming an acknowledged result without a visible success marker [1.00ms]
-(pass) persistent Feishu message receipts > does not mark a Runtime handover as a task failure [0.47ms]
-(pass) persistent Feishu message receipts > reports the original failure when the failure receipt is refused: a transient daemon error stays retryable [0.85ms]
-(pass) persistent Feishu message receipts > reports the original failure when the failure receipt is refused: a permanent Feishu refusal stays permanent [451.24ms]
+(pass) persistent Feishu message receipts > clears the working receipt on success without adding DONE or changing unrelated reactions [0.86ms]
+(pass) persistent Feishu message receipts > keeps thinking when cleanup fails and clears it on retry without accepting a late received state [451.89ms]
+(pass) persistent Feishu message receipts > still acknowledges failure before replacing THINKING and leaves the old state on a failed replacement [451.87ms]
+(pass) persistent Feishu message receipts > cleans up a legacy DONE receipt when a completed delivery is reconciled [0.37ms]
+[14:08:35] INFO  [feishu] received message from ou_user: Hello
+(pass) persistent Feishu message receipts > does not clear an incoming receipt when a durable handler only queues the reply [0.39ms]
+(pass) persistent Feishu message receipts > reconciles completed receipts for the initial and later steer messages after result delivery [1.19ms]
+(pass) persistent Feishu message receipts > reconciles failed receipts for the initial and later steer messages after result delivery [0.41ms]
+(pass) persistent Feishu message receipts > reconciles cancelled receipts for the initial and later steer messages after result delivery [0.35ms]
+[14:08:35] INFO  [feishu] received message from ou_user: Hello
+(pass) persistent Feishu message receipts > keeps thinking through queue handoff and a plain-answer wait without fabricating CoT [1.25ms]
+(pass) persistent Feishu message receipts > waits for the result card acknowledgement before removing THINKING [0.70ms]
+(pass) persistent Feishu message receipts > retries a failed final receipt using the checkpointed result and sends no second card [454.39ms]
+(pass) persistent Feishu message receipts > does not restore THINKING when resuming an acknowledged result without a visible success marker [0.84ms]
+(pass) persistent Feishu message receipts > does not mark a Runtime handover as a task failure [0.50ms]
+(pass) persistent Feishu message receipts > reports the original failure when the failure receipt is refused: a transient daemon error stays retryable [1.03ms]
+(pass) persistent Feishu message receipts > reports the original failure when the failure receipt is refused: a permanent Feishu refusal stays permanent [453.54ms]
 
 tests/unit/connectors/feishu-task-stream.test.ts:
-[13:21:34] INFO  [card-actions] Registered pending action: amula0loj_7_mj0aoa (chat=chat_1)
-[13:21:34] INFO  [card-actions] Resolved action amula0loj_7_mj0aoa
-[13:21:34] INFO  [card-actions] Registered pending action: amula0lok_8_oamqn1 (chat=chat_1)
-[13:21:34] INFO  [card-actions] form q0: select={"value":"staging"} custom="" type=object
-[13:21:34] INFO  [card-actions] form answers: {"Which environment?":"staging"}
-[13:21:34] INFO  [card-actions] Resolved action amula0lok_8_oamqn1
-(pass) Feishu canonical Task stream > preserves intermediate events and responds through the Task human request [2.22ms]
+[14:08:36] INFO  [card-actions] Registered pending action: amulbp3c5_7_5gm33g (chat=chat_1)
+[14:08:36] INFO  [card-actions] Resolved action amulbp3c5_7_5gm33g
+[14:08:36] INFO  [card-actions] Registered pending action: amulbp3c5_8_77zkbf (chat=chat_1)
+[14:08:36] INFO  [card-actions] form q0: select={"value":"staging"} custom="" type=object
+[14:08:36] INFO  [card-actions] form answers: {"Which environment?":"staging"}
+[14:08:36] INFO  [card-actions] Resolved action amulbp3c5_8_77zkbf
+(pass) Feishu canonical Task stream > preserves intermediate events and responds through the Task human request [2.08ms]
 
 tests/unit/connectors/tool-entry-reducer.test.ts:
-(pass) tool entry reducer — claude Bash (bash-exec recording) > pairs the four wire frames into one entry, merging args instead of replacing them [1.07ms]
-(pass) tool entry reducer — claude Bash (bash-exec recording) > forgets a completed call's seenInputs mark so a late frame is no longer suppressed [0.12ms]
-(pass) tool entry reducer — claude ExitPlanMode (enter-plan recording) > early-marks the plan frame and lets the failed terminal frame own the step [0.13ms]
+(pass) tool entry reducer — claude Bash (bash-exec recording) > pairs the four wire frames into one entry, merging args instead of replacing them [0.99ms]
+(pass) tool entry reducer — claude Bash (bash-exec recording) > forgets a completed call's seenInputs mark so a late frame is no longer suppressed [0.10ms]
+(pass) tool entry reducer — claude ExitPlanMode (enter-plan recording) > early-marks the plan frame and lets the failed terminal frame own the step [0.11ms]
 (pass) tool entry reducer — AskUserQuestion > never turns the question into a step — the question card owns it [0.05ms]
 (pass) tool entry reducer — claude agent spawn (agent-spawn recording) > names the Agent step from its description and keeps the nested Glob separate [0.42ms]
-(pass) tool entry reducer — codex collab (codex-collab recording) > lets the terminal frame enrich a wait call with the subagent answers [0.95ms]
+(pass) tool entry reducer — codex collab (codex-collab recording) > lets the terminal frame enrich a wait call with the subagent answers [1.03ms]
 
 tests/unit/connectors/feishu-outbound-images.test.ts:
-(pass) Feishu outbound image loading > classifies non-global address 0.0.0.1 [0.37ms]
-(pass) Feishu outbound image loading > classifies non-global address 10.0.0.1 [0.02ms]
+(pass) Feishu outbound image loading > classifies non-global address 0.0.0.1 [0.63ms]
+(pass) Feishu outbound image loading > classifies non-global address 10.0.0.1 [0.03ms]
 (pass) Feishu outbound image loading > classifies non-global address 100.64.0.1 [0.01ms]
 (pass) Feishu outbound image loading > classifies non-global address 127.0.0.1
 (pass) Feishu outbound image loading > classifies non-global address 169.254.0.1
 (pass) Feishu outbound image loading > classifies non-global address 172.16.0.1
 (pass) Feishu outbound image loading > classifies non-global address 192.0.0.1
 (pass) Feishu outbound image loading > classifies non-global address 192.0.2.1
-(pass) Feishu outbound image loading > classifies non-global address 192.88.99.1 [0.04ms]
+(pass) Feishu outbound image loading > classifies non-global address 192.88.99.1 [0.05ms]
 (pass) Feishu outbound image loading > classifies non-global address 192.168.0.1
 (pass) Feishu outbound image loading > classifies non-global address 198.18.0.1
 (pass) Feishu outbound image loading > classifies non-global address 198.51.100.1 [0.01ms]
 (pass) Feishu outbound image loading > classifies non-global address 203.0.113.1
 (pass) Feishu outbound image loading > classifies non-global address 224.0.0.1
-(pass) Feishu outbound image loading > classifies non-global address 240.0.0.1 [0.02ms]
-(pass) Feishu outbound image loading > classifies non-global address :: [0.76ms]
-(pass) Feishu outbound image loading > classifies non-global address ::1 [0.06ms]
+(pass) Feishu outbound image loading > classifies non-global address 240.0.0.1
+(pass) Feishu outbound image loading > classifies non-global address :: [0.92ms]
+(pass) Feishu outbound image loading > classifies non-global address ::1 [0.09ms]
 (pass) Feishu outbound image loading > classifies non-global address 64:ff9b::1 [0.06ms]
 (pass) Feishu outbound image loading > classifies non-global address 64:ff9b:1::1 [0.05ms]
-(pass) Feishu outbound image loading > classifies non-global address 100::1 [0.04ms]
-(pass) Feishu outbound image loading > classifies non-global address 100:0:0:1::1 [0.05ms]
-(pass) Feishu outbound image loading > classifies non-global address 2001:2::1 [0.15ms]
-(pass) Feishu outbound image loading > classifies non-global address 2001:db8::1 [0.13ms]
-(pass) Feishu outbound image loading > classifies non-global address 2002::1 [0.04ms]
-(pass) Feishu outbound image loading > classifies non-global address 3fff::1 [0.06ms]
-(pass) Feishu outbound image loading > classifies non-global address 5f00::1 [0.03ms]
-(pass) Feishu outbound image loading > classifies non-global address fc00::1 [0.05ms]
+(pass) Feishu outbound image loading > classifies non-global address 100::1 [0.02ms]
+(pass) Feishu outbound image loading > classifies non-global address 100:0:0:1::1 [0.02ms]
+(pass) Feishu outbound image loading > classifies non-global address 2001:2::1 [0.19ms]
+(pass) Feishu outbound image loading > classifies non-global address 2001:db8::1 [0.14ms]
+(pass) Feishu outbound image loading > classifies non-global address 2002::1 [0.03ms]
+(pass) Feishu outbound image loading > classifies non-global address 3fff::1 [0.07ms]
+(pass) Feishu outbound image loading > classifies non-global address 5f00::1 [0.02ms]
+(pass) Feishu outbound image loading > classifies non-global address fc00::1 [0.04ms]
 (pass) Feishu outbound image loading > classifies non-global address fe80::1 [0.03ms]
-(pass) Feishu outbound image loading > classifies non-global address ff02::1 [0.06ms]
-(pass) Feishu outbound image loading > classifies non-global address ::ffff:192.0.2.1 [0.09ms]
+(pass) Feishu outbound image loading > classifies non-global address ff02::1 [0.02ms]
+(pass) Feishu outbound image loading > classifies non-global address ::ffff:192.0.2.1 [0.06ms]
 (pass) Feishu outbound image loading > classifies non-global address ::ffff:c000:201 [0.04ms]
 (pass) Feishu outbound image loading > keeps globally reachable address 8.8.8.8 eligible [0.04ms]
 (pass) Feishu outbound image loading > keeps globally reachable address 192.0.0.9 eligible
 (pass) Feishu outbound image loading > keeps globally reachable address 192.31.196.1 eligible [0.02ms]
-(pass) Feishu outbound image loading > keeps globally reachable address 2001:1::1 eligible [0.08ms]
-(pass) Feishu outbound image loading > keeps globally reachable address 2001:3::1 eligible [0.09ms]
-(pass) Feishu outbound image loading > keeps globally reachable address 2001:4860:4860::8888 eligible [0.08ms]
-(pass) Feishu outbound image loading > keeps globally reachable address 2606:4700:4700::1111 eligible [0.08ms]
-(pass) Feishu outbound image loading > keeps globally reachable address ::ffff:8.8.8.8 eligible [0.06ms]
-(pass) Feishu outbound image loading > rejects non-image and oversized content before upload [0.52ms]
-(pass) Feishu outbound image loading > bounds streamed responses even when content-length is absent [0.89ms]
-(pass) Feishu outbound image loading > does not upload remote non-image responses [1.09ms]
-(pass) Feishu outbound image loading > keeps the timeout active while a remote response body is streaming [7.72ms]
-(pass) Feishu outbound image loading > rejects private hosts before fetching and checks every redirect target [0.89ms]
-(pass) Feishu outbound image loading > rejects a DNS answer set when any address is non-global before connecting [2.85ms]
-(pass) Feishu outbound image loading > rejects non-global IP literals before Bun can bypass the lookup hook [4.66ms]
-(pass) Feishu outbound image loading > uses one pinned DNS answer and never reconnects with a rebound private answer [25.45ms]
-(pass) Feishu outbound image loading > uploads duplicate sources once and reuses the image key across rewrites [1.39ms]
-(pass) Feishu outbound image loading > rejects Issue local paths while preserving Agent local image uploads [1.67ms]
-(pass) Feishu outbound image loading > degrades loader failures instead of retaining broken image syntax [0.31ms]
+(pass) Feishu outbound image loading > keeps globally reachable address 2001:1::1 eligible [0.09ms]
+(pass) Feishu outbound image loading > keeps globally reachable address 2001:3::1 eligible [0.07ms]
+(pass) Feishu outbound image loading > keeps globally reachable address 2001:4860:4860::8888 eligible [0.05ms]
+(pass) Feishu outbound image loading > keeps globally reachable address 2606:4700:4700::1111 eligible [0.04ms]
+(pass) Feishu outbound image loading > keeps globally reachable address ::ffff:8.8.8.8 eligible [0.03ms]
+(pass) Feishu outbound image loading > rejects non-image and oversized content before upload [0.54ms]
+(pass) Feishu outbound image loading > bounds streamed responses even when content-length is absent [1.05ms]
+(pass) Feishu outbound image loading > does not upload remote non-image responses [1.27ms]
+(pass) Feishu outbound image loading > keeps the timeout active while a remote response body is streaming [5.58ms]
+(pass) Feishu outbound image loading > rejects private hosts before fetching and checks every redirect target [0.90ms]
+(pass) Feishu outbound image loading > rejects a DNS answer set when any address is non-global before connecting [3.22ms]
+(pass) Feishu outbound image loading > rejects non-global IP literals before Bun can bypass the lookup hook [5.15ms]
+(pass) Feishu outbound image loading > uses one pinned DNS answer and never reconnects with a rebound private answer [26.30ms]
+(pass) Feishu outbound image loading > uploads duplicate sources once and reuses the image key across rewrites [1.70ms]
+(pass) Feishu outbound image loading > rejects Issue local paths while preserving Agent local image uploads [1.97ms]
+(pass) Feishu outbound image loading > degrades loader failures instead of retaining broken image syntax [0.49ms]
 
 tests/unit/connectors/feishu-send.test.ts:
-(pass) Feishu message sending > passes the durable delivery id as the reply uuid [0.55ms]
-(pass) Feishu message sending > passes the durable delivery id as a new message uuid [0.16ms]
-(pass) Feishu message sending > converts internal image markers to Feishu image keys in post markdown [0.15ms]
+(pass) Feishu message sending > passes the durable delivery id as the reply uuid [0.72ms]
+(pass) Feishu message sending > passes the durable delivery id as a new message uuid [0.22ms]
+(pass) Feishu message sending > converts internal image markers to Feishu image keys in post markdown [0.17ms]
 
 tests/unit/connectors/feishu-markdown-images.test.ts:
-(pass) Feishu markdown images > classifies Feishu keys, Multiremi attachments, files, remote URLs, and unsupported sources [0.29ms]
-(pass) Feishu markdown images > rewrites resolved images, preserves existing markers, and caches duplicate sources [0.29ms]
-(pass) Feishu markdown images > degrades failed and unparseable images without leaving broken image markdown [0.21ms]
-(pass) Feishu markdown images > degrades relative attachments to public links when a public URL is available [0.11ms]
-(pass) Feishu markdown images > ignores escaped image syntax [0.35ms]
+(pass) Feishu markdown images > classifies Feishu keys, Multiremi attachments, files, remote URLs, and unsupported sources [0.45ms]
+(pass) Feishu markdown images > rewrites resolved images, preserves existing markers, and caches duplicate sources [0.33ms]
+(pass) Feishu markdown images > degrades failed and unparseable images without leaving broken image markdown [0.19ms]
+(pass) Feishu markdown images > degrades relative attachments to public links when a public URL is available [0.08ms]
+(pass) Feishu markdown images > ignores escaped image syntax [0.38ms]
 
 tests/unit/daemon/trace-derive.test.ts:
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > empty trace [0.19ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > empty trace [0.15ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > a single text run [0.06ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > text split across chunks [0.01ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > phase=final wins over earlier text
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > phase=final ignores a blank final
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > commentary does not become the answer [0.06ms]
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > tool_use breaks the run [0.05ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > tool_use breaks the run [0.09ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > tool_result does NOT break the run [0.01ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > usage does NOT break the run [0.01ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > execution does NOT break the run
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > steer does NOT break the run [0.01ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > steer does NOT break the run
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > permission_response does NOT break the run
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > question_response does NOT break the run
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > thinking breaks the run [0.02ms]
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > permission_request breaks the run [0.04ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > thinking breaks the run [0.03ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > permission_request breaks the run [0.03ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > question_request breaks the run [0.02ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > plan breaks the run [0.03ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > compaction breaks the run [0.03ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > nested text never contributes
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > nested text does not break the run
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > nested tool_use does not break the run
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > nested text does not break the run [0.03ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > nested tool_use does not break the run [0.01ms]
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > whitespace-only prose is not an answer
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > unknown type neither contributes nor breaks
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > an empty trace with only tool frames [0.02ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > an empty trace with only tool frames
 (pass) deriveFinalReply matches FeishuCotTimeline.answer > exercises every known event type, so a new type cannot arrive uncovered [0.16ms]
-(pass) deriveFinalReply matches FeishuCotTimeline.answer > asserts break and no-break for both directions of each type [0.18ms]
-(pass) trace histogram and counters > buckets by (type, tool) and keeps tool only on tool frames [0.21ms]
-(pass) trace histogram and counters > orders buckets by first appearance so two runs over the same data agree [0.05ms]
-(pass) trace histogram and counters > counts a nested tool_use too, matching the Feishu tool counter [0.08ms]
+(pass) deriveFinalReply matches FeishuCotTimeline.answer > asserts break and no-break for both directions of each type [0.21ms]
+(pass) trace histogram and counters > buckets by (type, tool) and keeps tool only on tool frames [0.19ms]
+(pass) trace histogram and counters > orders buckets by first appearance so two runs over the same data agree [0.06ms]
+(pass) trace histogram and counters > counts a nested tool_use too, matching the Feishu tool counter [0.11ms]
 (pass) trace histogram and counters > summarizes with head and event_count as separate numbers [0.06ms]
-(pass) trace histogram and counters > reports the last execution event's model, or null [0.08ms]
+(pass) trace histogram and counters > reports the last execution event's model, or null [0.10ms]
 
- 412 pass
+ 414 pass
  0 fail
- 1654 expect() calls
-Ran 412 tests across 28 files. [25.37s]
+ 1664 expect() calls
+Ran 414 tests across 28 files. [24.72s]

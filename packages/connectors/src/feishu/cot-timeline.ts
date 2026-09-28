@@ -73,7 +73,10 @@ export class FeishuCotTimeline {
     } else if (message.type === "tool_result") {
       this.closeText();
       const key = message.tool_call_id ?? [...this.tools.keys()].findLast(k => !this.tools.get(k)!.ended);
-      const tool = key ? this.tools.get(key) : undefined;
+      let tool = key ? this.tools.get(key) : undefined;
+      // Checkpoint subscriptions omit acknowledged invocations; their stable ID
+      // still lets a later result update the existing native tool display.
+      if (!tool && this.throughSeq > 0 && message.tool_call_id) tool = this.recordTool(message, false);
       if (!tool || tool.hidden || tool.ended) return;
       tool.input = { ...tool.input, ...message.input }; // terminal frames can carry the first real args
       if (message.meta?.title) tool.title = String(message.meta.title);

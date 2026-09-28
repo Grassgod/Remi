@@ -52,24 +52,33 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     expect(http.filter(request => request.path.endsWith(`/tasks/${task.id}/status`))).toEqual([]);
     await h.disconnect();
     transport.append(task.id, runtimeId, [
+      { type: "tool_result", toolCallId: "local-read", status: "failed", output: "synthetic private stacktrace" },
       { type: "thinking", content: "recovered 5" },
       { type: "future.widget", content: "literal future payload", input: { nested: [1, { two: true }] }, meta: { arbitrary: "value" } },
     ]);
     await h.reconnect();
-    await waitFor(() => received.length === 4 && sender.checkpoint?.throughSeq === 6, "resumed CoT checkpoint", 5_000);
+    await waitFor(() => received.length === 5 && sender.checkpoint?.throughSeq === 7, "resumed CoT checkpoint", 5_000);
     const subscriptions = h.ledger.filter(entry => entry.type === "trace.subscribe");
     expect(subscriptions.map(entry => entry.frame.p.from_seq)).toEqual([2, 4]);
-    expect(received.map(event => event.seq)).toEqual([3, 4, 5, 6]);
+    expect(received.map(event => event.seq)).toEqual([3, 4, 5, 6, 7]);
     await h.client.event({ t: "task.complete", seq: 999_447, rt: runtimeId, p: {
       task_id: task.id, output: "Synthetic fixture complete", ...transport.completion(task.id),
     } });
     transport.close(task.id, "completed");
     expect(await rendering).toEqual({ messageId: "om_existing" });
-    expect(sender.checkpoint).toMatchObject({ throughSeq: 6, cot: { status: "finished" } });
+    expect(sender.checkpoint).toMatchObject({ throughSeq: 7, cot: { status: "finished" } });
     const nativeEvents = sender.events();
     expect(nativeEvents.filter(event => event.event_type === "REASONING_MESSAGE_CONTENT").map(event => JSON.parse(event.content).delta).join("")).toBe("live 3recovered 5");
-    expect(nativeEvents.filter(event => event.event_type === "TOOL_CALL_START")).toHaveLength(1);
-    expect(JSON.parse(nativeEvents.find(event => event.event_type === "future.widget")!.content)).toEqual({ ...received[3]! });
+    const starts = nativeEvents.filter(event => event.event_type === "TOOL_CALL_START");
+    const results = nativeEvents.filter(event => event.event_type === "TOOL_CALL_RESULT");
+    expect(starts).toHaveLength(1);
+    expect(results).toHaveLength(1);
+    expect(JSON.parse(results[0]!.content)).toMatchObject({
+      toolCallId: JSON.parse(starts[0]!.content).toolCallId,
+      content: JSON.stringify({ type: "text", text: "执行失败" }),
+    });
+    expect(JSON.stringify(nativeEvents)).not.toContain("synthetic private stacktrace");
+    expect(JSON.parse(nativeEvents.find(event => event.event_type === "future.widget")!.content)).toEqual({ ...received[4]! });
     expect(nativeEvents.at(-1)).toMatchObject({ event_type: "RUN_FINISHED" });
     expect(sender.calls.filter(call => call.operation === "POST")).toEqual([]);
     expect(http.filter(request => request.path.endsWith(`/tasks/${task.id}/messages`))).toEqual([]);
@@ -82,7 +91,8 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
         environment: "real local Bun API + real co-resident daemon + temporary SQLite; fake Feishu sender; synthetic trace producer",
         initial_checkpoint: checkpoint.throughSeq, checkpoint_before_disconnect: 4, final_checkpoint: sender.checkpoint?.throughSeq,
         subscribe_from_seq: subscriptions.map(entry => entry.frame.p.from_seq), received_seq: received.map(event => event.seq),
-        closed: true, native_events: nativeEvents, http_requests: http,
+        closed: true, cross_checkpoint_tool_result: { stable_id_reused: true, start_count: starts.length, result_count: results.length },
+        native_events: nativeEvents, http_requests: http,
         trace_requests: h.ledger.filter(entry => ["trace.subscribe", "trace.fetch", "trace.unsubscribe"].includes(entry.type))
           .map(entry => ({ type: entry.type, task_id: entry.frame.p.task_id, from_seq: entry.frame.p.from_seq, after_seq: entry.frame.p.after_seq })),
         polling: { cot_400ms_removed: true, status_reads: 1, human_750ms_removed: false,
@@ -90,7 +100,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       mkdirSync(dirname(evidencePath), { recursive: true });
       writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
       const escaped = JSON.stringify(evidence, null, 2).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-      writeFileSync(evidencePath.replace(/\.json$/, ".html"), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-447 local integration evidence</title><style>body{font:15px/1.6 system-ui;margin:24px;max-width:1100px;color:#222}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f3;padding:16px}h1{font-size:24px}p{max-width:900px}</style><h1>MUL-447: local integration evidence</h1><p>Real local daemon/API and temporary SQLite. Feishu sender and trace content are simulated. CoT resumes from 2 to 3, then from 4 to 5 after disconnect, and ends on closed. One final status read; no messages polling. Human-request 750 ms polling remains pending its cross-process event transport. Independent QA is still required.</p><pre>${escaped}</pre></html>`);
+      writeFileSync(evidencePath.replace(/\.json$/, ".html"), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-447 local integration evidence</title><style>body{font:15px/1.6 system-ui;margin:24px;max-width:1100px;color:#222}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f3;padding:16px}h1{font-size:24px}p{max-width:900px}</style><h1>MUL-447: local integration evidence</h1><p>Real local daemon/API and temporary SQLite. Feishu sender and trace content are simulated. CoT resumes from 2 to 3, then from 4 to 5 after disconnect, and ends on closed. The tool result after reconnect reuses the earlier tool ID without a second start. One final status read; no messages polling. Human-request 750 ms polling remains pending its cross-process event transport. Independent QA is still required.</p><pre>${escaped}</pre></html>`);
       console.log(`MUL-447 evidence: ${evidencePath}`);
     }
   } finally {

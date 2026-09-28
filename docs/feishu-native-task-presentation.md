@@ -11,6 +11,9 @@ code owns reconnect replay and gap filling. The connector performs no messages
 or status polling, and reads a final display snapshot once after `closed`.
 `FeishuCotTimeline` accepts canonical `TraceEvent`, including `tool_call_id` and
 `ts`; unknown types retain their type and complete payload in the native stream.
+If a tool result arrives after a checkpoint without its earlier invocation,
+`tool_call_id` reconstructs the same display ID. The renderer sends the result
+without re-sending the acknowledged tool start or reading older trace events.
 An unpinned provider session remains unnamed until the final snapshot arrives.
 
 Human-request updates for the separate interaction lane still use the existing

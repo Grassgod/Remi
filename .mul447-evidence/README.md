@@ -27,13 +27,14 @@ fallback. Steps 2 and 3 are not implemented. Independent strict QA is pending.
 | Requirement | Evidence |
 | --- | --- |
 | Resume at `throughSeq + 1`, no duplicates or omissions | `tests/unit/connectors/feishu-trace-subscription.test.ts`: consumed checkpoint case; `tests/unit/multiremi/feishu-concierge-host.test.ts`: saved checkpoint 7 produces event 8 |
-| Reconnect from consumed cursor | Subscription disconnect case uses the real `DaemonTraceSubscriptions`; local integration asserts wire cursors `[2,4]` and received sequences `[3,4,5,6]` |
+| Reconnect from consumed cursor | Subscription disconnect case uses the real `DaemonTraceSubscriptions`; local integration asserts wire cursors `[2,4]` and received sequences `[3,4,5,6,7]` |
 | `closed` ends the workflow | Empty closed stream test, plus real daemon/API terminal push and native `RUN_FINISHED` in local integration |
 | Unknown type remains unchanged | Subscription/timeline raw-object and complete-payload assertions; integration's `future.widget` native event |
+| Tool results crossing a checkpoint remain visible | Timeline failure/cancellation cases consume only new events and reuse the acknowledged invocation's stable ID, without re-sending its start; real daemon/API integration carries a failed tool result as the first event after reconnect |
 | No connector gap backfill | Connector calls only `subscribeTrace`; prerequisite `trace.test.ts` covers internal `trace.fetch` for gaps |
 | No 400 ms messages/status polling | Local integration asserts zero messages GETs, no status reads before closed, exactly one final status GET |
 
-The connector scope command completed with **412 pass, 0 fail**:
+The connector scope command completed with **414 pass, 0 fail**:
 
 ```sh
 bun test tests/unit/connectors \
@@ -96,7 +97,7 @@ MULTIREMI_TEST_MUL447_EVIDENCE_PATH=.mul447-evidence/step1-local-integration.jso
   bun test tests/integration/feishu-trace-subscription.test.ts
 ```
 
-Result: **1 pass, 0 fail**, 15 assertions. Real local Bun API, real co-resident
+Result: **1 pass, 0 fail**, 18 assertions. Real local Bun API, real co-resident
 daemon, real sockets and temporary SQLite/outbox/trace state. The provider trace
 and Feishu sender are simulated; no real Feishu message was sent. All services
 and temporary data are disposed by the harness.
@@ -104,8 +105,10 @@ and temporary data are disposed by the harness.
 The JSON and self-contained HTML record native CoT events, trace subscription
 RPCs, and local HTTP method/path pairs. No headers, tokens or credentials are
 recorded. Checkpoint 2 receives 3; after consuming 4 and disconnecting, wire
-cursor 4 resumes at 5. Received `[3,4,5,6]`; final checkpoint 6; `closed` ends the
-stream on the existing native message.
+cursor 4 resumes at 5. Received `[3,4,5,6,7]`; event 5 is a failed result for
+the tool started at event 4, with the same display ID, one `TOOL_CALL_START` and
+one `TOOL_CALL_RESULT`. Final checkpoint 7; `closed` ends the stream on the
+existing native message.
 
 ## Item 5 Gap
 
@@ -119,6 +122,8 @@ to the connector. Wiring that existing transport is required before removing
 the interaction lane's 750 ms loop.
 
 Therefore `apps/remi/cli/multiremi.ts` retains its human-request `sleep(750)`.
+The two presenter `delay(750, signal)` waits also remain; the same event-transport
+gap prevents replacing them with a cross-process subscription.
 This CoT fixture has no human requests: its zero human-request GET count does
 **not** prove item 5 complete. No new protocol API or contracts change was added.
 
@@ -129,6 +134,17 @@ Repository code search found no `pollFeishuTask` or
 two unrelated `Bun.sleep(400)` calls in task-steer test synchronization are out
 of scope. The one `sleep(750)` above is deliberately retained and reported.
 Old routes/frames from steps 2 and 3 remain outside this change.
+
+## CI Baseline
+
+At pushed head `242dd531`, Developer context (Ubuntu/Windows), Session Archive
+(Ubuntu/macOS), frontend-zero-jump and frontend-replica passed. Release build
+check `build` failed at `tests/arch/api-role-resolution.test.ts`: it finds
+`resolveApiRole` in `apps/remi/cli/multiremi.ts` and a role env read in
+`packages/server/src/store/db/read-pool.ts`. Both came unchanged from the
+parent/main MUL-462 line. MUL-436 step 3a owns the parent/main synchronization
+and its single fix; this branch must not duplicate it. CI for the final tool
+checkpoint commit must be checked separately after push.
 
 Production 209 and Wiki were not modified. No deployment, branch switching,
 default-branch push, or PR merge was performed.

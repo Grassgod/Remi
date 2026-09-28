@@ -108,6 +108,27 @@ describe("semantic native CoT timeline", () => {
     expect(JSON.stringify(samples)).not.toContain("stacktrace");
   });
 
+  it.each([["failed", "执行失败"], ["cancelled", "已取消"]])(
+    "preserves a %s tool result after a checkpoint without replaying the invocation",
+    (status, text) => {
+      const original = new FeishuCotTimeline("task");
+      original.accept(message(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } }));
+      const prefix = original.drain();
+      const toolCallId = prefix.samples.find(([type]) => type === "TOOL_CALL_START")?.[1].toolCallId;
+      const resumed = new FeishuCotTimeline("task", prefix.throughSeq);
+      resumed.accept(message(2, "tool_result", { toolCallId: "tc", status: "in_progress", output: "partial" }));
+      expect(resumed.drain().samples).toEqual([]);
+      resumed.accept(message(3, "tool_result", { toolCallId: "tc", status, output: "sensitive stacktrace" }));
+      const result = resumed.drain();
+      expect(result.throughSeq).toBe(3);
+      expect(result.samples).toEqual([["TOOL_CALL_RESULT", {
+        toolCallId, messageId: expect.any(String), role: "tool", content: JSON.stringify({ type: "text", text }),
+      }]]);
+      expect(resumed.toolCount).toBe(1);
+      expect(JSON.stringify(result.samples)).not.toContain("stacktrace");
+    },
+  );
+
   it("keeps narration chronological and passes unknown trace types through verbatim", () => {
     const timeline = new FeishuCotTimeline("task");
     timeline.accept(message(1, "text", { content: "先读取。" }));
