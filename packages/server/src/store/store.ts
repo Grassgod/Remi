@@ -84,6 +84,7 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  IssueDependencyError,
   ParentStatusGuardError,
   type IssueTimelineCursor,
   type IssueTimelinePageResult,
@@ -179,6 +180,7 @@ import type {
   AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   CreateAccessTokenInput,
   CreateBotMenuPublishRequestInput,
@@ -262,6 +264,7 @@ import type {
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssue,
   MultiremiIssueDecision,
   MultiremiIssueDecisionList,
@@ -3092,12 +3095,25 @@ runMigrations(this.db);
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
 
-  createIssue(input: CreateIssueInput): MultiremiIssue {
-    return this.issues.createIssue(input);
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
+  }): MultiremiIssue {
+    return this.issues.createIssue(input, transaction);
   }
 
-  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue {
-    return this.issues.createIssueWithinTransaction(input, deferredEvents);
+  /**
+   * MUL-400 E3: issue creation for a caller that already holds a transaction.
+   * Both a child-status collector and a commit-event queue are required — the
+   * caller replays the collector and drains the queue after its COMMIT (see
+   * IssuesRepo.createIssueWithinTransaction).
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue {
+    return this.issues.createIssueWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -3204,7 +3220,11 @@ runMigrations(this.db);
     return this.issues.listAssigneeFrequency(input);
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     return this.issues.batchUpdateIssues(input);
   }
 
@@ -3255,7 +3275,7 @@ runMigrations(this.db);
     return this.issues.getChildIssueProgress(parentIssueId);
   }
 
-  listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
+  listIssueDependencies(issueId: string): MultiremiIssueDependencyView[] {
     return this.issues.listIssueDependencies(issueId);
   }
 
@@ -3275,7 +3295,7 @@ runMigrations(this.db);
     issueId: string,
     input: CreateIssueDependencyInput,
     activity?: IssueMutationActivityContext,
-  ): MultiremiIssueDependency {
+  ): MultiremiIssueDependencyView {
     return this.issues.createIssueDependency(issueId, input, activity);
   }
 
@@ -3299,8 +3319,34 @@ runMigrations(this.db);
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number } {
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+    /** The Issue the write itself saw, after its row lock (see the repo). */
+    previous: MultiremiIssue;
+  } {
     return this.issues.updateIssueWithOutcome(id, input, options);
+  }
+
+  /** MUL-400 E3: prerequisites that are not `done` yet. */
+  listUnmetPrerequisites(issueId: string): import("@multiremi/store/repos/issue-dependencies.js").IssueDependencyUnmetRef[] {
+    return this.issues.listUnmetPrerequisites(issueId);
+  }
+
+  /** MUL-400 E3: `waiting_on` page data (unmet + all direct prerequisites). */
+  getIssueWaitingOn(issueId: string): import("@multiremi/contracts/types.js").MultiremiIssueWaitingOn {
+    return this.issues.getIssueWaitingOn(issueId);
+  }
+
+  /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: import("@multiremi/contracts/types.js").CreateIssueDependencyInput,
+    activity: import("@multiremi/store/repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+  ): import("@multiremi/contracts/types.js").MultiremiIssueDependencyView {
+    return this.issues.createIssueDependencyWithinTransaction(issueId, input, activity, deferredEvents);
   }
 
   /**
@@ -3315,12 +3361,22 @@ runMigrations(this.db);
     options: UpdateIssueOptions,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,
-  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
 
   runIssueUpdatePostCommit(
-    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,
@@ -3374,8 +3430,8 @@ runMigrations(this.db);
     return this.issues.issueArchiveSweepIntervalMs();
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
-    return this.issues.assignIssue(id, input);
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
+    return this.issues.assignIssue(id, input, options);
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
