@@ -398,7 +398,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // (l): GET /api/tasks/:id/trace and /api/shares/:token/tasks/:task_id/trace
     // add two served reads. MUL-479's context-window PUT adds one served
     // browser route, bringing the swept inventory to 790.
-    expect(statuses.size).toBe(790);
+    // MUL-485 adds one UI-owned Session log entry read route.
+    expect(statuses.size).toBe(791);
     expect(misdirected, routeCountHint("ui")).toHaveLength(86);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(87);
   });
@@ -430,9 +431,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // (l): the two exact trace-read patterns join the runtime allowlist. Both
     // are also ui reads; unlike other browser routes they do not add refusals.
     // MUL-479's context-window PUT adds one browser-only refusal.
-    expect(statuses.size).toBe(790);
-    expect(refused, routeCountHint("runtime")).toBe(695);
-    expect(refused + 2, routeCountHint("runtime")).toBe(697);
+    expect(statuses.size).toBe(791);
+    expect(refused, routeCountHint("runtime")).toBe(696);
+    expect(refused + 2, routeCountHint("runtime")).toBe(698);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

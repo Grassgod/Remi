@@ -34,6 +34,34 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("expands Session entries by seq or id and forwards event sequence bounds", async () => {
+    useCliEnv();
+    const get = specById("session.log.get");
+    const list = specById("session.event.list");
+    const paths: string[] = [];
+    globalThis.fetch = capabilityFetch(get.id, (request) => {
+      const url = new URL(request.url);
+      paths.push(`${url.pathname}${url.search}`);
+      return Response.json({ body_md: "complete", metadata: {}, delivered: null });
+    });
+    const getRegistry = registryFor([get]);
+    await capture(() => getRegistry.execute([...get.path, "ises_1", "12", "--output", "json"]));
+    await capture(() => getRegistry.execute([...get.path, "ises_1", "cmt_12", "--output", "json"]));
+    expect(paths).toEqual([
+      "/api/sessions/ises_1/log/entry?seq=12",
+      "/api/sessions/ises_1/log/entry?id=cmt_12",
+    ]);
+    globalThis.fetch = capabilityFetch(list.id, (request) => {
+      const url = new URL(request.url);
+      expect(url.searchParams.get("since_seq")).toBe("3");
+      expect(url.searchParams.get("to_seq")).toBe("12");
+      return Response.json([]);
+    });
+    await capture(() => registryFor([list]).execute([
+      ...list.path, "MUL-485", "ises_1", "--since-seq", "3", "--to-seq", "12", "--output", "json",
+    ]));
+  });
+
   it("issue grouped sends only the plural assignee type query parameter", async () => {
     useCliEnv();
     const spec = specById("issue.grouped");
