@@ -93,6 +93,100 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(dedicated.id)?.id).toBe(constrained.id);
   });
 
+  for (const ownerDedicated of [false, true]) {
+    for (const otherDedicated of [false, true]) {
+      it(`admits an explicit workspace only on its owner (owner dedicated=${ownerDedicated}, other dedicated=${otherDedicated})`, () => {
+        const store = createLocalStore();
+        const owner = store.registerRuntime({
+          name: "Workspace owner", provider: "codex", daemonId: "workspace-owner",
+          metadata: { runtime_workspaces: 1 },
+        });
+        const other = store.registerRuntime({
+          name: "Other device", provider: "codex", daemonId: "workspace-other",
+          metadata: { runtime_workspaces: 1 },
+        });
+        store.updateDaemonDedicated("local", owner.daemonId!, ownerDedicated, "local");
+        store.updateDaemonDedicated("local", other.daemonId!, otherDedicated, "local");
+        const workspace = store.runtimeWorkspaces.create(owner.id, { name: "Local files", root_path: "/local/files" });
+        const agent = store.createAgent({ name: "Local worker", provider: "codex" });
+        const task = store.createTask({ agentId: agent.id, runtimeWorkspaceId: workspace.id, prompt: "Use local files" });
+
+        const verdicts = store.describeTaskPlacement(task.id);
+        expect(verdicts).toHaveLength(2);
+        expect(verdicts.find((v) => v.runtimeId === owner.id)).toMatchObject({ placementOk: true, routingOk: true });
+        expect(verdicts.find((v) => v.runtimeId === other.id)).toMatchObject({ placementOk: false, routingOk: !otherDedicated });
+        expect(store.claimTask(other.id)).toBeNull();
+        expect(store.claimTask(owner.id)?.id).toBe(task.id);
+      });
+    }
+  }
+
+  it("preserves explicit-workspace Chat sessions and retained directories on a dedicated device", () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({
+      name: "Local Chat", provider: "codex", daemonId: "workspace-chat", metadata: { runtime_workspaces: 1 },
+    });
+    const other = store.registerRuntime({
+      name: "Other Chat", provider: "codex", daemonId: "workspace-chat-other", metadata: { runtime_workspaces: 1 },
+    });
+    const agent = store.createAgent({ name: "Workspace Chat", provider: "codex" });
+    const workspace = store.runtimeWorkspaces.create(runtime.id, { name: "Chat files", root_path: "/local/chat" });
+    const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: workspace.id });
+    const first = store.sendChatMessage(chat.id, { body: "first" }).task;
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+    const second = store.sendChatMessage(chat.id, { body: "queued before dedicated" }).task;
+    expect(second).toMatchObject({ runtimeId: runtime.id, sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+    store.updateDaemonDedicated("local", runtime.daemonId!, true, "local");
+
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: runtime.id, sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+    expect(store.claimTask(runtime.id)).toMatchObject({ id: second.id, sessionId: "sess_workspace_chat" });
+    store.startTask(second.id);
+    store.completeTask(second.id, { output: "ok", sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+
+    const third = store.sendChatMessage(chat.id, { body: "created while dedicated" }).task;
+    expect(third).toMatchObject({ runtimeId: runtime.id, sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+    expect(store.claimTask(runtime.id)?.sessionId).toBe("sess_workspace_chat");
+    store.startTask(third.id);
+    store.completeTask(third.id, { output: "ok", sessionId: "sess_workspace_chat", workDir: "/local/chat" });
+
+    db!.run("UPDATE multiremi_chat_sessions SET session_id = NULL WHERE id = ?", [chat.id]);
+    const reset = store.sendChatMessage(chat.id, { body: "retain files after provider reset" }).task;
+    expect(reset).toMatchObject({ runtimeId: runtime.id, sessionId: null, workDir: "/local/chat" });
+    expect(store.claimTask(other.id)).toBeNull();
+    expect(store.claimTask(runtime.id)).toMatchObject({ id: reset.id, workDir: "/local/chat" });
+  });
+
+  it("keeps an explicit-workspace Issue lane when its owning device becomes dedicated", () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({
+      name: "Local Issue", provider: "codex", daemonId: "workspace-issue", metadata: { runtime_workspaces: 1 },
+    });
+    const agent = store.createAgent({ name: "Workspace Issue", provider: "codex" });
+    const workspace = store.runtimeWorkspaces.create(runtime.id, { name: "Issue files", root_path: "/local/issue" });
+    const issue = store.createIssue({ title: "Local Issue", runtimeWorkspaceId: workspace.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const first = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first" });
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_workspace_issue" });
+    const lane = store.getSessionAgentLane(session.id, agent.id)!;
+    const second = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second" });
+    store.updateDaemonDedicated("local", runtime.daemonId!, true, "local");
+    expect(store.claimTask(runtime.id)).toMatchObject({ id: second.id, sessionId: "sess_workspace_issue" });
+    store.startTask(second.id);
+    store.completeTask(second.id, { output: "ok", sessionId: "sess_workspace_issue" });
+
+    const third = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "third" });
+    expect(third).toMatchObject({ runtimeId: runtime.id, sessionId: "sess_workspace_issue" });
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({
+      runtimeId: runtime.id, providerSessionId: "sess_workspace_issue", generation: lane.generation,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(third.id);
+  });
+
   // MUL-449: device routing must gate EVERY task. `holds_workspace` may stay
   // decoupled from the Issue workspace, but it must never decouple the device.
   it("keeps dedicated devices away from tasks that hold no Issue workspace", () => {
@@ -664,9 +758,9 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
   });
 
   // MUL-449 ruling 2: the claim predicate and the wait-reason observer must be
-  // one body of SQL. This asserts the refactor moved strings without editing
-  // them, which is what makes the shared placement probe trustworthy.
-  it("keeps the claim SELECT byte-identical to the pre-refactor SQL", () => {
+  // one body of SQL. MUL-466 only adds the explicit-workspace dedicated clause
+  // to the golden; every other byte still guards the original claim contract.
+  it("keeps the claim SELECT byte-identical to the routing golden", () => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({
       id: "rt_golden", name: "golden", provider: "codex", workspaceId: "local", daemonId: "dev-golden",
@@ -776,6 +870,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     type Shape =
       | "chat" | "issue-no-workspace" | "issue-workspace-on-M" | "issue-holds-zero"
       | "with-code-on-M" | "frozen-retry-on-M" | "runtime-workspace-on-M" | "runtime-workspace-on-U"
+      | "runtime-workspace-on-M-legacy" | "runtime-workspace-archived-on-M"
       | "workspace-runtime-gone";
     type Pin = "none" | "agent-bound-M-legacy" | "agent-bound-M-legacy-unpinned" | "task-pinned-M-legacy";
     type Devices = "unbound" | "bound-M" | "bound-M-legacy" | "bound-M-and-M-legacy";
@@ -783,6 +878,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const SHAPES: Shape[] = [
       "chat", "issue-no-workspace", "issue-workspace-on-M", "issue-holds-zero",
       "with-code-on-M", "frozen-retry-on-M", "runtime-workspace-on-M", "runtime-workspace-on-U",
+      "runtime-workspace-on-M-legacy", "runtime-workspace-archived-on-M",
       "workspace-runtime-gone",
     ];
     const PINS: Pin[] = ["none", "agent-bound-M-legacy", "agent-bound-M-legacy-unpinned", "task-pinned-M-legacy"];
@@ -805,9 +901,11 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       const store = createLocalStore();
       const codex = store.registerRuntime({
         id: "rt_inv_m_codex", name: "M codex", provider: "codex", workspaceId: "local", daemonId: M,
+        metadata: { runtime_workspaces: 1 },
       });
       const claude = store.registerRuntime({
         id: "rt_inv_m_claude", name: "M claude", provider: "claude", workspaceId: "local", daemonId: M,
+        metadata: { runtime_workspaces: 1 },
       });
       // M and M' are the two registrations of ONE machine: M is current and
       // keeps M' daemon's name as its legacy alias, while M' still registers
@@ -817,6 +915,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       db!.run("UPDATE multiremi_runtimes SET legacy_daemon_id = ? WHERE id = ?", [M_LEGACY, codex.id]);
       const legacy = store.registerRuntime({
         id: "rt_inv_m_legacy", name: "M prime", provider: "codex", workspaceId: "local", daemonId: M_LEGACY,
+        metadata: { runtime_workspaces: 1 },
       });
       // Same workspace — the claim-time refresh only scans the claimant's
       // workspace — but a provider no cell's Agent uses, so it runs the refresh
@@ -835,6 +934,9 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         );
       } else if (dedicated) {
         store.updateDaemonDedicated("local", M, true, "local");
+        if (shape === "runtime-workspace-on-M-legacy") {
+          store.updateDaemonDedicated("local", M_LEGACY, true, "local");
+        }
       }
 
       const provider = shape === "issue-workspace-on-M" && pin === "none" && devices === "bound-M"
@@ -904,12 +1006,16 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         });
         // ON DELETE SET NULL, the state `deleteRuntimeWithinTransaction` leaves.
         db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issueId]);
-      } else if (shape === "runtime-workspace-on-M" || shape === "runtime-workspace-on-U") {
+      } else if (shape.startsWith("runtime-workspace-")) {
         const workspace = (store as unknown as {
           runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
         }).runtimeWorkspaces.create(codex.id, { name: `matrix ${label}`, root_path: "/tmp/matrix-rw" });
         if (shape === "runtime-workspace-on-U") {
           db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [U, workspace.id]);
+        } else if (shape === "runtime-workspace-on-M-legacy") {
+          db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [M_LEGACY, workspace.id]);
+        } else if (shape === "runtime-workspace-archived-on-M") {
+          db!.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
         }
         db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
       } else if (shape === "frozen-retry-on-M") {
@@ -1040,7 +1146,32 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
                 expectations.push([!probed.includes(fixture.codexId),
                   `dedicated M with no Project binding must not admit M (probed ${JSON.stringify(probed)})`]);
               }
+              if (shape === "runtime-workspace-on-M" && pin === "none") {
+                expectations.push([probed.includes(fixture.codexId),
+                  `active explicit workspace on M must admit M regardless of bindings/dedicated (probed ${JSON.stringify(probed)})`]);
+              }
+              if (shape === "runtime-workspace-on-M-legacy" && pin === "none") {
+                expectations.push([probed.includes(fixture.legacyId) && !probed.includes(fixture.codexId),
+                  `explicit workspace on M' must admit only its exact daemon (probed ${JSON.stringify(probed)})`]);
+                expectations.push([verdicts.find((v) => v.runtimeId === fixture.codexId)?.routingOk === !dedicated,
+                  "a dedicated M must not use the explicit-workspace exception for M'"]);
+              }
+              if (shape === "runtime-workspace-archived-on-M") {
+                expectations.push([probed.length === 0,
+                  `archived explicit workspace must not be claimed (probed ${JSON.stringify(probed)})`]);
+                expectations.push([verdicts.find((v) => v.runtimeId === fixture.codexId)?.routingOk === !dedicated,
+                  "archived explicit workspace must not bypass dedicated admission"]);
+              }
               for (const [ok, detail] of expectations) if (!ok) fail(detail);
+
+              // Observe while still queued: claiming first would clear a wrong
+              // wait reason and hide disagreement with an allowed routing state.
+              const now = Date.now();
+              db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
+                new Date(now - 200_000).toISOString(), fixture.taskId,
+              ]);
+              fixture.store.refreshQueuedCapabilityWaitReasons(now);
+              const reason = fixture.store.getTask(fixture.taskId)!.waitReason ?? null;
 
               // 3. The real claim outcome must be one the probe predicted.
               const claimedBy = probeWinner(fixture, probed);
@@ -1048,15 +1179,6 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
               if (!claimable && probed.length > 0) {
                 fail(`probe listed ${JSON.stringify(probed)} but no claim won`);
               }
-
-              // 2. Wait text must land in the (a)(b)(c) category the verdicts describe.
-              const now = Date.now();
-              db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
-                new Date(now - 200_000).toISOString(), fixture.taskId,
-              ]);
-              fixture.store.refreshQueuedCapabilityWaitReasons(now);
-              const task = fixture.store.getTask(fixture.taskId)!;
-              const reason = task.waitReason ?? null;
 
               if (claimable) {
                 // (a) a machine can take it: never a placement or device reason.
@@ -1090,9 +1212,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
               // (c) nothing satisfies placement. Either the conflict text, or the
               // daemon fallback when every constraint names one unregistered machine.
               if (shape === "runtime-workspace-on-U" && pin === "none") {
-                const expectedPrefix = dedicated ? "等待项目设备：" : null;
-                if (expectedPrefix ? !reason?.startsWith(expectedPrefix) : reason !== null) {
-                  fail(`(c) pure U expected ${expectedPrefix ?? "no reason"}, got: ${reason}`);
+                if (reason !== null) {
+                  fail(`(c) active explicit workspace admits its unregistered owner even when dedicated, got: ${reason}`);
                 }
               } else if (!reason?.startsWith("等待任务落点：")) {
                 fail(`(c) expected placement wait, got: ${reason}`);
@@ -1102,7 +1223,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         }
       }
       // Chat and explicit U workspaces use only the unbound device column.
-      expect(cells).toBe(9 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
+      expect(cells).toBe(11 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
       expect(failures).toEqual([]);
     },
     { timeout: 120_000 });

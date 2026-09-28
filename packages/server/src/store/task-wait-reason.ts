@@ -58,6 +58,7 @@ export interface DeviceRoutingState {
   projectId: string | null;
   projectHasDevices: boolean;
   machineBound: boolean;
+  runtimeWorkspaceOnMachine: boolean;
   dedicated: boolean;
 }
 
@@ -66,7 +67,8 @@ export function deviceRoutingRepair(state: DeviceRoutingState, machineName: stri
   cause: string; actions: string[];
 } | null {
   const bindingAllowed = !state.projectId || !state.projectHasDevices || state.machineBound;
-  const dedicatedAllowed = !state.dedicated || (Boolean(state.projectId) && state.machineBound);
+  const dedicatedAllowed = !state.dedicated || (Boolean(state.projectId) && state.machineBound)
+    || state.runtimeWorkspaceOnMachine;
   if (bindingAllowed && dedicatedAllowed) return null;
   const actions: string[] = [];
   if (state.projectId) actions.push(`把 ${machineName} 加回项目的设备绑定`);

@@ -102,6 +102,11 @@ export const MUL449_CLAIM_SQL_GOLDEN = String.raw`UPDATE multiremi_tasks
           AND project_device.daemon_id = ?
       )
     )
+    OR EXISTS (
+      SELECT 1 FROM multiremi_runtime_workspaces rw
+      WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+        AND rw.daemon_id = ? AND rw.archived_at IS NULL
+    )
   )
 )
            AND (
