@@ -310,6 +310,12 @@ state of `agent/MUL-403` still runs.
   through the pool and the frames simply arrive later — but a channel that stays
   down for longer than the ring retains takes the ordinary `stream.gap` path.
   `trace:` is unaffected, because it never crosses.
+- **Negative / recovery cost, stated once so it is not rediscovered in an incident:**
+  a peer disconnect shows up as **lateness, not loss**, and the repair is **one
+  reconcile pass** — MUL-462's 「可能漏了」 signal makes each process re-read the head
+  of every `log:` stream it holds and fill the difference. That cost is bounded by
+  the number of streams with subscribers, it happens once per reconnect rather than
+  per frame, and it is why the pointer does not need a durable queue behind it.
 - **Negative / transition:** while the topology runs `api=all` beside
   `api-runtime=runtime`, a daemon still attached to the `all` process keeps its
   trace in that process, so a browser routed to `runtime` cannot see it until the
