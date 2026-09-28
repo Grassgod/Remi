@@ -426,6 +426,19 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "GET /api/issues/:id/timeline", // SQL pages still contain full comment bodies.
   "GET /api/multiremi/issues/:id/timeline",
   "GET /api/issues/:id/session-results", // Unbounded result content/metadata.
+  "GET /api/issues", // Full description/metadata rows; C-2 bounded bytes/data.
+  "GET /api/multiremi/issues", // Also hydrates full task rows for each issue.
+  "GET /api/issues/status-pages", // Row pages retain full issue bodies.
+  "GET /api/issues/grouped",
+  "GET /api/multiremi/issues/grouped",
+  "GET /api/issues/search",
+  "GET /api/multiremi/issues/search",
+  "GET /api/issues/children",
+  "GET /api/multiremi/issues/children",
+  "GET /api/issues/:id/children",
+  "GET /api/multiremi/issues/:id/children",
+  "GET /api/issues/:id/generated-issues",
+  "GET /api/issues/:id/decisions", // Full body/options and human-request payloads.
   "GET /api/issues/:id/active-task", // Filters full task rows after the read.
   "GET /api/issues/:id/task-runs",
   "GET /api/issues/:id/sessions/:sessionId/tasks",
@@ -444,6 +457,10 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/multiremi/chats",
   "GET /api/chat/sessions/:sessionId/pending-task", // Full queued task rows.
   "GET /api/chat/pending-tasks", // Already projected; keep pending C-2 byte data.
+  "POST /api/chat/attachments/send", // Task credential scope uses the full task getter.
+  "GET /api/multiremi/inbox", // Legacy full inbox collection/hydration.
+  "GET /api/inbox/page", // Row pagination does not cap details/issue body bytes.
+  "GET /api/inbox/summary", // Projected but unbounded completed-run details rows.
 
   // Audit: row LIMIT does not bound payload/result/schedule_prompt bytes.
   // C-2 requires projections/bounded bodies and single-reply data below 6 MiB.
@@ -454,11 +471,19 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "GET /api/daemon/autopilot-runs/:runId/gc-check",
   "GET /api/cli/context", // Task scope resolves a full run and prompt context.
   "GET /api/autopilots", // Autopilot prompt/compiled_prompt collection.
+  "GET /api/autopilots/:id", // Full prompt and trigger payload/templates.
+  "POST /api/autopilots", // Full prompt readback.
+  "POST /api/multiremi/autopilots",
+  "PATCH /api/autopilots/:id",
+  "PATCH /api/multiremi/autopilots/:id",
+  "DELETE /api/autopilots/:id",
+  "DELETE /api/multiremi/autopilots/:id",
+  "POST /api/webhooks/autopilots/:token", // Webhook-triggered run/queued read.
   "GET /api/multiremi/autopilots",
   "GET /api/multiremi/scheduler",
-  "POST /api/multiremi/autopilots/:id/run",
-  "POST /api/multiremi/autopilots/:id/run-scheduled",
-  "POST /api/multiremi/autopilots/:id/trigger",
+  "POST /api/multiremi/autopilots/:id/run", // advanceScheduledTargetRuns; C-2 bounded queued reads/data.
+  "POST /api/multiremi/autopilots/:id/run-scheduled", // Same queued read/C-2 condition.
+  "POST /api/multiremi/autopilots/:id/trigger", // Same queued read/C-2 condition.
   "POST /api/multiremi/autopilots/:id/webhook",
   "GET /api/autopilots/:id/deliveries", // Raw bodies are optionally projected in.
   "GET /api/autopilots/:id/deliveries/:deliveryId",
@@ -499,7 +524,22 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
-  "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/build", // advanceScheduledTargetRuns; C-2 bounded queued reads/data.
+
+  // Audit: archive bytes are external, but SQL metadata has no byte cap.
+  // C-2 requires bounded metadata reads and per-route single-reply evidence.
+  "GET /api/issues/:issueId/session-archives",
+  "POST /api/issues/:issueId/session-archives/:archiveId/verify",
+  "POST /api/issues/:issueId/session-archives/:archiveId/retry",
+  "GET /api/workspaces/:id/session-archive",
+  "PUT /api/workspaces/:id/session-archive",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+  "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
 
   // Audit: even a capped 2-MiB prompt may expand beyond 8 MiB in JSON. C-2/data.
   "GET /api/tasks/:taskId/prompt",
@@ -534,10 +574,10 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/daemon/runtimes/:runtimeId/recover-orphans", // Full orphan task set.
 
   // C-1 ruling: preserve MUL-462 readback page size, avoiding extra bridge calls.
-  // C-2/MUL-402 must retain the measured batch latency before removing this.
+  // C-2: MUL-402 removes this read OR a separately authorized row-width algorithm.
   "POST /api/daemon/tasks/:taskId/messages",
   // Audit: peer.receive calls the reference consumer in this HTTP context.
-  // C-2/MUL-402 must retain peer page size/latency before removing this.
+  // C-2: MUL-402 removes this read OR a separately authorized row-width algorithm.
   "POST /internal/peer/events",
   // C-1 ruling: queued reads must be bounded AND v0.2.84+ background replies
   // observed below 6 MiB before C-2 removes this independent entry.
@@ -554,7 +594,7 @@ export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> =
   if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", env.MULTIREMI_PG_REPLY_MAX_BYTES);
+    console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify(env.MULTIREMI_PG_REPLY_MAX_BYTES));
     return DEFAULT_DB_REPLY_MAX_BYTES;
   }
   return parsed;

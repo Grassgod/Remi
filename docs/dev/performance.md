@@ -100,10 +100,12 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 | --- | --- | --- |
 | 209 请求总量超集 | GET dashboard 的 usage/by-agent、agent-runtime、runtime/daily、usage/daily；GET knowledge/submissions、knowledge/runs；GET projects/:id/knowledge/recall、projects/:id/docs；GET workspaces/:id/repository-wikis；GET issues/:id、inbox、tasks/:id/inspection、tasks/:taskId/messages、multiremi/tasks；POST autopilots/:id/trigger、daemon/tasks/:taskId/fail、complete、daemon/runtimes/:runtimeId/tasks/claim。完整模式带 `/api/` 前缀，18 条全部保留 | 修复随同包或更早上线；有埋点的单次回包按路由 <6 MiB，至少三天并含一个工作日高峰；Explorer 只读复核，带头大哥派单逐条收回 |
 | 审计 | 全量 task/chat messages、inspection 别名、issue share、session events/results、comments/timeline、task 集合、run payload/result/schedule_prompt、SQL 文档与 revision 正文、迁移/发布、prompt 和相应 write 回读/actor scope。行数 LIMIT 或 TS 读后分页不等于字节有界；完整键及逐条依据见常量和本单报告 | 先做对应投影/有界读（messages 等待 MUL-402），再满足上行单次数据条件 |
-| C-1 续做裁定 | POST `/api/daemon/tasks/:taskId/messages`：保留 MUL-462 回读 8 行，避免每批多出的桥调用；审计同时纳入 POST `/internal/peer/events`，其同步消费会继承 HTTP 上下文 | MUL-402 / 有界回读完成，页大小、查询数和延迟满足约定，再按单次数据收回 |
+| C-1 续做裁定与 Senior `cmt_tvxpad98uqtz` | POST `/api/daemon/tasks/:taskId/messages`：保留 MUL-462 回读 8 行，避免每批多出的桥调用；同时纳入 POST `/internal/peer/events`，其同步消费会继承 HTTP 上下文 | MUL-402 去掉该读路径，或另一个任务把页大小改为按实际行宽；任一成立即收回，不必等三天观测 |
 | C-1 后台裁定 | `<background> <background>` 为独立、可一行删除的例外。Scheduler.sync → advanceScheduledTargetRuns 仍无界读 queued run 的 schedule_prompt/payload/result；独立 peer 消费也保留 8 行 | queued run 读取有界之后，且 v0.2.84 之后的后台单次数据 <6 MiB，才收回；本 PR 不修改 autopilots-repo.ts |
 
 repository-wikis 的 A/A2（`d905961b`、`d6714966`）已在 main、晚于 v0.2.84，与 C-1 同包或更早上线；本轮保守保留其例外并复测 209 行数模型，未声称 A/A2 已在取证时的生产版本生效。旧 task messages 的 22.7MB / 28 个任务数据来自 MUL-386 `cmt_cecxmzj19eea` 的行 JSON 估算，与桥 bytes 不混用。dashboard 的 58.42 MiB 是请求总量；单次接近/超过 64 MiB 的情况应单列报告，本 PR 不修。
+
+`advanceScheduledTargetRuns` 也可由 canonical trigger、三个 multiremi run/trigger 别名及 repository wiki build 触发；这些 HTTP 例外的收回也要求 queued 读有界。请求内未等待完成的异步工作会继承该请求的 ALS 上下文，同一函数由 timer 触发时则为 `<background>`；C-2 要按触发方看数据。后台收回清单还包括 SCM/issue-title/messaging scheduler、outbound-dispatcher sweep、task-capability-monitor、repository-wiki storage job、WS 消息处理和启动迁移，不能只修 queued run 就移除整个后台例外。归档/trace 正文在外部文件存储；SQL 归档 metadata 无字节上限，相关归档读与回读同样保守进表。
 
 回滚 C-1 合并用 `git revert -m 1 <merge>`；应急可设 `MULTIREMI_PG_REPLY_MAX_BYTES=0`，209 配置变更由贺华杰决定。
 

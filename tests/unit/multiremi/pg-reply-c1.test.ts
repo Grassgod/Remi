@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { createMultiremiApp } from "@multiremi/api/server.js";
 import {
   createRequestMetricsMiddleware, currentDbReplyOrigin, DB_REPLY_TRANSITION_EXCEPTIONS,
-  DEFAULT_DB_REPLY_MAX_BYTES, resetRequestMetricsForTest, resolveDbReplyMaxBytes,
+  DEFAULT_DB_REPLY_MAX_BYTES, resetRequestMetricsForTest, resolveDbReplyMaxBytes, resolveRequestMetricsOptions,
 } from "@multiremi/observability/request-metrics.js";
 import {
   PostgresReplyTooLargeError, PostgresSyncDatabase, postgresReplyMaxBytes,
@@ -37,11 +37,17 @@ describe("MUL-398 C-1 effective reply limit", () => {
   it("warns once per resolution with only the invalid override as variable data", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      for (const value of ["bad", "-1", "1.5", "NaN", "Infinity", "9007199254740992"]) {
+      for (const value of ["bad", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "bad\nvalue"]) {
         warn.mockClear();
         expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: value })).toBe(8 * MIB);
-        expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", value]]);
+        expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify(value)]]);
       }
+      warn.mockClear();
+      process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "bad\nvalue";
+      resetDbReplyLimitForTest();
+      expect(postgresReplyMaxBytes()).toBe(64 * MIB);
+      expect(postgresReplyMaxBytes()).toBe(64 * MIB);
+      expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify("bad\nvalue")]]);
       for (const value of [undefined, "", " ", "0", " 2097152 "]) {
         warn.mockClear();
         expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: value }))
@@ -89,8 +95,11 @@ describe("MUL-398 C-1 effective reply limit", () => {
       app.use("*", createRequestMetricsMiddleware({ ...metrics, enabled }));
       const result = () => ({ bytes: postgresReplyMaxBytes(), rows: taskMessagePageRows(pgMarker) });
       app.post("/api/daemon/tasks/:taskId/messages", c => c.json(result()));
+      app.post("/internal/peer/events", c => c.json(result()));
       app.get("/api/c1/nonexception", c => c.json(result()));
       expect(await (await app.request("/api/daemon/tasks/fixture/messages", { method: "POST" })).json())
+        .toEqual({ bytes: 64 * MIB, rows: 8 });
+      expect(await (await app.request("/internal/peer/events", { method: "POST" })).json())
         .toEqual({ bytes: 64 * MIB, rows: 8 });
       const ordinary = await app.request("/api/c1/nonexception");
       expect(await ordinary.json()).toEqual({ bytes: 8 * MIB, rows: 1 });
@@ -123,24 +132,32 @@ describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
     const lines: string[] = [];
     const log = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
     let caught: unknown;
-    app.use("*", createRequestMetricsMiddleware(metrics));
+    let enabled = true;
+    app.use("*", (c, next) => createRequestMetricsMiddleware(resolveRequestMetricsOptions("all", {
+      MULTIREMI_REQUEST_METRICS: enabled ? "1" : "0",
+    }))(c, next));
     const read = (size: number) => db.query("SELECT repeat('x', ?) AS body").get(size) as { body: string };
     app.get("/api/tasks/:taskId/messages", c => c.json({ bytes: read(24 * MIB).body.length }));
     app.get("/api/c1/nonexception", c => c.json({ bytes: read(9 * MIB).body.length }));
     app.onError((error, c) => { caught = error; return c.json({ error: error.message }, 500); });
     try {
-      const exception = await app.request("/api/tasks/fixture/messages");
-      expect(exception.status).toBe(200);
-      expect(await exception.json()).toEqual({ bytes: 24 * MIB });
-      expect(lines.some(line => JSON.parse(line).event === "api_db_reply_rejected")).toBe(false);
-      const ordinary = await app.request("/api/c1/nonexception");
-      expect(ordinary.status).toBe(500);
-      expect(caught).toBeInstanceOf(PostgresReplyTooLargeError);
-      const rejected = lines.map(line => JSON.parse(line)).find(line => line.event === "api_db_reply_rejected");
-      expect(rejected).toMatchObject({ method: "GET", route: "/api/c1/nonexception", max_bytes: 8 * MIB });
-      expect(rejected.bytes).toBeGreaterThan(8 * MIB);
-      expect(ordinary.headers.get("Server-Timing")).toContain("dbp;dur=0.0");
-      expect(await (await app.request("/api/tasks/fixture/messages")).json()).toEqual({ bytes: 24 * MIB });
+      for (const mode of [true, false]) {
+        enabled = mode;
+        lines.length = 0;
+        const exception = await app.request("/api/tasks/fixture/messages");
+        expect(exception.status).toBe(200);
+        expect(await exception.json()).toEqual({ bytes: 24 * MIB });
+        expect(lines.some(line => JSON.parse(line).event === "api_db_reply_rejected")).toBe(false);
+        const ordinary = await app.request("/api/c1/nonexception");
+        expect(ordinary.status).toBe(500);
+        expect(caught).toBeInstanceOf(PostgresReplyTooLargeError);
+        const rejected = lines.map(line => JSON.parse(line)).find(line => line.event === "api_db_reply_rejected");
+        expect(rejected).toMatchObject({ method: "GET", route: "/api/c1/nonexception", max_bytes: 8 * MIB });
+        expect(rejected.bytes).toBeGreaterThan(8 * MIB);
+        if (enabled) expect(ordinary.headers.get("Server-Timing")).toContain("dbp;dur=0.0");
+        else expect(ordinary.headers.get("Server-Timing")).toBeNull();
+        expect(await (await app.request("/api/tasks/fixture/messages")).json()).toEqual({ bytes: 24 * MIB });
+      }
     } finally { log.mockRestore(); db.close(); }
   });
 

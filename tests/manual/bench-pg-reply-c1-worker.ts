@@ -54,11 +54,16 @@ export async function runC1Worker(input: {
   registerPeerRoutes(peerApp, { peer, secret: peerSecret });
   const realQuery = db.query.bind(db);
   let calls = 0;
+  let messageSelects = 0;
   db.query = (sql: string) => {
     const statement = realQuery(sql);
     return new Proxy(statement, { get(target, key) {
       const value = Reflect.get(target, key);
-      return typeof value === "function" ? (...args: unknown[]) => { calls++; return value.apply(target, args); } : value;
+      return typeof value === "function" ? (...args: unknown[]) => {
+        calls++;
+        if (key === "all" && /^SELECT \* FROM multiremi_task_messages/.test(sql)) messageSelects++;
+        return value.apply(target, args);
+      } : value;
     } });
   };
   const auth = { Authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -75,6 +80,7 @@ export async function runC1Worker(input: {
   let longTaskId: string | undefined;
   let shareToken: string | undefined;
   let peerSequence = 0;
+  let seededPeer = false;
   const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
   try {
     emit({ ready: true, stage: before ? "before" : "after" });
@@ -97,12 +103,20 @@ export async function runC1Worker(input: {
         if (response.status !== 200) throw new Error(`Daemon batch status ${response.status}`);
         emit({ ms, queries: timing(response, "dbq") });
       } else if (command.kind === "peer" || command.kind === "peer-http") {
+        if (!seededPeer) {
+          // Each referenced message exceeds 512 KiB; the degraded event itself
+          // carries only seq bounds, matching the receiver's production contract.
+          db.run("UPDATE multiremi_task_messages SET content = ?, input = ?, output = ? WHERE task_id = ?",
+            ["x".repeat(256 * 1024), JSON.stringify("x".repeat(256 * 1024 - 2)), "x".repeat(64 * 1024), taskId]);
+          seededPeer = true;
+        }
         fanout ??= createRealtimeFanout({ store, role: "ui", peer, registries: {
           browser: new Map([["local", new Set([browser.client])]]), browserScope: new Map(),
           browserUser: new Map(), daemon: new Map(),
         } });
         browser.frames.length = 0;
         calls = 0;
+        messageSelects = 0;
         const envelope = { v: 1, id: `c1_peer_${peerSequence++}`, origin: "c1-sender", kind: "task_messages",
           payload: { task_id: taskId, degraded: true, seq_start: 1, seq_end: count } };
         const started = performance.now();
@@ -118,7 +132,9 @@ export async function runC1Worker(input: {
         }
         const ms = performance.now() - started;
         if (browser.frames.length !== count) throw new Error(`Peer delivered ${browser.frames.length}/${count}`);
-        emit({ ms, queries: calls, rows: pageRows, origin, frames: browser.frames.length });
+        if (messageSelects !== Math.ceil(count / 8)) throw new Error(`Peer message SELECTs ${messageSelects}/${Math.ceil(count / 8)}`);
+        emit({ ms, queries: calls, messageSelects, referencedBodyBytes: count * (576 * 1024 - 2),
+          rows: pageRows, origin, frames: browser.frames.length });
       } else if (command.kind === "long") {
         if (!longTaskId) {
           store.completeTask(taskId, { output: "C1 batch measurements complete" });

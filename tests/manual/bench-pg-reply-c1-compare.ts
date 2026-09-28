@@ -57,7 +57,7 @@ const before = await spawnWorker(baseline, "before");
 const after = await spawnWorker(root, "after");
 const result: Record<string, unknown> = { baselineSha: "b95dd2fa", samples, warmups,
   fixture: { batchSizes: [1, 10, 50], contentBytes: 1024, longMessageCount: 96, longMessageBytes: 256 * 1024,
-    queuedRuns: 20, queuedPromptBytes: 512 * 1024 } };
+    peerMessageBodyBytes: 576 * 1024 - 2, queuedRuns: 20, queuedPromptBytes: 512 * 1024 } };
 try {
   const measurements: unknown[] = [];
   for (const kind of ["daemon", "peer", "peer-http"]) {
@@ -73,6 +73,7 @@ try {
       const stats = (stage: "before" | "after") => ({
         queries: [...new Set(pairs.map(pair => pair[stage].queries))],
         pageRows: [...new Set(pairs.map(pair => pair[stage].rows).filter(Boolean))],
+        messageSelects: [...new Set(pairs.map(pair => pair[stage].messageSelects).filter(value => value !== undefined))],
         origin: pairs[0]![stage].origin,
         p50Ms: percentile(pairs.map(pair => pair[stage].ms), .5),
         p95Ms: percentile(pairs.map(pair => pair[stage].ms), .95),
