@@ -1,0 +1,1671 @@
+{
+  "name": "MUL-473 assignee reference resolution",
+  "capturedAt": "<timestamp>",
+  "source": "pre-MUL-473 implementation (593ff2ba)",
+  "cases": [
+    {
+      "label": "agent row id",
+      "ref": "agt_assignee_plain",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "member row id",
+      "ref": "mem_local_usr_81jxvp4lz635",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "squad row id",
+      "ref": "sqd_assignee_plain",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "reader user id (also an agent name)",
+      "ref": "usr_zne8vi8besy6",
+      "store": {
+        "error": "Ambiguous assignee reference: usr_zne8vi8besy6"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "other member user id",
+      "ref": "usr_81jxvp4lz635",
+      "store": {
+        "error": "Ambiguous assignee reference: usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "agent name",
+      "ref": "Plain agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "member name",
+      "ref": "Other member",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "member email",
+      "ref": "other-member@example.test",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "squad name",
+      "ref": "Plain squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "usr_-shaped agent name",
+      "ref": "usr_assignee_lookalike",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "usr_-shaped squad name",
+      "ref": "usr_assignee_squad_lookalike",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_squad"
+        ]
+      }
+    },
+    {
+      "label": "usr_-shaped value that exists nowhere",
+      "ref": "usr_assignee_nowhere",
+      "store": {
+        "error": "Assignee not found: usr_assignee_nowhere"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "mem_-shaped agent name",
+      "ref": "mem_assignee_lookalike",
+      "store": {
+        "error": "Member not found: mem_assignee_lookalike"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "sqd_-shaped agent name",
+      "ref": "sqd_assignee_lookalike",
+      "store": {
+        "error": "Squad not found: sqd_assignee_lookalike"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "mem_-shaped value that exists nowhere",
+      "ref": "mem_assignee_nowhere",
+      "store": {
+        "error": "Member not found: mem_assignee_nowhere"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "agt_-shaped value that exists nowhere",
+      "ref": "agt_assignee_nowhere",
+      "store": {
+        "error": "Agent not found: agt_assignee_nowhere"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "sqd_-shaped value that exists nowhere",
+      "ref": "sqd_assignee_nowhere",
+      "store": {
+        "error": "Squad not found: sqd_assignee_nowhere"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "collision: member user id + agent name + squad name",
+      "ref": "usr_zne8vi8besy6",
+      "store": {
+        "error": "Ambiguous assignee reference: usr_zne8vi8besy6"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "collision: member user id + agent name",
+      "ref": "usr_81jxvp4lz635",
+      "store": {
+        "error": "Ambiguous assignee reference: usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "member user id with no collision",
+      "ref": "usr_p5s3fiduwruv",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_p5s3fiduwruv"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "collision: two members share a user id, one named like it",
+      "ref": "usr_assignee_dupe_shared",
+      "store": {
+        "error": "Assignee not found: usr_assignee_dupe_shared"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "collision: two agents share an alias",
+      "ref": "Shared alias",
+      "store": {
+        "error": "Assignee not found: Shared alias"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "agent id prefix",
+      "ref": "agt_assignee_pl",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "exact agent id that prefixes another id",
+      "ref": "agt_assignee_ambiguous_a",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_ambiguous_a"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "archived agent row id",
+      "ref": "agt_assignee_archived",
+      "store": {
+        "error": "Agent not found: agt_assignee_archived"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "archived member row id",
+      "ref": "mem_local_usr_1jucd2hzrho2",
+      "store": {
+        "error": "Member not found: mem_local_usr_1jucd2hzrho2"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "archived squad row id",
+      "ref": "sqd_assignee_archived",
+      "store": {
+        "error": "Squad not found: sqd_assignee_archived"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "archived agent name (live twin exists)",
+      "ref": "Archived agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "archived squad name (live twin exists)",
+      "ref": "Archived squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name, as written",
+      "ref": "Plain agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name, upper case",
+      "ref": "PLAIN AGENT",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name, lower case",
+      "ref": "plain agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name, punctuation stripped",
+      "ref": "Plainagent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name, one char dropped",
+      "ref": "Plain agen",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name, one char appended",
+      "ref": "Plain agentz",
+      "store": {
+        "error": "Assignee not found: Plain agentz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name, lower + padded",
+      "ref": "  plain agent  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent name with digits, as written",
+      "ref": "Agent 7",
+      "store": {
+        "error": "Assignee not found: Agent 7"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, upper case",
+      "ref": "AGENT 7",
+      "store": {
+        "error": "Assignee not found: AGENT 7"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, lower case",
+      "ref": "agent 7",
+      "store": {
+        "error": "Assignee not found: agent 7"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, punctuation stripped",
+      "ref": "Agent7",
+      "store": {
+        "error": "Assignee not found: Agent7"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, one char dropped",
+      "ref": "Agent ",
+      "store": {
+        "error": "Assignee not found: Agent"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, one char appended",
+      "ref": "Agent 7z",
+      "store": {
+        "error": "Assignee not found: Agent 7z"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent name with digits, lower + padded",
+      "ref": "  agent 7  ",
+      "store": {
+        "error": "Assignee not found: agent 7"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, as written",
+      "ref": "Dotted.Name.Agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, upper case",
+      "ref": "DOTTED.NAME.AGENT",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, lower case",
+      "ref": "dotted.name.agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, punctuation stripped",
+      "ref": "DottedNameAgent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, one char dropped",
+      "ref": "Dotted.Name.Agen",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, one char appended",
+      "ref": "Dotted.Name.Agentz",
+      "store": {
+        "error": "Assignee not found: Dotted.Name.Agentz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, lower + padded",
+      "ref": "  dotted.name.agent  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, as written",
+      "ref": "DottedNameAgent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, upper case",
+      "ref": "DOTTEDNAMEAGENT",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, lower case",
+      "ref": "dottednameagent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, punctuation stripped",
+      "ref": "DottedNameAgent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, one char dropped",
+      "ref": "DottedNameAgen",
+      "store": {
+        "error": "Assignee not found: DottedNameAgen"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, one char appended",
+      "ref": "DottedNameAgentz",
+      "store": {
+        "error": "Assignee not found: DottedNameAgentz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: dotted agent name, no dots, lower + padded",
+      "ref": "  dottednameagent  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_dotted"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, as written",
+      "ref": "Mixed Case Agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, upper case",
+      "ref": "MIXED CASE AGENT",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, lower case",
+      "ref": "mixed case agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, punctuation stripped",
+      "ref": "MixedCaseAgent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, one char dropped",
+      "ref": "Mixed Case Agen",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, one char appended",
+      "ref": "Mixed Case Agentz",
+      "store": {
+        "error": "Assignee not found: Mixed Case Agentz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: mixed-case agent name, lower + padded",
+      "ref": "  mixed case agent  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_cased"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, as written",
+      "ref": "usr_assignee_lookalike",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, upper case",
+      "ref": "USR_ASSIGNEE_LOOKALIKE",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, lower case",
+      "ref": "usr_assignee_lookalike",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, punctuation stripped",
+      "ref": "usrassigneelookalike",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, one char dropped",
+      "ref": "usr_assignee_lookalik",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, one char appended",
+      "ref": "usr_assignee_lookalikez",
+      "store": {
+        "error": "Assignee not found: usr_assignee_lookalikez"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: usr_-shaped agent name, lower + padded",
+      "ref": "  usr_assignee_lookalike  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_usr_shaped"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_usr_shaped_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, as written",
+      "ref": "Plain squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, upper case",
+      "ref": "PLAIN SQUAD",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, lower case",
+      "ref": "plain squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, punctuation stripped",
+      "ref": "Plainsquad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, one char dropped",
+      "ref": "Plain squa",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad name, one char appended",
+      "ref": "Plain squadz",
+      "store": {
+        "error": "Assignee not found: Plain squadz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: squad name, lower + padded",
+      "ref": "  plain squad  ",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, as written",
+      "ref": "Other member",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, upper case",
+      "ref": "OTHER MEMBER",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, lower case",
+      "ref": "other member",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, punctuation stripped",
+      "ref": "Othermember",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, one char dropped",
+      "ref": "Other membe",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: member name, one char appended",
+      "ref": "Other memberz",
+      "store": {
+        "error": "Assignee not found: Other memberz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: member name, lower + padded",
+      "ref": "  other member  ",
+      "store": {
+        "assigneeType": "member",
+        "assigneeId": "mem_local_usr_81jxvp4lz635"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_other_member"
+        ]
+      }
+    },
+    {
+      "label": "derived: archived agent name, as written",
+      "ref": "Archived agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, upper case",
+      "ref": "ARCHIVED AGENT",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, lower case",
+      "ref": "archived agent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, punctuation stripped",
+      "ref": "Archivedagent",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, one char dropped",
+      "ref": "Archived agen",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, one char appended",
+      "ref": "Archived agentz",
+      "store": {
+        "error": "Assignee not found: Archived agentz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived agent name, lower + padded",
+      "ref": "  archived agent  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, as written",
+      "ref": "Archived member",
+      "store": {
+        "error": "Assignee not found: Archived member"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, upper case",
+      "ref": "ARCHIVED MEMBER",
+      "store": {
+        "error": "Assignee not found: ARCHIVED MEMBER"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, lower case",
+      "ref": "archived member",
+      "store": {
+        "error": "Assignee not found: archived member"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, punctuation stripped",
+      "ref": "Archivedmember",
+      "store": {
+        "error": "Assignee not found: Archivedmember"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, one char dropped",
+      "ref": "Archived membe",
+      "store": {
+        "error": "Assignee not found: Archived membe"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, one char appended",
+      "ref": "Archived memberz",
+      "store": {
+        "error": "Assignee not found: Archived memberz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived member name, lower + padded",
+      "ref": "  archived member  ",
+      "store": {
+        "error": "Assignee not found: archived member"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, as written",
+      "ref": "Archived squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, upper case",
+      "ref": "ARCHIVED SQUAD",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, lower case",
+      "ref": "archived squad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, punctuation stripped",
+      "ref": "Archivedsquad",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, one char dropped",
+      "ref": "Archived squa",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, one char appended",
+      "ref": "Archived squadz",
+      "store": {
+        "error": "Assignee not found: Archived squadz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: archived squad name, lower + padded",
+      "ref": "  archived squad  ",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_live_twin"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent id, as written",
+      "ref": "agt_assignee_plain",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent id, upper case",
+      "ref": "AGT_ASSIGNEE_PLAIN",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent id, lower case",
+      "ref": "agt_assignee_plain",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent id, punctuation stripped",
+      "ref": "agtassigneeplain",
+      "store": {
+        "error": "Assignee not found: agtassigneeplain"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent id, one char dropped",
+      "ref": "agt_assignee_plai",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: agent id, one char appended",
+      "ref": "agt_assignee_plainz",
+      "store": {
+        "error": "Agent not found: agt_assignee_plainz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: agent id, lower + padded",
+      "ref": "  agt_assignee_plain  ",
+      "store": {
+        "assigneeType": "agent",
+        "assigneeId": "agt_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad id, as written",
+      "ref": "sqd_assignee_plain",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad id, upper case",
+      "ref": "SQD_ASSIGNEE_PLAIN",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad id, lower case",
+      "ref": "sqd_assignee_plain",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad id, punctuation stripped",
+      "ref": "sqdassigneeplain",
+      "store": {
+        "error": "Assignee not found: sqdassigneeplain"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: squad id, one char dropped",
+      "ref": "sqd_assignee_plai",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "derived: squad id, one char appended",
+      "ref": "sqd_assignee_plainz",
+      "store": {
+        "error": "Squad not found: sqd_assignee_plainz"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "derived: squad id, lower + padded",
+      "ref": "  sqd_assignee_plain  ",
+      "store": {
+        "assigneeType": "squad",
+        "assigneeId": "sqd_assignee_plain"
+      },
+      "http": {
+        "status": 200,
+        "total": 1,
+        "issueIds": [
+          "iss_assignee_plain_squad"
+        ]
+      }
+    },
+    {
+      "label": "blank reference",
+      "ref": "   ",
+      "store": {
+        "error": "<null>"
+      },
+      "http": {
+        "status": 200,
+        "total": 10,
+        "issueIds": [
+          "iss_assignee_duplicate_user_id",
+          "iss_assignee_other_member",
+          "iss_assignee_shared_user_id_squad",
+          "iss_assignee_usr_shaped_squad",
+          "iss_assignee_plain_squad",
+          "iss_assignee_shared_user_id",
+          "iss_assignee_sqd_shaped_agent",
+          "iss_assignee_mem_shaped_agent",
+          "iss_assignee_usr_shaped_agent",
+          "iss_assignee_plain_agent"
+        ]
+      }
+    },
+    {
+      "label": "single character",
+      "ref": "A",
+      "store": {
+        "error": "Ambiguous assignee reference: A"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "underscore only",
+      "ref": "_",
+      "store": {
+        "error": "Assignee not found: _"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
+      "label": "usr_ prefix only",
+      "ref": "usr_",
+      "store": {
+        "error": "Assignee not found: usr_"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    }
+  ]
+}

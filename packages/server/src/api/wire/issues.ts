@@ -2,6 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import type {
+  AssignIssueInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   MultiremiAttachment,
@@ -9,6 +10,7 @@ import type {
   MultiremiIssue,
   MultiremiIssueComment,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
   MultiremiIssueSession,
@@ -18,10 +20,15 @@ import type {
   MultiremiSessionResult,
   MultiremiTimelineEntry,
   MultiremiTimelinePage,
+  CreateSessionTaskInput,
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
-import { BatchParentStatusGuardError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
+import {
+  BatchParentStatusGuardError,
+  IssueDependencyError,
+  ParentStatusGuardError,
+} from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
@@ -222,13 +229,14 @@ export function issueSubscriberTargetErrorResponse(c: Context, error: unknown): 
   return c.json({ error: message }, 400);
 }
 
-export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependency): Record<string, unknown> {
+export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependencyView): Record<string, unknown> {
   return {
     id: dependency.id,
     workspace_id: dependency.workspaceId,
     issue_id: dependency.issueId,
     depends_on_issue_id: dependency.dependsOnIssueId,
     type: dependency.type,
+    direction: dependency.direction,
     issue: dependency.issue ? issueCompatibilityResponse(dependency.issue) : null,
     depends_on_issue: dependency.dependsOnIssue ? issueCompatibilityResponse(dependency.dependsOnIssue) : null,
     created_at: dependency.createdAt,
@@ -276,6 +284,15 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       ...rejectedIssueIds(err),
     }, 409);
   }
+  // MUL-400 E3 gate 2: leaving backlog with unmet prerequisites is a conflict,
+  // and the body names the prerequisites so the client can explain the hold.
+  if (err instanceof IssueDependencyError) {
+    return c.json({
+      error: err.message,
+      code: err.code,
+      unmet: err.details.unmet ?? [],
+    }, 409);
+  }
   if (err.message === "auto_title is reserved for system metadata") {
     return c.json({ error: err.message }, 400);
   }
@@ -309,6 +326,14 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
 
 export function issueDependencyErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // MUL-400 E3: cycles and ancestor dependencies are 409 with the offending key
+  // path; the console turns `path` into the readable chain.
+  if (err instanceof IssueDependencyError) {
+    if (err.code === "dependency_cycle" || err.code === "dependency_on_ancestor") {
+      return c.json({ error: err.message, code: err.code, path: err.details.path ?? [] }, 409);
+    }
+    return c.json({ error: err.message, code: err.code, unmet: err.details.unmet ?? [] }, 409);
+  }
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Dependent issue not found:")) return c.json({ error: "dependent issue not found" }, 400);
   if (err.message === "An issue cannot depend on itself") return c.json({ error: "an issue cannot depend on itself" }, 400);
@@ -352,9 +377,93 @@ const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
 ] as const;
 
 export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
-  const out: Record<string, unknown> = { ...input };
-  for (const field of SERVER_OWNED_ISSUE_UPDATE_FIELDS) delete out[field];
-  return out as UpdateIssueInput;
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_UPDATE_FIELDS);
+}
+
+/**
+ * MUL-448: lineage the assignment route stamps from the authenticated request.
+ *
+ * Same `??` hazard as above: the route overwrites `parentTaskId`, but a body
+ * that also sends `parent_task_id` leaves the alias to win when the credential
+ * carries no lineage (a member PAT has no source task, so the camelCase stamp
+ * is null and `null ?? body.parent_task_id` picks the forged value up).
+ */
+const SERVER_OWNED_ASSIGN_FIELDS = ["parentTaskId", "parent_task_id"] as const;
+
+export function stripServerOwnedAssignFields(input: AssignIssueInput = {}): AssignIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_ASSIGN_FIELDS);
+}
+
+/**
+ * MUL-448: what the Session task route derives for itself.
+ *
+ * `parentTaskId` comes from the caller's task credential and `sourceEventId`
+ * names the SCM event that authorizes repository scope; neither is a
+ * caller-selectable input on this surface.
+ */
+const SERVER_OWNED_SESSION_TASK_FIELDS = [
+  "parentTaskId",
+  "parent_task_id",
+  "sourceEventId",
+  "source_event_id",
+] as const;
+
+export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput): CreateSessionTaskInput {
+  return stripRequestFields(input, SERVER_OWNED_SESSION_TASK_FIELDS);
+}
+
+/**
+ * MUL-448 B4: caller-supplied creator/requester identities are not accepted.
+ *
+ * The native create route strips `createdBy` / `created_by`, and both
+ * quick-create routes strip `requesterId` / `requester_id`. These routes do not
+ * stamp a credentialed identity, so their result stays aligned with main. The
+ * compatibility `POST /api/issues` route still stamps the credentialed caller
+ * through `withIssueCreateRequestContext`.
+ */
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+
+export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
+}
+
+/**
+ * MUL-448 B3: provenance a credentialed create must not take from the body.
+ *
+ * `sourceIssueId` + `issueKind` are what the compatibility create route matches
+ * on (`findGeneratedIssueByTitle`) to hand back an existing issue instead of
+ * creating one, and `issueKind` alone flips the intake/execution semantics the
+ * generated-issue cache keys on. A member could therefore file an "execution"
+ * naming someone else's intake with the title a real run would use, and the
+ * run's own create would then return that forged issue with no task dispatched.
+ *
+ * The credentialed paths derive both fields from the credential: the compat
+ * route through `withIssueCreateRequestContext` (intake task token only), and
+ * the native route by simply not accepting them. The anonymous compatibility
+ * mode (master token / auth disabled) keeps passing the body through.
+ */
+const SERVER_OWNED_ISSUE_SOURCE_FIELDS = [
+  "sourceIssueId",
+  "source_issue_id",
+  "issueKind",
+  "issue_kind",
+] as const;
+
+export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_SOURCE_FIELDS);
+}
+
+/** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+
+export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);
+}
+
+function stripRequestFields<T extends object>(input: T, fields: readonly string[]): T {
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const field of fields) delete out[field];
+  return out as T;
 }
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
@@ -374,8 +483,10 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
-  // MUL-400 E1: `force` survives the compatibility projection. The routes strip
-  // it for task identities, so reaching the store with it means a member asked.
+  // MUL-400 E1/E3: `force` survives the compatibility projection because the
+  // batch route needs it to select the parent-status override (the store moves
+  // it into a server-internal option that the dependency gate ignores). The
+  // routes strip it for task identities, so reaching the store means a member.
   if (hasRequestField(input, "force")) out.force = input.force === true;
   return out;
 }
