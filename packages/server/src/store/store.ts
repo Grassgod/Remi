@@ -109,6 +109,8 @@ import {
   SessionArchivesRepo,
   type SessionArchiveStatusSnapshot,
   type SessionArchiveWorkspaceUsage,
+  type TraceBackfillCommitInput,
+  type TraceBackfillCommitResult,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
   TaskTracesRepo,
@@ -977,6 +979,28 @@ runMigrations(this.db);
     tasks: readonly TraceBackfillTaskDigest[],
   ): void {
     this.traceBackfillProgress.replaceTasks(subjectKind, subjectId, archiveId, tasks);
+  }
+
+  /**
+   * One subject of the trace backfill in one transaction: the `ready`
+   * `trace_backfill` row, its pointers, the `none` pointers, the progress mark
+   * and the per-task digests.
+   */
+  commitTraceBackfill(
+    input: TraceBackfillCommitInput & {
+      progress: TraceBackfillProgressInput;
+      taskDigests: readonly TraceBackfillTaskDigest[];
+    },
+  ): TraceBackfillCommitResult {
+    return this.db.transaction(() => {
+      const result = this.sessionArchives.commitTraceBackfill(input);
+      const archiveId = result.archive?.id ?? null;
+      this.traceBackfillProgress.markDone({ ...input.progress, archiveId });
+      if (archiveId) {
+        this.traceBackfillProgress.replaceTasks(input.subjectKind, input.subjectId, archiveId, input.taskDigests);
+      }
+      return result;
+    })();
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }

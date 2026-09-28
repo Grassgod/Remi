@@ -200,6 +200,12 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    round-trips (`JSON.stringify(JSON.parse(text)) === text`) and reports every
    mismatch as `json_nonroundtrip`, expected to be zero. Already-truncated members
    reconcile against the stored value, not against a re-truncated copy.
+   A JSON column whose stored text does not parse (the write-path cap fired and
+   left a `… [truncated]` prefix; 187 `input` rows and 0 `meta` rows at the
+   2026-09-26 snapshot) is carried as `null`, the same value
+   `parseStoredTraceJson` yields on the live path and the API answers today. The
+   dry run counts them as `json_unparseable_input` / `json_unparseable_meta` and
+   stops on any unparseable row that lacks the marker.
 
 ## B1 implementation boundary (MUL-426)
 
@@ -272,6 +278,8 @@ their legacy read path until B7 backfills them.
   completion report; a daemon that omits them leaves cards without those fields.
 - **Negative:** the six comments whose Issue no longer exists are not carried into
   the log; they survive only in the pre-drop backup.
+- **Negative:** JSON columns that no longer parse are backfilled as `null`; the
+  truncated prefixes of those rows survive only in the pre-drop backup.
 - **Neutral / open:** window-read shape (`entries + patches` vs inlined updated
   rows), whether replicas key freshness on `log_version`, the Feishu catch-up
   cursor and the `trace.read` limit are settled with MUL-401/MUL-403.

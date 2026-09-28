@@ -7,6 +7,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import {
+  copyFile,
   lstat,
   mkdir,
   open,
@@ -48,7 +49,15 @@ import {
   type ArchiveIngestVerification,
 } from "@multiremi/session-archive/ingest.js";
 import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
-import { SessionArchiveTraceOwnershipError } from "@multiremi/store/repos/session-archives-repo.js";
+import {
+  SessionArchiveTraceOwnershipError,
+  TraceBackfillSubjectError,
+  type TraceBackfillCommitResult,
+} from "@multiremi/store/repos/session-archives-repo.js";
+import type {
+  TraceBackfillProgressInput,
+  TraceBackfillTaskDigest,
+} from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -57,6 +66,8 @@ const UPLOAD_PROGRESS_HEARTBEAT_MS = 30_000;
 const DEFAULT_ROOT = join(homedir(), ".remi", "multiremi", "session-archives");
 const ISSUE_PURGE_OUTBOX = ".issue-purge-outbox";
 const DEFAULT_PURGE_RECOVERY_INTERVAL_MS = 30_000;
+/** Present in a backfill archive directory until its row is committed. */
+const TRACE_BACKFILL_PENDING_MARKER = ".trace-backfill-pending";
 const log = createLogger("session-archive");
 
 interface IssueArchivePurgeReceipt {
@@ -76,6 +87,26 @@ export interface SessionArchiveStorageConfig {
   root: string;
   maxBytes: number;
   minFreeBytes: number;
+}
+
+/** One subject of `scripts/backfill-task-traces.ts`, staged and verified. */
+export interface TraceBackfillIngestInput {
+  workspaceId: string;
+  subject: SessionArchiveSubjectScope;
+  /** Recorded on the row and the pointers; the backfill has no uploading Runtime. */
+  runtimeId: string;
+  daemonId: string;
+  /** The staged zip from `prepareSessionArchive`. It is moved, not copied, into place. */
+  archivePath: string;
+  sourceRevision: string;
+  sha256: string;
+  sizeBytes: number;
+  fileCount: number;
+  /** Must carry `kind: "trace_backfill"`. */
+  metadata: Record<string, unknown>;
+  noneTaskIds: readonly string[];
+  progress: TraceBackfillProgressInput;
+  taskDigests: readonly TraceBackfillTaskDigest[];
 }
 
 export interface SessionArchiveVerifyResult {
@@ -995,6 +1026,196 @@ export class SessionArchiveService {
     const retried = this.store.retrySessionArchive(archiveId);
     if (!retried) throw this.issueLifecycleClosed();
     return retried;
+  }
+
+  /**
+   * Publish one subject of the task_messages trace backfill (MUL-432).
+   *
+   * The archive goes where an upload of the same subject would, under the same
+   * path rules and with the same `manifest.json`, and its pointers go through
+   * the same swap rule. What differs is that there is no upload attempt: the
+   * row is created `ready` in the transaction that writes the pointers and
+   * marks the subject done. Until then the directory carries a marker, so an
+   * interrupted run can tell its own leftovers from a live archive.
+   */
+  async ingestTraceBackfill(input: TraceBackfillIngestInput): Promise<TraceBackfillCommitResult> {
+    const { subject } = input;
+    if (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(subject.id)) {
+      throw new SessionArchiveError("subject_id must be a plain identifier", 400, "session_archive_invalid_subject");
+    }
+    if (input.metadata.kind !== "trace_backfill") {
+      throw new SessionArchiveError("trace backfill metadata must carry kind trace_backfill");
+    }
+    if (Buffer.byteLength(JSON.stringify(input.metadata), "utf8") > 64 * 1024) {
+      throw new SessionArchiveError("metadata exceeds 65536 bytes", 413, "metadata_too_large");
+    }
+    if (!/^[a-f0-9]{64}$/.test(input.sha256)) {
+      throw new SessionArchiveError("sha256 must be a 64-character lowercase hexadecimal digest");
+    }
+    if (input.sizeBytes > this.config.maxBytes) {
+      throw new SessionArchiveError(
+        `archive exceeds configured maximum of ${this.config.maxBytes} bytes`,
+        413,
+        "session_archive_too_large",
+      );
+    }
+    const declared = {
+      workspaceId: input.workspaceId,
+      subjectKind: subject.kind,
+      subjectId: subject.id,
+      issueId: subject.kind === "issue" ? subject.id : null,
+      format: SESSION_ARCHIVE_FORMAT_V2,
+      runtimeId: input.runtimeId,
+      daemonId: input.daemonId,
+      sourceRevision: input.sourceRevision,
+      sha256: input.sha256,
+      sizeBytes: input.sizeBytes,
+      fileCount: input.fileCount,
+      metadata: input.metadata,
+    };
+    const staged: MultiremiSessionArchive = {
+      ...declared,
+      id: "",
+      uploadedSizeBytes: input.sizeBytes,
+      status: "ready",
+      relativePath: "",
+      attemptCount: 1,
+      retryBudgetBaseAttempt: 0,
+      lastError: null,
+      nextRetryAt: null,
+      retryExhaustedAt: null,
+      createdAt: "",
+      updatedAt: "",
+      completedAt: null,
+    };
+    this.assertArchiveHash(await hashFile(input.archivePath, input.sizeBytes), staged);
+    const ingest = await this.validateArchiveIngest(input.archivePath, staged);
+    const commit = (archive: MultiremiSessionArchive) => this.store.commitTraceBackfill({
+      workspaceId: input.workspaceId,
+      subjectKind: subject.kind,
+      subjectId: subject.id,
+      archive: {
+        id: archive.id,
+        runtimeId: archive.runtimeId,
+        daemonId: archive.daemonId,
+        sourceRevision: archive.sourceRevision,
+        sha256: archive.sha256,
+        sizeBytes: archive.sizeBytes,
+        fileCount: archive.fileCount ?? input.fileCount,
+        relativePath: archive.relativePath,
+        metadata: archive.metadata,
+      },
+      pointers: buildTracePointers(archive, ingest.traces),
+      noneTaskIds: input.noneTaskIds,
+      progress: input.progress,
+      taskDigests: input.taskDigests,
+    });
+
+    const existing = this.store.listSessionArchivesForSubject(subject.kind, subject.id)
+      .find((archive) => archive.sourceRevision === input.sourceRevision && archive.sha256 === input.sha256);
+    if (existing) {
+      // Byte-identical content an earlier run already published: reuse it.
+      if (existing.status !== "ready" || existing.metadata.kind !== "trace_backfill") {
+        throw new SessionArchiveError(
+          `archive ${existing.id} already holds this content`, 409, "session_archive_attempt_conflict",
+        );
+      }
+      await this.verifiedFinalHash(await this.resolveArchivePath(existing.relativePath, false), existing);
+      const result = this.translateTraceBackfillError(() => commit(existing));
+      await unlink(input.archivePath).catch(() => {});
+      return result;
+    }
+
+    const id = createId("sar");
+    const relativePath = archiveRelativePath({
+      workspaceId: input.workspaceId, subjectKind: subject.kind, subjectId: subject.id, archiveId: id,
+    });
+    const finalPath = await this.resolveArchivePath(relativePath, true);
+    const directory = dirname(finalPath);
+    const marker = join(directory, TRACE_BACKFILL_PENDING_MARKER);
+    const archive: MultiremiSessionArchive = { ...staged, id, relativePath };
+    let committed = false;
+    try {
+      await writeFile(marker, `${JSON.stringify({ archive_id: id, subject })}\n`, { flag: "wx", mode: 0o600 });
+      await this.ensureCapacity(input.sizeBytes);
+      try {
+        await rename(input.archivePath, finalPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+        const partial = `${finalPath}.backfill.partial`;
+        await copyFile(input.archivePath, partial, constants.COPYFILE_EXCL);
+        const handle = await open(partial, constants.O_RDONLY);
+        try {
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await rename(partial, finalPath);
+        await unlink(input.archivePath);
+      }
+      this.assertArchiveHash(await hashFile(finalPath, input.sizeBytes), archive);
+      const manifestTemp = await this.writeManifest(finalPath, archive, input.sizeBytes);
+      await rename(manifestTemp, join(directory, "manifest.json"));
+      await this.syncDirectory(directory);
+      const result = this.translateTraceBackfillError(() => commit(archive));
+      committed = true;
+      await unlink(marker).catch((error) => {
+        log.warn(`Failed to clear trace backfill marker for ${id}: ${String(error)}`);
+      });
+      return result;
+    } finally {
+      if (!committed) await rm(directory, { recursive: true, force: true }).catch((error) => {
+        log.warn(`Failed to clean trace backfill archive directory for ${id}: ${String(error)}`);
+      });
+    }
+  }
+
+  /**
+   * Remove what an interrupted backfill run left in a subject's directory:
+   * archive directories that still carry the pending marker and have no row.
+   * A committed archive whose marker survived a crash only loses the marker.
+   */
+  async cleanupTraceBackfillOrphans(workspaceId: string, subject: SessionArchiveSubjectScope): Promise<string[]> {
+    // <subject>/<archive id>/sessions.zip, so the subject directory is two up.
+    const relativeSubject = dirname(dirname(archiveRelativePath({
+      workspaceId, subjectKind: subject.kind, subjectId: subject.id, archiveId: "probe",
+    })));
+    let subjectDirectory: string;
+    try {
+      subjectDirectory = dirname(await this.resolveArchivePath(join(relativeSubject, "probe"), false));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const removed: string[] = [];
+    for (const entry of await readdir(subjectDirectory, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith("sar_")) continue;
+      const directory = join(subjectDirectory, entry.name);
+      const marker = join(directory, TRACE_BACKFILL_PENDING_MARKER);
+      const hasMarker = await lstat(marker).then((info) => info.isFile(), () => false);
+      if (!hasMarker) continue;
+      if (this.store.getSessionArchive(entry.name)) {
+        await unlink(marker).catch(() => {});
+        continue;
+      }
+      await rm(directory, { recursive: true, force: true });
+      removed.push(entry.name);
+    }
+    return removed;
+  }
+
+  private translateTraceBackfillError<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof SessionArchiveTraceOwnershipError) {
+        throw new SessionArchiveError(error.message, 422, "session_archive_trace_ownership_mismatch");
+      }
+      if (error instanceof TraceBackfillSubjectError) {
+        throw new SessionArchiveError(error.message, 409, "trace_backfill_subject_invalid");
+      }
+      throw error;
+    }
   }
 
   private requireWritableArchive(
