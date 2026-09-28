@@ -2055,6 +2055,8 @@ runMigrations(this.db);
       const delivery = this.feishuBot.claimOutbound(workspaceId, runtimeId, now, true, true, true, true);
       if (!delivery) break;
       deliveries.push(delivery);
+      // E5 and pre-C5 deliveries retain their existing one-row heartbeat cadence.
+      if (!delivery.kind || delivery.kind.startsWith("decision_")) break;
     }
     return deliveries;
   }

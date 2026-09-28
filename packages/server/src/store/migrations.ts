@@ -3265,6 +3265,15 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
   ensureFeishuOutboundKindsSchema(db, dialect);
   addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_requested INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_context TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_task_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_outbound_operations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, unit_key TEXT NOT NULL,
+    operation TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, leased_until TEXT,
+    available_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(workspace_id, kind, unit_key));
+    CREATE INDEX IF NOT EXISTS idx_feishu_outbound_operations_pending
+      ON multiremi_feishu_bot_outbound_operations(workspace_id, status, available_at, leased_until);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
@@ -4150,7 +4159,7 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
       attempt_count, external_message_id, last_error, sent_at, created_at, updated_at
     FROM multiremi_feishu_bot_outbound_deliveries_legacy;
     DROP TABLE multiremi_feishu_bot_outbound_deliveries_legacy;
-    CREATE INDEX idx_multiremi_feishu_bot_outbound_pending
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_pending
       ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
   `);
 }
@@ -4164,24 +4173,8 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
 const HUMAN_REQUEST_PUSH_TABLE = "multiremi_feishu_bot_human_request_pushes";
 const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
 
-/**
- * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
- * NULL. SQLite cannot drop NOT NULL in place and the column is UNIQUE, so the
- * table is rebuilt.
- *
- * The rebuild is atomic and self-healing, because a crash used to be permanent:
- * the previous version ran RENAME → CREATE → copy → DROP as four separate
- * statements, so a crash after the RENAME left every push row stranded in
- * `_legacy` with an empty live table and no way back. Two habits fix that:
- * run the whole rebuild inside one transaction (SQLite rolls a DDL transaction
- * back cleanly), and treat a surviving `_legacy` table as unfinished work —
- * copy from it and drop it — rather than as an error.
- *
- * `foreign_keys` cannot be toggled inside a transaction. Nothing references
- * this table (it is a leaf: no `REFERENCES multiremi_feishu_bot_human_request_pushes`
- * anywhere in the schema), so the surrounding code only has to turn them off
- * for the rebuild's duration to keep the RENAME from rewriting its own FKs.
- */
+/** C5 relaxes the Task key without deleting delivery data. SQLite retains an
+ * atomic pre-migration copy; PG can relax the constraint in place. */
 export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDatabaseDialect): void {
   const table = "multiremi_feishu_bot_outbound_deliveries";
   addColumnIfMissing(db, table, "unit_key TEXT NOT NULL DEFAULT ''");
@@ -4210,8 +4203,8 @@ export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDa
     return columns.length === 1 && columns[0]!.name === "task_id";
   });
   if (!oldUnique) { ensureFeishuOutboundKindIndexes(db); return; }
-  const backup = `${table}_c5_backup`;
-  if (tableExists(db, backup)) throw new Error("C5 outbound migration: live unique key and backup coexist; inspect before migrating");
+  let backup = `${table}_c5_backup`;
+  for (let version = 2; tableExists(db, backup); version++) backup = `${table}_c5_backup_${version}`;
   const schema = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string };
   const relaxed = schema.sql.replace(/\btask_id\s+TEXT\s+UNIQUE\b/i, "task_id TEXT");
   if (relaxed === schema.sql) throw new Error("C5 outbound migration: unexpected task_id unique constraint");
@@ -4229,7 +4222,9 @@ export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDa
       for (const index of indexes) {
         // Index names are global in SQLite; the original indexes stay on the retained backup.
         const definition = index.sql.slice(index.sql.toUpperCase().indexOf(" ON "));
-        db.exec(`CREATE ${/^CREATE UNIQUE/i.test(index.sql) ? "UNIQUE " : ""}INDEX "${index.name.replaceAll('"', '""')}_c5"${definition}`);
+        let name = `${index.name}_c5`;
+        for (let version = 2; db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name); version++) name = `${index.name}_c5_${version}`;
+        db.exec(`CREATE ${/^CREATE UNIQUE/i.test(index.sql) ? "UNIQUE " : ""}INDEX "${name.replaceAll('"', '""')}"${definition}`);
       }
       ensureFeishuOutboundKindIndexes(db);
     })();
@@ -4239,18 +4234,44 @@ export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDa
 }
 
 function ensureFeishuOutboundKindIndexes(db: SqlDatabase): void {
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_outbound_task_kind_unit
-    ON multiremi_feishu_bot_outbound_deliveries(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))`);
-  // A Task's compatibility carrier is either a pre-upgrade NULL row or a CoT row.
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_outbound_task_carrier
-    ON multiremi_feishu_bot_outbound_deliveries(task_id)
-    WHERE task_id IS NOT NULL AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_feishu_outbound_pending_c5
-    ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_feishu_outbound_kind_c5
-    ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  const indexes = [
+    ["idx_feishu_outbound_task_kind_unit", "UNIQUE ", "(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))"],
+    ["idx_feishu_outbound_task_carrier", "UNIQUE ", "(task_id) WHERE task_id IS NOT NULL AND (kind IS NULL OR kind = 'cot') AND unit_key = ''"],
+    ["idx_feishu_outbound_pending_c5", "", "(status, available_at, leased_until, created_at)"],
+    ["idx_feishu_outbound_kind_c5", "", "(kind, status, available_at)"],
+  ];
+  for (const [baseName, unique, definition] of indexes) {
+    let name = baseName!;
+    if (!isPostgresDialect(db)) {
+      for (let version = 2; ; version++) {
+        const existing = db.query("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) as { tbl_name: string } | null;
+        if (!existing || existing.tbl_name === table) break;
+        name = `${baseName}_${version}`;
+      }
+    }
+    db.exec(`CREATE ${unique}INDEX IF NOT EXISTS ${name} ON ${table}${definition}`);
+  }
 }
 
+/**
+ * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
+ * NULL. SQLite cannot drop NOT NULL in place and the column is UNIQUE, so the
+ * table is rebuilt.
+ *
+ * The rebuild is atomic and self-healing, because a crash used to be permanent:
+ * the previous version ran RENAME → CREATE → copy → DROP as four separate
+ * statements, so a crash after the RENAME left every push row stranded in
+ * `_legacy` with an empty live table and no way back. Two habits fix that:
+ * run the whole rebuild inside one transaction (SQLite rolls a DDL transaction
+ * back cleanly), and treat a surviving `_legacy` table as unfinished work —
+ * copy from it and drop it — rather than as an error.
+ *
+ * `foreign_keys` cannot be toggled inside a transaction. Nothing references
+ * this table (it is a leaf: no `REFERENCES multiremi_feishu_bot_human_request_pushes`
+ * anywhere in the schema), so the surrounding code only has to turn them off
+ * for the rebuild's duration to keep the RENAME from rewriting its own FKs.
+ */
 function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase, dialect: SqlDatabaseDialect): void {
   if (isPostgresDialect(db, dialect)) {
     // Postgres can relax the column in place, and the PRAGMA below is SQLite

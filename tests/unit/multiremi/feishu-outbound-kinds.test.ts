@@ -162,4 +162,67 @@ describe("Feishu outbound kind leases", () => {
     expect(rows(splitTask).find(row => row.kind === "result_card").status).toBe("sent");
     expect(claim(f)).toEqual([]);
   });
+
+  it("persists attachment intent with jobs=0 and replays a crashed operation without duplicating or resetting delivered rows", () => {
+    const f = configureKindBot(createLocalStore());
+    const taskId = f.inbound("deferredfiles").taskId;
+    for (const row of claim(f)) expect(report(f, row, "sent")).toBe(true);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const batch = f.store.sendChatAttachments(taskId, [{ filename: "report.html", sizeBytes: 4,
+      contentType: "text/html", url: "/api/attachments/local-test/content" }], "Report attached");
+    expect(batch.delivery_ids).toHaveLength(1);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(batch.delivery_ids[0]!)).toBeNull();
+    expect(claim(f)).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const file = claim(f).find(row => row.id === batch.delivery_ids[0])!;
+    expect(file.attachments?.[0]?.filename).toBe("report.html");
+    expect(file.body).toBe("Report attached");
+    expect(report(f, file, "sent")).toBe(true);
+    db!.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'processing',
+      claim_token = 'crashed', leased_until = '2000-01-01' WHERE kind = 'attachments'`);
+    expect(claim(f)).toEqual([]);
+    expect(db!.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").all(file.id))
+      .toEqual([{ id: file.id, status: "sent" }]);
+    expect(db!.query("SELECT status FROM multiremi_feishu_bot_outbound_operations WHERE kind = 'attachments'").get())
+      .toEqual({ status: "done" });
+  });
+
+  it("preserves the inbound group recipient when a jobs=0 process leaves the carrier to the background writer", () => {
+    const f = configureKindBot(createLocalStore());
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const submitted = f.store.submitFeishuBotMessage("local", f.runtimeId, { revision: f.config.revision,
+      externalSessionKey: "oc_group:thread:om_group", chatId: "oc_group", chatType: "group", threadId: "om_group",
+      externalMessageId: "om_group", senderOpenId: "ou_group_requester", text: "Group reply", deliveryMode: "native_cot_v1" });
+    expect(rows(submitted.taskId)).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const cot = claim(f).find(row => row.kind === "cot")!;
+    expect(cot.mention).toEqual({ mode: "person", openId: "ou_group_requester", resolvedOpenId: "ou_group_requester" });
+    expect(cot.interactionOpenId).toBe("ou_group_requester");
+  });
+
+  it("follows a retargeted Task for split receipts without recreating the original carrier or changing legacy ingress fields", () => {
+    const f = configureKindBot(createLocalStore());
+    const taskId = f.inbound("retrylineage").taskId;
+    const initial = claim(f);
+    for (const row of initial) expect(report(f, row, "sent")).toBe(true);
+    const task = f.store.getTask(taskId)!;
+    const retry = f.store.createTask({ agentId: f.agent.id, workspaceId: "local", chatSessionId: task.chatSessionId, prompt: "Retry" });
+    f.store.retargetFeishuRoundPushTaskWithinTransaction(taskId, retry.id);
+    f.store.completeTask(taskId, { output: "Original run ends" });
+    expect(f.store.claimTask(f.runtimeId)?.id).toBe(retry.id);
+    f.store.startTask(retry.id);
+    const retryCot = claim(f).find(row => row.kind === "cot")!;
+    expect(retryCot.id).toBe(initial.find(row => row.kind === "cot")!.id);
+    expect(report(f, retryCot, "sent")).toBe(true);
+    f.store.completeTask(retry.id, { output: "Retried answer" });
+    const result = claim(f).find(row => row.kind === "result_card")!;
+    expect(result.taskId).toBe(retry.id);
+    expect(report(f, result, "sent")).toBe(true);
+    const receipt = claim(f).find(row => row.kind === "receipt")!;
+    expect(receipt.targetMessageId).toBe("om_kind_retrylineage");
+    expect(receipt.receiptState).toBe("completed");
+    expect(rows(taskId)).toEqual([]);
+    expect(db!.query("SELECT task_id, outbound_task_id FROM multiremi_feishu_bot_deliveries WHERE external_message_id = ?")
+      .get("om_kind_retrylineage")).toEqual({ task_id: taskId, outbound_task_id: retry.id });
+  });
 });

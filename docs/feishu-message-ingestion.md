@@ -110,8 +110,8 @@ remi workspace feishu-bot sender revoke <workspace> <sender>
 ## 机器人消息回应
 
 MUL-440 为声明 `feishu_outbound_kinds: 1` 的守护进程把回执拆成独立服务端
-outbox 行；每个原消息及状态独立 lease、退避和最多六次尝试。结果卡确认
-后才领取终态回执；回执永久失败只写审计与日志，不连坐结果、卡片或绑定。
+outbox 行；每个原消息及状态独立 lease、退避和最多六次尝试。结果卡
+投递行结束后才领取终态回执；回执永久失败只写审计与日志，不连坐结果、卡片或绑定。
 未声明能力的守护进程继续使用原来的整条任务投递，升级与交接不切换已领取
 任务的模式。迁移与回滚见 [C5 迁移说明](feishu-outbound-kind-migration.md)。
 

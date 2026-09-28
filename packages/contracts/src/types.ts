@@ -4435,11 +4435,12 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** The requester, including in private chats where the final card needs no @. */
   interactionOpenId?: string;
   /**
-   * What the host should do with this delivery (MUL-407). Absent means the
+   * What the host should do with this delivery. Absent means the
    * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
    * `decision_card` carries a server-built card in `body` and posts it as a
    * proactive thread reply; `decision_card_patch` edits the message named by
-   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   * `targetMessageId`; `decision_reminder` is a plain text nudge. C5 adds
+   * independent CoT, interaction, result and receipt handlers.
    */
   kind?: FeishuBotOutboundDeliveryKind;
   /** A receipt owns exactly one original inbound message and state transition. */
@@ -4454,7 +4455,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
    */
   humanRequestTaskId?: string;
   human_request_task_id?: string;
-  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  /** A decision patch target or the original inbound message a receipt updates. */
   targetMessageId?: string;
   target_message_id?: string;
   /**

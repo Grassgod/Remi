@@ -414,9 +414,13 @@ export class MultiremiDaemonClient {
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
           } : {}),
         });
-    const pendingFeishuOutbound = rawOutbound ? normalizeOutbound(rawOutbound) : undefined;
     const pendingFeishuOutbounds = Array.isArray(resp.pending_feishu_outbounds)
       ? resp.pending_feishu_outbounds.map(outbound => normalizeOutbound(outbound as unknown as Record<string, unknown>)) : undefined;
+    const first = pendingFeishuOutbounds?.[0];
+    // Existing E5 callers consume the singular accessor; both accessors share
+    // the same delivery, whose ID the daemon's run map already deduplicates.
+    const pendingFeishuOutbound = rawOutbound ? normalizeOutbound(rawOutbound)
+      : first && (!first.kind || first.kind.startsWith("decision_")) ? first : undefined;
     // `agent_plugins.revision` is the daemon's change token for the desired
     // Plugin set: while it is unchanged the poll loop skips that GET entirely.
     // Normalize it here so a server that omits the field, or a proxy that

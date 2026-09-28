@@ -743,20 +743,23 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   options?: FeishuOutboundOptions, daemon?: MultiremiDaemon, displayName?: string): Promise<{ messageId: string }> {
   const taskId = delivery.taskId, requestId = delivery.humanRequestId;
   if (!daemon || !options || !taskId || !requestId) throw new FeishuDeliveryError("Interaction transport is unavailable", false);
+  options.signal.throwIfAborted();
   let request = await daemon.getFeishuBotHumanRequest(taskId, requestId);
   if (!request) throw new FeishuDeliveryError("Interaction request is unavailable", true);
   if (!delivery.resumeMessageId && request.status !== "pending") return { messageId: "" };
   const recipientOpenId = delivery.interactionOpenId
     ?? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) ?? undefined;
-  const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? undefined;
+  const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
+  const agentName = cardInput.agentName ?? displayName;
+  const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
-    card: buildTaskInteractionCard(request, { agentName: displayName, sessionId, recipientOpenId }),
+    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
     idempotencyKey: delivery.idempotencyKey })).messageId;
   if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
   await options.onStarted?.(messageId);
   const registration = registerTaskInteraction({ appId: handle.appId, chatId: delivery.chatId, messageId,
-    recipientOpenId, request, agentName: displayName, sessionId,
+    recipientOpenId, request, agentName, sessionId,
     submit: async response => {
       options.signal.throwIfAborted();
       try { return await daemon.respondFeishuBotHumanRequest(taskId, requestId, response); }
@@ -772,7 +775,7 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
       options.signal.throwIfAborted();
       request = registration.current() ?? await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
     }
-    await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName: displayName, sessionId, receipt: true }));
+    await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName, sessionId, receipt: true }));
     return { messageId };
   } finally { registration.dispose(); }
 }

@@ -10,7 +10,10 @@ token and lease for every delivery.
 
 The Task's primary delivery pins `delivery_mode` on its first successful claim.
 `legacy` remains legacy through retries and connector handover; `split` is only
-claimable by a capable daemon. Previously attempted deliveries are always legacy.
+claimable by a capable daemon. Previously attempted deliveries and NULL-kind
+carriers are always legacy. E5 and other legacy lanes keep their one-row heartbeat
+cadence; the upgraded client retains the singular accessor for those rows as an
+alias of the same delivery, deduplicated by the daemon's delivery-ID run map.
 This prevents a rolling upgrade from presenting the same Task twice. E5 decision
 cards and their checkpoint fields are independent of this negotiation.
 
@@ -24,13 +27,22 @@ six-attempt limit and its own backoff.
 Writers and claims are gated by `MULTIREMI_BACKGROUND_JOBS` (default enabled).
 When process roles are introduced, ui runs these jobs and api-runtime explicitly
 sets this variable to `0`; the code does not select a role. Background claims
-reconcile lifecycle writes missed by a process with jobs disabled. No Hub or
+reconcile lifecycle writes missed by a process with jobs disabled. Existing
+topic, E5, round and attachment entry points persist their original operation in
+`multiremi_feishu_bot_outbound_operations` while jobs are disabled. The background
+process replays each under a separate operation lease, using stable delivery IDs
+and established idempotent writers. This avoids silently dropping attachments
+or topic/round operations during process handover. No Hub or
 peer-channel dependency is introduced.
 
 ## Schema and retained data
 
 The migration adds `unit_key`, `cascade_failure`, and `delivery_mode`, plus an
-`outbound_requested` marker on inbound deliveries for background reconciliation. It keeps
+`outbound_requested`, nullable `outbound_context` and `outbound_task_id` on inbound deliveries for
+background reconciliation (including the original recipient and checkpoint).
+`outbound_task_id` follows a recovery retry for split receipts and reconciliation;
+the original inbound `task_id` and the legacy receipt-ID lookup retain their
+existing meaning. The deferred-operation table above is also additive. It keeps
 existing NULL kinds and uses an expression unique index on
 `(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))`. NULL Task IDs remain
 distinct, so E5 decision cards are unaffected. The obsolete single-Task unique
@@ -38,6 +50,9 @@ constraint must be relaxed to allow split rows. No delivery data is deleted.
 SQLite performs an atomic copy into the new table and retains the original table
 as `multiremi_feishu_bot_outbound_deliveries_c5_backup`; PostgreSQL relaxes the
 constraint in place. Repeating the migration does not repeat the copy.
+If an operator has restored a legacy live table beside an existing backup,
+SQLite retains another numbered backup instead of overwriting the first one;
+index creation checks the live table, not merely a globally occupied name.
 
 ## Rollback
 
@@ -55,7 +70,7 @@ a partial index does not satisfy that conflict target. Do not deploy it directly
 over the C5 schema. A physical restore requires a separate approved operation:
 
 1. Pause writers and claimers, drain split Tasks as above, and take a database
-   backup/export. Verify every split Task has a terminal result row and every
+   backup/export. Drain pending deferred operations too. Verify every split Task has a terminal result row and every
    split delivery is `sent` or `failed`; active Task streams must also be drained.
 2. In one transaction rename the **current**, fully populated outbound table to
    a timestamped C5 archive. Retain the entire archive, including all split rows.

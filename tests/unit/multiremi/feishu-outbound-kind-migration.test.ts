@@ -51,6 +51,26 @@ describe("C5 outbound schema on SQLite", () => {
       expect(db.query(`SELECT COUNT(*) AS n FROM ${table}_c5_backup`).get()).toEqual({ n: 0 });
     } finally { db.close(); }
   });
+
+  it("retains both backups and restores live unique indexes when a legacy table is recreated beside a C5 archive", () => {
+    const db = new Database(":memory:");
+    try {
+      seed(db);
+      verify(db, "sqlite");
+      db.exec(`ALTER TABLE ${table} RENAME TO c5_archive;
+        CREATE TABLE ${table} (id TEXT PRIMARY KEY, task_id TEXT UNIQUE, kind TEXT,
+          status TEXT, available_at TEXT, leased_until TEXT, created_at TEXT);
+        INSERT INTO ${table}(id, task_id) VALUES ('restored', 'restored_task');`);
+      ensureFeishuOutboundKindsSchema(db, "sqlite");
+      ensureFeishuOutboundKindsSchema(db, "sqlite");
+      expect(db.query(`SELECT COUNT(*) AS n FROM ${table}_c5_backup`).get()).toEqual({ n: 3 });
+      expect(db.query(`SELECT COUNT(*) AS n FROM ${table}_c5_backup_2`).get()).toEqual({ n: 1 });
+      expect(db.query("SELECT COUNT(*) AS n FROM c5_archive").get()).toEqual({ n: 7 });
+      expect(() => db.run(`INSERT INTO ${table}(id, task_id) VALUES ('duplicate_restored', 'restored_task')`)).toThrow();
+      db.run(`INSERT INTO ${table}(id, task_id, kind) VALUES ('restored_result', 'restored_task', 'result_card')`);
+      expect(() => db.run(`INSERT INTO ${table}(id, task_id, kind) VALUES ('duplicate_result', 'restored_task', 'result_card')`)).toThrow();
+    } finally { db.close(); }
+  });
 });
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;

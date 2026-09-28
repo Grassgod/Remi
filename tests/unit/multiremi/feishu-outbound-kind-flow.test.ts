@@ -5,7 +5,7 @@ import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { setFeishuMessageReceipt } from "@connectors/feishu/message-receipt.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
-import { controlPlaneConciergeHost } from "../../../apps/remi/cli/multiremi.js";
+import { controlPlaneConciergeHost, sendInteractionCardLane } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { nativeHarness, transcript } from "../connectors/feishu-native-harness.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
@@ -139,5 +139,40 @@ describe("C5 full fake-channel delivery", () => {
     expect(db!.query("SELECT delivery_mode, status FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?").all(taskId))
       .toEqual([{ delivery_mode: "legacy", status: "sent" }]);
     expect((await f.beat(false)).pending_feishu_outbound).toBeUndefined();
+  });
+
+  it("checkpoints an interaction independently, restores its callback target after restart and patches the same card", async () => {
+    const f = configureKindBot(createLocalStore());
+    const taskId = f.inbound("interaction").taskId;
+    for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
+      { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
+    const request = f.store.createTaskHumanRequest({ taskId, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
+    const delivery = f.store.claimFeishuBotOutbounds("local", f.runtimeId).find(row => row.kind === "interaction_card")!;
+    expect(delivery.humanRequestId).toBe(request.id);
+    const cot = db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? AND kind = 'cot'").get(taskId) as { id: string };
+    expect(delivery.id).not.toBe(cot.id);
+    const cards: any[] = [], patches: any[] = [];
+    const handle = { appId: f.config.appId,
+      sendProactiveCard: async (input: any) => { cards.push(input); return { messageId: "om_question" }; },
+      updateProactiveCard: async (id: string, card: any) => { patches.push({ id, card }); },
+    } as unknown as FeishuChannelHandle;
+    const daemon = { getFeishuBotHumanRequest: async () => f.store.getTaskHumanRequest(request.id),
+      getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
+    } as unknown as MultiremiDaemon;
+    await expect(sendInteractionCardLane(handle, delivery, { signal: new AbortController().signal,
+      onStarted: async id => {
+        expect(f.store.reportFeishuBotOutbound("local", f.runtimeId, delivery.id,
+          { claimToken: delivery.claimToken, status: "streaming", externalMessageId: id })).toBe(true);
+        throw new Error("Simulated crash after checkpoint");
+      } }, daemon)).rejects.toThrow("Simulated crash");
+    f.store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } }, respondedBy: "test" });
+    const resumed = f.store.claimFeishuBotOutbounds("local", f.runtimeId, new Date(Date.now() + 121_000)).find(row => row.id === delivery.id)!;
+    expect(resumed.resumeMessageId).toBe("om_question");
+    expect(await sendInteractionCardLane(handle, resumed, { signal: new AbortController().signal, onStarted: async () => {} }, daemon)).toEqual({ messageId: "om_question" });
+    expect(cards).toHaveLength(1);
+    expect(patches).toHaveLength(1);
+    expect(patches[0].id).toBe("om_question");
+    expect(JSON.stringify(cards[0].card)).toContain("Kind bot");
+    expect(f.store.getTaskHumanRequest(request.id)?.status).toBe("responded");
   });
 });

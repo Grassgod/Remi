@@ -108,4 +108,27 @@ describe.skipIf(!adminUrl)("C5 delivery on real PostgreSQL", () => {
       for (const worker of workers) worker.terminate();
     }
   }, 60_000);
+
+  it("recovers deferred attachment writes after jobs=0 and preserves their stable IDs across an operation retry", () => {
+    const store = new MultiremiStore(db);
+    const f = configureKindBot(store);
+    const taskId = f.inbound("pg_deferred").taskId;
+    for (const row of store.claimFeishuBotOutbounds("local", "rt_kinds")) store.reportFeishuBotOutbound("local", "rt_kinds", row.id,
+      { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const batch = store.sendChatAttachments(taskId, [{ filename: "pg.html", sizeBytes: 4,
+      contentType: "text/html", url: "/api/attachments/pg-local/content" }]);
+    expect(db.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(batch.delivery_ids[0]!)).toBeNull();
+    expect(store.claimFeishuBotOutbounds("local", "rt_kinds")).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const file = store.claimFeishuBotOutbounds("local", "rt_kinds").find(row => row.id === batch.delivery_ids[0])!;
+    expect(file.attachments?.[0]?.filename).toBe("pg.html");
+    expect(store.reportFeishuBotOutbound("local", "rt_kinds", file.id,
+      { claimToken: file.claimToken, status: "sent", externalMessageId: "om_pg_attachment" })).toBe(true);
+    db.run(`UPDATE multiremi_feishu_bot_outbound_operations SET status = 'processing', claim_token = 'crashed',
+      leased_until = '2000-01-01' WHERE kind = 'attachments'`);
+    expect(store.claimFeishuBotOutbounds("local", "rt_kinds")).toEqual([]);
+    expect(db.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").all(file.id))
+      .toEqual([{ id: file.id, status: "sent" }]);
+  }, 30_000);
 });
