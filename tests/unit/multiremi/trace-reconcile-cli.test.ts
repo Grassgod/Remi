@@ -16,7 +16,11 @@ import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runTraceBackfill } from "../../../scripts/backfill-task-traces.js";
 import { assignTraceBackfillSubjects } from "../../../scripts/lib/task-trace-backfill.js";
-import { selectTraceReconcileSample } from "../../../scripts/lib/task-trace-reconcile.js";
+import {
+  selectTraceReconcileSample,
+  TRACE_RECONCILE_SAMPLE_QUOTAS,
+  TRACE_RECONCILE_SAMPLE_SEED,
+} from "../../../scripts/lib/task-trace-reconcile.js";
 import {
   insertSyntheticAgent,
   insertSyntheticChat,
@@ -155,6 +159,36 @@ describe("reconcile sample selection", () => {
       raw.close();
     }
   });
+
+  it("takes fixed per-group quotas without moving a shortfall to other groups", () => {
+    expect(TRACE_RECONCILE_SAMPLE_QUOTAS).toEqual({ chat: 50, task: 50, issue_without_archive: 50, issue_with_archive: 50 });
+    expect(TRACE_RECONCILE_SAMPLE_SEED).toBe("mul-432-reconcile-sample-v1");
+    const raw = new Database(":memory:");
+    const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
+    try {
+      new MultiremiStore(db).ensureLocalWorkspace();
+      seedGroups(db);
+      const assignment = assignTraceBackfillSubjects(db, { oldTableStoppedAt: CUTOFF });
+      const quotas = { chat: 5, task: 3, issue_without_archive: 6, issue_with_archive: 10 };
+      const fixed = selectTraceReconcileSample(assignment, { quotas, seed: TRACE_RECONCILE_SAMPLE_SEED });
+      expect(fixed.requested).toBe(24);
+      expect(fixed.taskIds.size).toBe(18);
+      expect(fixed.by_group).toMatchObject({
+        chat: { quota: 5, candidates: 14, sampled: 5 },
+        task: { quota: 3, candidates: 10, sampled: 3 },
+        issue_without_archive: { quota: 6, candidates: 15, sampled: 6 },
+        issue_with_archive: { quota: 10, candidates: 4, sampled: 4 },
+      });
+      expect([...selectTraceReconcileSample(assignment, { quotas, seed: TRACE_RECONCILE_SAMPLE_SEED }).taskIds])
+        .toEqual([...fixed.taskIds]);
+
+      const defaults = selectTraceReconcileSample(assignment, { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS, seed: TRACE_RECONCILE_SAMPLE_SEED });
+      expect(defaults.requested).toBe(200);
+      expect(Object.values(defaults.by_group).map((group) => [group.quota, group.sampled])).toEqual([[50, 14], [50, 10], [50, 15], [50, 4]]);
+    } finally {
+      raw.close();
+    }
+  });
 });
 
 describe("read-only database handle", () => {
@@ -242,6 +276,13 @@ for (const backend of backends) {
           const replay = runCli(env, ...common, "--sample-size=12", "--seed=m432");
           expect(replay.stdout.checked_by_group).toEqual(sample.stdout.checked_by_group);
           expect(replay.stdout.checked_rows).toBe(sample.stdout.checked_rows);
+
+          // No size and no seed: the quotas and seed fixed in code, recorded in the report.
+          const byDefault = runCli(env, ...common);
+          expect(byDefault.exitCode).toBe(0);
+          expect(byDefault.stdout.sample).toMatchObject({ seed: TRACE_RECONCILE_SAMPLE_SEED, requested: 200, tasks: 43 });
+          expect(Object.values(byDefault.stdout.sample.by_group).map((group: any) => [group.quota, group.sampled]))
+            .toEqual([[50, 14], [50, 10], [50, 15], [50, 4]]);
 
           const full = runCli(env, ...common, "--mode=full");
           expect(full.exitCode).toBe(0);

@@ -278,21 +278,39 @@ function readArchiveRow(db: SqlDatabase, archiveId: string) {
   };
 }
 
+/**
+ * The default reconcile sample (MUL-432 QA round 1): 50 tasks from each of the
+ * four groups, 200 in all, drawn with this seed. Both are fixed here so a
+ * rerun on the same data checks the same tasks; both go in the report.
+ */
+export const TRACE_RECONCILE_SAMPLE_QUOTAS: Readonly<Record<TraceBackfillGroup, number>> = {
+  chat: 50,
+  task: 50,
+  issue_without_archive: 50,
+  issue_with_archive: 50,
+};
+export const TRACE_RECONCILE_SAMPLE_SEED = "mul-432-reconcile-sample-v1";
+
 export interface TraceReconcileSample {
   seed: string;
   requested: number;
   taskIds: Set<string>;
-  by_group: Record<TraceBackfillGroup, { candidates: number; sampled: number; sampled_render: number; sampled_none: number }>;
+  by_group: Record<
+    TraceBackfillGroup,
+    { quota: number; candidates: number; sampled: number; sampled_render: number; sampled_none: number }
+  >;
 }
 
 /**
- * A seeded random sample of backfilled tasks (rendered and `none`) that covers
- * every group with candidates: the size is split evenly across groups, and
- * what a small group cannot use goes to the others.
+ * A seeded random sample of backfilled tasks (rendered and `none`). With
+ * `quotas`, each group gives exactly its quota, or all its candidates when it
+ * has fewer (the shortfall shows as `sampled < quota`). With `size`, the size
+ * is split evenly across groups and what a small group cannot use goes to the
+ * others.
  */
 export function selectTraceReconcileSample(
   assignment: TraceBackfillAssignment,
-  options: { size: number; seed: string },
+  options: { seed: string } & ({ quotas: Readonly<Record<TraceBackfillGroup, number>> } | { size: number }),
 ): TraceReconcileSample {
   const candidates = Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, [] as string[]])) as Record<
     TraceBackfillGroup,
@@ -307,7 +325,8 @@ export function selectTraceReconcileSample(
   for (const group of TRACE_BACKFILL_GROUPS) candidates[group].sort();
 
   const quota = Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, 0])) as Record<TraceBackfillGroup, number>;
-  let remaining = options.size;
+  if ("quotas" in options) Object.assign(quota, options.quotas);
+  let remaining = "quotas" in options ? 0 : options.size;
   while (remaining > 0) {
     const open = TRACE_BACKFILL_GROUPS.filter((group) => quota[group] < candidates[group].length);
     if (open.length === 0) break;
@@ -326,13 +345,15 @@ export function selectTraceReconcileSample(
     for (const taskId of picked) taskIds.add(taskId);
     const none = picked.filter((taskId) => noneIds.has(taskId)).length;
     byGroup[group] = {
+      quota: quota[group],
       candidates: candidates[group].length,
       sampled: picked.length,
       sampled_render: picked.length - none,
       sampled_none: none,
     };
   }
-  return { seed: options.seed, requested: options.size, taskIds, by_group: byGroup };
+  const requested = "quotas" in options ? Object.values(options.quotas).reduce((a, b) => a + b, 0) : options.size;
+  return { seed: options.seed, requested, taskIds, by_group: byGroup };
 }
 
 function sameSeqSet(left: number[], right: number[]): boolean {

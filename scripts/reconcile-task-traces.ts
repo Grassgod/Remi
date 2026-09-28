@@ -10,22 +10,23 @@
  * entry and pointer that agree. `none` pointers are checked when the stop
  * moment is given.
  *
- * Default is a seeded random sample of 200 tasks spread over all four
- * groups; `--mode=full` checks every task and every subject digest. The seed
- * is recorded in the report so a sample can be replayed.
+ * Default is a random sample of 200 tasks, 50 from each of the four groups,
+ * drawn with a seed fixed in code (`TRACE_RECONCILE_SAMPLE_QUOTAS`,
+ * `TRACE_RECONCILE_SAMPLE_SEED`); `--sample-size` splits another size evenly
+ * instead and `--seed` replaces the seed. `--mode=full` checks every task and
+ * every subject digest. Quotas and seed are recorded in the report.
  *
  * Nothing is written: SQLite is opened on an existing file with
  * `query_only`, Postgres with `default_transaction_read_only`, and every
  * statement except a single SELECT is refused before it reaches either.
  *
- *   bun scripts/reconcile-task-traces.ts [--mode=sample|full] [--sample-size=200] [--seed=<text>]
+ *   bun scripts/reconcile-task-traces.ts [--mode=sample|full] [--sample-size=<n>] [--seed=<text>]
  *     [--groups=chat,task,issue_without_archive,issue_with_archive] [--old-table-stopped-at=<ISO>]
  *     [--archive-root=<dir>] [--sqlite-path=<file>] [--out=<report.json>]
  *
  * Exit status: 0 no mismatch, 3 mismatches, 1 error.
  */
 import { Database } from "bun:sqlite";
-import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -44,11 +45,11 @@ import {
 import {
   reconcileTraceBackfill,
   selectTraceReconcileSample,
+  TRACE_RECONCILE_SAMPLE_QUOTAS,
+  TRACE_RECONCILE_SAMPLE_SEED,
   type TraceReconcileReport,
   type TraceReconcileSample,
 } from "./lib/task-trace-reconcile.js";
-
-export const TRACE_RECONCILE_DEFAULT_SAMPLE_SIZE = 200;
 
 /** One SELECT, optionally followed by a single trailing semicolon. */
 const SINGLE_SELECT = /^\s*SELECT\b[^;]*;?\s*$/i;
@@ -113,8 +114,8 @@ export async function runTraceReconcile(options: TraceReconcileRunOptions): Prom
   const assignment = assignTraceBackfillSubjects(options.db, { oldTableStoppedAt: cutoff });
   const sample = options.mode === "sample"
     ? selectTraceReconcileSample(assignment, {
-      size: options.sampleSize ?? TRACE_RECONCILE_DEFAULT_SAMPLE_SIZE,
-      seed: options.seed ?? randomBytes(8).toString("hex"),
+      seed: options.seed ?? TRACE_RECONCILE_SAMPLE_SEED,
+      ...(options.sampleSize === undefined ? { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS } : { size: options.sampleSize }),
     })
     : null;
   const result = await reconcileTraceBackfill(options.db, {
