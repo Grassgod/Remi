@@ -343,7 +343,7 @@ describe("AcpProvider session/new payload", () => {
     // Request the bridge's model recommendation without changing its current effort.
     expect(initialize.params.clientCapabilities._meta).toEqual({
       terminal_output: true,
-      jetbrains: { air: { version: 1, capabilities: ["recommendedValue"] } },
+      jetbrains: { air: { version: 1, capabilities: ["recommendedValue", "sessionFailure"] } },
     });
   });
 
@@ -362,6 +362,7 @@ describe("AcpProvider session/new payload", () => {
     expect(initialize.params.clientCapabilities._meta).toEqual({
       terminal_output: true,
       "subagent-transcript": true,
+      jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } },
     });
   });
 
@@ -1039,7 +1040,7 @@ describe("AcpProvider model and effort", () => {
       expect(models[1]?.effort?.defaultLevel).toBe("xhigh");
       const [initialize] = only(agent.requests(), "initialize");
       expect(initialize?.params.clientCapabilities._meta.jetbrains.air).toEqual({
-        version: 1, capabilities: ["recommendedValue"],
+        version: 1, capabilities: ["recommendedValue", "sessionFailure"],
       });
     } finally {
       await provider.close();

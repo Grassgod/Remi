@@ -8,6 +8,7 @@ function createLogger(_: string) { return _log; }
 
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { isolateProcessTmp, mapPrivateTmpPath } from "./private-tmp.js";
+import { AcpRpcError, airMetadata } from "./session-failure.js";
 
 import type {
   JsonRpcRequest,
@@ -97,6 +98,7 @@ export class AcpClient {
   private _options: AcpClientOptions;
   private _serverSessionId: string | null = null;
   private _initializeResult: InitializeResult | null = null;
+  private _requestedSessionFailures = false;
   /**
    * Inbound requests we are serving and haven't answered yet, keyed by the
    * agent's request id. The value settles the request as cancelled; the agent
@@ -122,6 +124,12 @@ export class AcpClient {
   /** The agent's `initialize` response (protocol version + advertised capabilities). */
   get initializeResult(): InitializeResult | null {
     return this._initializeResult;
+  }
+
+  get typedSessionFailures(): boolean {
+    const capabilities = airMetadata(this._initializeResult?._meta)?.capabilities
+      ?? airMetadata(this._initializeResult?.agentCapabilities?._meta)?.capabilities;
+    return this._requestedSessionFailures && Array.isArray(capabilities) && capabilities.includes("sessionFailure");
   }
 
   private _log(...args: unknown[]) {
@@ -379,7 +387,7 @@ export class AcpClient {
     this._pending.delete(msg.id);
 
     if (msg.error) {
-      pending.reject(new Error(`RPC error ${msg.error.code}: ${msg.error.message}`));
+      pending.reject(new AcpRpcError(msg.error.code, msg.error.message, msg.error.data));
     } else {
       pending.resolve(msg.result);
     }
@@ -516,8 +524,8 @@ export class AcpClient {
         _meta: {
           terminal_output: true,
           ...(this._options.agentType === "codex"
-            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue"] } } }
-            : { "subagent-transcript": true }),
+            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue", "sessionFailure"] } } }
+            : { "subagent-transcript": true, jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } } }),
         },
         fs: { readTextFile: true, writeTextFile: true },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and
@@ -528,6 +536,8 @@ export class AcpClient {
       },
     };
 
+    const capabilities = airMetadata(params.clientCapabilities?._meta)?.capabilities;
+    this._requestedSessionFailures = Array.isArray(capabilities) && capabilities.includes("sessionFailure");
     const result = await this._request<InitializeResult>("initialize", params);
     this._initialized = true;
     this._initializeResult = result;
