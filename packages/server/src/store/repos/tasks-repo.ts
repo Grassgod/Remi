@@ -3988,7 +3988,14 @@ export class TasksRepo {
                FROM multiremi_session_events event
                WHERE event.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
                  AND event.task_id = task.id
-                 AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')) AS terminal_event_seq
+                 AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled', 'delegation_report')) AS terminal_event_seq,
+              (SELECT report.metadata
+                FROM multiremi_session_events report
+                WHERE report.session_id = COALESCE(task.delegated_from_issue_session_id, task.issue_session_id)
+                  AND report.task_id = task.id
+                  AND report.kind = 'delegation_report'
+                ORDER BY report.seq DESC
+                LIMIT 1) AS delegation_report_metadata
        FROM multiremi_tasks task
        WHERE COALESCE(task.delegated_from_issue_session_id, task.issue_session_id) = ?
          AND task.status IN ('completed', 'failed', 'cancelled')
@@ -4016,9 +4023,16 @@ export class TasksRepo {
       const terminalStatus = isTrigger
         ? trigger.terminalStatus
         : source.status as DelegationTerminalReport["terminalStatus"];
-      const resultCommentId = isTrigger && trigger.resultCommentId !== undefined
-        ? trigger.resultCommentId
-        : this.lastDelegationResultCommentId(source);
+      const reportMetadata = row.delegation_report_metadata == null
+        ? null
+        : parseJson<Record<string, unknown>>(row.delegation_report_metadata, {});
+      const hasResultCommentSnapshot = reportMetadata != null
+        && Object.hasOwn(reportMetadata, "result_comment_id");
+      const resultCommentId = hasResultCommentSnapshot
+        ? nullableString(reportMetadata.result_comment_id)
+        : isTrigger && trigger.resultCommentId !== undefined
+          ? trigger.resultCommentId
+          : this.lastDelegationResultCommentId(source);
       return {
         source,
         sourceAgentName: this.ctx.agents().getAgent(source.agentId)?.name ?? source.agentId,

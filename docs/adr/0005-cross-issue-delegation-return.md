@@ -122,9 +122,21 @@ Two further behaviours were decided with the fix's reviewers:
    transaction: the value resolved for the bridge metadata is threaded into the
    return-prompt construction, so the two cannot disagree even if a later
    comment commits in between (comment writes do not take the workspace
-   lifecycle lock). It is never back-filled: the automatic
-   result comment is posted after that transaction commits, so a report with no
-   in-run comment carries `result_comment_id: null` and the prompt line
+   lifecycle lock). That bridge value is the source task's terminal snapshot:
+   every later drain reads it from the newest `delegation_report` event, and a
+   present `result_comment_id: null` is authoritative rather than a reason to
+   query comments again. The newest event is used to match the drain's existing
+   maximum-event-sequence coverage rule and the bridge writer's existing
+   latest-event lookup if historical data contains duplicate reports. A report
+   without the metadata key falls back to the legacy latest-comment lookup for
+   compatibility. Such a missing snapshot can still occur for same-issue
+   delegations, which use their terminal task event rather than a cross-issue
+   bridge, and for historical or malformed bridge events created before this
+   contract; new cross-issue terminal reports always include the key. No
+   existing event is rewritten and no fallback value is persisted. It is never
+   back-filled: the automatic result comment is posted after that transaction
+   commits, so a report with no in-run comment carries
+   `result_comment_id: null` and the prompt line
    `Result comment: none at completion (the final reply is posted as a comment
    after this report; result text follows)`. The report body is always the task
    result, truncated to 16000 characters, which is the primary content.

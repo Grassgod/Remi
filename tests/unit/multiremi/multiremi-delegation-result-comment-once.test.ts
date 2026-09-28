@@ -53,9 +53,12 @@ async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiS
   }
 }
 
-function fixture(store: MultiremiStore) {
-  const leaderRuntime = store.registerRuntime({ name: "Leader runtime", provider: "claude", workspaceId: "local" });
-  const workerRuntime = store.registerRuntime({ name: "Worker runtime", provider: "claude", workspaceId: "local" });
+function fixture(store: MultiremiStore, daemonId?: string) {
+  const runtimeIdentity = daemonId ? { daemonId, ownerId: "local" } : {};
+  const leaderRuntime = store.registerRuntime({ name: "Leader runtime", provider: "claude", workspaceId: "local",
+    ...runtimeIdentity });
+  const workerRuntime = store.registerRuntime({ name: "Worker runtime", provider: "claude", workspaceId: "local",
+    ...runtimeIdentity });
   const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
   const worker = store.createAgent({ name: "Worker", provider: "claude", runtimeId: workerRuntime.id });
   const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
@@ -141,6 +144,276 @@ function rawDb(store: MultiremiStore) {
   return (store as unknown as { ctx: { db: { run: (sql: string, ...p: unknown[]) => unknown } } }).ctx.db;
 }
 
+function countResultCommentSelectsForTask(store: MultiremiStore, taskId: string) {
+  const db = (store as unknown as {
+    ctx: { db: { query: (sql: string) => Record<string, unknown> } };
+  }).ctx.db;
+  const original = db.query.bind(db);
+  let selects = 0;
+  db.query = (sql: string) => {
+    const statement = original(sql);
+    if (!sql.includes(RESULT_COMMENT_SELECT)) return statement;
+    const get = (statement.get as (...params: unknown[]) => unknown).bind(statement);
+    return {
+      ...statement,
+      get: (...params: unknown[]) => {
+        if (params.includes(taskId)) selects += 1;
+        return get(...params);
+      },
+    };
+  };
+  return { count: () => selects };
+}
+
+async function requestJson(
+  base: string,
+  path: string,
+  token: string,
+  body: Record<string, unknown> = {},
+  expected = 200,
+  method = "POST",
+): Promise<Record<string, any>> {
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  expect(response.status).toBe(expected);
+  return text ? JSON.parse(text) as Record<string, any> : {};
+}
+
+async function withHttpApi(
+  store: MultiremiStore,
+  run: (base: string) => Promise<void>,
+): Promise<void> {
+  const app = createMultiremiApp({ store, authToken: "result-comment-http-root" });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => app.fetch(request) });
+  try {
+    await run(`http://127.0.0.1:${server.port}`);
+  } finally {
+    server.stop(true);
+  }
+}
+
+async function httpCredentials(store: MultiremiStore, daemonId: string) {
+  const user = store.getOrCreateUser({ email: `${daemonId}@example.test`, name: "Snapshot member" });
+  store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
+  const member = await store.createAccessToken({ workspaceId: "local", userId: user.id,
+    name: "Snapshot member", type: "pat", purpose: "cli" });
+  const daemon = await store.createAccessToken({ workspaceId: "local", userId: "local",
+    name: "Snapshot daemon", type: "daemon", purpose: "daemon", daemonId });
+  return { member: member.token, daemon: daemon.token };
+}
+
+async function startThroughDaemon(
+  base: string,
+  daemonToken: string,
+  task: MultiremiTask,
+  runtimeId: string,
+): Promise<void> {
+  const claimed = await requestJson(base, `/api/daemon/runtimes/${runtimeId}/tasks/claim`, daemonToken);
+  expect(claimed.task.id).toBe(task.id);
+  await requestJson(base, `/api/daemon/tasks/${task.id}/start`, daemonToken);
+}
+
+async function dispatchThroughHttp(
+  base: string,
+  store: MultiremiStore,
+  source: MultiremiTask,
+  issue: MultiremiIssue,
+  agentId: string,
+): Promise<MultiremiTask> {
+  const token = await store.createTaskAccessToken(source, "local");
+  const created = await requestJson(base, "/api/multiremi/tasks", token.token, {
+    agentId,
+    issueId: issue.id,
+    prompt: "Execute delegated work over HTTP.",
+  }, 201);
+  return store.getTask(created.task.id)!;
+}
+
+async function runCancelledReturnSnapshotCase(
+  store: MultiremiStore,
+  withInRunComment: boolean,
+): Promise<void> {
+  const daemonId = `mul456-f2-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const childTask = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched the work." });
+    await startThroughDaemon(base, credentials.daemon, childTask, f.workerRuntime.id);
+
+    let inRunCommentId: string | null = null;
+    if (withInRunComment) {
+      const taskToken = await store.createTaskAccessToken(childTask, "local");
+      const posted = await requestJson(base, `/api/multiremi/issues/${f.child.id}/comments`, taskToken.token,
+        { body: "In-run result A", issue_session_id: childTask.issueSessionId }, 201);
+      inRunCommentId = posted.comment.id;
+      // Keep A as a real HTTP-created task comment while placing it before the
+      // dispatch boundary. This makes the normal post-commit auto reply C run,
+      // reproducing QA's A -> C ordering without inserting a synthetic comment.
+      const dispatchedAt = store.getTask(childTask.id)!.dispatchedAt!;
+      const beforeDispatch = new Date(Date.parse(dispatchedAt) - 1_000).toISOString();
+      rawDb(store).run(
+        "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
+        [beforeDispatch, beforeDispatch, inRunCommentId],
+      );
+    }
+
+    const selects = countResultCommentSelectsForTask(store, childTask.id);
+    await requestJson(base, `/api/daemon/tasks/${childTask.id}/complete`, credentials.daemon,
+      { output: "Automatic result comment C" });
+
+    const sourceAfterCompletion = store.getTask(childTask.id)!;
+    const firstReturn = store.getTask(sourceAfterCompletion.delegationReturnTaskId!)!;
+    const bridge = () => store.listSessionEvents(f.leaderSession.id)
+      .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
+    const bridgeBeforeCancel = JSON.stringify(bridge());
+    const automaticComment = store.listIssueComments(f.child.id)
+      .find((comment) => comment.taskId === childTask.id && comment.id !== inRunCommentId);
+    expect(automaticComment).toBeDefined();
+    expect(selects.count()).toBe(1);
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
+    expect(firstReturn.prompt).toContain(inRunCommentId
+      ? `Result comment: ${inRunCommentId}`
+      : "Result comment: none at completion");
+
+    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    const sourceAfterCancel = store.getTask(childTask.id)!;
+    const replacement = store.getTask(sourceAfterCancel.delegationReturnTaskId!)!;
+    expect(replacement.id).not.toBe(firstReturn.id);
+    expect(replacement.prompt).toContain(inRunCommentId
+      ? `Result comment: ${inRunCommentId}`
+      : "Result comment: none at completion");
+    expect(replacement.prompt).not.toContain(`Result comment: ${automaticComment!.id}`);
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBe(inRunCommentId);
+    expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
+    expect(selects.count()).toBe(1);
+  });
+}
+
+async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> {
+  const daemonId = `mul456-f2-e2-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const childTask = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched the work." });
+    await startThroughDaemon(base, credentials.daemon, childTask, f.workerRuntime.id);
+
+    const taskToken = await store.createTaskAccessToken(childTask, "local");
+    await requestJson(base, `/api/multiremi/issues/${f.child.id}`, taskToken.token,
+      { status: "done" }, 200, "PATCH");
+    const e2Round = store.listTasksForIssue(f.parent.id)
+      .find((task) => task.status === "queued" && task.wakeSource === "child_status")!;
+    expect(e2Round).toBeDefined();
+
+    const selects = countResultCommentSelectsForTask(store, childTask.id);
+    await requestJson(base, `/api/daemon/tasks/${childTask.id}/complete`, credentials.daemon,
+      { output: "Automatic result comment C" });
+    expect(store.getTask(childTask.id)?.delegationReturnTaskId).toBe(e2Round.id);
+    const bridge = () => store.listSessionEvents(f.leaderSession.id)
+      .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
+    const bridgeBeforeCancel = JSON.stringify(bridge());
+    const automaticComment = store.listIssueComments(f.child.id)
+      .find((comment) => comment.taskId === childTask.id)!;
+    expect(automaticComment).toBeDefined();
+    expect((bridge().metadata as Record<string, unknown>).result_comment_id).toBeNull();
+    expect(selects.count()).toBe(1);
+
+    await requestJson(base, `/api/tasks/${e2Round.id}/cancel`, credentials.member);
+    const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+    expect(replacement.id).not.toBe(e2Round.id);
+    expect(replacement.prompt).toContain("Result comment: none at completion");
+    expect(replacement.prompt).not.toContain(`Result comment: ${automaticComment.id}`);
+    expect(JSON.stringify(bridge())).toBe(bridgeBeforeCancel);
+    expect(selects.count()).toBe(1);
+  });
+}
+
+async function runMissingSnapshotCompatibilityCase(store: MultiremiStore): Promise<void> {
+  const daemonId = `mul456-f2-legacy-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const childTask = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched the work." });
+    await startThroughDaemon(base, credentials.daemon, childTask, f.workerRuntime.id);
+
+    const selects = countResultCommentSelectsForTask(store, childTask.id);
+    await requestJson(base, `/api/daemon/tasks/${childTask.id}/complete`, credentials.daemon,
+      { output: "Automatic result comment C" });
+    const source = store.getTask(childTask.id)!;
+    const firstReturn = store.getTask(source.delegationReturnTaskId!)!;
+    const automaticComment = store.listIssueComments(f.child.id)
+      .find((comment) => comment.taskId === childTask.id)!;
+    const bridge = store.listSessionEvents(f.leaderSession.id)
+      .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
+    expect(selects.count()).toBe(1);
+
+    // Simulate a pre-contract bridge that has no snapshot key at all. This is
+    // deliberately different from the current event's explicit null.
+    rawDb(store).run("UPDATE multiremi_session_events SET metadata = ? WHERE id = ?", [
+      JSON.stringify({ source_task_id: childTask.id }), bridge.id,
+    ]);
+    await requestJson(base, `/api/tasks/${firstReturn.id}/cancel`, credentials.member);
+    const replacement = store.getTask(store.getTask(childTask.id)!.delegationReturnTaskId!)!;
+    expect(replacement.prompt).toContain(`Result comment: ${automaticComment.id}`);
+    expect(selects.count()).toBe(2);
+  });
+}
+
+async function runRedispatchThenDrainSnapshotCase(store: MultiremiStore): Promise<void> {
+  const daemonId = `mul456-f2-redispatch-${process.pid}-${++sequence}`;
+  const f = fixture(store, daemonId);
+  const credentials = await httpCredentials(store, daemonId);
+  await withHttpApi(store, async (base) => {
+    const first = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    const second = await dispatchThroughHttp(base, store, f.leaderTask, f.child, f.worker.id);
+    await startThroughDaemon(base, credentials.daemon, f.leaderTask, f.leaderRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${f.leaderTask.id}/complete`, credentials.daemon,
+      { output: "Leader dispatched both tasks." });
+
+    await startThroughDaemon(base, credentials.daemon, first, f.workerRuntime.id);
+    const firstSelects = countResultCommentSelectsForTask(store, first.id);
+    await requestJson(base, `/api/daemon/tasks/${first.id}/complete`, credentials.daemon,
+      { output: "First automatic result C1" });
+    const originalReturn = store.getTask(store.getTask(first.id)!.delegationReturnTaskId!)!;
+    const firstAutomaticComment = store.listIssueComments(f.child.id)
+      .find((comment) => comment.taskId === first.id)!;
+    expect(firstSelects.count()).toBe(1);
+
+    store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
+    const supervisor = store.createAgent({ name: "Snapshot supervisor", provider: "claude", role: "supervisor" });
+    store.setAgentSupervisor(supervisor.id, true);
+    const patrol = store.createIssue({ title: "Snapshot patrol", status: "in_progress" });
+    const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
+    const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
+    const redispatched = await requestJson(base, `/api/tasks/${originalReturn.id}/redispatch`,
+      supervisorToken.token, { reason: "Rebuild the unclaimed return." }, 202);
+    const replacement = store.getTask(redispatched.replacement_task.id)!;
+    expect(replacement.id).not.toBe(originalReturn.id);
+    expect(store.getTask(first.id)?.delegationReturnTaskId).toBeNull();
+
+    await startThroughDaemon(base, credentials.daemon, second, f.workerRuntime.id);
+    await requestJson(base, `/api/daemon/tasks/${second.id}/complete`, credentials.daemon,
+      { output: "Second automatic result C2" });
+    expect(store.getTask(first.id)?.delegationReturnTaskId).toBe(replacement.id);
+    expect(replacement.prompt).not.toContain(`Result comment: ${firstAutomaticComment.id}`);
+    expect(store.getTask(replacement.id)!.prompt).not.toContain(`Result comment: ${firstAutomaticComment.id}`);
+    expect(store.getTask(replacement.id)!.prompt).toContain("Result comment: none at completion");
+    expect(firstSelects.count()).toBe(1);
+  });
+}
+
 for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 result comment resolved once (${backend})`, () => {
     it("uses one id for the bridge metadata and the prompt even when a later comment lands mid-transaction", async () => {
@@ -218,6 +491,32 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const bridge = store.listSessionEvents(f.leaderSession.id)
           .find((event) => event.kind === "delegation_report" && event.taskId === childTask.id)!;
         expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
+      });
+    }, PG_TEST_TIMEOUT);
+
+    for (const withInRunComment of [false, true]) {
+      it(`reuses the terminal ${withInRunComment ? "comment A" : "null"} snapshot after an unclaimed return is cancelled`, async () => {
+        await withStore(backend, async (store) => {
+          await runCancelledReturnSnapshotCase(store, withInRunComment);
+        });
+      }, PG_TEST_TIMEOUT);
+    }
+
+    it("reuses the null snapshot after a queued E2 coverage round is cancelled", async () => {
+      await withStore(backend, async (store) => {
+        await runCancelledE2SnapshotCase(store);
+      });
+    }, PG_TEST_TIMEOUT);
+
+    it("keeps the legacy latest-comment fallback when the bridge has no snapshot key", async () => {
+      await withStore(backend, async (store) => {
+        await runMissingSnapshotCompatibilityCase(store);
+      });
+    }, PG_TEST_TIMEOUT);
+
+    it("reuses the historical snapshot when redispatch is followed by another terminal drain", async () => {
+      await withStore(backend, async (store) => {
+        await runRedispatchThenDrainSnapshotCase(store);
       });
     }, PG_TEST_TIMEOUT);
 
