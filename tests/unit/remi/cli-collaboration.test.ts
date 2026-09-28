@@ -34,6 +34,19 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("issue grouped sends only the plural assignee type query parameter", async () => {
+    useCliEnv();
+    const spec = specById("issue.grouped");
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/issues/grouped");
+      expect(url.searchParams.get("assignee_types")).toBe("member");
+      expect(url.searchParams.has("assignee_type")).toBe(false);
+      return Response.json({ groups: [], total: 0 });
+    });
+    await capture(() => registryFor([spec]).execute([...spec.path, "--assignee-type", "member", "--output", "json"]));
+  });
+
   it("executes status-pages with list filters and optional archived total", async () => {
     useCliEnv();
     const spec = specById("issue.status-pages");
@@ -46,6 +59,7 @@ describe("native collaboration CLI contracts", () => {
         project_id: "prj_1", parent_id: "iss_parent", top_level_only: "true", limit: "50",
         metadata: '{"lane":1}', include_archived_total: "true",
       })) expect(url.searchParams.get(name)).toBe(value);
+      expect(url.searchParams.has("assignee_type")).toBe(false);
       return Response.json({ groups: { todo: { issues: [], total: 0, has_more: false } }, archived_total: 3 });
     });
     const output = await capture(() => registryFor([spec]).execute([
@@ -662,6 +676,25 @@ describe("native collaboration CLI contracts", () => {
     const nativeAdapter = specById("issue.list");
     const viaRegistry = await capture(() => registryFor([nativeAdapter]).execute(["issue", "list", "--output", "json"]));
     expect(viaRegistry).toEqual(direct);
+  });
+
+  it("issue list sends plural assignee types through both Registry and legacy paths", async () => {
+    useCliEnv();
+    const queries: URLSearchParams[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      expect(url.pathname).toBe("/api/issues");
+      queries.push(url.searchParams);
+      return Response.json({ issues: [], total: 0 });
+    }) as typeof fetch;
+    const args = ["issue", "list", "--assignee-type", "member", "--output", "json"];
+    await capture(() => runMultiremi(args));
+    await capture(() => registryFor([specById("issue.list")]).execute(args));
+    expect(queries).toHaveLength(2);
+    for (const query of queries) {
+      expect(query.get("assignee_types")).toBe("member");
+      expect(query.has("assignee_type")).toBe(false);
+    }
   });
 
   it("keeps the dependency CLI aligned with the legacy issue handler", async () => {
