@@ -124,6 +124,20 @@ describe("SharedTask trace expansion", () => {
     }
   });
 
+  it("displays shortened identity values with the existing notice and pages to eof", async () => {
+    const event = { seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash", tool_call_id: "call_short",
+      status: "completed", truncated: true as const, original_bytes: 1_049_741, truncated_fields: ["tool_call_id"] };
+    getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) => afterSeq === 0
+      ? page({ events: [event], next_after_seq: 1, head: 2, eof: false })
+      : page({ events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "last" }], next_after_seq: 2, head: 2 }));
+    renderTask();
+    await userEvent.setup().click(screen.getByText("agt_share"));
+    expect(await screen.findByText("last")).toBeInTheDocument();
+    const expected = JSON.stringify(event, null, 2) + "\n（内容过长已截断，原始 1049741 字节）";
+    expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === expected)).toBeInTheDocument();
+    expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1]);
+  });
+
   it.each([
     { type: "text", content: "same text" },
     { type: "tool_result", output: "same output" },

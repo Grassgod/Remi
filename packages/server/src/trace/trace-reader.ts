@@ -7,6 +7,7 @@ import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 export const TRACE_READ_DEFAULT_LIMIT = 200;
 export const TRACE_READ_MAX_LIMIT = 500;
 export const TRACE_READ_MAX_BYTES = 1024 * 1024;
+export const TRACE_READ_MIN_BYTES = 256;
 
 export type TraceReadState = "ok" | "unreachable" | "not_found" | "backfilling" | "lost";
 export interface TraceReadResult {
@@ -38,7 +39,7 @@ export class TraceReader {
   async readTrace(taskId: string, afterSeq = 0, limit = TRACE_READ_DEFAULT_LIMIT, maxBytes = TRACE_READ_MAX_BYTES): Promise<TraceReadResult> {
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new RangeError("after_seq must be a non-negative integer");
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new RangeError("maxBytes must be a positive integer");
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < TRACE_READ_MIN_BYTES) throw new RangeError(`maxBytes must be an integer >= ${TRACE_READ_MIN_BYTES}`);
     const pageLimit = Math.min(limit, TRACE_READ_MAX_LIMIT);
     const byteLimit = Math.min(maxBytes, TRACE_READ_MAX_BYTES);
     const pointer = this.pointer(taskId);
@@ -144,12 +145,33 @@ export class TraceReader {
           const { seq, ts, type, tool, tool_call_id, status } = event;
           shortened = { seq, ts, type, tool, tool_call_id, status, truncated: true, original_bytes: shortened.original_bytes };
         }
+        const truncatedFields: string[] = [];
+        const shortenIdentities = () => {
+          const keys = ["tool_call_id", "tool", "type", "status", "ts"] as const;
+          const longestFirst = keys.filter((key) => typeof shortened[key] === "string")
+            .sort((a, b) => Buffer.byteLength(shortened[b]!) - Buffer.byteLength(shortened[a]!));
+          for (const key of longestFirst) {
+            if (fits()) break;
+            const value = shortened[key];
+            if (typeof value !== "string" || !value.length) continue;
+            if (!truncatedFields.includes(key)) truncatedFields.push(key);
+            shorten(value, (text) => { shortened[key] = text; });
+          }
+        };
+        if (!fits()) shortenIdentities();
+        if (truncatedFields.length) shortened.truncated_fields = truncatedFields;
+        // The identity marker adds bytes after the initial prefix search.
+        if (Buffer.byteLength(JSON.stringify([shortened]), "utf8") > maxBytes) {
+          shortenIdentities();
+          if (!fits()) throw new Error("Trace read projection exceeds its byte budget");
+        }
         page.push(shortened);
         break;
       }
       page.push(event);
       bytes += size;
     }
+    if (Buffer.byteLength(JSON.stringify(page), "utf8") > maxBytes) throw new Error("Trace read page exceeds its byte budget");
     return {
       events: page,
       next_after_seq: page.at(-1)?.seq ?? afterSeq,

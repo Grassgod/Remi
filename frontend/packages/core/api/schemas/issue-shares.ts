@@ -53,6 +53,7 @@ export const SharedTaskTracePageSchema = z.object({
   events: z.array(z.object({
     seq: z.number().int().positive(), type: z.string(), ts: z.string(),
     truncated: z.literal(true).optional(), original_bytes: z.number().int().positive().optional(),
+    truncated_fields: z.array(z.string()).optional(),
   }).loose()),
   next_after_seq: z.number().int().nonnegative(),
   head: z.number().int().nonnegative(),
