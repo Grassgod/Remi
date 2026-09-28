@@ -110,18 +110,21 @@ describe("TraceReader oversized first event", () => {
   });
 
   it("preserves the exact emoji prefix at the tool_call_id truncation boundary", async () => {
-    const text = "中😀文😀".repeat(100);
+    const text = "中文😀\u0001".repeat(200);
     const event: TraceEvent = { seq: 7, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash", tool_call_id: text, status: "completed" };
-    const prefix = "中😀文😀".repeat(6) + "中😀";
-    const projected = { ...event, tool_call_id: prefix, truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(event)), truncated_fields: ["tool_call_id"] };
-    const budget = Buffer.byteLength(JSON.stringify([projected]));
-    expect(budget).toBeGreaterThanOrEqual(TRACE_READ_MIN_BYTES);
-    const page = await (await archiveReaderFor([event])).readTrace("tsk_trace", 0, 200, budget);
-    expect(page).toMatchObject({ state: "ok", next_after_seq: 7, eof: true });
-    expect(page.events[0]!.tool_call_id).toBe(prefix);
-    expect(page.events[0]!.truncated_fields).toEqual(["tool_call_id"]);
-    expect(Buffer.from(page.events[0]!.tool_call_id!).toString("utf8")).toBe(prefix);
-    expect(Buffer.byteLength(JSON.stringify(page.events))).toBe(budget);
+    const reader = await archiveReaderFor([event]);
+    for (let count = 25; count <= 42; count++) {
+      const prefix = Array.from(text).slice(0, count).join("");
+      const projected = { ...event, tool_call_id: prefix, truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(event)), truncated_fields: ["tool_call_id"] };
+      const budget = Buffer.byteLength(JSON.stringify([projected]));
+      expect(budget).toBeGreaterThanOrEqual(TRACE_READ_MIN_BYTES);
+      const page = await reader.readTrace("tsk_trace", 0, 200, budget);
+      expect(page).toMatchObject({ state: "ok", next_after_seq: 7, eof: true });
+      expect(page.events[0]!.tool_call_id).toBe(prefix);
+      expect(page.events[0]!.truncated_fields).toEqual(["tool_call_id"]);
+      expect(Buffer.from(page.events[0]!.tool_call_id!).toString("utf8")).toBe(prefix);
+      expect(Buffer.byteLength(JSON.stringify(page.events))).toBe(budget);
+    }
   });
 
   it("rejects budgets below TRACE_READ_MIN_BYTES before reading a source", async () => {
@@ -187,6 +190,30 @@ describe("TraceReader oversized first event", () => {
     expect(shortened).not.toMatch(/[\uD800-\uDBFF]$/);
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(512);
+  });
+
+  it.each(["content", "output", "input"] as const)("preserves exact code-point prefixes at %s truncation boundaries", async (field) => {
+    const text = "中文😀\u0001".repeat(200);
+    const event: TraceEvent = { seq: 7, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
+      tool_call_id: "call_exact", status: "completed", meta: { fixture: "m".repeat(128) },
+      [field]: field === "input" ? { nested: { command: text }, count: 7, flags: [true, false] } : text };
+    const reader = await archiveReaderFor([event]);
+    for (let count = 1; count <= 18; count++) {
+      const prefix = Array.from(text).slice(0, count).join("");
+      const projected = { ...event, truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(event)),
+        [field]: field === "input" ? { nested: { command: prefix }, count: 7, flags: [true, false] } : prefix };
+      const budget = Buffer.byteLength(JSON.stringify([projected]));
+      expect(budget).toBeGreaterThanOrEqual(TRACE_READ_MIN_BYTES);
+      const page = await reader.readTrace("tsk_trace", 0, 200, budget);
+      expect(page).toMatchObject({ state: "ok", next_after_seq: 7, head: 7, eof: true });
+      const result = page.events[0]!;
+      const actual = field === "input" ? (result.input!.nested as { command: string }).command : result[field]!;
+      expect(actual).toBe(prefix);
+      expect(Buffer.from(actual).toString("utf8")).toBe(prefix);
+      expect(Buffer.byteLength(JSON.stringify(page.events))).toBe(budget);
+      expect(result).not.toHaveProperty("truncated_fields");
+      if (field === "input") expect(result.input).toEqual({ nested: { command: prefix }, count: 7, flags: [true, false] });
+    }
   });
 
   it("shortens content, output and nested input in order before using the minimal identity fallback", async () => {
