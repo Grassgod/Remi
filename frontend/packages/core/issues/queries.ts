@@ -195,7 +195,7 @@ export function flattenIssueBuckets(data: ListIssuesCache) {
 async function fetchFirstPages(
   filter: MyIssuesFilter = {},
   sort?: IssueSortParam,
-  archive?: { client: QueryClient; wsId: string; signal: AbortSignal },
+  archive?: { client: QueryClient; wsId: string; signal: () => AbortSignal },
 ): Promise<ListIssuesCache> {
   const cacheArchivedTotal = archive
     ? createArchivedTotalWriter(archive.client, archive.wsId, archive.signal)
@@ -212,7 +212,7 @@ async function fetchFirstPages(
 
 const archivedTotalRequests = new WeakMap<QueryClient, Map<string, symbol>>();
 
-function createArchivedTotalWriter(client: QueryClient, wsId: string, signal: AbortSignal) {
+function createArchivedTotalWriter(client: QueryClient, wsId: string, signal: () => AbortSignal) {
   let requests = archivedTotalRequests.get(client);
   if (!requests) {
     requests = new Map();
@@ -225,8 +225,9 @@ function createArchivedTotalWriter(client: QueryClient, wsId: string, signal: Ab
   // All grouped keys share this count. A newer request or an optimistic count
   // write takes precedence, even when the old transport ignores cancellation.
   return (total: number | undefined) => {
-    if (signal.aborted || requests.get(wsId) !== request
-      || (client.getQueryState(key)?.dataUpdateCount ?? 0) !== updates) return;
+    if (requests.get(wsId) !== request
+      || (client.getQueryState(key)?.dataUpdateCount ?? 0) !== updates
+      || signal().aborted) return;
     if (total === undefined) throw new Error("List response is missing requested archived_total");
     client.setQueryData(key, total);
   };
@@ -340,7 +341,11 @@ async function fetchAllMyAssigneeGroups(
 export function issueListOptions(wsId: string, sort?: IssueSortParam) {
   return queryOptions({
     queryKey: issueKeys.listSorted(wsId, sort),
-    queryFn: ({ client, signal }) => fetchFirstPages({}, sort, { client, wsId, signal }),
+    // Read the signal at publication time; reading it before the transport
+    // settles also opts into TanStack's cancel-on-last-observer-removal policy.
+    queryFn: (context) => fetchFirstPages({}, sort, {
+      client: context.client, wsId, signal: () => context.signal,
+    }),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
   });
@@ -413,8 +418,8 @@ export function issueAssigneeGroupsOptions(
 ) {
   return queryOptions<GroupedIssuesResponse>({
     queryKey: issueKeys.assigneeGroups(wsId, { ...filter, ...sort }),
-    queryFn: async ({ client, signal }) => {
-      const cacheArchivedTotal = createArchivedTotalWriter(client, wsId, signal);
+    queryFn: async (context) => {
+      const cacheArchivedTotal = createArchivedTotalWriter(context.client, wsId, () => context.signal);
       const response = await api.listGroupedIssues({
         group_by: "assignee",
         limit: ISSUE_PAGE_SIZE,

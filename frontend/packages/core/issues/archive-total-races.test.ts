@@ -52,6 +52,23 @@ const settle = () => new Promise<void>((resolve) => { setTimeout(resolve, 0); })
 afterEach(() => { clients.splice(0).forEach((qc) => qc.clear()); });
 
 describe("inline archive count response ordering", () => {
+  it.each(writers)("%s: transient observer removal still shares the initial request", async (writer) => {
+    const h = fixture();
+    const qc = client();
+    const source = options(writer);
+    const first = source.observe(qc).subscribe(() => {});
+    first();
+    const observer = source.observe(qc);
+    const stop = observer.subscribe(() => {});
+    try {
+      expect(h.pending).toHaveLength(1);
+      h.pending[0]!(1);
+      await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+      expect(qc.getQueryData(issueKeys.archivedCount(WS))).toBe(1);
+      expect(h.pending).toHaveLength(1);
+    } finally { stop(); }
+  });
+
   it.each(writers)("%s: canceled response cannot publish even without a replacement request", async (writer) => {
     const h = fixture();
     const qc = client();

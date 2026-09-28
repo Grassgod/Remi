@@ -65,6 +65,8 @@ try {
     const web = start(["node", resolve(root!, "node_modules/next/dist/bin/next"), "dev", "--webpack",
       "--hostname", "127.0.0.1", "--port", "18572"], resolve(root!, "frontend/apps/web"));
     await ready("http://127.0.0.1:18572/login");
+    await ready("http://127.0.0.1:18572/local/issues");
+    await ready("http://127.0.0.1:18572/local/inbox");
     const probe = start([process.execPath, resolve(import.meta.dir, "mul395-s9-3b-positions.ts"), phase!,
       "http://localhost:18572", "--issues-only", "--rounds", "3", "--timeout", "20000", "--out",
       resolve(repo, `reports/performance/MUL-395-archive-count-${phase}.json`)], repo);
