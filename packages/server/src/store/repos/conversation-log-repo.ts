@@ -9,6 +9,7 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { renderMarkdown } from "../../render/markdown.js";
 import {
   CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP,
   CONVERSATION_LOG_KIND_VISIBILITY,
@@ -234,6 +235,7 @@ export class ConversationLogRepo {
     const id = input.id ?? createId("clog");
     const now = input.createdAt ?? nowIso();
     const updatedAt = input.updatedAt ?? now;
+    const rendered = renderMarkdown(input.bodyMd ?? "");
     this.ctx.db.run(
       `INSERT INTO multiremi_conversation_log (
          session_id, seq, id, kind, visibility, author_type, author_id, task_id,
@@ -251,8 +253,8 @@ export class ConversationLogRepo {
         input.authorId ?? null,
         input.taskId ?? null,
         input.bodyMd ?? "",
-        input.bodyHtml ?? null,
-        input.renderVersion ?? null,
+        rendered.html,
+        rendered.render_version,
         input.parentId ?? null,
         input.resolvedAt ?? null,
         input.resolvedByType ?? null,
@@ -350,7 +352,12 @@ export class ConversationLogRepo {
     if (!current) return null;
     const sets: string[] = [];
     const params: unknown[] = [];
-    const fields = input.fields;
+    const fields = { ...input.fields };
+    if (fields.body_md !== undefined || fields.body_html !== undefined || fields.render_version !== undefined) {
+      const rendered = renderMarkdown(fields.body_md ?? current.body_md);
+      fields.body_html = rendered.html;
+      fields.render_version = rendered.render_version;
+    }
     if (fields.body_md !== undefined) {
       sets.push("body_md = ?");
       params.push(fields.body_md);
@@ -401,7 +408,7 @@ export class ConversationLogRepo {
     );
     const entry = this.getEntryWithinTransaction(sessionId, seq);
     if (!entry) return null;
-    this.emit(sessionId, toPatch(seq, revision, input.fields, now));
+    this.emit(sessionId, toPatch(seq, revision, fields, now));
     return entry;
   }
 

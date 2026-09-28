@@ -40,6 +40,7 @@ import {
   attachmentCompatibilityResponse,
   cleanString,
   commentCompatibilityResponse,
+  commentReactionCompatibilityResponse,
   currentTaskAccessToken,
   authenticatedRequestUserId,
   currentRequestUserId,
@@ -1623,7 +1624,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (anchor === null || before === null || after === null || (before ?? 0) + (after ?? 0) > 100) {
       return c.json({ error: "invalid log window" }, 400);
     }
-    return c.json(store.conversationLogWindow(sessionId, { anchor, before, after }));
+    const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    const commentIds = window.entries.filter(entry => entry.kind === "message").map(entry => entry.id);
+    const reactions = store.listCommentReactionsForComments(commentIds);
+    const attachments = store.listAttachmentsForComments(commentIds);
+    return c.json({ ...window, entries: window.entries.map(entry => entry.kind === "message"
+      ? { ...entry, metadata: { ...entry.metadata,
+        reactions: (reactions.get(entry.id) ?? []).map(commentReactionCompatibilityResponse),
+        attachments: (attachments.get(entry.id) ?? []).map(attachmentCompatibilityResponse),
+      } } : entry) });
   });
   app.get("/api/sessions/:sessionId/inherited-context", (c) => {
     const session = store.getIssueSession(c.req.param("sessionId"));
