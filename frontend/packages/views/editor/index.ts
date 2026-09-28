@@ -23,3 +23,6 @@ export { AttachmentCard } from "./attachment-card";
 export type { AttachmentCardProps } from "./attachment-card";
 export { Attachment } from "./attachment";
 export type { AttachmentInput, AttachmentProps } from "./attachment";
+export { MermaidDiagram } from "./mermaid-diagram";
+export { HtmlPreviewBody, type HtmlSource } from "./html-preview-body";
+export { HtmlBlockPreview } from "./html-block-preview";

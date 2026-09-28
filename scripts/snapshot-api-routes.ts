@@ -60,6 +60,7 @@ export const SNAPSHOT_STATUS_ONLY_ROUTES = new Set([
   "GET /ws",
   "GET /api/daemon/ws",
   "GET /api/realtime/ws",
+  "GET /api/trace/ws",
 ]);
 
 const NORMALIZER_RULES = [

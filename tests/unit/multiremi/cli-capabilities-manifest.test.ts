@@ -176,9 +176,10 @@ describe("CLI capabilities manifest", () => {
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
-      exempt: 94,
+      // MUL-438 also adds the browser trace socket, under websocket_transport.
+      exempt: 95,
       missing: 0,
-      total: 772,
+      total: 773,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });

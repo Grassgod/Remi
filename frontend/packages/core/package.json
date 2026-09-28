@@ -18,6 +18,7 @@
     "./api/schema": "./api/schema.ts",
     "./api/schemas": "./api/schemas/index.ts",
     "./api/ws-client": "./api/ws-client.ts",
+    "./api/trace-socket": "./api/trace-socket.ts",
     "./config": "./config/index.ts",
     "./auth": "./auth/index.ts",
     "./workspace": "./workspace/index.ts",
@@ -104,6 +105,7 @@
     "./feedback": "./feedback/index.ts",
     "./feedback/mutations": "./feedback/mutations.ts",
     "./realtime": "./realtime/index.ts",
+    "./replica": "./replica/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",
     "./onboarding": "./onboarding/index.ts",
@@ -134,8 +136,9 @@
     "./skills/frontmatter": "./skills/frontmatter.ts"
   },
   "dependencies": {
-    "@multiremi/contracts": "workspace:*",
     "@formatjs/intl-localematcher": "catalog:",
+    "@multiremi/contracts": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-query-devtools": "^5.96.2",
     "i18next": "catalog:",

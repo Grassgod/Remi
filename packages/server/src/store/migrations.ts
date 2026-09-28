@@ -3281,6 +3281,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // Why a decision lane carried plain text instead of a card. NULL means the
   // delivery is a normal card (or not a decision lane at all).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
+  ensureFeishuOutboundKindsSchema(db, dialect);
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_requested INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_context TEXT");
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_task_id TEXT");
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_feishu_bot_outbound_operations (
+    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, unit_key TEXT NOT NULL,
+    operation TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', claim_token TEXT, leased_until TEXT,
+    available_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(workspace_id, kind, unit_key));
+    CREATE INDEX IF NOT EXISTS idx_feishu_outbound_operations_pending
+      ON multiremi_feishu_bot_outbound_operations(workspace_id, status, available_at, leased_until);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
@@ -4166,7 +4177,7 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
       attempt_count, external_message_id, last_error, sent_at, created_at, updated_at
     FROM multiremi_feishu_bot_outbound_deliveries_legacy;
     DROP TABLE multiremi_feishu_bot_outbound_deliveries_legacy;
-    CREATE INDEX idx_multiremi_feishu_bot_outbound_pending
+    CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_pending
       ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at);
   `);
 }
@@ -4179,6 +4190,128 @@ function allowNullableFeishuOutboundReplyToMessageId(db: SqlDatabase): void {
  */
 const HUMAN_REQUEST_PUSH_TABLE = "multiremi_feishu_bot_human_request_pushes";
 const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
+
+/** C5 relaxes the Task key without deleting delivery data. SQLite retains an
+ * atomic pre-migration copy; PG can relax the constraint in place. */
+export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDatabaseDialect): void {
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  addColumnIfMissing(db, table, "unit_key TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, table, "cascade_failure INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, table, "delivery_mode TEXT");
+  if (isPostgresDialect(db, dialect)) {
+    db.transaction(() => {
+      const constraints = db.query(`SELECT c.conname FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE t.relname = ? AND n.nspname = current_schema() AND c.contype = 'u'
+          AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+            WHERE attrelid = t.oid AND attname = 'task_id')]::smallint[]`).all(table) as Array<{ conname: string }>;
+      for (const constraint of constraints) {
+        const name = constraint.conname.replaceAll('"', '""');
+        db.exec(`ALTER TABLE ${table} DROP CONSTRAINT "${name}"`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+    return;
+  }
+  const uniqueIndexes = db.query(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number; partial: number }>;
+  const oldUnique = uniqueIndexes.some(index => {
+    if (Number(index.unique) !== 1 || Number(index.partial) === 1) return false;
+    const columns = db.query(`PRAGMA index_info("${index.name.replaceAll('"', '""')}")`).all() as Array<{ name: string }>;
+    return columns.length === 1 && columns[0]!.name === "task_id";
+  });
+  if (!oldUnique) { ensureFeishuOutboundKindIndexes(db); return; }
+  let backup = `${table}_c5_backup`;
+  for (let version = 2; tableExists(db, backup); version++) backup = `${table}_c5_backup_${version}`;
+  const schema = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string };
+  const relaxed = schema.sql.replace(/\btask_id\s+TEXT\s+UNIQUE\b/i, "task_id TEXT");
+  if (relaxed === schema.sql) throw new Error("C5 outbound migration: unexpected task_id unique constraint");
+  const columns = (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .map(column => `"${column.name.replaceAll('"', '""')}"`).join(", ");
+  const indexes = db.query("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL")
+    .all(table) as Array<{ name: string; sql: string }>;
+  const foreignKeys = Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys);
+  if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE ${table} RENAME TO ${backup}`);
+      db.exec(relaxed);
+      db.exec(`INSERT INTO ${table} (${columns}) SELECT ${columns} FROM ${backup}`);
+      for (const index of indexes) {
+        // Index names are global in SQLite; the original indexes stay on the retained backup.
+        const definition = index.sql.slice(index.sql.toUpperCase().indexOf(" ON "));
+        let name = `${index.name}_c5`;
+        for (let version = 2; db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name); version++) name = `${index.name}_c5_${version}`;
+        db.exec(`CREATE ${/^CREATE UNIQUE/i.test(index.sql) ? "UNIQUE " : ""}INDEX "${name.replaceAll('"', '""')}"${definition}`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+  } finally {
+    if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function ensureFeishuOutboundKindIndexes(db: SqlDatabase): void {
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  const indexes = [
+    ["idx_feishu_outbound_task_kind_unit", "UNIQUE ", "(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))"],
+    ["idx_feishu_outbound_task_carrier", "UNIQUE ", "(task_id) WHERE task_id IS NOT NULL AND (kind IS NULL OR kind = 'cot') AND unit_key = ''"],
+    ["idx_feishu_outbound_pending_c5", "", "(status, available_at, leased_until, created_at)"],
+    ["idx_feishu_outbound_kind_c5", "", "(kind, status, available_at)"],
+  ];
+  if (isPostgresDialect(db)) {
+    const keys = [
+      ["task_id", "COALESCE(kind, ''::text)", "COALESCE(unit_key, ''::text)"],
+      ["task_id"],
+      ["status", "available_at", "leased_until", "created_at"],
+      ["kind", "status", "available_at"],
+    ];
+    const carrierPredicate = "((task_id IS NOT NULL) AND ((kind IS NULL) OR (kind = 'cot'::text)) AND (unit_key = ''::text))";
+    type IndexDefinition = { unique: boolean; keys: string[]; predicate: string | null };
+    const liveIndexes = () => db.query(`SELECT i.indisunique AS "unique",
+        to_json(ARRAY(SELECT pg_get_indexdef(i.indexrelid, key, false)
+          FROM generate_series(1, i.indnkeyatts) AS key)) AS keys,
+        pg_get_expr(i.indpred, i.indrelid) AS predicate
+      FROM pg_index i
+      JOIN pg_class t ON t.oid = i.indrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_class index_relation ON index_relation.oid = i.indexrelid
+      JOIN pg_am method ON method.oid = index_relation.relam
+      WHERE t.relname = ? AND n.nspname = current_schema()
+        AND i.indisvalid AND i.indisready AND method.amname = 'btree'`).all(table) as IndexDefinition[];
+    const matches = (index: IndexDefinition, position: number) =>
+      index.unique === Boolean(indexes[position]![1])
+      && index.keys.length === keys[position]!.length
+      && index.keys.every((key, column) => key === keys[position]![column])
+      && index.predicate === (position === 1 ? carrierPredicate : null);
+    const existing = liveIndexes();
+    for (const [position, [baseName, unique, definition]] of indexes.entries()) {
+      if (existing.some(index => matches(index, position))) continue;
+      let name = baseName!;
+      for (let version = 2; db.query(`SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = ? AND n.nspname = current_schema()`).get(name); version++) name = `${baseName}_${version}`;
+      // An archive may own the original name. A concurrent collision must fail, not skip creation.
+      db.exec(`CREATE ${unique}INDEX ${name} ON ${table}${definition}`);
+    }
+    const complete = liveIndexes();
+    if (indexes.some((_, position) => !complete.some(index => matches(index, position)))) {
+      throw new Error("C5 outbound migration: live index definitions are incomplete; see docs/feishu-outbound-kind-migration.md");
+    }
+    return;
+  }
+  for (const [baseName, unique, definition] of indexes) {
+    let name = baseName!;
+    if (!isPostgresDialect(db)) {
+      for (let version = 2; ; version++) {
+        const existing = db.query("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?").get(name) as { tbl_name: string } | null;
+        if (!existing || existing.tbl_name === table) break;
+        name = `${baseName}_${version}`;
+      }
+    }
+    db.exec(`CREATE ${unique}INDEX IF NOT EXISTS ${name} ON ${table}${definition}`);
+  }
+}
 
 /**
  * MUL-407: a decision-card push has no wake Task, so `wake_task_id` must accept
