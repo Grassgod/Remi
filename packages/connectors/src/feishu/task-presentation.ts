@@ -132,6 +132,9 @@ export class FeishuTaskPresentation {
     await this.finishCot(finalStatus);
     if (this.options.lane === "cot") {
       this.active = false;
+      if (this.state.cot?.status === "disabled" && this.state.cot.error) {
+        throw new FeishuDeliveryError(this.state.cot.error, false);
+      }
       return { messageId: this.state.cot?.messageId ?? "" };
     }
     const answer = this.timeline.answer(snapshotText);

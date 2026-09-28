@@ -175,4 +175,21 @@ describe("C5 full fake-channel delivery", () => {
     expect(JSON.stringify(cards[0].card)).toContain("Kind bot");
     expect(f.store.getTaskHumanRequest(request.id)?.status).toBe("responded");
   });
+
+  it("records a permanently rejected native CoT as failed while the independent result handler still delivers", async () => {
+    const f = flow();
+    const taskId = f.inbound("cotrefusal").taskId;
+    const initial = (await f.client.heartbeatRuntime(f.runtimeId, undefined, undefined, false, true)).pending_feishu_outbounds!;
+    f.store.completeTask(taskId, { output: "Final answer" });
+    f.h.client.request = async () => ({ code: 230001, msg: "Permanent fake CoT refusal", data: {} }) as any;
+    for (const row of initial) await f.daemon.handleFeishuBotOutbound(f.runtimeId, row);
+    const cot = db!.query("SELECT status FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? AND kind = 'cot'").get(taskId);
+    expect(cot).toEqual({ status: "failed" });
+    const next = (await f.client.heartbeatRuntime(f.runtimeId, undefined, undefined, false, true)).pending_feishu_outbounds!;
+    const result = next.find(row => row.kind === "result_card")!;
+    expect(result).toBeDefined();
+    await f.daemon.handleFeishuBotOutbound(f.runtimeId, result);
+    expect(f.h.cards()).toHaveLength(1);
+    expect(db!.query("SELECT status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(result.id)).toEqual({ status: "sent" });
+  });
 });
