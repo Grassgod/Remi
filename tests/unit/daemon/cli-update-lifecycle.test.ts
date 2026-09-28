@@ -6,6 +6,7 @@ import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multiremi.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import type { DaemonProtocolConnect } from "@multiremi/worker/daemon-protocol-client.js";
+import { injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -93,9 +94,10 @@ for (const outcome of ["failed", "completed"] as const) {
     let update: Promise<void> | undefined;
     try {
       await waitFor(() => claims.every((count) => count > 0), "both providers must poll before the update");
-      // Exercise the existing update handler directly. A-2 deliberately does not
-      // deliver pending_update; MUL-419 wires that handler to runtime.update.
-      update = (daemons[0] as unknown as { handleRuntimeUpdate(runtimeId: string, id: string, version: string, scope: string): Promise<void> }).handleRuntimeUpdate("rt_claude", "upd_test", "v9.9.9", "cli");
+      // MUL-419: 换回真实 v2 下发
+      update = injectDaemonHeartbeatInput(daemons[0]!, { input: {
+        runtime_id: "rt_claude", status: "ok", pending_update: { id: "upd_test", target_version: "v9.9.9", scope: "cli" },
+      } });
       await waitFor(() => updateStarted, "installer must start");
       const pausedClaims = [...claims];
       const siblingHeartbeats = heartbeats[1]!;
