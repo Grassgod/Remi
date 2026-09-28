@@ -3,6 +3,7 @@
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiChatMessage,
   MultiremiDaemonHeartbeatAck,
@@ -115,7 +116,15 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   return response;
 }
 
-export function taskMessageRealtimePayload(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
+/**
+ * MUL-474: only routing/scope fields are read, so the builder takes the narrow
+ * fan-out subject instead of a whole Task — appending a message must not load
+ * the prompt.
+ */
+export function taskMessageRealtimePayload(
+  message: MultiremiTaskMessage,
+  task: TaskMessageFanoutSubject,
+): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     task_id: message.taskId,
     issue_id: task.issueId,
@@ -822,7 +831,10 @@ function taskResultWireValue(task: MultiremiTask): unknown | null {
   };
 }
 
-export function daemonTaskMessageWireResponse(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
+export function daemonTaskMessageWireResponse(
+  message: MultiremiTaskMessage,
+  task: TaskMessageFanoutSubject,
+): Record<string, unknown> {
   const response: Record<string, unknown> = {
     task_id: message.taskId,
     seq: message.seq,

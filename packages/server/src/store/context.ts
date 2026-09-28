@@ -200,7 +200,24 @@ export type CreateIssueCommentOptions =
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
-export type TaskMessagesListener = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }) => void;
+/**
+ * The Task fields one message batch's fan-out reads: routing (`workspaceId`,
+ * `agentId`), Chat scoping, and the wire payload's `issue_id` /
+ * `issue_session_id` / `chat_session_id`. MUL-474 narrowed this from the whole
+ * `MultiremiTask` so appending a message no longer has to load the prompt.
+ */
+export interface TaskMessageFanoutSubject {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  chatSessionId: string | null;
+  issueId: string | null;
+  issueSessionId: string | null;
+}
+
+export type TaskMessagesListener = (
+  event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] },
+) => void;
 export type WorkspaceEventListener = (event: {
   type: string;
   workspaceId: string;
@@ -524,6 +541,14 @@ export interface TasksSurface {
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
+  /**
+   * MUL-474: identity/status columns only — no `prompt`, `result` or `usage`.
+   * The daemon identity guard and the task-level handlers read this instead of
+   * {@link getTask}; the row is cached for the rest of the request.
+   */
+  getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
+  /** MUL-474: the `status` route's fields, without the prompt column. */
+  getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -922,7 +947,7 @@ export class StoreContext {
     }
   }
 
-  notifyTaskMessages(task: MultiremiTask, messages: MultiremiTaskMessage[]): void {
+  notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
     if (messages.length === 0) return;
     for (const listener of [...this.taskMessagesListeners]) {
       try {
