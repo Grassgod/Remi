@@ -3905,7 +3905,7 @@ runMigrations(this.db);
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision {
     return this.issues.isSquadLeaderDelegation(input);
   }
 

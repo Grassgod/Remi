@@ -11,6 +11,7 @@ import {
   nullableString,
   parseJson,
   resolveOptionalStringField,
+  resolveCamelOrSnakeString,
   searchMatch,
   searchRank,
   toJson,
@@ -134,6 +135,13 @@ function parentStatusGuardEnabled(): boolean {
  * path produced it (task terminal vs. a status edit).
  */
 export type ChildTerminalOutcome = "done" | "failed" | "blocked" | "cancelled";
+
+export type SquadLeaderDelegationDecision =
+  | { ok: true; delegatedFromIssueSessionId: string | null }
+  | { ok: false; reason: "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
+      | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | null };
+
+const DELEGATION_TREE_MAX_DEPTH = 16;
 
 /** `null` for statuses that are not a child ending. */
 function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
@@ -2007,7 +2015,9 @@ export class IssuesRepo {
         dependencyId: id,
         dependsOnIssueId,
         type,
-        ...sourceTaskActivityData(activity.sourceTaskId ?? input.parentTaskId ?? input.parent_task_id),
+        ...sourceTaskActivityData(
+          activity.sourceTaskId ?? resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+        ),
       },
     }, deferredEvents);
     const stored = this.getIssueDependency(id)!;
@@ -2369,7 +2379,7 @@ export class IssuesRepo {
       cancelledTasks = this.unassignIssueWithinTransaction(id, {
         actorType: input.actorType ?? "system",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents);
     }
     if (forceStartAttempt) {
@@ -2379,7 +2389,7 @@ export class IssuesRepo {
         ownerId: nextAssigneeId,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, collector, deferredEvents);
     }
     const next = this.getIssue(id)!;
@@ -2389,7 +2399,7 @@ export class IssuesRepo {
       previousStatus: current.status,
       actorType: "system",
       actorId: null,
-      automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+      automationSourceTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
     });
     // MUL-400 S1c (QA round 1): every audit row below commits with the status
     // write above. The events go on the caller's queue, so a rollback leaves
@@ -2422,7 +2432,7 @@ export class IssuesRepo {
           previous_status: current.status,
           openChildren: this.countOpenChildIssues(id),
           open_children: this.countOpenChildIssues(id),
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         },
       }, deferredEvents);
     }
@@ -2495,7 +2505,7 @@ export class IssuesRepo {
       this.notifyChildStatusChange(
         previous,
         updated,
-        cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         collector,
       );
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
@@ -2647,7 +2657,7 @@ export class IssuesRepo {
         assignee_type: issue.assigneeType,
         assigneeId: issue.assigneeId,
         assignee_id: issue.assigneeId,
-        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id ?? null),
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
       },
     }, deferredEvents);
   }
@@ -3596,6 +3606,7 @@ export class IssuesRepo {
       childStatus: child.status,
       readinessLines,
     });
+    const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
     const comment = this.createSystemIssueCommentWithinTransaction(parent.id, body, {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -3603,7 +3614,7 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, deferredEvents);
+    }, deferredEvents, null, issueSessionId);
     return { tasks: this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId, nested, deferredEvents), comment };
   }
 
@@ -3863,7 +3874,7 @@ export class IssuesRepo {
     // Postgres, which has no savepoints.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+      const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
       const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
       if (queued) {
         const appended = appendChildStatusReport(queued.prompt, {
@@ -3910,6 +3921,7 @@ export class IssuesRepo {
         prompt: childDoneParentTaskPrompt(systemComment, outcome),
         parentTaskId,
         preserveIssueStatus: true,
+        wakeSource: "child_status",
       }, nested, deferredEvents);
       this.ctx.appendIssueActivity(parent.id, {
         actorType: "system",
@@ -3932,6 +3944,16 @@ export class IssuesRepo {
       }, deferredEvents);
       return [task];
     })();
+  }
+
+  private childDoneReturnSessionId(parentIssueId: string, triggeringTaskId: string | null): string {
+    const triggering = triggeringTaskId ? this.ctx.tasks().getTask(triggeringTaskId) : null;
+    const delegatedSessionId = triggering?.delegatedFromIssueSessionId;
+    const delegatedSession = delegatedSessionId
+      ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
+    return delegatedSession?.issueId === parentIssueId
+      ? delegatedSession.id
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -3996,7 +4018,7 @@ export class IssuesRepo {
       const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents))();
       this.ctx.emitCommitEvents(deferredEvents);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
@@ -4056,14 +4078,14 @@ export class IssuesRepo {
           taskId: null,
           task_id: null,
           deferred: true,
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
           cancelled: 0,
         },
       });
       this.recordDependencyDispatchSkipped(
         { ...current, assigneeType, assigneeId },
         unmetDependencies,
-        { actorType, actorId, parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null },
+        { actorType, actorId, parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id") },
       );
       if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
@@ -4091,7 +4113,8 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
     }
     if (assigneeType === "member") {
@@ -4124,7 +4147,7 @@ export class IssuesRepo {
         to_id: assigneeId,
         taskId: task?.id ?? null,
         task_id: task?.id ?? null,
-        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         cancelled,
       },
     });
@@ -4164,7 +4187,7 @@ export class IssuesRepo {
         unmet,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents);
       return;
     }
@@ -6120,7 +6143,7 @@ export class IssuesRepo {
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
-      if (comment.authorType === "agent" && !leaderDelegation) {
+      if (comment.authorType === "agent" && !leaderDelegation.ok) {
         this.recordCommentMentionSkipped(
           issue,
           comment,
@@ -6169,10 +6192,10 @@ export class IssuesRepo {
       // keeps one provider conversation and receives a delta; a teammate that
       // has never been delegated to still gets a fresh lane, and `remi task
       // create` remains the explicit way to start an independent one.
-      const continuedDelegation = leaderDelegation
+      const continuedDelegation = leaderDelegation.ok
         ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId)
         : null;
-      const delegationId = leaderDelegation
+      const delegationId = leaderDelegation.ok
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
       let task: MultiremiTask;
@@ -6279,30 +6302,101 @@ export class IssuesRepo {
     return targets;
   }
 
+  /**
+   * MUL-400 E2b: is a task-token dispatch a squad-leader delegation, and where
+   * does its terminal report return?
+   *
+   * The same-issue branch is the pre-E2b rule, byte for byte: the leader's own
+   * task, its own Session, a squad-owned issue, and a teammate. A dispatch to a
+   * *different* issue is the E2b extension: the delegator's issue must still be
+   * the squad's, its task must carry a main Session, and the target issue must
+   * sit in the delegator's own subtree or in the subtree of its parent (child,
+   * grandchild, sibling, sibling's descendant), walking up at most 16 levels
+   * with a visited set. The return always lands on the delegator's Issue
+   * Session, never on the child issue's Session.
+   *
+   * A failed cross-issue judgement returns a reason that the task carries to
+   * its terminal hook, so the silence that hid MUL-383 becomes auditable. The
+   * same-issue branch returns `reason: null`: its behaviour is deliberately
+   * unchanged, so a non-delegating same-issue dispatch stays exactly as quiet as
+   * it is today.
+   */
   isSquadLeaderDelegation(input: {
     issue: MultiremiIssue;
     sourceTask: MultiremiTask | null;
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): SquadLeaderDelegationDecision {
     const { issue, sourceTask, authorAgentId, targetAgentId, issueSessionId } = input;
-    if (
-      !authorAgentId
-      || !sourceTask
-      || sourceTask.agentId !== authorAgentId
-      || sourceTask.issueId !== issue.id
-      || sourceTask.issueSessionId !== issueSessionId
-      || issue.assigneeType !== "squad"
-      || !issue.assigneeId
-    ) return false;
-    const squad = this.ctx.squads().getSquad(issue.assigneeId);
-    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return false;
-    return this.ctx.squads().listSquadMembers(squad.id).some((member) =>
-      member.memberType === "agent"
-      && member.memberId === targetAgentId
-      && member.memberId !== authorAgentId
+    if (!authorAgentId || !sourceTask || sourceTask.agentId !== authorAgentId) {
+      return { ok: false, reason: null };
+    }
+    if (sourceTask.issueId === issue.id) {
+      if (
+        sourceTask.issueSessionId !== issueSessionId
+        || issue.assigneeType !== "squad"
+        || !issue.assigneeId
+      ) return { ok: false, reason: null };
+      const squad = this.ctx.squads().getSquad(issue.assigneeId);
+      if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return { ok: false, reason: null };
+      const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+        member.memberType === "agent"
+        && member.memberId === targetAgentId
+        && member.memberId !== authorAgentId
+      );
+      if (!teammate) return { ok: false, reason: null };
+      return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId! };
+    }
+
+    if (!sourceTask.issueId || !sourceTask.issueSessionId) {
+      return { ok: false, reason: "source_not_issue_task" };
+    }
+    const sourceIssue = this.getIssue(sourceTask.issueId);
+    if (!sourceIssue || sourceIssue.workspaceId !== issue.workspaceId) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    const sourceSession = this.ctx.issueSessions().getIssueSession(sourceTask.issueSessionId);
+    if (!sourceSession || sourceSession.inheritMode !== "none") {
+      return { ok: false, reason: "source_side_session" };
+    }
+    if (sourceIssue.assigneeType !== "squad" || !sourceIssue.assigneeId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    const squad = this.ctx.squads().getSquad(sourceIssue.assigneeId);
+    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    if (targetAgentId === authorAgentId) return { ok: false, reason: "self_dispatch" };
+    const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+      member.memberType === "agent" && member.memberId === targetAgentId
     );
+    if (!teammate) return { ok: false, reason: "target_not_squad_member" };
+    if (!this.isIssueInDelegationTree(sourceIssue, issue)) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId };
+  }
+
+  /**
+   * MUL-400 E2b scope rule: the target issue is the delegator's own issue, a
+   * descendant of it, or a descendant of its parent (which covers siblings and
+   * their subtrees). Bounded to 16 hops with a visited set, so a malformed
+   * parent chain cannot loop and a deep tree cannot cost unbounded reads.
+   */
+  private isIssueInDelegationTree(sourceIssue: MultiremiIssue, targetIssue: MultiremiIssue): boolean {
+    if (sourceIssue.id === targetIssue.id) return true;
+    const allowedRoots = new Set<string>([sourceIssue.id]);
+    if (sourceIssue.parentIssueId) allowedRoots.add(sourceIssue.parentIssueId);
+    const seen = new Set<string>();
+    let cursor: string | null = targetIssue.id;
+    for (let depth = 0; cursor && depth <= DELEGATION_TREE_MAX_DEPTH; depth += 1) {
+      if (allowedRoots.has(cursor)) return true;
+      if (seen.has(cursor)) return false;
+      seen.add(cursor);
+      cursor = this.getIssue(cursor)?.parentIssueId ?? null;
+    }
+    return false;
   }
 
   private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {
