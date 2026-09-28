@@ -16,7 +16,13 @@ Windows 通过 Node 启动随仓库提供的无扩展名 `remi-claude-agent-acp`
 
 原生 `/compact` 失败另走 `tool_call_update(status: "failed", _meta.contextCompaction.error)`，随后可能正常返回 `end_turn`，不保证发 AIR error。provider 独立记录这条失败，以 error 文本作为详情；只有同一轮失败后再次输出 assistant 文本才视为恢复并记 warning。前一轮或失败前的正常输出、压缩横幅、thinking 和普通工具失败不改变这项判断。
 
-RPC、typed 失败对象及其 cause、原生失败压缩工具的文本共用 ACP 脱敏函数，覆盖编码参数名、Authorization/Basic、Cookie/session 等凭据形态。daemon 在失败报告、日志和终结进度写入前再次调用同一函数，并按本任务注入的凭据值精确替换（含 URL 编码和 Base64 形态）；原始分类 hint 不可枚举，typed failure 保存脱敏副本。
+RPC、typed 失败对象及其 cause、原生失败压缩工具的文本共用 ACP 脱敏函数 `redactProviderErrorText`；daemon 在失败报告、日志和终结进度写入前用 `redactTaskError` 再调用一次。原始分类 hint 不可枚举，typed failure 保存脱敏副本。脱敏只保证以下三类，范围以 [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) 第 2 条为准：
+
+- 已配置凭据按值替换：本任务的 relay 和 auth 令牌，以及 provider 环境变量中名字含 `SECRET`、`TOKEN`、`PASSWORD`、`API_KEY`、`ACCESS_KEY`、`PRIVATE_KEY`、`CREDENTIAL` 段的值，trim 后不足 8 字符的跳过。在任意位置替换，覆盖原文、Base64、Base64url 和 URL 编码（含 `+` 与小写十六进制变体）。
+- 已知格式：`Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie` 头的值，`Bearer`/`Basic` 后的 token，URL 里的用户名密码，`sk-` 密钥，`ghp_`/`gho_` token，三段式 JWT。
+- 敏感键后的值：键名经最多三次 `%XX` 解码、拆驼峰、转小写后以 `api_key`、`key`、`token`、`secret`、`password`、`session_id`、`auth`、`cookie` 等结尾，分隔符为 `:` 或 `=`（允许转义引号）。引号串替换到同一转义层级的闭合引号，未闭合时到行尾；`{}`/`[]` 容器替换到匹配的闭合处，未闭合时到文本末尾；裸值只替换一个词，遇到空白、引号、反引号、`,;&{}[]` 或转义引号结束。唯一例外：值前一个字符是空格、且这个词整体是 4xx/5xx 状态码（可带一个 `.` 或 `:`）时保留，供失败分类使用。
+
+不在范围内，QA 记为观察项而非缺陷：裸值终止符之后没有标签的文本；不足 8 字符的已配置凭据（只靠格式和键名规则）；空敏感字段后用 tab 或换行隔开的状态码会被替换；`401\"` 这类转义形态在脱敏前就分不出类。
 
 Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容接口和一个默认模型。填写连接名称、API 基础地址、模型 ID，以及 API Key 或本机 `REMI_CLAUDE_*` 环境变量名；请求鉴权可选 Bearer Token 或 `x-api-key`。地址填写服务基础路径，Claude Code 在其后请求 `/v1/messages`，例如网关是 `https://gateway.example/anthropic`，不要填写完整 messages 路径。允许 Runtime 可访问的 HTTP(S) 本机或局域网地址，服务端不主动请求该地址。
 

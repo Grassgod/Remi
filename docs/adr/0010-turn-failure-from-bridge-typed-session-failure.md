@@ -52,19 +52,50 @@ the configured fallback even when a candidate Runtime supported it.
    truncating the appended text to 500 characters. Failure classification prefers known
    structured error kinds, then uses text. Model unavailability precedes auth;
    HTTP status matching excludes request IDs and UUID fragments.
-   One ACP redactor protects RPC, typed failure objects and their causes,
-   native failed-compaction events, and legacy terminal error messages. The
-   daemon applies the same function again before failure reports, logs and
-   terminal progress; task-injected credentials are replaced by exact value,
-   including URL-encoded and Base64 forms. Credential patterns cover encoded
-   parameter names, authentication schemes and Cookie/session values. Typed
-   failure copies are sanitized, and raw classification hints stay non-enumerable.
    Availability text must describe the model itself, not an unsupported input
    feature. Generic `invalid_request_error` wrappers classify as invalid input
    only with no HTTP error status or exclusively 400, after specific provider
    causes such as authentication, quota, rate limits and server errors.
    Other HTTP error statuses retain their own classification. Code-less input
    failures remain supported; context-overflow markers are unchanged.
+
+   One ACP redactor (`redactProviderErrorText`) protects RPC, typed failure
+   objects and their causes, native failed-compaction events, and legacy
+   terminal error messages. The daemon's `redactTaskError` applies it again
+   before failure reports, logs and terminal progress. Typed failure copies
+   are sanitized, and raw classification hints stay non-enumerable. The
+   redaction contract (ruling `cmt_yufkv0in1pc2`) guarantees exactly three
+   things:
+
+   - Configured credentials are replaced by value anywhere in the text. These
+     are the task's relay and auth tokens, plus provider environment values
+     whose name has a `SECRET`, `TOKEN`, `PASSWORD`, `API_KEY`, `ACCESS_KEY`,
+     `PRIVATE_KEY` or `CREDENTIAL` segment. Values shorter than 8 characters
+     after trimming are skipped. Raw, Base64, Base64url and URL-encoded forms
+     are covered, including the `+` and lowercase-hex variants.
+   - Known formats: `Authorization`, `Proxy-Authorization`, `Cookie` and
+     `Set-Cookie` header values; the token after `Bearer` or `Basic`; URL
+     user info; `sk-` keys; `ghp_`/`gho_` tokens; three-part JWTs.
+   - Values of sensitive keys. A key is sensitive when, after up to three
+     `%XX` decodes, camel-case splitting and lowercasing, it ends in
+     `api_key`, `apikey`, `key`, `token`, `secret`, `password`, `passwd`,
+     `passphrase`, `credential(s)`, `session`, `session_id`, `sid`, `auth`,
+     `authorization` or `cookie`, and is followed by `:` or `=` (escaped
+     quotes allowed). A quoted value is replaced up to the closing quote at
+     the same escape level, or to the end of the line if unclosed. A `{}` or
+     `[]` container is replaced up to its matching close, or to the end of the
+     text if unclosed. A bare value is replaced for one word, which ends at
+     whitespace, a quote, a backtick, one of `,;&{}[]` or an escaped quote.
+     The only exception: when the character before the value is a space and
+     the whole word is a 4xx/5xx status (optionally followed by one `.` or
+     `:`), the word is kept for failure classification.
+
+   Out of scope, and recorded by QA as observations rather than defects:
+   unlabeled text after a bare value's terminator; configured credentials
+   shorter than 8 characters, which rely on the format and key rules; a
+   status separated from an empty sensitive field by a tab or newline, which
+   is replaced; escaped forms such as `401\"`, which the classifier cannot
+   read even before redaction.
 3. For bridges without negotiated support, the daemon checks only the final
    emitted message in a naturally completed turn. It must be a short text
    message beginning with a known Codex transport error prefix and classify as
