@@ -1,5 +1,6 @@
 import { expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { AUTH_COOKIE_NAME } from "@multiremi/api/helpers/login.js";
 import { createPr2Harness, capturePr2Responses, capturePr2QueryCounts } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
 
 const fixtureDir = `${import.meta.dir}/../../fixtures/multiremi`;
@@ -33,6 +34,18 @@ it("authorizes private attachments before comparing even a correct ETag", async 
     const denied = await harness.app.request(path, { headers: { ...harness.viewerHeaders, "If-None-Match": etag! } });
     expect({ status: denied.status, body: await denied.text() }).toEqual(baseline.denied);
     expect(denied.headers.get("etag")).toBeNull();
+    const cookieHeaders = (credentials: typeof harness.headers) => ({
+      Cookie: `${AUTH_COOKIE_NAME}=${encodeURIComponent(credentials.Authorization.slice(7))}`,
+      "X-Workspace-ID": credentials["X-Workspace-ID"], "If-None-Match": etag!,
+    });
+    const cookieDenied = await harness.app.request(path, { headers: cookieHeaders(harness.viewerHeaders) });
+    expect({ status: cookieDenied.status, body: await cookieDenied.text() }).toEqual(baseline.denied);
+    expect(cookieDenied.headers.get("etag")).toBeNull();
+    const cookieAllowed = await harness.app.request(path, { headers: cookieHeaders(harness.headers) });
+    expect(cookieAllowed.status).toBe(304);
+    expect(await cookieAllowed.text()).toBe("");
+    expect(cookieAllowed.headers.get("vary")?.toLowerCase()).toContain("authorization");
+    expect(cookieAllowed.headers.get("vary")?.toLowerCase()).toContain("cookie");
     for (const validator of [etag!, `W/${etag}`, `"other", ${etag}`, "*"]) {
       const matched = await harness.app.request(path, { headers: { ...harness.headers, "If-None-Match": validator } });
       expect(matched.status).toBe(304);

@@ -20,6 +20,8 @@ All on-disk upload writers were checked: `attachments.ts` task upload (lines 59-
 
 The private-chat regression uses a valid member credential with the correct ETag for someone else's attachment. The baseline and optimized route both return **403**, body `{"error":"not your chat session"}`, without an ETag. Unsigned requests with a correct validator return 401. Authorized exact, weak, list, and wildcard validators return 304 with an empty body and no Content-Length; a stale validator returns the original bytes. Unknown attachments and missing files retain their 404 errors.
 
+Cacheable content responses also carry `Vary: Authorization, Cookie` on 200 and 304, separating bearer and login-cookie cache entries. `private` alone only forbids shared caching; the nominated request fields supply the cache-key distinction ([RFC 9111 section 4.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1)). Other helper callers retain no-store and do not gain this header.
+
 ## Golden replay
 
 Fixture: 50 sessions, 20 agents, 300 inbox rows plus 6 explicit sentinels, 20 local and 30 foreign runtimes. Sentinels include archived attention, an old unread item, read/unread completed runs spanning date groups, and malformed details. The wire golden includes four timezone offsets (0/480/-300/840), raw JSON response strings, attachment bytes and pre-existing content headers, private/unsigned errors, runtime order and owner filter, and legacy per-runtime hydration. Only ISO timestamps are replaced by `<timestamp>`; ids and ordering remain stable. The newly specified ETag/cache headers and 304 behavior are separately asserted, since the baseline does not have them.

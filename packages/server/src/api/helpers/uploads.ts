@@ -53,7 +53,11 @@ export async function localAttachmentFileResponse(
     "Cache-Control": requestHeaders ? "private, max-age=31536000, immutable" : "no-store",
     "X-Content-Type-Options": "nosniff",
   };
-  if (requestHeaders) headers["ETag"] = `"${attachment.id}"`;
+  if (requestHeaders) {
+    headers["ETag"] = `"${attachment.id}"`;
+    // Private caches must also separate login credentials.
+    headers["Vary"] = "Authorization, Cookie";
+  }
   // The caller completes authorization and visibility checks before this helper.
   if (requestHeaders && ifNoneMatchMatches(requestHeaders.get("if-none-match"), headers["ETag"]!)) {
     delete headers["Content-Length"];

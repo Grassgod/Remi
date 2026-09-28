@@ -366,10 +366,11 @@ describe("MUL-473 attachment content caching", () => {
     expect(Buffer.from(await response.arrayBuffer()).equals(seeded.bytes)).toBe(true);
     expect(response.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
     expect(response.headers.get("etag")).toBe('"att_mul473_fixture"');
+    expect(response.headers.get("vary")?.toLowerCase()).toContain("authorization");
+    expect(response.headers.get("vary")?.toLowerCase()).toContain("cookie");
     expect(response.headers.get("content-disposition")).toStartWith('attachment; filename="hotspot.bin"');
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    // The ETag must be stable across requests: it is derived from the file's
-    // identity, size and mtime, none of which a read changes.
+    // The immutable id is the content version; reads do not change it.
     const second = await harness.app.request(`/api/attachments/${seeded.id}/content`, { headers: harness.headers });
     expect(second.headers.get("etag")).toBe(response.headers.get("etag"));
   }, 20000);
@@ -387,6 +388,7 @@ describe("MUL-473 attachment content caching", () => {
     expect(await revalidated.text()).toBe("");
     expect(revalidated.headers.get("etag")).toBe(etag);
     expect(revalidated.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+    expect(revalidated.headers.get("vary")).toBe(first.headers.get("vary"));
     expect(revalidated.headers.get("content-disposition")).toStartWith('attachment; filename="hotspot.bin"');
 
     // A weak validator and a list entry both match, per RFC 9110.
