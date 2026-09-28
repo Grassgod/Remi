@@ -483,3 +483,71 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
     expect(out.gaps).toEqual([{ from: 1, to: 1 }]);
   });
 });
+
+describe("MUL-436 regression 3 A2: bounded delivered history", () => {
+  it("bounds long-lived delivered islands and gaps edits of forgotten bases", async () => {
+    const fires: Array<() => void> = [];
+    const hub = make({
+      limits: { ring: { streamMaxFrames: 4 } },
+      scheduleHole: (callback) => { fires.push(callback); return undefined; },
+    }), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    for (let index = 0; index < 4096; index++) {
+      row(hub, index * 2 + 1);
+      if (index > 0) {
+        const fire = fires.shift(); expect(fire).toBeDefined(); fire!(); await settle();
+      }
+      hub.flushNow();
+    }
+    const subscriber = [...(hub as unknown as {
+      subscribers: Map<string, Set<{ delivered: HubSeqRange[] }>>;
+    }).subscribers.get("log:s")!][0]!;
+    expect(subscriber.delivered.length).toBeLessThanOrEqual(1024);
+    expect(hub.snapshot().frames).toBe(1);
+    const before = out.frames.length, gaps = out.gaps.length;
+    patch(hub, 1); patch(hub, 8191); hub.flushNow();
+    expect(out.frames.slice(before)).toEqual([{
+      seq: 8191, kind: "patch", payload: { session_id: "s", target_seq: 8191, revision: 2, fields: { body_md: "edited" } },
+    }]);
+    expect(out.gaps.slice(gaps)).toEqual([{ from: 1, to: 1 }]);
+  }, 15_000);
+
+  it("keeps uninterrupted deliveries in one range and still patches old bases", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 1 } } }), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    for (let seq = 1; seq <= 4096; seq++) { row(hub, seq); hub.flushNow(); }
+    const subscriber = [...(hub as unknown as {
+      subscribers: Map<string, Set<{ delivered: HubSeqRange[] }>>;
+    }).subscribers.get("log:s")!][0]!;
+    expect(subscriber.delivered).toEqual([{ from: 1, to: 4096 }]);
+    patch(hub, 1); hub.flushNow();
+    expect(out.frames.at(-1)).toMatchObject({ seq: 1, kind: "patch" });
+    expect(out.gaps).toEqual([]);
+  });
+
+  it("enforces the range bound when an edit invalidation splits a delivered island", async () => {
+    const fires: Array<() => void> = [];
+    const hub = make({
+      limits: { laggingBytes: 10 },
+      scheduleHole: (callback) => { fires.push(callback); return undefined; },
+    }), out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    for (let index = 0; index < 1024; index++) {
+      row(hub, index * 2 + 1);
+      if (index > 0) { fires.shift()!(); await settle(); }
+      hub.flushNow();
+    }
+    row(hub, 2048); row(hub, 2049); hub.flushNow();
+    out.buffered = 11; row(hub, 2050); hub.flushNow();
+    patch(hub, 2048); hub.flushNow();
+    const subscriber = [...(hub as unknown as {
+      subscribers: Map<string, Set<{ delivered: HubSeqRange[] }>>;
+    }).subscribers.get("log:s")!][0]!;
+    expect(subscriber.delivered.length).toBeLessThanOrEqual(1024);
+    out.buffered = 0; sub.notifyDrain(); hub.flushNow();
+    const before = out.frames.length, gaps = out.gaps.length;
+    patch(hub, 1); patch(hub, 2049); hub.flushNow();
+    expect(out.frames.slice(before).map((frame) => frame.seq)).toEqual([2049]);
+    expect(out.gaps.slice(gaps)).toEqual([{ from: 1, to: 1 }]);
+  }, 15_000);
+});

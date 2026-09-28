@@ -88,6 +88,8 @@ export const HUB_FLUSH_SAMPLES = 256;
 export const HUB_HOLE_WAIT_SAMPLES = 256;
 /** Non-initial row revisions remembered per consumer; forgotten bases need gaps. */
 const HUB_DELIVERED_REVISION_LIMIT = 1024;
+/** Keep the newest 1024 delivered islands, independent of gaps or online time. */
+const HUB_DELIVERED_RANGE_LIMIT = 1024;
 
 /**
  * The read side the hub may use.
@@ -1037,6 +1039,7 @@ export class HubImpl implements ObservableLiveHub {
           const last = subscriber.delivered.at(-1);
           if (last && last.to + 1 === frame.seq) last.to = frame.seq;
           else subscriber.delivered.push({ from: frame.seq, to: frame.seq });
+          this.trimDelivered(subscriber);
         }
         if (frame.kind !== "trace") {
           this.rememberDeliveredRevision(subscriber, frame.seq, (frame.payload as B0ConversationLogEntry).revision);
@@ -1096,6 +1099,18 @@ export class HubImpl implements ObservableLiveHub {
         if (range.from < from) subscriber.delivered.push({ from: range.from, to: from - 1 });
         if (range.to > to) subscriber.delivered.push({ from: to + 1, to: range.to });
       }
+    }
+    this.trimDelivered(subscriber);
+  }
+
+  private trimDelivered(subscriber: HubSubscriber): void {
+    const excess = subscriber.delivered.length - HUB_DELIVERED_RANGE_LIMIT;
+    if (excess <= 0) return;
+    const removed = subscriber.delivered.splice(0, excess);
+    const through = removed.at(-1)!.to;
+    // Forget both kinds of proof; a future edit of a trimmed row becomes a gap.
+    for (const seq of subscriber.deliveredRevisions.keys()) {
+      if (seq <= through) subscriber.deliveredRevisions.delete(seq);
     }
   }
 
