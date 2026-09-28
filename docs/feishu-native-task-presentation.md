@@ -97,9 +97,27 @@ replace interactive question/approval forms; those use `card.action.trigger`.
 
 ## Recovery and rollout
 
-The existing outbound queue stores `presentation_checkpoint` and
+MUL-440 splits newly claimed Tasks into server-written `cot`,
+`interaction_card`, `result_card`, and `receipt` deliveries. Each row has its
+own claim token, lease, backoff and six-attempt budget. `previous_delivery_id`
+orders rows; failure propagates only through `cascade_failure=1` edges. The
+result waits for its CoT delivery to finish or fail, without inheriting failure.
+Receipts never serve as predecessors. Final receipt failure records an audit
+and log; it changes neither the result nor the binding. The split CoT renderer
+keeps native waiting steps while independent interaction handlers own the forms.
+
+A daemon declares `feishu_outbound_kinds: 1` on its claiming heartbeat and
+receives `pending_feishu_outbounds`. Undeclared daemons retain the original
+singular response and bundled Task handler. The first successful carrier lease
+pins a Task to legacy or split for its entire delivery, including retries and
+handover; previously attempted rows stay legacy. See
+[schema, compatibility and rollback](feishu-outbound-kind-migration.md).
+
+The outbound queue stores `presentation_checkpoint` and
 `interaction_open_id`. The checkpoint contains the renderer version, native IDs,
-acknowledged Task sequence, final message ID and request-to-card mapping. Updates
+acknowledged Task sequence, and (for legacy Tasks) final message ID and
+request-to-card mapping. Split result/interaction rows persist their own message
+IDs rather than changing the legacy checkpoint fields. Updates
 require the current runtime and unexpired claim token; acknowledged IDs and
 receipt states cannot be discarded. Inbound event deduplication and queue
 insertion commit together. Callback recovery reconstructs handlers from the

@@ -202,6 +202,25 @@ export type CreateIssueCommentOptions =
   | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
   | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
 
+/**
+ * One human-request transition, as the store recorded it.
+ *
+ * Deliberately *not* expressed as a task event. `notifyTaskEvent("task:running")`
+ * fires once per task resume, and a task resumes only when its **last** pending
+ * request settles — so a task with two open requests would report one transition
+ * and lose the other. E5 keys its cards by request id (MUL-403 §2 item 4), so the
+ * store publishes the request that changed instead of the task that happened to
+ * move with it.
+ */
+export interface HumanRequestTransition {
+  type: "created" | "responded" | "expired" | "cancelled";
+  request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest;
+  /** Workspace of the owning task, so a consumer does not have to look it up. */
+  workspaceId: string;
+}
+
+export type HumanRequestListener = (transition: HumanRequestTransition) => void;
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (
@@ -549,6 +568,8 @@ export interface TasksSurface {
   getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
   /** MUL-474: the `status` route's fields, without the prompt column. */
   getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
+  listTaskMessages(taskId: string, sinceSeq?: number | null): import("@multiremi/contracts/types.js").MultiremiTaskMessage[];
+  listTaskHumanRequests(taskId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest[];
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -831,6 +852,7 @@ export interface FeishuBotSurface {
   }): MultiremiTask[];
   retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;
+  materializeFeishuTaskDeliveries(taskId: string): void;
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -838,6 +860,7 @@ export interface FeishuBotSurface {
     supportsTaskStream?: boolean,
     supportsNativeCot?: boolean,
     supportsAttachments?: boolean,
+    supportsKinds?: boolean,
   ): MultiremiFeishuBotOutboundDelivery | null;
   getFeishuBotOutboundAttachment(
     workspaceId: string,
@@ -887,6 +910,7 @@ export class StoreContext {
   readonly taskEventListeners = new Set<TaskEventListener>();
   readonly taskMessagesListeners = new Set<TaskMessagesListener>();
   readonly workspaceEventListeners = new Set<WorkspaceEventListener>();
+  readonly humanRequestListeners = new Set<HumanRequestListener>();
   readonly analyticsEvents: MultiremiAnalyticsEvent[] = [];
   readonly metricCounters = new Map<string, MultiremiMetricCounter>();
 
@@ -1107,7 +1131,28 @@ export class StoreContext {
     }
   }
 
+  /**
+   * Publish one human-request transition.
+   *
+   * Called by the store facade right after each of the three write paths returns
+   * the row it changed, so the transition is reported exactly once and while the
+   * row is durable.
+   */
+  notifyHumanRequest(transition: HumanRequestTransition): void {
+    for (const listener of [...this.humanRequestListeners]) {
+      try {
+        listener(transition);
+      } catch {
+        // Realtime listeners are best-effort and must not roll back the write.
+      }
+    }
+  }
+
   notifyTaskEvent(type: string, task: MultiremiTask): void {
+    if (["task:running", "task:awaiting_human", "task:completed", "task:failed", "task:cancelled"].includes(type)) {
+      try { this.feishuBot().materializeFeishuTaskDeliveries(task.id); }
+      catch (error) { log.warn(`Feishu task delivery materialization failed for ${task.id}; background claim will retry`); }
+    }
     for (const listener of [...this.taskEventListeners]) {
       try {
         listener({ type, task });

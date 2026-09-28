@@ -358,6 +358,7 @@ export class MultiremiDaemonClient {
               // cards. Declared on its own so a host without it is handed no
               // decision card rather than one whose buttons do nothing.
               feishu_issue_decision_card: FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+              feishu_outbound_kinds: 1,
             }
           : {}),
       }, undefined, signal);
@@ -368,8 +369,7 @@ export class MultiremiDaemonClient {
       throw error;
     }
     const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
-    const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
-      ? {
+    const normalizeOutbound = (rawOutbound: Record<string, unknown>): MultiremiFeishuBotOutboundDelivery => ({
           id: String(rawOutbound.id ?? ""),
           claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
           chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
@@ -402,6 +402,9 @@ export class MultiremiDaemonClient {
               decision_issue_id: rawOutbound.decision_issue_id,
             } : {}),
           } : {}),
+          ...(["received", "completed", "failed"].includes(String(rawOutbound.receipt_state)) ? {
+            receiptState: rawOutbound.receipt_state as MultiremiFeishuBotOutboundDelivery["receiptState"],
+          } : {}),
           ...(typeof rawOutbound.human_request_id === "string" ? {
             humanRequestId: rawOutbound.human_request_id,
             human_request_id: rawOutbound.human_request_id,
@@ -426,8 +429,14 @@ export class MultiremiDaemonClient {
             taskId: rawOutbound.task_id,
             resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
           } : {}),
-        }
-      : undefined;
+        });
+    const pendingFeishuOutbounds = Array.isArray(resp.pending_feishu_outbounds)
+      ? resp.pending_feishu_outbounds.map(outbound => normalizeOutbound(outbound as unknown as Record<string, unknown>)) : undefined;
+    const first = pendingFeishuOutbounds?.[0];
+    // Existing E5 callers consume the singular accessor; both accessors share
+    // the same delivery, whose ID the daemon's run map already deduplicates.
+    const pendingFeishuOutbound = rawOutbound ? normalizeOutbound(rawOutbound)
+      : first && (!first.kind || first.kind.startsWith("decision_")) ? first : undefined;
     // `agent_plugins.revision` is the daemon's change token for the desired
     // Plugin set: while it is unchanged the poll loop skips that GET entirely.
     // Normalize it here so a server that omits the field, or a proxy that
@@ -446,6 +455,7 @@ export class MultiremiDaemonClient {
       ...rest,
       ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
       ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
+      ...(pendingFeishuOutbounds ? { pending_feishu_outbounds: pendingFeishuOutbounds } : {}),
     } as MultiremiDaemonHeartbeatConfigAck;
   }
 

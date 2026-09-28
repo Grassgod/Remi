@@ -193,6 +193,7 @@ import {
   type CommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
+  type HumanRequestListener,
   type TaskMessagesListener,
   type WorkspaceEventListener,
 } from "@multiremi/store/context.js";
@@ -627,6 +628,20 @@ export class MultiremiStore {
     this.ctx.taskEventListeners.add(listener);
     return () => {
       this.ctx.taskEventListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to human-request transitions (MUL-403 §2 item 4).
+   *
+   * `humanRequestListeners` lives on the context beside the other realtime
+   * listener sets, so the hub's feed attaches and detaches exactly like the
+   * task/workspace listeners do.
+   */
+  onHumanRequest(listener: HumanRequestListener): () => void {
+    this.ctx.humanRequestListeners.add(listener);
+    return () => {
+      this.ctx.humanRequestListeners.delete(listener);
     };
   }
 
@@ -1744,6 +1759,76 @@ runMigrations(this.db);
     return this.notificationDispatcher.retry(id);
   }
 
+  /**
+   * The table the `body_html` backfill reads and writes (MUL-439).
+   *
+   * The backfill task is built in the API process, where the store's own
+   * `SqlDatabase` is not reachable from outside this class. Rather than widen
+   * the store's surface with a general-purpose handle, these two methods give
+   * the task the one shape it needs: does the table exist with the columns B1
+   * owns, and what rows still need a render.
+   *
+   * The probe is the store's own `PRAGMA table_info`, which
+   * `translateSqliteToPg` maps to `information_schema.columns`, so it answers
+   * on both backends. `null` means the table is not there yet, which is the
+   * documented case where the backfill must not start.
+   */
+  conversationLogRenderColumns(): { body_html: boolean; render_version: boolean } | null {
+    let columns: Array<{ name?: unknown }>;
+    try {
+      columns = this.db
+        .query("PRAGMA table_info(multiremi_conversation_log)")
+        .all() as Array<{ name?: unknown }>;
+    } catch {
+      return null;
+    }
+    if (columns.length === 0) return null;
+    const names = new Set(columns.map((column) => String(column.name ?? "")));
+    return {
+      body_html: names.has("body_html"),
+      render_version: names.has("render_version"),
+    };
+  }
+
+  /**
+   * Conversation-log rows whose `body_html` is missing or was produced by a
+   * different `render_version`, oldest first.
+   *
+   * Returns an empty list when the table or either column is missing, so a
+   * caller can run this before B1 lands without special-casing.
+   */
+  listConversationLogRowsNeedingBodyHtml(
+    renderVersion: string,
+    limit: number,
+  ): Array<{ session_id: string; seq: number; body_md: string | null }> {
+    const columns = this.conversationLogRenderColumns();
+    if (!columns?.body_html || !columns.render_version) return [];
+    return this.db
+      .query(
+        `SELECT session_id, seq, body_md FROM multiremi_conversation_log
+         WHERE body_html IS NULL OR render_version IS NULL OR render_version <> ?
+         ORDER BY session_id, seq
+         LIMIT ?`,
+      )
+      .all(renderVersion, limit) as Array<{ session_id: string; seq: number; body_md: string | null }>;
+  }
+
+  /** Store one rendered body. Guarded by the table's primary key. */
+  setConversationLogBodyHtml(
+    sessionId: string,
+    seq: number,
+    html: string,
+    renderVersion: string,
+  ): number {
+    return this.db
+      .query(
+        `UPDATE multiremi_conversation_log
+         SET body_html = ?, render_version = ?
+         WHERE session_id = ? AND seq = ?`,
+      )
+      .run(html, renderVersion, sessionId, seq).changes;
+  }
+
   startNotificationDeliverySweeper(): void {
     this.notificationDispatcher.start();
     this.taskCapabilityMonitor.start();
@@ -2131,6 +2216,22 @@ runMigrations(this.db);
     this.feishuBot.upsertRoundPushDeliveryWithinTransaction(task, body);
   }
 
+  materializeFeishuTaskDeliveries(taskId: string): void {
+    this.feishuBot.materializeTaskDeliveries(taskId);
+  }
+
+  claimFeishuBotOutbounds(workspaceId: string, runtimeId: string, now?: string | Date): MultiremiFeishuBotOutboundDelivery[] {
+    const deliveries: MultiremiFeishuBotOutboundDelivery[] = [];
+    for (let count = 0; count < 16; count++) {
+      const delivery = this.feishuBot.claimOutbound(workspaceId, runtimeId, now, true, true, true, true);
+      if (!delivery) break;
+      deliveries.push(delivery);
+      // E5 and pre-C5 deliveries retain their existing one-row heartbeat cadence.
+      if (!delivery.kind || delivery.kind.startsWith("decision_")) break;
+    }
+    return deliveries;
+  }
+
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -2138,8 +2239,9 @@ runMigrations(this.db);
     supportsTaskStream = false,
     supportsNativeCot = false,
     supportsAttachments = false,
+    supportsKinds = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments, supportsKinds);
   }
 
   getFeishuBotOutboundAttachment(
@@ -5102,8 +5204,10 @@ runMigrations(this.db);
 
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
     const request = this.tasks.createTaskHumanRequest(input);
+    this.feishuBot.materializeTaskDeliveries(input.taskId);
     const wakeTask = this.feishuBot.prepareHumanRequestPush(request);
     if (wakeTask) this.ctx.notifyTaskEnqueued(wakeTask);
+    this.notifyHumanRequest("created", request);
     return request;
   }
 
@@ -5121,13 +5225,35 @@ runMigrations(this.db);
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    if (request) this.notifyHumanRequest("responded", request);
     return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
     const request = this.tasks.expireTaskHumanRequest(requestId, status);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    // The store's terminal statuses are `timeout` and `cancelled`; the hub's event
+    // names are `expired` and `cancelled`. The mapping lives here rather than in the
+    // feed so a consumer never has to know the store's spelling.
+    if (request) this.notifyHumanRequest(status === "timeout" ? "expired" : "cancelled", request);
     return request;
+  }
+
+  /**
+   * Publish one human-request transition, resolving the owning task's workspace.
+   *
+   * The workspace is looked up here because the request row is keyed by task only,
+   * and a consumer (the hub's feed) would otherwise need a second read on the write
+   * path. A task that cannot be resolved simply publishes nothing: a transition
+   * without a workspace cannot be routed.
+   */
+  private notifyHumanRequest(
+    type: "created" | "responded" | "expired" | "cancelled",
+    request: MultiremiTaskHumanRequest,
+  ): void {
+    const task = this.tasks.getTask(request.taskId);
+    if (!task) return;
+    this.ctx.notifyHumanRequest({ type, request, workspaceId: task.workspaceId });
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {

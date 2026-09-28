@@ -60,6 +60,7 @@ export const SNAPSHOT_STATUS_ONLY_ROUTES = new Set([
   "GET /ws",
   "GET /api/daemon/ws",
   "GET /api/realtime/ws",
+  "GET /api/trace/ws",
 ]);
 
 const NORMALIZER_RULES = [
@@ -149,6 +150,7 @@ function installDeterminism(): () => void {
 
   setEnv("MULTIREMI_TOKEN", undefined); // auth middleware off: snapshot handler bodies
   setEnv("MULTIREMI_DATABASE_URL", undefined); // never touch a real Postgres
+  setEnv("MULTIREMI_API_ROLE", undefined); // capture the baseline without an inherited role
   setEnv("NODE_ENV", "test");
   setEnv("MULTIREMI_UPLOAD_DIR", UPLOAD_DIR);
   setEnv("MULTIREMI_RELEASE_DIR", RELEASE_DIR);

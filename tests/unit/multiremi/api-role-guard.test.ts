@@ -72,7 +72,16 @@ const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string
  * exact paths; everything else is refused.
  */
 const RUNTIME_ALLOWED_PREFIXES = ["/api/daemon/", "/health/", "/internal/"] as const;
-const RUNTIME_ALLOWED_EXACT = ["/health", "/healthz", "/readyz", "/api/multiremi/health"] as const;
+const RUNTIME_ALLOWED_EXACT = [
+  "/health",
+  "/healthz",
+  "/readyz",
+  "/api/multiremi/health",
+  // MUL-438: the browser trace socket is served by the process that owns the
+  // trace stream (runtime), and nginx routes the path there. It is the one
+  // browser-facing path in this allowlist.
+  "/api/trace/ws",
+] as const;
 // MUL-402 cmt_0buuxntn73ab (l): trace reads are served by both ui and runtime.
 const RUNTIME_ALLOWED_TRACE_READS = [/^\/api\/tasks\/[^/]+\/trace$/, /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/];
 
@@ -146,7 +155,12 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
       const { method, path } = concreteRequest(pattern);
       // The three upgrade-only routes answer 426 through `app.request`; the WS
       // behaviour is asserted separately below against a real server.
-      if (pattern === "GET /api/daemon/ws" || pattern === "GET /ws" || pattern === "GET /api/realtime/ws") continue;
+      if (
+        pattern === "GET /api/daemon/ws"
+        || pattern === "GET /ws"
+        || pattern === "GET /api/realtime/ws"
+        || pattern === "GET /api/trace/ws"
+      ) continue;
       const response = await app.request(path, { method });
       statuses.set(pattern, response.status);
     }
@@ -341,7 +355,7 @@ describe("MUL-461 api role — env resolution", () => {
 describe("MUL-461 api role — guard over the full golden route inventory", () => {
   it("keeps main's behavior when the role is all", async () => {
     const statuses = await sweep("all");
-    expect(statuses.size).toBe(GOLDEN.routes.length - 3);
+    expect(statuses.size).toBe(GOLDEN.routes.length - 4);
     let refused = 0;
     for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
@@ -511,6 +525,18 @@ describe("MUL-461 api role — websocket upgrades", () => {
     }
   });
 
+  it("serves the browser trace socket from runtime and refuses it from ui's mirror rule", async () => {
+    // MUL-438: the trace stream's home is the runtime process, so this is the one
+    // browser upgrade path runtime must NOT refuse. A successful upgrade has no
+    // readable body (asserted by the status alone); a 421 would carry the header.
+    const served = await upgradeStatus("runtime", "/api/trace/ws?workspace_id=local");
+    expect(served.status).not.toBe(421);
+    // `ui` only refuses the daemon prefix, so this path is simply not its
+    // business to refuse at the guard — nginx sends it to runtime (MUL-464).
+    const onUi = await upgradeStatus("ui", "/api/trace/ws?workspace_id=local");
+    expect(onUi.status).not.toBe(421);
+  });
+
   it("keeps the 426 upgrade-required answer for a non-upgrade GET", async () => {
     const { store, db } = memoryStore();
     try {
@@ -531,7 +557,7 @@ describe("MUL-461 api role — health and effective config", () => {
     delete process.env.MULTIREMI_API_ROLE;
     const { store, db } = memoryStore();
     try {
-      const app = createMultiremiApp({ store, authToken: null });
+      const app = createMultiremiApp({ store, authToken: null, hub: null });
       // Byte-identity with main matters here: `snapshot-api-routes.ts` records these
       // bodies, so an unconditional `role` would break the golden check.
       expect(await (await app.request("/health")).json()).toEqual({ ok: true });

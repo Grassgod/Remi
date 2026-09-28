@@ -1,17 +1,18 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 792,
+    "routeCount": 793,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 564,
+      "compat": 565,
       "root": 16
     },
-    "getRoutes": 337,
+    "getRoutes": 338,
     "getRoutesWithBody": 334,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
+      "GET /api/trace/ws",
       "GET /ws"
     ],
     "mutationRoutes": 455,
@@ -407,6 +408,7 @@
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -1182,6 +1184,7 @@
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -24434,6 +24437,17 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/trace/ws",
+      "route": "GET /api/trace/ws",
+      "path": "/api/trace/ws",
+      "status": 426,
+      "body": {
+        "__body__": {
+          "omitted": "websocket-upgrade route; status recorded only"
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/workspaces",
       "route": "GET /api/workspaces",
       "path": "/api/workspaces",
@@ -25510,7 +25524,26 @@
       "path": "/health",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "streams": 0,
+          "frames": 0,
+          "ring_bytes": 0,
+          "known_heads": 0,
+          "subscriptions": 0,
+          "lagging_subscribers": 0,
+          "flush_p95_ms": 0,
+          "flush_samples": 0,
+          "fill_count": 0,
+          "fill_failures": 0,
+          "hole_waits": 0,
+          "hole_wait_ms": 0,
+          "dropped_frames": 0,
+          "pending_frames": 0,
+          "evicted_streams": 0
+        }
       }
     },
     {
@@ -25550,7 +25583,14 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "peer_link": false,
+          "fill_count": 0,
+          "hub_hole_wait_ms": 0
+        }
       }
     },
     {
