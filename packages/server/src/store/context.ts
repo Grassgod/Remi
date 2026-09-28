@@ -312,6 +312,12 @@ export interface IssuesSurface {
   ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  /** MUL-458: caller owns the force-start task/status/activity transaction. */
+  recordDependencyForceStarted(
+    issueId: string,
+    input: import("./repos/issues-repo.js").DependencyForceStartedInput,
+    deferredEvents: CommitEventQueue,
+  ): void;
   /** MUL-400 E3: page data for the detail surface. */
   getIssueWaitingOn(issueId: string): MultiremiIssueWaitingOn;
   /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
