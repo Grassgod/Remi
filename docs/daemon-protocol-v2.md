@@ -111,6 +111,8 @@ JSON 文本帧，不用二进制：
 是同一个理由——它们都能从本地状态重算，丢一帧没有代价。
 
 `best_effort` 与 `rpc` 都不参与滑动窗口，也不带 `seq`。
+trace 组不是窗口可靠帧：上行 `trace.append` 用 RPC 的 `id`/`re` 关联，可靠性来自 task trace
+head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` 仍是带 `seq` 的 event。
 
 ### 1.4 可靠事件清单
 
@@ -121,7 +123,7 @@ JSON 文本帧，不用二进制：
 `runtime.model_list_result`、`runtime.local_skills_result`、`runtime.directory_scan_result`、
 `runtime.local_skill_import_result`、`runtime.bot_menu_result`、`feishu.outbound_result`、`plugin.state`、
 `runtime.archive_sessions_result`（`rt:` 分区）。
-另有 `trace.append`，可靠但**不进 outbox**，见 §5。
+`trace.append` 不属于可靠事件清单：它是按 trace head 续传的 RPC，**不进 outbox**，见 §5。
 
 **server → daemon**（由 DB 状态重推导，无服务端队列，见 §2.3）：
 
@@ -129,12 +131,12 @@ JSON 文本帧，不用二进制：
 `runtime.command`、`runtime.model_list`、`runtime.local_skills`、`runtime.directory_scan`、
 `runtime.local_skill_import`、`runtime.bot_menu`、`runtime.profile`、`feishu.outbound`、
 `feishu.directive`、`ssh_mesh.reconcile`、`platform.drain`、`plugin.desired_revision`、`workspace.settings`、
-`runtime.archive_sessions`。
+`runtime.archive_sessions`、`trace.push`（订阅内保序，可暂停）。
 
 ### 1.5 RPC 清单
 
 **daemon → server**：`steer.consume`、`human_request.create`、`human_request.expire`、`plugin.desired`、
-`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
+`trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
 **server → daemon**：`trace.read`。
@@ -538,6 +540,9 @@ B 的 `unreachable` 对应其余三种错误。
 
 `TaskMessageBatcher` 的出口从 outbox 改为 `TraceStore.append`，随后 `TraceStreamer` 按 head 读游标
 发 `trace.append`。daemon 上只有一份数据：trace 文件既是被上传的内容，也是重放缓冲。
+`trace.append` 的外层信封用 `id`/`re`，不带 `seq`，应答仍捎带 `hub_head`；带 `seq`、
+不带 `id` 的误用按 RPC 拒绝为 `protocol_violation`，不追加事件。丢失应答后按服务端 head
+重发，服务端按 task 内事件 seq 幂等，不使用 outbox 或滑动窗口。
 
 **trace 不进 outbox。**B 已经要写规范化 trace 文件，再进 outbox 就是双写，而且这个量级
 （线上 4.9M 行）会把 SQLite outbox 变成瓶颈。

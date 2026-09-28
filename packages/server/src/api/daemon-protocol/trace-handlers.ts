@@ -33,7 +33,7 @@ export class DaemonTraceService {
     layer.setTraceHeads(session => Object.fromEntries([...this.runtimes]
       .filter(([, runtimeId]) => session.runtimeIds.includes(runtimeId))
       .map(([taskId]) => [taskId, sink.head(taskId) ?? 0])));
-    layer.registerEventHandler("trace.append", (frame, session) => this.append(frame, session));
+    layer.registerRpcHandler("trace.append", (frame, session) => this.append(frame, session));
     layer.registerRpcHandler("trace.head", (frame, session) => this.head(frame, session));
     layer.registerRpcHandler("trace.subscribe", (frame, session) => this.subscribe(frame, session));
     layer.registerRpcHandler("trace.unsubscribe", (frame, session) => this.unsubscribe(frame, session));
@@ -76,6 +76,7 @@ export class DaemonTraceService {
 
   private append(frame: DaemonParsedFrame, session: DaemonProtocolSession) {
     try {
+      if (!frame.id || frame.seq !== null) return failure("protocol_violation");
       const task = this.task(frame, session, true);
       const events = frame.payload.events as TraceEvent[];
       if (!Array.isArray(events) || !events.length || events.length > DAEMON_TRACE_APPEND_MAX_EVENTS
