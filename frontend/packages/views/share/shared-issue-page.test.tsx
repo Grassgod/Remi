@@ -91,6 +91,8 @@ describe("SharedTask trace expansion", () => {
     { seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "\u0001".repeat(180_000) },
     { seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
       tool_call_id: "i".repeat(1024 * 1024 + 1000), status: "completed", output: "" },
+    { seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
+      tool_call_id: "call_output", status: "completed", output: "\u0001".repeat(180_000) },
   ])("renders an oversized $type completely and automatically pages to eof", async (event) => {
     getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) => afterSeq === 0
       ? page({ events: [event], next_after_seq: 1, head: 2, eof: false })
@@ -98,7 +100,7 @@ describe("SharedTask trace expansion", () => {
     renderTask();
     await userEvent.setup().click(screen.getByText("agt_share"));
     expect(await screen.findByText("last")).toBeInTheDocument();
-    const expected = messageText(traceEventToMessage(event));
+    const expected = event.content || event.output || JSON.stringify(event, null, 2);
     expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === expected)).toBeInTheDocument();
     expect(screen.queryByText(/内容过长已截断/)).not.toBeInTheDocument();
     expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1]);
