@@ -212,8 +212,10 @@ interface HubSubscriber {
    * building an ack after a replay started must not see its gap shrink under it.
    */
   readonly requested: number;
-  /** Last sequence handed to this subscriber. */
+  /** Replay cursor, advanced by both delivery and gap notifications. */
   cursor: number;
+  /** Contiguous ranges actually delivered; gap-skipped rows are never patch bases. */
+  readonly delivered: HubSeqRange[];
   lagging: boolean;
   active: boolean;
   /** Set for A-0's spelling, which wants `TraceEvent`s rather than hub frames. */
@@ -358,8 +360,8 @@ export class HubImpl implements ObservableLiveHub {
    * MUL-402 B1's write hook: an insert, or an in-place update after `revision++`.
    *
    * An entry carries its own `seq`; a patch keeps the `seq` of the row it patches,
-   * so it is fanned out to the subscribers already holding that row and replaces
-   * the retained copy rather than extending the window.
+   * so it is fanned out to the subscribers already holding that row and marks
+   * the retained copy stale rather than extending the window.
    */
   onEntry(sessionId: string, entry: B0ConversationLogEntry | ConversationLogPatch): void {
     const key = `log:${sessionId}` as HubStreamKey;
@@ -916,11 +918,8 @@ export class HubImpl implements ObservableLiveHub {
       for (const subscriber of set) {
         if (!subscriber.active) continue;
         if (changes && changes.length > 0 && !subscriber.lagging) {
-          // Only to a subscriber that already holds the row being patched. One that
-          // is still behind will get the *current* version of that frame from its
-          // replay — the ring replaced its copy — so sending the patch too would
-          // deliver the same `seq` twice.
-          const applicable = changes.filter((frame) => frame.seq <= subscriber.cursor);
+          // A gap advances the replay cursor without delivering a patch base.
+          const applicable = changes.filter((frame) => this.hasDelivered(subscriber, frame.seq));
           if (applicable.length > 0) this.send(subscriber, applicable);
         }
         const more = this.deliverOneBatch(subscriber, stream);
@@ -941,6 +940,9 @@ export class HubImpl implements ObservableLiveHub {
     // A paused subscriber is the drain callback's business, not the flush loop's:
     // returning true here would spin `setImmediate` until the socket drained.
     if (subscriber.lagging) return false;
+    let staleBoundary = subscriber.cursor;
+    for (const seq of stream.staleSeqs) staleBoundary = Math.max(staleBoundary, seq);
+    if (staleBoundary > subscriber.cursor) this.reportGap(subscriber, staleBoundary);
     const entries = this.ring.entriesAfter(stream, subscriber.cursor);
     if (entries.length === 0) return false;
     const batch: HubFrame[] = [];
@@ -968,6 +970,12 @@ export class HubImpl implements ObservableLiveHub {
       } else {
         subscriber.sink.send(frames);
       }
+      for (const frame of frames) {
+        if (frame.kind === "patch") continue;
+        const last = subscriber.delivered.at(-1);
+        if (last && last.to + 1 === frame.seq) last.to = frame.seq;
+        else subscriber.delivered.push({ from: frame.seq, to: frame.seq });
+      }
     } catch (error) {
       this.warn(`subscriber for ${subscriber.key} threw: ${errorText(error)}`);
     }
@@ -978,6 +986,10 @@ export class HubImpl implements ObservableLiveHub {
       buffered = 0;
     }
     if (buffered > this.limits.laggingBytes) subscriber.lagging = true;
+  }
+
+  private hasDelivered(subscriber: HubSubscriber, seq: number): boolean {
+    return subscriber.delivered.some((range) => range.from <= seq && seq <= range.to);
   }
 
   /** The transport drained: resume from `cursor + 1`, or report the range we lost. */
@@ -1050,6 +1062,7 @@ export class HubImpl implements ObservableLiveHub {
       sink,
       requested: fromSeq,
       cursor: fromSeq,
+      delivered: [],
       lagging: false,
       active: true,
       traceListener,
