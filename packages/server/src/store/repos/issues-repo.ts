@@ -803,9 +803,14 @@ export class IssuesRepo {
   ): MultiremiIssue {
     assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
-    const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
+    const parentRef = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    const parentIssueId = parentRef ? this.resolveIssueRelationRef(parentRef, workspaceId) ?? parentRef : null;
+    const blockedByIds = blockedBy.map((ref) => this.resolveIssueRelationRef(ref, workspaceId)
+      ?? this.resolveIssueRelationRef(ref, null) ?? ref);
+    const sourceIssueId = cleanOptionalString(input.sourceIssueId ?? input.source_issue_id) ?? null;
+    this.lockIssueRelationRows([parentIssueId, sourceIssueId, ...blockedByIds]);
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
     if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");
@@ -823,7 +828,6 @@ export class IssuesRepo {
     }
 
     const issueKind = normalizeIssueKind(input.issueKind ?? input.issue_kind);
-    const sourceIssueId = cleanOptionalString(input.sourceIssueId ?? input.source_issue_id) ?? null;
     if (sourceIssueId) {
       const sourceIssue = this.getIssue(sourceIssueId);
       if (!sourceIssue) throw new Error(`Source issue not found: ${sourceIssueId}`);
@@ -888,8 +892,8 @@ export class IssuesRepo {
       ],
     );
     this.linkReferencedAttachmentsToIssue(id, input.description);
-    for (const ref of blockedBy) {
-      this.createIssueDependencyWithinTransaction(id, { dependsOnIssueId: ref, type: "blocked_by" }, {
+    for (const otherId of blockedByIds) {
+      this.createIssueDependencyWithLockedEndpoints(id, otherId, { dependsOnIssueId: otherId, type: "blocked_by" }, {
         actorType: "system",
         actorId: createdBy,
       }, deferredEvents);
@@ -2062,19 +2066,29 @@ export class IssuesRepo {
     activity: IssueMutationActivityContext,
     deferredEvents: CommitEventQueue,
   ): MultiremiIssueDependencyView {
+    const dependsOnRef = String(input.dependsOnIssueId ?? input.depends_on_issue_id ?? "").trim();
+    // The workspace is only a hint for ref -> id resolution. All validation
+    // uses fresh rows after the complete, ordered lock set has been acquired.
+    const hint = this.ctx.db.query("SELECT workspace_id FROM multiremi_issues WHERE id = ?").get(issueId) as Row | null;
+    const otherId = this.resolveIssueRelationRef(dependsOnRef, hint ? String(hint.workspace_id) : null)
+      ?? this.resolveIssueRelationRef(dependsOnRef, null) ?? dependsOnRef;
+    this.lockIssueRelationRows([issueId, otherId]);
+    return this.createIssueDependencyWithLockedEndpoints(issueId, otherId, input, activity, deferredEvents);
+  }
+
+  private createIssueDependencyWithLockedEndpoints(
+    issueId: string,
+    otherId: string,
+    input: CreateIssueDependencyInput,
+    activity: IssueMutationActivityContext,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssueDependencyView {
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const dependsOnRef = String(input.dependsOnIssueId ?? input.depends_on_issue_id ?? "").trim();
+    const requestedOther = this.getIssue(otherId);
+    if (!requestedOther) throw new Error(`Dependent issue not found: ${input.dependsOnIssueId ?? input.depends_on_issue_id}`);
+    if (requestedOther.workspaceId !== issue.workspaceId) throw new Error("Issue dependency must stay within a workspace");
     const requestedType = normalizeIssueDependencyType(input.type);
-    // Two lookups on purpose: the workspace-scoped one is the normal path, and
-    // resolving across workspaces lets the cross-workspace case answer with its
-    // own error instead of a misleading "not found".
-    const requestedOther = this.getIssueByRef(dependsOnRef, issue.workspaceId);
-    if (!requestedOther) {
-      const otherWorkspaceIssue = this.getIssueByRef(dependsOnRef, null);
-      if (otherWorkspaceIssue) throw new Error("Issue dependency must stay within a workspace");
-      throw new Error(`Dependent issue not found: ${dependsOnRef}`);
-    }
 
     // `related` carries no direction and is stored as asked. `blocked_by` and
     // `blocks` both resolve to "the dependent waits for the prerequisite".
@@ -2094,6 +2108,27 @@ export class IssuesRepo {
     if (existing) return this.issueDependencyView(this.hydrateIssueDependency(toIssueDependency(existing)), issue.id);
     this.assertDependencyAllowed(waiter, prerequisite);
     return this.insertIssueDependencyRow(waiter.id, prerequisite.id, "blocked_by", input, activity, issue.id, deferredEvents);
+  }
+
+  /** Resolve identity only; workspaces and relationship state are checked after locking. */
+  private resolveIssueRelationRef(ref: string, workspaceId: string | null): string | null {
+    const value = ref.trim();
+    const filter = workspaceId ? " AND workspace_id = ?" : "";
+    const workspaceParams = workspaceId ? [workspaceId] : [];
+    const exact = this.ctx.db.query(`SELECT id FROM multiremi_issues WHERE id = ?${filter}`)
+      .get(value, ...workspaceParams) as Row | null;
+    if (exact) return String(exact.id);
+    const numeric = /^\d+$/.test(value);
+    const rows = this.ctx.db.query(
+      `SELECT id FROM multiremi_issues WHERE (lower(issue_key) = lower(?)${numeric ? " OR issue_number = ?" : ""})${filter} LIMIT 2`,
+    ).all(value, ...(numeric ? [Number(value)] : []), ...workspaceParams) as Row[];
+    return rows.length === 1 ? String(rows[0]!.id) : null;
+  }
+
+  /** Workspace locks must already be held; never acquire another shared issue row later. */
+  private lockIssueRelationRows(ids: Array<string | null>): void {
+    const ordered = [...new Set(ids.filter((id): id is string => Boolean(id)))].sort();
+    for (const id of ordered) this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
   }
 
   private findIssueDependencyRow(
@@ -2354,13 +2389,20 @@ export class IssuesRepo {
     // until commit, while SQLite serializes the writer transaction. Re-read
     // only after acquiring it so a user terminal transition and a worker
     // lifecycle transition can never derive writes from the same stale row.
-    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    const parentRef = hasAnyField(input, "parentIssueId", "parent_issue_id")
+      ? resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", null) : null;
+    const hint = parentRef
+      ? this.ctx.db.query("SELECT workspace_id FROM multiremi_issues WHERE id = ?").get(id) as Row | null
+      : null;
+    const parentId = parentRef
+      ? this.resolveIssueRelationRef(parentRef, input.workspaceId ?? input.workspace_id ?? (hint ? String(hint.workspace_id) : null)) ?? parentRef
+      : null;
+    this.lockIssueRelationRows([id, parentId]);
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
-    const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    const nextParentIssueId = parentId ?? resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
     this.assertIssueWorkspaceMoveAllowed(current, input);
     let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
     const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
