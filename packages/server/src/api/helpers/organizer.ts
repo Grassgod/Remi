@@ -92,8 +92,8 @@ export async function organizerTaskInspection(
       if (tail.state === "ok") traceEvents = tail.events;
     }
   }
-  // TODO(MUL-432): remove the legacy-table fallback together with that table.
-  const messages = card || traceEvents ? [] : store.listTaskMessages(task.id);
+  // TODO(MUL-432): switch last_message's legacy-tail source and remove the fallback when dropping the table.
+  const messages = traceEvents ? [] : store.listTaskMessages(task.id);
   const histogram = new Map<string, { type: string; tool: string | null; count: number }>();
   for (const message of traceEvents ?? messages) {
     const key = `${message.type}\u0000${message.tool ?? ""}`;

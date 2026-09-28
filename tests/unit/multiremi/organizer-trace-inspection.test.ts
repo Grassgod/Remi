@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { organizerTaskInspection } from "@multiremi/api/helpers/organizer.js";
+import { organizerTaskInspection, organizerTurnStats } from "@multiremi/api/helpers/organizer.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -52,6 +52,30 @@ describe("organizer trace inspection", () => {
     const inspection = await organizerTaskInspection(store, { ...task, status: "completed" }, {
       getTurnStats: () => ({ toolCallCount: 7, eventCount: 30, typeHistogram: [{ type: "tool_use", tool: "Read", count: 7 }] }),
     });
+    expect(inspection).toMatchObject({
+      tool_call_count: 7, event_count: 30,
+      message_type_histogram: [{ type: "tool_use", tool: "Read", count: 7 }],
+    });
+  });
+
+  it("preserves the legacy last_message on a completed task with full persisted turn-card statistics", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Organizer tail", provider: "codex", workspaceId: "local" });
+    const issue = store.createIssue({ title: "Organizer tail", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
+    store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
+    db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+    db!.transaction(() => store.updateTurnCardWithinTransaction(task.id, {
+      toolCallCount: 7, eventCount: 30, typeHistogram: [{ type: "tool_use", tool: "Read", count: 7 }],
+    }))();
+    expect(organizerTurnStats(store, task.id)).toMatchObject({ toolCallCount: 7, eventCount: 30 });
+    const terminal = store.getTask(task.id)!;
+    const previous = await organizerTaskInspection(store, terminal, { getTurnStats: () => null });
+    const inspection = await organizerTaskInspection(store, terminal, { getTurnStats: (id) => organizerTurnStats(store, id) });
+    const tail = store.listTaskMessages(task.id).at(-1)!;
+    expect(previous.last_message).toEqual({ seq: tail.seq, created_at: tail.createdAt });
+    expect(inspection.last_message).toEqual(previous.last_message);
     expect(inspection).toMatchObject({
       tool_call_count: 7, event_count: 30,
       message_type_histogram: [{ type: "tool_use", tool: "Read", count: 7 }],
