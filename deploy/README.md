@@ -388,8 +388,6 @@ rollback below:
       print(f\"activeOperation: {op['id']} {op['kind']} {op['status']}\")
   if active:
       sys.exit(1)
-  if len(operations) >= 100:
-      sys.exit('STOP: full operation list; cannot prove the window is idle')
   print('activeOperation: none')
   "
   # expected, every time before and during the switch:
@@ -403,9 +401,16 @@ rollback below:
   (`packages/contracts/src/types.ts`), including `rolling_back`: these are the
   `active_slot = 1` operations the updater may be handling. Any status outside
   `terminal` means stop and wait, including an unknown future status. The list
-  uses the server's maximum limit of 100 recent operations; a full response is
-  rejected because it could omit an older active operation. Invalid JSON, a
+  uses the server's maximum limit of 100 recent operations. Invalid JSON, a
   failed CLI request, or any nonzero exit code also means do not start.
+
+  `create()` claims `active_slot = 1`, and the unique index
+  `idx_multiremi_platform_operations_active` prevents another operation until
+  `report()` or queued cancellation releases it; terminal states are irreversible.
+  Thus at most one operation is non-terminal, and it must be the newest operation
+  because all earlier ones finished before its creation.
+  `list()` orders by `created_at DESC`, so the first page includes that operation
+  even when more than 100 terminal records exist.
 
   Do not read maintenance for this pre-check. Drain belongs to an active
   operation; with none active, a residual expired drain is recovered by the

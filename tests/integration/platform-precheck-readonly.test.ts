@@ -4,8 +4,15 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import {
+  PlatformOperationsRepo,
+  PlatformOperationConflictError,
+  isTerminalPlatformOperationStatus,
+} from "@multiremi/store/repos/platform-operations-repo.js";
+import type { MultiremiPlatformOperationStatus } from "@multiremi/contracts/types.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 
 const repoRoot = resolve(import.meta.dir, "../..");
@@ -17,6 +24,22 @@ const authWrite = "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id 
 const scenarios = ["expired-drain", "missing-state", "active-operation"] as const;
 type Scenario = typeof scenarios[number];
 interface Write { sql: string; changes: number }
+
+const contractSource = ts.createSourceFile("types.ts",
+  readFileSync(resolve(repoRoot, "packages/contracts/src/types.ts"), "utf8"),
+  ts.ScriptTarget.Latest, true);
+const statusDeclaration = contractSource.statements.find((node): node is ts.TypeAliasDeclaration =>
+  ts.isTypeAliasDeclaration(node) && node.name.text === "MultiremiPlatformOperationStatus");
+if (!statusDeclaration || !ts.isUnionTypeNode(statusDeclaration.type)) {
+  throw new Error("Platform operation status contract must be a union");
+}
+const contractStatuses = statusDeclaration.type.types.map((node) => {
+  if (!ts.isLiteralTypeNode(node) || !ts.isStringLiteral(node.literal)) {
+    throw new Error("Platform operation statuses must be string literals");
+  }
+  return node.literal.text as MultiremiPlatformOperationStatus;
+});
+const terminalStatuses = contractStatuses.filter(isTerminalPlatformOperationStatus);
 
 // Audit execution, including prepared statement get/all/run/values and exec.
 // Record attempted writes even when ON CONFLICT makes them affect zero rows.
@@ -145,6 +168,91 @@ function assertOnlyAuthWrites(writes: Write[], writeCount = 1) {
   );
 }
 
+function repoFixture() {
+  const raw = new Database(":memory:");
+  const audit = { recording: false, writes: [] as Write[] };
+  const db = auditedDatabase(raw, audit);
+  new MultiremiStore(db);
+  return {
+    raw, audit, repo: new PlatformOperationsRepo(db),
+    row(id: string) {
+      return raw.query("SELECT * FROM multiremi_platform_operations WHERE id = ?").get(id) as
+        Record<string, unknown>;
+    },
+    close() { raw.close(); },
+  };
+}
+
+describe("MUL-464 serialized platform-operation invariants", () => {
+  test("create conflicts while an operation holds the unique active slot", () => {
+    const f = repoFixture();
+    try {
+      const active = f.repo.create({ kind: "restart" }, "local");
+      expect(() => f.repo.create({ kind: "update" }, "local")).toThrow(PlatformOperationConflictError);
+      expect(f.row(active.id).active_slot).toBe(1);
+      const indexes = f.raw.query("PRAGMA index_list(multiremi_platform_operations)").all();
+      expect(indexes).toContainEqual(expect.objectContaining({
+        name: "idx_multiremi_platform_operations_active", unique: 1,
+      }));
+      expect(f.repo.list(100)).toHaveLength(1);
+    } finally { f.close(); }
+  });
+
+  test("report maps every contract status to its terminal or active slot", () => {
+    for (const status of contractStatuses) {
+      const f = repoFixture();
+      try {
+        const operation = f.repo.create({ kind: "restart" }, "local");
+        expect(f.repo.report(operation.id, { status })?.status, status).toBe(status);
+        expect(f.row(operation.id).active_slot, status).toBe(isTerminalPlatformOperationStatus(status) ? null : 1);
+      } finally { f.close(); }
+    }
+  });
+
+  test("a terminal operation ignores subsequent reports for every contract status", () => {
+    for (const terminal of terminalStatuses) {
+      const f = repoFixture();
+      try {
+        const operation = f.repo.create({ kind: "restart" }, "local");
+        const completed = f.repo.report(operation.id, { status: terminal });
+        const before = f.row(operation.id);
+        f.audit.recording = true;
+        for (const status of contractStatuses) {
+          expect(f.repo.report(operation.id, { status, output: "must not be written" }), `${terminal} -> ${status}`)
+            .toEqual(completed);
+          expect(f.row(operation.id), `${terminal} -> ${status}`).toEqual(before);
+        }
+        expect(f.audit.writes, terminal).toEqual([]);
+        expect(f.row(operation.id).active_slot, terminal).toBeNull();
+      } finally { f.close(); }
+    }
+  });
+
+  test("cancelling a queued operation releases the slot and is irreversible", () => {
+    const f = repoFixture();
+    try {
+      const operation = f.repo.create({ kind: "restart" }, "local");
+      expect(f.repo.requestCancel(operation.id).status).toBe("cancelled");
+      expect(f.row(operation.id).active_slot).toBeNull();
+      const before = f.row(operation.id);
+      f.audit.recording = true;
+      expect(f.repo.report(operation.id, { status: "queued" })?.status).toBe("cancelled");
+      expect(f.row(operation.id)).toEqual(before);
+      expect(f.audit.writes).toEqual([]);
+    } finally { f.close(); }
+  });
+
+  test("claim changes queued to preparing without releasing the slot", () => {
+    const f = repoFixture();
+    try {
+      const operation = f.repo.create({ kind: "restart" }, "local");
+      expect(f.repo.claim()).toMatchObject({ id: operation.id, status: "preparing" });
+      expect(f.row(operation.id).active_slot).toBe(1);
+      expect(() => f.repo.create({ kind: "restart" }, "local")).toThrow(PlatformOperationConflictError);
+    } finally { f.close(); }
+  });
+});
+
 describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () => {
   for (const scenario of scenarios) {
     test(`operations leaves all platform state unchanged: ${scenario}`, async () => {
@@ -214,7 +322,39 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
     }
   });
 
-  test("the pre-check refuses non-terminal, unknown, full and malformed responses", () => {
+  for (const withActive of [false, true]) {
+    test(`150 terminal operations via CLI ${withActive ? "plus the latest active operation stop" : "permit an idle window"}`, async () => {
+      const f = await fixture("missing-state");
+      try {
+        f.audit.recording = false;
+        for (let index = 0; index < 150; index++) {
+          const operation = f.store.createPlatformOperation({ kind: "restart" }, "local");
+          f.store.reportPlatformOperation(operation.id, { status: terminalStatuses[index % terminalStatuses.length]! });
+          // Distinct historical timestamps make the latest page deterministic.
+          f.raw.run("UPDATE multiremi_platform_operations SET created_at = ? WHERE id = ?",
+            [new Date(Date.UTC(2020, 0, 1) + index * 1000).toISOString(), operation.id]);
+        }
+        const active = withActive ? f.store.createPlatformOperation({ kind: "restart" }, "local") : null;
+        if (active) f.store.reportPlatformOperation(active.id, { status: "rolling_back" });
+        expect(f.raw.query("SELECT COUNT(*) AS n FROM multiremi_platform_operations").get())
+          .toEqual({ n: withActive ? 151 : 150 });
+        const before = f.snapshot();
+        f.audit.writes.length = 0;
+        f.audit.recording = true;
+        const body = await f.cli();
+        expect(body.operations).toHaveLength(100);
+        if (active) expect(body.operations[0]).toMatchObject({ id: active.id, status: "rolling_back" });
+        assertOnlyAuthWrites(f.audit.writes);
+        expect(f.snapshot()).toEqual(before);
+        const gate = checkOperations(body);
+        expect(gate.status, gate.stderr).toBe(withActive ? 1 : 0);
+        expect(gate.stdout.trim()).toBe(active
+          ? `activeOperation: ${active.id} restart rolling_back` : "activeOperation: none");
+      } finally { f.close(); }
+    });
+  }
+
+  test("the pre-check refuses non-terminal, unknown and malformed responses", () => {
     const operation = (status: string) => ({ id: "pop_local", kind: "restart", status });
     for (const status of ["queued", "preparing", "pulling", "draining", "switching",
       "restarting", "verifying", "rolling_back", "future_status"]) {
@@ -224,10 +364,6 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
     }
     const terminalHistory = ["succeeded", "failed", "cancelled", "rolled_back"].map(operation);
     expect(checkOperations({ operations: terminalHistory }).status).toBe(0);
-    const full = checkOperations({ operations: Array.from({ length: 100 }, () => operation("succeeded")) });
-    expect(full.status).toBe(1);
-    expect(full.stdout).not.toContain("activeOperation: none");
-    expect(full.stderr).toContain("full operation list");
     for (const body of [{}, { operations: null }, { operations: [{}] }]) {
       const gate = checkOperations(body);
       expect(gate.status).not.toBe(0);

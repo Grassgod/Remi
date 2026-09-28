@@ -245,6 +245,16 @@ describe("application compose stack", () => {
     expect(section).toContain("set -o pipefail");
   });
 
+  test("the pre-check accepts a full history page using serialized irreversible operations", () => {
+    const section = splitSection(deployReadme);
+    expect(section).not.toContain("STOP: full operation list");
+    expect(section).not.toMatch(/if len\(operations\)\s*>=\s*100/u);
+    expect(section).toContain("idx_multiremi_platform_operations_active");
+    expect(section).toContain("terminal states are irreversible");
+    expect(section).toContain("newest operation");
+    expect(section).toContain("created_at DESC");
+  });
+
   test("the documented non-terminal statuses equal the complement of TERMINAL_STATUSES", () => {
     const section = splitSection(deployReadme);
     const body = section.match(/python3 -c "([\s\S]*?)\n  "/u)?.[1];
