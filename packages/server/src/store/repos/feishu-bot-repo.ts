@@ -983,7 +983,7 @@ export class FeishuBotRepo {
           [chatSessionId, messageId, attachmentId, workspaceId]);
       }
       if (steered) {
-        this.ctx.tasks().createTaskSteerMessage({ taskId: task.id, kind: "steer", content: text,
+        this.ctx.tasks().createTaskSteerMessageWithinTransaction({ taskId: task.id, kind: "steer", content: text,
           authorType: "external", authorId: sender.actorId, sourceChatMessageId: messageId });
       }
       this.ctx.db.run(
@@ -2358,7 +2358,7 @@ export class FeishuBotRepo {
         const pending = wakeTask.status === "queued"
           ? { messages: [], omittedCount: 0 }
           : this.ctx.chat().preparePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId, wakeTask.id);
-        this.ctx.tasks().createTaskSteerMessage({
+        this.ctx.tasks().createTaskSteerMessageWithinTransaction({
           taskId: wakeTask.id,
           kind: "steer",
           content: roundPushPrompt(input.issue, pending.messages.map((message) => message.body), pending.omittedCount),

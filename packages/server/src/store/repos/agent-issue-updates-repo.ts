@@ -3,7 +3,7 @@ import type {
   MultiremiChatMessage,
   MultiremiChatSession,
 } from "@multiremi/contracts/types.js";
-import type { StoreContext } from "@multiremi/store/context.js";
+import type { CommitEventQueue, StoreContext, WorkspaceEvent } from "@multiremi/store/context.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
 
@@ -162,7 +162,11 @@ export class AgentIssueUpdatesRepo {
   }
 
   /** Caller owns the transaction; used immediately before a leader-round wake. */
-  flushIssueNowWithinTransaction(issueId: string, nowInput: string | Date = new Date()): AgentIssueUpdateFlushResult {
+  flushIssueNowWithinTransaction(
+    issueId: string,
+    deferredEvents: CommitEventQueue,
+    nowInput: string | Date = new Date(),
+  ): AgentIssueUpdateFlushResult {
     const now = nowInput instanceof Date ? nowInput : new Date(nowInput);
     if (!Number.isFinite(now.getTime())) throw new Error("now must be a valid date");
     const rows = this.ctx.db.query(
@@ -172,12 +176,16 @@ export class AgentIssueUpdatesRepo {
     ).all(issueId) as Row[];
     let delivered = 0;
     let dropped = 0;
+    const events: WorkspaceEvent[] = [];
     for (const row of rows) {
       const outcome = this.flushOneWithinTransaction(String(row.chat_session_id), now, true);
       if (outcome.kind === "delivered") delivered += 1;
       else if (outcome.kind === "dropped") dropped += 1;
-      if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result);
+      if (outcome.kind === "delivered" && outcome.result) this.publish(outcome.result, events);
     }
+    // These messages preceded the deferred terminal events. Prepend the whole
+    // batch so that order, including the order between Chats, stays unchanged.
+    deferredEvents.workspace.unshift(...events);
     return { delivered, dropped };
   }
 
@@ -355,14 +363,27 @@ export class AgentIssueUpdatesRepo {
     );
   }
 
-  private publish(result: { session: MultiremiChatSession; message: MultiremiChatMessage }): void {
-    this.ctx.emitChatEvent(result.session, "chat:message", {
+  private publish(
+    result: { session: MultiremiChatSession; message: MultiremiChatMessage },
+    events?: WorkspaceEvent[],
+  ): void {
+    const payload = {
       message_id: result.message.id,
       role: "system",
       content: result.message.body,
       task_id: null,
       created_at: result.message.createdAt,
-    }, { actorType: "system", actorId: null });
+    };
+    if (events) {
+      // Match emitChatEvent's fallback for a null actor id.
+      events.push({
+        type: "chat:message", workspaceId: result.session.workspaceId,
+        chatSessionId: result.session.id, actorType: "system", actorId: result.session.creatorId,
+        payload: { chat_session_id: result.session.id, ...payload },
+      });
+    } else {
+      this.ctx.emitChatEvent(result.session, "chat:message", payload, { actorType: "system", actorId: null });
+    }
   }
 }
 
