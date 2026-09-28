@@ -1,6 +1,6 @@
 import { isCompactionOutput } from "@shared/contracts/compaction.js";
 
-const providerHttp5xxRe = /(^|[^0-9])5[0-9][0-9]([^0-9]|$)/;
+const providerHttpStatusRe = /(?:^|[\s:()[\]{},."'])([45][0-9]{2})(?=$|[\s:()[\]{},."'])/g;
 
 const codexSemanticInactivityMarker = "codex semantic inactivity timeout";
 const codexFirstTurnNoProgressMarker = "codex app-server no progress timeout";
@@ -22,7 +22,10 @@ export type { TaskFailureReasonValue } from "@shared/contracts/task-failure-reas
 export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   const trimmed = String(rawError ?? "").trim();
   if (!trimmed) return TaskFailureReason.AgentUnknown;
-  const lower = trimmed.toLowerCase();
+  const lower = trimmed.toLowerCase()
+    .replace(/\brequest[\s_-]*id\s*[:=]\s*["']?[a-z0-9_-]+["']?/g, "")
+    .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/g, "");
+  const statuses = [...lower.matchAll(providerHttpStatusRe)].map((match) => Number(match[1]));
 
   // Repository preparation happens before the agent starts; these markers only
   // occur in repo cache/sync errors, which may embed network phrases ("connection
@@ -60,10 +63,19 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     return TaskFailureReason.AgentMissingConfig;
   }
 
-  if (containsAny(
+  if (
+    statuses.includes(404) ||
+    // Match availability of the model itself, not "model X: image input is
+    // not supported" or another unsupported request feature.
+    /\bmodel\s+(?:["']?[^\s:"',()[\]{}]+["']?\s+)?(?:is\s+)?(?:not found|not supported|not available)\b/.test(lower) ||
+    containsAny(lower, "issue with the selected model", "is not supported by any configured account",
+      "unknown model", "model_not_found", "acp_model_unsupported", "cannot select model", "http 404", "404 page not found")
+  ) {
+    return TaskFailureReason.AgentModelNotFoundOrUnavailable;
+  }
+
+  if (statuses.some((status) => status === 401 || status === 403) || containsAny(
     lower,
-    "401",
-    "403",
     "unauthorized",
     "login required",
     "not logged in",
@@ -78,9 +90,8 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     return TaskFailureReason.AgentProviderAuthOrAccess;
   }
 
-  if (containsAny(
+  if (statuses.includes(402) || containsAny(
     lower,
-    "402",
     "insufficient_balance",
     "balance is too low",
     "monthly usage limit",
@@ -94,9 +105,8 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   }
 
   // The gateway's account pool is empty for this model. This is the marker
-  // MUL-336 switches models on, so it must be recognised BEFORE the generic
-  // 5xx rule — "503 No available accounts" would otherwise degrade into an
-  // ambiguous provider_server_error and never trigger a fallback. The phrases
+  // MUL-336 introduced model switching for this marker; keep it BEFORE the
+  // generic 5xx rule so the switch record retains the specific cause. The phrases
   // are deliberately account-pool specific: a bare 503 stays ambiguous.
   if (containsAny(
     lower,
@@ -110,13 +120,14 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     return TaskFailureReason.AgentProviderNoAvailableAccount;
   }
 
-  if (containsAny(lower, "429", "rate limit", "overloaded", "529", "no capacity available")) {
+  if (statuses.some((status) => status === 429 || status === 529)
+    || containsAny(lower, "rate limit", "overloaded", "no capacity available")) {
     return TaskFailureReason.AgentProviderCapacityOrRateLimit;
   }
 
   if (
     containsAny(lower, "server had an error", "provider returned error", "internal error", "service unavailable", "bad gateway") ||
-    providerHttp5xxRe.test(lower)
+    statuses.some((status) => status >= 500)
   ) {
     return TaskFailureReason.AgentProviderServerError;
   }
@@ -125,11 +136,13 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     return TaskFailureReason.AgentProviderNetwork;
   }
 
-  if (
-    (lower.includes("model") && lower.includes("not found")) ||
-    containsAny(lower, "unknown model", "selected model", "http 404", "404 page not found")
-  ) {
-    return TaskFailureReason.AgentModelNotFoundOrUnavailable;
+  // Gateways can wrap provider failures in invalid_request_error. Only a 400
+  // or a code-less input error may reach this rule, after specific causes.
+  if (statuses.every((status) => status === 400) && (
+    lower.includes("invalid_request_error") ||
+    /\b(?:image|audio|video|text) input\s+(?:is\s+)?not supported\b/.test(lower)
+  )) {
+    return TaskFailureReason.ApiInvalidRequest;
   }
 
   if (containsAny(lower, "returned empty output", "returned no parseable output")) {
@@ -159,9 +172,9 @@ export function classifyPoisonedOutput(output: string): TaskFailureReasonValue |
 }
 
 export function classifyPoisonedError(error: string): TaskFailureReasonValue | null {
-  const lower = String(error ?? "").toLowerCase();
-  if (lower.includes("invalid_request_error") && lower.includes("400")) return TaskFailureReason.ApiInvalidRequest;
-  return null;
+  // The daemon's early invalid-request check must share the full precedence.
+  const reason = classifyTaskFailure(error);
+  return reason === TaskFailureReason.ApiInvalidRequest ? reason : null;
 }
 
 export function classifyResumeUnsafeTimeout(provider: string, error: string): TaskFailureReasonValue | null {
@@ -173,10 +186,62 @@ export function classifyResumeUnsafeTimeout(provider: string, error: string): Ta
   return null;
 }
 
-export function classifyDaemonTaskFailure(provider: string, error: string): TaskFailureReasonValue {
-  return classifyPoisonedError(error)
+export interface TaskFailureHint {
+  category?: string;
+  errorKind?: string;
+  codexErrorInfo?: unknown;
+}
+
+function classifyFailureHint(hint?: TaskFailureHint): TaskFailureReasonValue | null {
+  const kind = hint?.errorKind;
+  switch (kind) {
+    case "model_not_found": return TaskFailureReason.AgentModelNotFoundOrUnavailable;
+    case "authentication_error":
+    case "authentication_failed":
+    case "permission_denied": return TaskFailureReason.AgentProviderAuthOrAccess;
+    case "billing_error": return TaskFailureReason.AgentProviderQuotaLimit;
+    case "rate_limit":
+    case "overloaded": return TaskFailureReason.AgentProviderCapacityOrRateLimit;
+    case "server_error": return TaskFailureReason.AgentProviderServerError;
+    case "invalid_request": return TaskFailureReason.ApiInvalidRequest;
+  }
+  if (hint?.codexErrorInfo != null) {
+    const info = hint.codexErrorInfo;
+    if (info === "contextWindowExceeded") return TaskFailureReason.AgentContextOverflow;
+    if (info === "usageLimitExceeded") return TaskFailureReason.AgentProviderQuotaLimit;
+    if (typeof info === "object" && !Array.isArray(info)) {
+      const connection = (info as Record<string, unknown>).httpConnectionFailed;
+      if (connection && typeof connection === "object") {
+        const status = (connection as Record<string, unknown>).httpStatusCode;
+        if (status === 404) return TaskFailureReason.AgentModelNotFoundOrUnavailable;
+        if (typeof status === "number") {
+          const reason = classifyTaskFailure(`HTTP ${status}`);
+          if (reason !== TaskFailureReason.AgentUnknown) return reason;
+        }
+      }
+    }
+  }
+  switch (hint?.category) {
+    case "quota": return TaskFailureReason.AgentProviderQuotaLimit;
+    case "authentication": return TaskFailureReason.AgentProviderAuthOrAccess;
+    default: return null;
+  }
+}
+
+export function classifyDaemonTaskFailure(provider: string, error: string, hint?: TaskFailureHint): TaskFailureReasonValue {
+  return classifyFailureHint(hint)
+    ?? classifyPoisonedError(error)
     ?? classifyResumeUnsafeTimeout(provider, error)
     ?? classifyTaskFailure(error);
+}
+
+/** Only old bridges expose a terminal failure as their final assistant message. */
+export function classifyLegacyProviderFailure(output: string): TaskFailureReasonValue | null {
+  const text = output.trim();
+  if (text.length > 600 || !/^(unexpected status |stream disconnected|error sending request|exceeded retry limit)/i.test(text)) return null;
+  const reason = classifyTaskFailure(text);
+  return reason.startsWith("agent_error.provider_") || reason === TaskFailureReason.AgentModelNotFoundOrUnavailable
+    ? reason : null;
 }
 
 function containsAny(value: string, ...needles: string[]): boolean {
