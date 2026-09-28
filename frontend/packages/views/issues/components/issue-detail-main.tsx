@@ -17,6 +17,8 @@ import {
   type RevealAnchor,
 } from "../../common/use-anchored-reveal";
 import { useStickToBottom } from "../../common/use-stick-to-bottom";
+import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
+import { useNavigation } from "../../navigation";
 import {
   IssueActivitySection,
   STICK_PIN_THRESHOLD_PX,
@@ -161,6 +163,8 @@ export function IssueDetailMain({
   // cycle once the session list answers.
   const resetKey = `${issueId}:${sessions.activeId}:${highlightCommentId ?? ""}`;
 
+  const { pathname } = useNavigation();
+
   const reveal = useAnchoredReveal({
     scrollEl: scrollContainerEl,
     contentEl,
@@ -173,6 +177,14 @@ export function IssueDetailMain({
     fresh: undefined,
     budgetMs: highlightCommentId ? DEEP_LINK_REVEAL_BUDGET_MS : undefined,
   });
+
+  // MUL-472 b: the *main* content of an issue route is this scroll body, not the
+  // detail query. The issue row lands first; the timeline (and the reveal hook
+  // that un-hides it) settles after. Publishing readiness from the reveal state
+  // keeps the shell's deferred requests behind what the user is reading — QA's
+  // probe caught them 230-900 ms ahead of the first row. `revealed` is true for
+  // a forced reveal too, so a page that never settles still opens the gate.
+  useRouteContentReady(pathname, reveal.revealed);
 
   const stick = useStickToBottom({
     scrollEl: scrollContainerEl,

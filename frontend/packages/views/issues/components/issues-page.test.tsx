@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -95,6 +95,7 @@ const mockListAgents = vi.hoisted(() =>
     },
   ]),
 );
+const mockGetAgentTaskSnapshot = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockListSquads = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -122,6 +123,7 @@ vi.mock("@multiremi/core/api", () => ({
     listMembers: (...args: any[]) => mockListMembers(...args),
     listAgents: (...args: any[]) => mockListAgents(...args),
     listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   },
   getApi: () => ({
     listIssues: (...args: any[]) => mockListIssues(...args),
@@ -130,6 +132,7 @@ vi.mock("@multiremi/core/api", () => ({
     listMembers: (...args: any[]) => mockListMembers(...args),
     listAgents: (...args: any[]) => mockListAgents(...args),
     listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   }),
   setApiInstance: vi.fn(),
 }));
@@ -492,6 +495,8 @@ describe("IssuesPage (shared)", () => {
     mockViewState.grouping = "status";
     mockViewState.statusFilters = [];
     mockViewState.priorityFilters = [];
+    mockViewState.agentRunningFilter = false;
+    mockGetAgentTaskSnapshot.mockReset().mockResolvedValue([]);
     mockScope = "all";
   });
 
@@ -500,6 +505,52 @@ describe("IssuesPage (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  // MUL-472 b: with the running-agent filter on, the snapshot *is* the row set.
+  // Deferring it would leave `runningIssueIds` empty and paint a confident
+  // "nothing matches" while the real answer was still in flight.
+  it("does not show an empty list while the running-agent filter is waiting for the snapshot", async () => {
+    mockViewState.viewMode = "list";
+    mockViewState.agentRunningFilter = true;
+    // The list itself resolves immediately; only the snapshot hangs. That
+    // isolates the behaviour under test: with the filter on, the row set is the
+    // snapshot, so the page must stay in its loading state until the snapshot
+    // arrives instead of rendering the (currently empty) filtered result.
+    mockListIssues.mockImplementation(async (params: any) => ({
+      issues: mockIssues.filter((i) => i.status === params?.status),
+      total: 0,
+    }));
+    let releaseSnapshot!: (tasks: unknown[]) => void;
+    mockGetAgentTaskSnapshot.mockImplementation(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+
+    renderWithQuery(<IssuesPage />);
+
+    // Let every list request settle, then look at what the page claims.
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    await act(async () => {
+      // Flush Query's batched notification, not only the request promises.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The list body renders one accordion per status; an empty one says
+    // "No issues". With the snapshot still in flight the page must not be
+    // claiming that — the rows it would show depend on the snapshot.
+    expect(screen.queryAllByText("No issues").length).toBe(0);
+    expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
+
+    releaseSnapshot([
+      { id: "task-1", status: "running", issue_id: "issue-1", agent_id: "agent-1" },
+    ]);
+    // Once it arrives the page renders, filtered to the running issue only.
+    await screen.findByText("Implement auth");
+    expect(screen.queryByText("Write tests")).not.toBeInTheDocument();
+    expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
   });
 
   it("renders issue titles after data loads", async () => {
@@ -530,6 +581,21 @@ describe("IssuesPage (shared)", () => {
     await screen.findByText("Backlog");
     expect(screen.getAllByText("Todo").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the ready marker absent while the archive count holds the body skeleton", async () => {
+    let releaseArchive!: () => void;
+    mockListIssues.mockImplementation((params: any) => params?.archived_only
+      ? new Promise((resolve) => { releaseArchive = () => resolve({ issues: [], total: 0 }); })
+      : Promise.resolve({ issues: mockIssues.filter((i) => i.status === params?.status), total: 0 }));
+    renderWithQuery(<IssuesPage />);
+    await waitFor(() => expect(releaseArchive).toBeDefined());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
+    expect(screen.queryByText("Implement auth")).not.toBeInTheDocument();
+    await act(async () => { releaseArchive(); });
+    await screen.findByText("Implement auth");
+    expect(document.querySelector('[data-perf-scroll="list"]')).not.toBeNull();
   });
 
   it("keeps the archived pseudo-column hidden and shows its server count", async () => {

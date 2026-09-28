@@ -3,14 +3,27 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "../hooks";
+import { useAfterFirstScreen } from "../platform/use-after-first-screen";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 
-export function useActorName() {
+export function useActorName(
+  /**
+   * Row labels defer agent/squad lookups. Assignee board columns opt in
+   * immediately because their headings depend on those names.
+   */
+  options: { squadsEnabled?: boolean; agentsEnabled?: boolean } = {},
+) {
   const wsId = useWorkspaceId();
+  const gateOpen = useAfterFirstScreen();
+  const squadsEnabled = options.squadsEnabled ?? gateOpen;
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, {
+    enabled: options.agentsEnabled ?? gateOpen,
+  }));
+  const { data: squads = [] } = useQuery(
+    squadListOptions(wsId, { enabled: squadsEnabled }),
+  );
 
   const getMemberName = useCallback((userId: string) => {
     const m = members.find((m) => m.user_id === userId);
