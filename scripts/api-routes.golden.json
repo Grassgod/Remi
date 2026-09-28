@@ -25317,7 +25317,15 @@
           "hole_wait_ms": 0,
           "dropped_frames": 0,
           "pending_frames": 0,
-          "evicted_streams": 0
+          "evicted_streams": 0,
+          "peer_link": "disabled",
+          "hub_peer_loss_detected": {
+            "first_epoch": 0,
+            "epoch_change": 0,
+            "sequence_gap": 0
+          },
+          "hub_peer_reconcile_streams": 0,
+          "hub_peer_duplicate_dropped": 0
         }
       }
     },
@@ -25358,14 +25366,7 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true,
-        "hub": {
-          "role": "all",
-          "transport": "local",
-          "peer_link": false,
-          "fill_count": 0,
-          "hub_hole_wait_ms": 0
-        }
+        "ok": true
       }
     },
     {
