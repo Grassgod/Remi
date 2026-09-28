@@ -206,6 +206,24 @@ export class BatchParentStatusGuardError extends ParentStatusGuardError {
   }
 }
 
+export interface IssueWorkspaceMoveRelations {
+  parent: string | null;
+  children: string[];
+  dependencies: Array<{ id: string; key: string; type: MultiremiIssueDependencyType }>;
+  hidden: number;
+}
+
+/** 409: explicitly detach relationships before moving an issue to another workspace. */
+export class IssueWorkspaceMoveError extends Error {
+  readonly code = "workspace_move_blocked";
+  constructor(
+    readonly relations: IssueWorkspaceMoveRelations,
+    readonly issueIds?: string[],
+  ) {
+    super("Detach parent, child and dependency relationships before moving an issue to another workspace");
+  }
+}
+
 export class ParentDoneGrantOwnerError extends Error {
   readonly code = "parent_done_grant_owner_not_agent";
 }
@@ -1250,6 +1268,9 @@ export class IssuesRepo {
       try {
         issues.push(this.updateIssue(issueId, rowUpdates, batchOptions));
       } catch (err) {
+        if (err instanceof IssueWorkspaceMoveError) {
+          throw new IssueWorkspaceMoveError(err.relations, [issueId]);
+        }
         // The per-row guard stays armed: a concurrent writer can still move an
         // Issue into a guarded state after the pre-flight above.
         if (err instanceof ParentStatusGuardError) {
@@ -1275,6 +1296,22 @@ export class IssuesRepo {
    * batch, and it does so with the refused issue ids.
    */
   private preflightBatchUpdateIssues(issueIds: string[], updates: UpdateIssueInput): void {
+    if (hasAnyField(updates, "workspaceId", "workspace_id")) {
+      const rejected: string[] = [];
+      let firstError: IssueWorkspaceMoveError | null = null;
+      for (const issueId of issueIds) {
+        const current = this.getIssue(issueId);
+        if (!current) continue;
+        try {
+          this.assertIssueWorkspaceMoveAllowed(current, updates);
+        } catch (err) {
+          if (!(err instanceof IssueWorkspaceMoveError)) throw err;
+          rejected.push(issueId);
+          firstError ??= err;
+        }
+      }
+      if (firstError) throw new IssueWorkspaceMoveError(firstError.relations, rejected);
+    }
     if (!parentStatusGuardEnabled()) return;
     if (!hasAnyField(updates, "status")) return;
     const rejected: string[] = [];
@@ -1293,6 +1330,43 @@ export class IssuesRepo {
       }
     }
     if (firstError) throw new BatchParentStatusGuardError(firstError, rejected);
+  }
+
+  private assertIssueWorkspaceMoveAllowed(current: MultiremiIssue, input: UpdateIssueInput): void {
+    const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+    if (nextWorkspaceId === current.workspaceId) return;
+    const parent = current.parentIssueId ? this.getIssue(current.parentIssueId) : null;
+    // Raw edges must block a move even when hidden by the read views, or a
+    // legacy foreign edge could become visible again in the target workspace.
+    const children = this.ctx.db.query(
+      `SELECT id, issue_key, workspace_id FROM multiremi_issues
+       WHERE parent_issue_id = ? ORDER BY id`,
+    ).all(current.id) as Row[];
+    const dependencies = this.ctx.db.query(
+      `SELECT d.id, d.type, other.issue_key AS other_key
+       FROM multiremi_issue_dependencies d
+       LEFT JOIN multiremi_issues other ON other.id =
+         CASE WHEN d.issue_id = ? THEN d.depends_on_issue_id ELSE d.issue_id END
+         AND other.workspace_id = ?
+       WHERE d.issue_id = ? OR d.depends_on_issue_id = ?
+       ORDER BY d.id`,
+    ).all(current.id, current.workspaceId, current.id, current.id) as Row[];
+    const visibleChildren = children.filter((row) => String(row.workspace_id) === current.workspaceId);
+    const visibleDependencies = dependencies.filter((row) => row.other_key != null);
+    const visibleParent = parent?.workspaceId === current.workspaceId ? parent.key : null;
+    const relations: IssueWorkspaceMoveRelations = {
+      parent: visibleParent,
+      children: visibleChildren.map((row) => String(row.issue_key)),
+      dependencies: visibleDependencies.map((row) => ({
+        id: String(row.id), key: String(row.other_key), type: String(row.type) as MultiremiIssueDependencyType,
+      })),
+      hidden: (current.parentIssueId && !visibleParent ? 1 : 0)
+        + children.length - visibleChildren.length
+        + dependencies.length - visibleDependencies.length,
+    };
+    if (current.parentIssueId || children.length || dependencies.length) {
+      throw new IssueWorkspaceMoveError(relations);
+    }
   }
 
   deleteIssue(id: string): boolean {
@@ -2287,6 +2361,7 @@ export class IssuesRepo {
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    this.assertIssueWorkspaceMoveAllowed(current, input);
     let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
     const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
     const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
