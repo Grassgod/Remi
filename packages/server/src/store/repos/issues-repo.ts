@@ -28,6 +28,7 @@ import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
@@ -862,6 +863,10 @@ export class IssuesRepo {
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Child membership and guarded parent decisions serialize on the parent row.
+    if (parentIssueId && !lockIssueRowWithinTransaction(this.ctx.db, parentIssueId)) {
+      throw new Error(`Parent issue not found: ${parentIssueId}`);
+    }
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
     if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");
@@ -2354,13 +2359,21 @@ export class IssuesRepo {
     // until commit, while SQLite serializes the writer transaction. Re-read
     // only after acquiring it so a user terminal transition and a worker
     // lifecycle transition can never derive writes from the same stale row.
-    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+    // Keep workspace -> child -> parent order. A new membership (even a closed
+    // child) changes A4; reopening changes the unfinished-child count as well.
+    if (nextParentIssueId && (nextParentIssueId !== current.parentIssueId
+      || (isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus)))) {
+      if (!lockIssueRowWithinTransaction(this.ctx.db, nextParentIssueId)) {
+        throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      }
+    }
     let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
     const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
     const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
@@ -2411,7 +2424,6 @@ export class IssuesRepo {
     }
 
     const updatedAt = nowIso();
-    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
     // MUL-400 E3 gate 2: dependency and parent-grant guards are both decided
     // while the same Issue row lock is held.
     this.assertDependenciesMetForStatus(id, current, nextStatus, input, deferredEvents);
@@ -2640,7 +2652,8 @@ export class IssuesRepo {
       // new parent is covered by the hook above.
       if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
         const oldParent = this.getIssue(previous.parentIssueId);
-        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
+        if (oldParent) this.ctx.db.transaction(() =>
+          this.rederiveParentStatus(oldParent, updated, collector, hookEvents))();
       }
     } catch (err) {
       // The hook's own transaction rolled back, so its transitions and events
@@ -3646,6 +3659,12 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): void {
     if (parent.status !== "in_review") return;
+    // No parent row lock before counting (MUL-471). The conditional UPDATE below
+    // takes that lock and re-checks `in_review` after any wait, so a concurrent
+    // parent decision turns it into a no-op. A child added or reopened after
+    // this count is a child event of its own, and closing a child never takes
+    // the lock, so an earlier lock would not make the count below any more
+    // current.
     const openChildren = this.countOpenChildIssues(parent.id);
     if (openChildren === 0) return;
     const now = nowIso();
@@ -4220,18 +4239,25 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.db.run(
-      `UPDATE multiremi_issues
-       SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
-       WHERE id = ?`,
-      [
-        assigneeType,
-        assigneeId,
-        taskAgent ? "todo" : current.status,
-        now,
-        id,
-      ],
-    );
+    const writeAssignment = () => {
+      if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+      if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
+      const locked = this.getIssue(id)!;
+      // Agent assignment also reopens a settled Issue, independently of PATCH.
+      if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
+        if (!lockIssueRowWithinTransaction(this.ctx.db, locked.parentIssueId)) {
+          throw new Error(`Parent issue not found: ${locked.parentIssueId}`);
+        }
+      }
+      this.ctx.db.run(
+        `UPDATE multiremi_issues
+         SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
+         WHERE id = ?`,
+        [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
+      );
+    };
+    if (this.ctx.db.inTransaction) writeAssignment();
+    else this.ctx.db.transaction(writeAssignment)();
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {

@@ -47,6 +47,24 @@ export const CONTRACT = {
   scrollRoot: "[data-perf-scroll]",
   scrollRootIssueDetail: '[data-perf-scroll="issue-detail"]',
   scrollRootChat: '[data-perf-scroll="chat"]',
+  /**
+   * The list pages' own readiness marker (MUL-472 item 5):
+   * `frontend/packages/views/common/use-list-perf-marker.ts` writes
+   * `data-perf-scroll="list"` onto the list container only once that page's own
+   * list request resolved, so the marker's *presence* means "these rows are the
+   * answer to a request this round issued".
+   *
+   * It is deliberately not the measured viewport: list rounds keep
+   * `[data-slot="sidebar-inset"]` as their root in both tables (see
+   * {@link scrollRootSelector}) so the two stay comparable on one DOM. What the
+   * marker decides is which table `--selectors auto` uses — the same
+   * `contractDom` rule the detail and chat routes already trigger, which is why
+   * a list round can now be reported as `contract` instead of always falling
+   * back to `legacy`. The list root is intentionally *not* re-pointed at this
+   * element: keeping one root across the tables is what keeps
+   * `selectorEquivalence.scrollRoot` reading "same".
+   */
+  listMarker: '[data-perf-scroll="list"]',
   /** Real data rows; skeletons never carry this attribute. */
   items: "[data-perf-item]",
   skeleton: '[data-slot="skeleton"]',
@@ -95,13 +113,16 @@ export function cssEscape(value: string): string {
 }
 
 export function scrollRootSelector(mode: SelectorMode, shape: PageShape): string {
-  // A list page has neither data-tab-scroll-root nor a data-perf-scroll of its
-  // own, so requiring either one left every list round structurally unable to
-  // reach ready. Fall back to the content region MUL-367 measured inside.
+  // A list page has neither data-tab-scroll-root nor a measured viewport of its
+  // own, so both tables root it in the content region MUL-367 measured inside.
+  // Keeping *one* root across the tables is what makes their equivalence
+  // provable; the list readiness marker (`CONTRACT.listMarker`) is read
+  // separately, by `detectContractDom` / the recorder, not as a root.
   if (shape === "list") return LEGACY.listRoot;
   if (mode === "legacy") return LEGACY.scrollRoot;
   return shape === "chat" ? CONTRACT.scrollRootChat : CONTRACT.scrollRootIssueDetail;
 }
+
 
 /**
  * Root the profile falls back to when its primary one is missing.

@@ -44,19 +44,33 @@ export function inboxSummaryOptions(wsId: string) {
  * list UI renders: archived items excluded, then deduplicated by issue so a
  * single issue with three unread notifications counts once.
  */
-export function useInboxUnreadCount(wsId: string | null | undefined): number {
+/**
+ * Unread totals from `/api/inbox/summary`.
+ *
+ * `enabled` defaults to true: the inbox page's own unread count must not wait
+ * behind anything. The sidebar badge passes the shell's first-screen gate
+ * (MUL-472 b) so the summary request stays out of the route's first wave; the
+ * hook keeps returning cached numbers either way.
+ */
+export function useInboxUnreadCount(
+  wsId: string | null | undefined,
+  enabled = true,
+): number {
   const { data } = useQuery({
     ...inboxSummaryOptions(wsId ?? ""),
-    enabled: !!wsId,
+    enabled: !!wsId && enabled,
     select: (summary) => summary.unread,
   });
   return data ?? 0;
 }
 
-export function useInboxAttentionUnreadCount(wsId: string | null | undefined): number {
+export function useInboxAttentionUnreadCount(
+  wsId: string | null | undefined,
+  enabled = true,
+): number {
   const { data } = useQuery({
     ...inboxSummaryOptions(wsId ?? ""),
-    enabled: !!wsId,
+    enabled: !!wsId && enabled,
     select: (summary) => summary.attention,
   });
   return data ?? 0;

@@ -286,7 +286,7 @@ export function issueListQuery(
 ): ListIssuesInput {
   const compat = mode === "compat";
   const workspaceId = requestedWorkspaceId ?? (compat ? c.req.query("workspace_id") : c.req.query("workspaceId") ?? c.req.query("workspace_id")) ?? "local";
-  const assigneeTypes = splitQueryList(compat ? c.req.query("assignee_types") : c.req.query("assigneeTypes") ?? c.req.query("assignee_types")) as ListIssuesInput["assigneeTypes"];
+  const assigneeTypes = splitQueryList(compat ? c.req.query("assignee_types") ?? c.req.query("assignee_type") : c.req.query("assigneeTypes") ?? c.req.query("assignee_types")) as ListIssuesInput["assigneeTypes"];
   const assigneeId = resolveAssigneeFilterId(
     store,
     workspaceId,

@@ -912,6 +912,22 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const effective = model.effective;
+  const [contextSaving, setContextSaving] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
+  async function persistContext(oneMillion: boolean) {
+    if (engine !== "claude") return;
+    setContextSaving(true);
+    setContextError(null);
+    try {
+      await api.putRelayContextWindow(wsId, engine, { model: model.model_id, one_million: oneMillion });
+      await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
+      await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+    } catch (error) {
+      setContextError(error instanceof Error ? error.message : t(($) => $.modelGateway.context_save_failed));
+    } finally {
+      setContextSaving(false);
+    }
+  }
   // The server's `state` keeps a stored-but-inert declaration from rendering as
   // if it were in force: `outranked` keeps the existing conflict hint, and
   // `blocked` states the exact reason the declaration cannot apply.
@@ -984,10 +1000,11 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
   return (
     <li className="py-3 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 flex-1 space-y-1">
           <p className="truncate text-xs font-medium">{model.label || model.model_id}</p>
           <p className="truncate font-mono text-[11px] text-muted-foreground">{model.model_id}</p>
           <div className="flex flex-wrap items-center gap-1.5">
+            {engine === "claude" && model.context_window?.one_million ? <Badge variant="secondary">1M</Badge> : null}
             {effective ? (
               <>
                 <Badge variant={effective.source === "manual" ? "secondary" : "outline"}>
@@ -1038,19 +1055,36 @@ function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
             </p>
           ) : null}
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          aria-expanded={open}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <SlidersHorizontal className="h-3 w-3" />
-          {open
-            ? t(($) => $.modelGateway.reasoning_close)
-            : t(($) => $.modelGateway.reasoning_edit)}
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          {engine === "claude" ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span>{t(($) => $.modelGateway.context_title)}</span>
+              <Switch
+                checked={model.context_window?.one_million === true}
+                disabled={contextSaving || saving}
+                aria-label={t(($) => $.modelGateway.context_label, { model: model.model_id })}
+                onCheckedChange={(checked) => void persistContext(checked)}
+              />
+            </div>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <SlidersHorizontal className="h-3 w-3" />
+            {open
+              ? t(($) => $.modelGateway.reasoning_close)
+              : t(($) => $.modelGateway.reasoning_edit)}
+          </Button>
+        </div>
       </div>
+      {engine === "claude" ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">{t(($) => $.modelGateway.context_warning)}</p>
+      ) : null}
+      {contextError ? <p role="alert" className="mt-2 text-xs text-destructive">{contextError}</p> : null}
       {open ? (
         <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
           <ReasoningLevelFields

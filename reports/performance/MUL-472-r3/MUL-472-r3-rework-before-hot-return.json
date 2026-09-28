@@ -1,0 +1,4506 @@
+{
+  "phase": "rework-before",
+  "main": "36fb03c47eba7914be7a4d026f19e360b83a0f83",
+  "results": [
+    {
+      "phase": "rework-before",
+      "main": "36fb03c47eba7914be7a4d026f19e360b83a0f83",
+      "round": 1,
+      "firstVisibleMs": 775.5,
+      "anchor": "iss_pin_me",
+      "gatedRequests": [],
+      "requests": [],
+      "fixedAnchorShiftPx": 0,
+      "disconnectedFrames": 0,
+      "jump": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "samples": [
+        {
+          "t": 775.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 799.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 892,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 906.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 923,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 965.4000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 966.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 972.9000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 989.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1006.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1022.9000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1039.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1056.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1072.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1089.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1106.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1123,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1139.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1156.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1172.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1189.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1206.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1222.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1239.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1256.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1272.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1289.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1306.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1322.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1339.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1356.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1373,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1389.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1406.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1422.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1439.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1456.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1473.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1489.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1506.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1523.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1539.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1556.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1572.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1589.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1606.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1622.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1639.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1656.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1672.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1689.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1706.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1722.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1739.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1756.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1773.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1789.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1806.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1822.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1839.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1856.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1872.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1889.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1906.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1922.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1939.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1956.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1972.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1989.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2006.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2022.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2039.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2056.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2073,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2089.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2106.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2122.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2139.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2156.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2173,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2189.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2206.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2223,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2239.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2256.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2273,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2289.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2306.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2322.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2339.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2356.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2372.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2389.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2406.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2422.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2439.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2456.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2472.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2489.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2506.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2522.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2539.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2556.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2572.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2589.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2606.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2622.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2639.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2656.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2673.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2689.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2706.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2722.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2740,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2756.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2772.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2789.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2806.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2822.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2839.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2856,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2872.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2889.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2906.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2922.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2939.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2956.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2972.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2989.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3006.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3022.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3039.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3056.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3072.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3089.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3106.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3122.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3139.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3156,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3173,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3189.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3206.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3223,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3239.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3256.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3273,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3289.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3306.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3322.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3339.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3356.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3372.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3389.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3406.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3422.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3439.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3456.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3473,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3489.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3506.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3522.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3539.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3556.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3572.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3589.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3606.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3622.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3639.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3656.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3673,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3689.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3706.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3723,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3739.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3756.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3772.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3789.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3806.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3822.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3839.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3856,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3872.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3889.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3906.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        }
+      ],
+      "gateIdleFires": [
+        {
+          "t": 939.1000022888184,
+          "route": "/local/issues"
+        }
+      ],
+      "gateIdleAfterFirstMs": [
+        163.60000228881836
+      ]
+    },
+    {
+      "phase": "rework-before",
+      "main": "36fb03c47eba7914be7a4d026f19e360b83a0f83",
+      "round": 2,
+      "firstVisibleMs": 651.8000030517578,
+      "anchor": "iss_pin_me",
+      "gatedRequests": [],
+      "requests": [],
+      "fixedAnchorShiftPx": 0,
+      "disconnectedFrames": 0,
+      "jump": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "samples": [
+        {
+          "t": 651.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 744.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 746.9000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 755.9000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 772.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 792.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 822.4000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 823.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 839.4000015258789,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 855.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 872.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 889.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 905.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 922.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 939.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 955.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 972.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 989.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1005.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1022.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1039.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1055.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1072.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1089.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1106,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1122.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1139.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1155.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1172.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1189.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1206,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1222.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1239.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1255.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1272.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1289.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1306,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1322.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1339.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1356.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1372.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1389.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1406.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1422.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1439.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1455.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1472.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1489.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1505.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1522.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1539.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1555.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1572.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1589.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1605.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1622.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1639.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1656,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1672.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1689.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1705.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1722.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1739.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1755.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1772.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1789.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1805.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1822.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1839.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1856,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1872.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1889.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1905.8000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1922.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1939.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1955.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1972.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1989.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2005.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2022.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2039.3000030517578,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2055.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2072.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2089.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2105.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2123,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2139.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2156,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2172.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2189.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2205.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2222.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2239.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2255.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2272.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2289.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2305.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2322.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2339.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2356,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2372.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2389.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2406,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2422.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2439.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2455.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2472.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2489.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2505.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2522.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2539.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2556,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2572.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2589.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2605.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2622.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2639.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2655.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2672.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2689.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2705.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2722.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2739.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2755.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2772.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2789.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2805.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2822.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2839.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2855.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2872.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2889.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2905.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2922.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2939.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2955.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2972.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2989.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3005.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3022.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3039.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3055.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3072.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3089.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3105.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3122.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3139.300003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3155.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3172.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3189.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3205.900001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3222.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3239.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3255.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3272.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3289.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3305.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3322.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3339.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3355.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3372.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3389.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3406.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3422.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3439.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3455.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3472.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3489.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3505.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3522.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3539.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3555.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3572.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3589.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3606.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3622.6000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3639,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3656.2000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3672.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3689.1000022888184,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3705.7000007629395,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3722.400001525879,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3739,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3755.800003051758,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        }
+      ],
+      "gateIdleFires": [
+        {
+          "t": 795.9000015258789,
+          "route": "/local/issues"
+        }
+      ],
+      "gateIdleAfterFirstMs": [
+        144.0999984741211
+      ]
+    },
+    {
+      "phase": "rework-before",
+      "main": "36fb03c47eba7914be7a4d026f19e360b83a0f83",
+      "round": 3,
+      "firstVisibleMs": 641.0999984741211,
+      "anchor": "iss_pin_me",
+      "gatedRequests": [],
+      "requests": [],
+      "fixedAnchorShiftPx": 0,
+      "disconnectedFrames": 0,
+      "jump": {
+        "jumps": [],
+        "jumpCount": 0,
+        "jumpPx": 0,
+        "jumpScrollPx": 0
+      },
+      "samples": [
+        {
+          "t": 641.0999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 665.5999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 765.5999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 772.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 789.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 811.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 841.5999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 842.1999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 856.0999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 872.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 889.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 905.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 922.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 939.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 956.0999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 972.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 989.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1006,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1022.5999984741211,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1039.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1056.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1072.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1089.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1106,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1122.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1139.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1155.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1172.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1189.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1206.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1222.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1239.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1255.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1272.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1289.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1306.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1322.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1339.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1356,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1372.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1389.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1406.1999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1422.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1439.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1456,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1472.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1489.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1505.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1522.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1539.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1556.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1572.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1589.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1606.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1622.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1639.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1656.1999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1672.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1689.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1706,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1722.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1739.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1755.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1772.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1789.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1806.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1822.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1839.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1856.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1872.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1889.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1906,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1922.6999969482422,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1939.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1955.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1973,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 1989.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2006.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2022.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2039.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2056,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2072.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2089.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2105.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2122.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2139.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2156,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2172.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2189.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2206,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2222.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2239.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2256,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2272.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2289.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2306.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2322.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2339.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2356.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2372.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2389.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2406,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2422.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2439.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2456,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2472.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2489.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2506.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2522.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2539.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2556,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2572.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2589.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2606.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2622.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2639.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2656.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2672.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2689.199996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2706.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2722.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2739.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2756,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2772.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2789.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2806.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2822.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2839.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2856.199996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2872.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2889.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2906.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2922.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2939.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2956,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2972.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 2989.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3005.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3022.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3039.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3056,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3072.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3089.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3106,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3122.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3139.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3155.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3172.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3189.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3206.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3222.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3239.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3255.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3272.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3289.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3306,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3322.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3339.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3356,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3372.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3389.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3406.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3422.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3439.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3456,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3472.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3489.199996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3506,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3522.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3539.2999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3556.099998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3572.7999992370605,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3589.5,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3606,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3622.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3639.199996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3655.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3672.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3689.3999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3706,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3722.699996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3739.199996948242,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3755.8999977111816,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        },
+        {
+          "t": 3772.599998474121,
+          "route": "/local/issues",
+          "key": "iss_pin_me",
+          "top": 160,
+          "connected": true,
+          "visible": true
+        }
+      ],
+      "gateIdleFires": [
+        {
+          "t": 815.1999969482422,
+          "route": "/local/issues"
+        }
+      ],
+      "gateIdleAfterFirstMs": [
+        174.0999984741211
+      ]
+    }
+  ]
+}
