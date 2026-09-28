@@ -70,11 +70,11 @@ squad rule about ordering was prose. The observable failures were:
 
    *Layer 2 — task creation (`createTaskWithinWorkspaceLock` in tasks-repo),
    the single funnel every task is born in:* creating the **first** task of a
-   waiting issue is refused with `IssueDependencyError("dependencies_unmet")`,
-   regardless of who is asking. Because the check sits at the funnel rather than
-   at each caller, a path that does not exist yet is covered too. The check runs
-   after the issue is resolved and before any `INSERT`, so a refusal leaves no
-   partial row.
+   waiting issue is normally refused with
+   `IssueDependencyError("dependencies_unmet")`. Because the check sits at the
+   funnel rather than at each caller, a path that does not exist yet is covered
+   too. The check runs after the issue is resolved and before any `INSERT`, so a
+   refusal leaves no partial row.
 
    *Structural exemptions (never identity-based, and never request-supplied).* A
    round that continues an existing conversation is not the issue's first
@@ -89,23 +89,35 @@ squad rule about ordering was prose. The observable failures were:
    and `delegatedByAgentId` in both spellings, and only server paths (retry,
    continuation, the E2 wake-up, the delegation return) set them. A caller that
    supplies any of them gets the ordinary gate behaviour: 409
-   `dependencies_unmet` and no round. The dispatch behaviour around these
-   exemptions is:
-   - a comment-driven dispatch on a waiting issue records the hold and does not
-     create a task — `dispatch_skipped` with `dependencies_unmet` for the
-     assignee auto-response, `comment_mention_skipped` with the same reason for
-     an agent mention — and **the comment itself is still persisted**;
+   `dependencies_unmet` and no round.
+
+   *Credential-verified member actions.* A human comment, human agent mention or
+   human rerun explicitly starts a waiting issue. The comment and rerun
+   boundaries derive the actor from the credential, never the request body, and
+   set the server-internal `dependencyForce` marker with source `comment`,
+   `mention` or `rerun`. Public task creation strips `dependencyForce` and
+   `dependency_force`, so callers cannot forge the marker. The funnel still
+   makes no identity decision: it consumes the trusted marker and, in its task
+   transaction, inserts the round, moves `backlog` to `todo`, and records one
+   `dependency_force_started` with the member, source, comment/task ids and
+   unmet prerequisites. The dispatched prompt warns that prerequisites remain
+   unfinished. A mention dispatches only the mentioned agent; when that agent is
+   not the issue owner, the activity records `assignee_dispatched: false`.
+
+   Agent-authored comments and mentions do not receive the marker and remain
+   held by the gate. Agent rerun, public task create and session task create also
+   remain held. The other automatic paths remain unchanged:
    - an Autopilot `trigger_issue` on a waiting issue settles its run as
      `skipped` with reason `dependencies_unmet` and creates no task;
-   - `POST /api/multiremi/tasks` and `POST /api/issues/:id/rerun` answer 409
-     `dependencies_unmet`, with a message telling the caller to force-start.
+   - agent rerun, `POST /api/multiremi/tasks`, and session task creation answer
+     409 `dependencies_unmet`.
 
-   **There is exactly one way across the dependency: a member's `force`.** It
-   works only through the audited status write — CLI
+   **The explicit status override remains a member's `force`.** It works through
+   the audited status write — CLI
    `remi issue update <A> --status todo --force`, or the web "强制开工" button —
    which moves the issue out of `backlog` and records `dependency_force_started`.
    Once the issue is no longer waiting, both layers treat it as an ordinary
-   running issue. There is no second override:
+   running issue. The other status/assignment surfaces do not become overrides:
    - the **assign route** does not accept one: `force` is a server-internal
      parameter (`AssignIssueOptions`, mirroring `UpdateIssueOptions`), never a
      field of the request-bound `AssignIssueInput`, so a request body that
@@ -116,8 +128,7 @@ squad rule about ordering was prose. The observable failures were:
      server-internal option the dependency gate never reads, so a waiting issue
      targeted by a batch keeps its status, gets no round, and is reported
      per-row as skipped with `dependencies_unmet`. Choosing this over dropping
-     batch `force` entirely keeps S1's documented behaviour intact while
-     satisfying the ruling's "exactly one entrance";
+     batch `force` entirely keeps S1's documented behaviour intact;
    - a single forced start dispatches exactly once: the status write, the
      `dependency_force_started` record, the `issue_assigned` record and the
      round are **one transaction** (see 3a), and the route's assign-on-update
@@ -138,6 +149,11 @@ squad rule about ordering was prose. The observable failures were:
    no runnable agent) is decided before the INSERT: the status change and its
    `dispatch_skipped` report both stand, because that is what the member asked
    for.
+
+   A PATCH force and a comment-driven round can race. The PATCH assignment path
+   cancels active issue tasks, so it may cancel a comment round that committed
+   just before it. This requires two concurrent human actions and is not changed
+   by this decision.
 
    **One attempt leaves exactly one task row and exactly one start record.**
    Which record depends on what the lock saw, and all three are legitimate:
@@ -230,8 +246,8 @@ squad rule about ordering was prose. The observable failures were:
    Structurally exempt tasks (retry, continuation, redispatch, delegation return
    and E2 parent wake-up) can still be created while the issue waits. Each such
    creation records `dependency_gate_exempted`; starting the task moves the
-   issue to `in_progress` under the existing rules. This does not override the
-   dependency: the only override remains a member's status PATCH with `force`.
+   issue to `in_progress` under the existing rules. These structural
+   continuations are separate from the explicit member actions above.
 
    Two details the audit depends on, both pinned by cases:
 
