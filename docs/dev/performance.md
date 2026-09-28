@@ -218,7 +218,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 | 属性 | 宿主 | 取值 | 写入方 |
 | --- | --- | --- | --- |
-| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat | `issue-detail` \| `chat` | S1 打标 |
+| `data-perf-scroll` | 被测量的滚动根：issue 详情、chat；列表页的就绪标记（MUL-472 第 5 项） | `issue-detail` \| `chat` \| `list` | S1 打标；`list` 由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在该页自己的列表请求返回后写上 |
 | `data-perf-item` | 真实数据行（timeline 行、chat 消息、issue 行、board card、inbox 行、子单行） | `comment` \| `activity` \| `resolved-bar` \| `message` \| `issue` \| `inbox` \| `sub-issue` | S1 打标 |
 | `data-perf-key` | 同一行 | 行自身的稳定 id | S1 打标 |
 | `data-perf-anchor` | 该页面口径的终点元素 | `latest-comment` \| `agent-stream` \| `target-comment` \| `latest-message` | S1 打标 |
@@ -238,8 +238,10 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | --- | --- |
 | 终点 | 详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500 ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500 ms 安静。chat：最新一条消息可见 + 500 ms 安静 |
 | 超高行 | 行高 > 根高时，`covers`（top ≤ 1 且 bottom ≥ 根高 − 1）或 `bottomVisible`（0 ≤ bottom ≤ 根高 + 1）任一成立即算可见；`target-comment` 为 `topVisible \| (tall && covers)`，因为 `scrollIntoView({ block: "center" })` 会把超高目标的顶边推出视口。每轮在就绪帧记原始 `anchorRectAtReady: { top, bottom, height, rootHeight }`（根相对坐标，只记数不下结论） |
-| 列表页滚动根 | 11 个列表页既没有 `[data-tab-scroll-root]` 也没有自己 `data-perf-scroll`，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根） |
-| 跳动 | 首次出现真实内容之后，相邻帧中同一 `data-perf-key` 的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格 |
+| 列表页滚动根 | 11 个列表页没有自己的滚动根，两种模式都以 `[data-slot="sidebar-inset"]`（MUL-367 的 `READY_SELECTOR`）为根；空 chat 的 legacy heading 规则也用这个回退根（它渲染 `EmptyState`，没有 chat 滚动根）。列表 *根* 不在两种表之间分开，`selectorEquivalence.scrollRoot` 才能继续读 `same` |
+| 列表页就绪标记（MUL-472 第 5 项） | issues / my-issues / inbox / projects / agents / runtimes / skills / autopilots / workbench 的列表容器由 [use-list-perf-marker.ts](../../frontend/packages/views/common/use-list-perf-marker.ts) 在自己那条列表请求 `status === "success"` 且不是 `keepPreviousData` 占位数据时才写 `data-perf-scroll="list"`。`--selectors auto` 从 `[data-perf-scroll]` 判定，所以带标记的列表轮从此记 `contract`（此前 09-28 两轮 32/32 行都是 `legacy`）；标记出现即代表「屏幕上的行是本轮自己那次请求的答案」，事件量是 `mounted && listPerfFresh(query)`，脚本无需再加时钟 |
+| 首屏请求 gate（MUL-472 返工） | [use-after-first-screen.ts](../../frontend/packages/core/platform/use-after-first-screen.ts) 等当前路由主内容就绪，再经下一帧和 `requestIdleCallback({ timeout: 1000 })` 打开。列表由上述同一个标记条件发布，空成功、失败也发布；详情等 timeline reveal。未接入发布者的路由从路由开始等 2s 再进 idle；有发布者的慢请求不会被兜底抢先打开。默认页面级每次切页关闭，首个 render 即 false；`scope: "shell"` 会话内只等一次。筛选依赖 snapshot 时立即取，数据未到不显示空列表，也不写就绪标记 |
+| 跳动 | 首次出现目标页真实内容之后，相邻帧中同一 `data-perf-key` 且同一 DOM 元素的可见行位移 > 1 px（或 scrollTop 位移 > 1 px）即移动帧；连续移动帧合并为**一次**跳动。`jumps = 0` 才合格。入口页行换成目标页行是导航，不能把两个不同锚点的坐标差计作同一行的位移 |
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
 | 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
@@ -254,6 +256,12 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。**行号在点击前一刻重算**，且算在「真实第一页 + 注入目标」这份快照上——那才是浏览器渲染的列表。目标不在当前列表里时记 `skipped: warm-target-not-in-list`。点击后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 10s）并记 `urlCommitMs`；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`。被点中行的文本记入 `clickedRowText`，用来核对点的就是目标 issue |
 | 深链目标读态 | 候选在同等条件下**优先选未读**（所在分组条目里至少一条 `read=false`）。未读目标会走「自动已读成功 → refetch → 渲染」这条真实用户最常见的路径，而允许表保证它可完成；报告记 `targetRead` 与 `targetGroupHasUnread` |
 | 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
+
+页面 gate 的发布者在最后一个实例卸载时释放该次访问，取消 idle、兜底 timer；发布者自己的帧回调同时取消。同 pathname 重挂也从关闭开始，缓存内容仍在下一帧与 idle 后放行。无发布者时由最后一个消费者释放 registry；会话级 shell 标志保持打开。异步回调绑定 gate 实例，旧回调不能打开同路径的新实例。
+
+聊天 aggregate pending 的两个 observer 是 ChatFab 和 [SessionDropdown](../../frontend/packages/views/chat/components/session-dropdown.tsx)。后者常驻于隐藏 ChatWindow，条件为 `chatVisible || shellGateOpen`：隐藏时等会话首 gate，用户打开窗口或进入聊天页面时立即查询。共享 key 的去重不能替代每个 observer 的 enabled；[壳层守卫](../../frontend/packages/views/layout/shell-deferred-queries.test.tsx)挂载完整 DashboardLayout、ChatFab 与真实隐藏 ChatWindow，核对门控前请求为 0。
+
+隐藏聊天窗口的缓存子树同样需要门控：ChatMessageList 的 live/assistant 任务消息、HumanRequestDock 表单仅在 `chatVisible` 时 enabled，旧消息分页回调也检查可见性；无缓存会话时挂载的 WorkLocationPicker 项目候选同样继承聊天可见性，其他可见选择器保留默认立即查询。隐藏时包括 degraded task header 在内的 invalidate 只标 stale，重新打开立即正常 refetch；详情主体的执行行不受此可见性门控影响。壳层守卫预置 19 组 key 的缓存后逐 key invalidate，并经过真实 `createTaskHandlers`；虚拟列表提供测试尺寸并断言历史回复实际挂载，防止新 observer 从失效路径绕过门控。
 
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 
@@ -272,7 +280,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 ### 选择器回退：contract / legacy
 
-生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
+生产在本单合入并发布之前没有 `data-perf-*`，所以 [frontend/scripts/perf/lib/selectors.ts](../../frontend/scripts/perf/lib/selectors.ts) 维护两套选择器，`--selectors auto|contract|legacy`（默认 `auto`：页面存在 `[data-perf-scroll]` 即用 contract，否则 legacy；列表页的标记见上表，`CONTRACT.listMarker` 就是它）。**所有选择器都集中在这个模块里**，不散落在脚本各处。每一轮都记 `selectorMode`。
 
 | 用途 | legacy 选择器 / 规则 |
 | --- | --- |

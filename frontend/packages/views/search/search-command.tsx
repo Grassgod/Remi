@@ -156,8 +156,16 @@ export function SearchCommand() {
   // typically already in the detail cache because the user has opened them;
   // if not, this triggers a lookup per id so Recent never depends on whether
   // the issue falls inside the paginated list cache.
+  //
+  // MUL-472 b: only while the panel is open. The recents store is local, but
+  // resolving up to 20 ids is up to 20 `GET /api/issues/:id` calls that used to
+  // fire on every page load before the user ever opened the palette — on a
+  // fresh browser profile the baseline measured exactly that.
   const recentDetailQueries = useQueries({
-    queries: recentItems.map((item) => issueDetailOptions(wsId, item.id)),
+    queries: recentItems.map((item) => ({
+      ...issueDetailOptions(wsId, item.id),
+      enabled: open,
+    })),
   });
   const recentIssues = useMemo(
     () =>

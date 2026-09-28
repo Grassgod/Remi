@@ -50,6 +50,7 @@ import { DataTable } from "@multiremi/ui/components/ui/data-table";
 import { useNavigation } from "../../navigation";
 import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { availabilityConfig, availabilityOrder } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
 import { EditAgentDialog } from "./edit-agent-dialog";
@@ -97,7 +98,15 @@ export function AgentsPage() {
     isLoading,
     error: listError,
     refetch: refetchList,
+    status: agentsStatus,
+    isPlaceholderData: agentsIsPlaceholderData,
   } = useQuery(agentListOptions(wsId));
+  // MUL-472 item 5: mark the list container as this page's measured viewport and
+  // publish whether the rows came from this round's own response.
+  const perfMarker = useListPerfMarker({
+    status: agentsStatus,
+    isPlaceholderData: agentsIsPlaceholderData,
+  });
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runCountsRaw = [] } = useQuery(agentRunCounts30dOptions(wsId));
@@ -445,7 +454,7 @@ export function AgentsPage() {
   // ---- Loading ----
   if (isLoading) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
         <PageHeaderBar totalCount={0} onCreate={() => setShowCreate(true)} />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border">
@@ -477,7 +486,7 @@ export function AgentsPage() {
   const showEmpty = totalActiveCount === 0 && archivedCount === 0;
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeaderBar
         totalCount={totalActiveCount}
         onCreate={() => setShowCreate(true)}

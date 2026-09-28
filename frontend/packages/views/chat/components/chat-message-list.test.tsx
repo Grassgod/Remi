@@ -1,8 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { chatKeys } from "@multiremi/core/chat/queries";
+import { setApiInstance } from "@multiremi/core/api";
+import { createTaskHandlers } from "../../test/task-handlers";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 
@@ -17,13 +19,15 @@ import type { TaskMessagePayload } from "@multiremi/core/types/events";
 // logical indices — which is exactly how `data-perf-anchor="latest-message"`
 // silently never rendered for months of green tests.
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, firstItemIndex = 0, components }: {
+  Virtuoso: ({ data, itemContent, firstItemIndex = 0, components, startReached }: {
     data: ChatMessage[];
     itemContent: (index: number, item: ChatMessage) => ReactNode;
     firstItemIndex?: number;
     components?: { Footer?: () => ReactNode };
+    startReached?: () => void;
   }) => (
     <div>
+      <button onClick={startReached}>Load older</button>
       {data.map((item, index) => (
         <div key={item.id}>{itemContent(index + firstItemIndex, item)}</div>
       ))}
@@ -49,6 +53,44 @@ vi.mock("./task-status-pill", () => ({
 }));
 
 import { ChatMessageList } from "./chat-message-list";
+
+describe("cached message observer visibility", () => {
+  it("does not fetch an older page from a hidden virtual-list callback", () => {
+    const client = new QueryClient();
+    const load = vi.fn();
+    const content = (visible: boolean) => <QueryClientProvider client={client}><ChatMessageList visible={visible} messages={[]} pendingTask={null} availability={undefined} hasOlderMessages onLoadOlderMessages={load} /></QueryClientProvider>;
+    const view = render(content(false));
+    fireEvent.click(screen.getByText("Load older"));
+    expect(load).not.toHaveBeenCalled();
+    view.rerender(content(true));
+    fireEvent.click(screen.getByText("Load older"));
+    expect(load).toHaveBeenCalledTimes(1);
+    view.unmount(); client.clear();
+  });
+  it.each(["live", "assistant"])("keeps the %s observer inactive while hidden and refetches stale data on reopen", async (kind) => {
+    const taskId = "tsk_visibility";
+    const listTaskMessages = vi.fn(async () => []);
+    setApiInstance({ listTaskMessages } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(chatKeys.taskMessages(taskId), []);
+    const message = { id: "msg_visibility", role: kind === "assistant" ? "assistant" : "user", content: "Cached reply", task_id: kind === "assistant" ? taskId : null } as ChatMessage;
+    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
+    const content = (visible: boolean) => <QueryClientProvider client={client}><ChatMessageList visible={visible} messages={[message]} pendingTask={kind === "live" ? { task_id: taskId, status: "running" } as ChatPendingTask : null} availability={undefined} /></QueryClientProvider>;
+    const view = render(content(false));
+    try {
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 }); });
+      expect(listTaskMessages).not.toHaveBeenCalled();
+      expect(client.getQueryCache().find({ queryKey: chatKeys.taskMessages(taskId) })?.isActive()).toBe(false);
+      view.rerender(content(true));
+      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
+      listTaskMessages.mockClear();
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 3, seq_end: 4 }); });
+      expect(listTaskMessages).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount(); sync.dispose?.(); client.clear();
+    }
+  });
+});
 
 const TASK_ID = "task_01hzzzzzzzzzzzzzzzzzzzzzzz";
 const TIMELINE_TEXT = "Timeline answer from the task transcript.";

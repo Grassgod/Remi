@@ -141,9 +141,23 @@ export function ChatWindow({
   );
   const setSelectedAgentId = useChatStore((s) => s.setSelectedAgentId);
   const user = useAuthStore((s) => s.user);
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  // MUL-472 b: while the floating window is minimised (the FAB is showing, so
+  // the conversation is not on screen) this component must not preload the
+  // session list, the message page, the pending task or the mention recents.
+  // Only `enabled` gates are added; the window structure is untouched so the
+  // MUL-403 branch can keep merging main. The chat *page* is always visible.
+  const chatVisible = isPage || isOpen;
+  const { data: agents = [] } = useQuery(
+    agentListOptions(wsId, { enabled: chatVisible }),
+  );
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: chatVisible,
+  });
+  const { data: projects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: chatVisible,
+  });
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -151,7 +165,7 @@ export function ChatWindow({
     isLoading: sessionsLoading,
     isError: sessionsError,
     refetch: refetchSessions,
-  } = useQuery(chatSessionsOptions(wsId));
+  } = useQuery(chatSessionsOptions(wsId, "all", { enabled: chatVisible }));
   const {
     data: rawMessagePages,
     isLoading: messagesLoading,
@@ -160,7 +174,9 @@ export function ChatWindow({
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(chatMessagesPageOptions(activeSessionId ?? ""));
+  } = useInfiniteQuery(
+    chatMessagesPageOptions(activeSessionId ?? "", undefined, { enabled: chatVisible }),
+  );
   // When no active session, always show empty — don't use stale cache.
   // Page 0 contains the latest chronological window; later cursor pages are
   // older chronological windows. Reverse pages so older fetched pages render
@@ -187,7 +203,7 @@ export function ChatWindow({
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
   const { data: pendingTask } = useQuery(
-    pendingChatTaskOptions(activeSessionId ?? ""),
+    pendingChatTaskOptions(activeSessionId ?? "", { enabled: chatVisible }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
   useChatScopeSubscription(activeSessionId, !!activeSessionId);
@@ -246,7 +262,7 @@ export function ChatWindow({
   // disable) so the input doesn't flash a fake "no agent" state in the
   // few hundred ms before the agent list query resolves. Only `"none"`
   // (server confirmed: zero usable agents) drives the disabled UI.
-  const agentAvailability = useWorkspaceAgentAvailability();
+  const agentAvailability = useWorkspaceAgentAvailability(chatVisible);
   const noAgent =
     agentAvailability === "none" ||
     (!!currentSession &&
@@ -601,7 +617,7 @@ export function ChatWindow({
     pointerEvents: isOpen ? "auto" : "none",
   };
 
-  const contextItems = useChatContextItems(wsId);
+  const contextItems = useChatContextItems(wsId, chatVisible);
 
   const conversation = (
     <>
@@ -637,6 +653,7 @@ export function ChatWindow({
             </TooltipContent>
           </Tooltip>
           <SessionDropdown
+            chatVisible={chatVisible}
             sessions={sessions}
             // Use the full agent list (incl. archived) so historical
             // sessions can still resolve their avatar.
@@ -708,6 +725,7 @@ export function ChatWindow({
           ) : (
             <WorkLocationPicker
               wsId={wsId}
+              projectsEnabled={chatVisible}
               value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
               projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
               onChange={location => {
@@ -740,6 +758,7 @@ export function ChatWindow({
       ) : hasMessages ? (
         <ChatMessageList
           key={activeSessionId}
+          visible={chatVisible}
           messages={messages}
           pendingTask={pendingTask}
           availability={availability}
@@ -768,7 +787,7 @@ export function ChatWindow({
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      <HumanRequestDock taskId={pendingTaskId} />
+      <HumanRequestDock taskId={pendingTaskId} enabled={chatVisible} />
 
       {noAgent ? (
         <NoAgentBanner />
@@ -878,6 +897,7 @@ export function ChatWindow({
                 </div>
               ) : (
                 <SessionDropdown
+                  chatVisible={chatVisible}
                   presentation="list"
                   sessions={sessions}
                   agents={agents}

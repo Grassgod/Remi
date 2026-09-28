@@ -26,7 +26,9 @@ import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useModalStore } from "@multiremi/core/modals";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useNavigation } from "../../navigation";
 import { useRecentContextStore } from "@multiremi/core/chat";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
@@ -133,15 +135,22 @@ function ProjectIssuesContent({
   const creatorFilters = useViewStore((s) => s.creatorFilters);
   const labelFilters = useViewStore((s) => s.labelFilters);
   const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
+  const { pathname } = useNavigation();
 
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  // MUL-472 b: page scope — this page's own snapshot waits for this page. It is
+  // also the row set when the running-agent filter is on, so it stays ungated
+  // in that state (see issues-page.tsx).
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const snapshotQuery = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || agentRunningFilter }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const task of snapshot) {
+    for (const task of snapshotQuery.data ?? []) {
       if (task.status === "running" && task.issue_id) ids.add(task.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   const issues = useMemo(
     () => filterIssues(projectIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, projectFilters: [], includeNoProject: false, labelFilters, agentRunningFilter, runningIssueIds }),
@@ -167,7 +176,9 @@ function ProjectIssuesContent({
     [assigneeGroups, agentRunningFilter, runningIssueIds],
   );
 
-  const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = new Map() } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)
@@ -203,7 +214,7 @@ function ProjectIssuesContent({
   // an unresolved (or failed) fetch is indistinguishable from an empty
   // project, and a project with hundreds of issues opens on a confident
   // "No issues linked — create one" CTA.
-  if (isPending) {
+  if (isPending || (agentRunningFilter && snapshotQuery.isPending)) {
     return (
       <div className="flex flex-1 min-h-0 flex-col gap-2 p-4">
         {Array.from({ length: 6 }).map((_, index) => (
@@ -449,6 +460,8 @@ export function ProjectDetail({
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const userId = useAuthStore((s) => s.user?.id);
+  const { pathname } = useNavigation();
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
@@ -473,8 +486,8 @@ export function ProjectDetail({
   const archiveProject = useArchiveProject();
   const restoreProject = useRestoreProject();
   const { data: pinnedItems = [] } = useQuery({
-    ...pinListOptions(wsId, userId ?? ""),
-    enabled: !!userId,
+    ...pinListOptions(wsId, userId ?? "", { enabled: afterFirstScreen }),
+    enabled: !!userId && afterFirstScreen,
   });
   const isPinned = pinnedItems.some((p) => p.item_type === "project" && p.item_id === projectId);
   const createPin = useCreatePin();

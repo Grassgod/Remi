@@ -2,6 +2,7 @@
 
 import { createContext, use, useEffect, useMemo, useTransition } from "react";
 import type { NavigationAdapter } from "./types";
+import { FirstScreenRouteProvider } from "@multiremi/core/platform/use-after-first-screen";
 
 const NavigationContext = createContext<NavigationAdapter | null>(null);
 const NavigationPendingContext = createContext<boolean>(false);
@@ -45,7 +46,9 @@ export function NavigationProvider({
   return (
     <NavigationContext.Provider value={wrapped}>
       <NavigationPendingContext.Provider value={isPending}>
-        {children}
+        <FirstScreenRouteProvider routeKey={value.pathname}>
+          {children}
+        </FirstScreenRouteProvider>
       </NavigationPendingContext.Provider>
     </NavigationContext.Provider>
   );
