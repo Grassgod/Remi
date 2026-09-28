@@ -79,9 +79,8 @@ interface ActiveStream {
   id: string;
   handlers: StreamSubscriptionHandlers;
   /**
-   * The caller's anchor, kept until the first frame arrives. A resume from
-   * `head + 1` is only meaningful once something has been received; before that
-   * the caller's anchor is the newest information available.
+   * The caller's explicit anchor for the next successful subscription send.
+   * A socket that is connecting, authenticating or cannot send must retain it.
    */
   pendingFromSeq: number | null;
   head: number;
@@ -382,15 +381,14 @@ export class WSClient {
   }
 
   private sendStreamSubscribe(entry: ActiveStream): void {
+    if (!this.authenticated) return;
     const fromSeq = entry.pendingFromSeq ?? (entry.head > 0 ? entry.head + 1 : 1);
+    if (!this.trySend({
+      type: "stream.subscribe",
+      payload: { stream: entry.stream, id: entry.id, from_seq: fromSeq },
+    } as never)) return;
     entry.pendingFromSeq = null;
     entry.sent = true;
-    if (this.authenticated) {
-      this.send({
-        type: "stream.subscribe",
-        payload: { stream: entry.stream, id: entry.id, from_seq: fromSeq },
-      } as never);
-    }
   }
 
   /**
@@ -506,8 +504,14 @@ export class WSClient {
   }
 
   send(message: WSMessage) {
+    this.trySend(message);
+  }
+
+  private trySend(message: WSMessage): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
+      return true;
     }
+    return false;
   }
 }

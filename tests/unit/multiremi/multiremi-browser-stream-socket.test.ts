@@ -62,7 +62,7 @@ async function pausedSubscriptionFixture(stream: "log" | "trace") {
   hub.subscribe = ((_key: string, fromSeq: number): HubSubscription => {
     active.add(fromSeq);
     return { first_seq: 1, head: 50, log_version: null, gap: null, unsubscribe: () => { active.delete(fromSeq); } };
-  }) as typeof hub.subscribe;
+  }) as unknown as typeof hub.subscribe;
   const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null, liveHub: hub, streamAuth: pause });
   const path = stream === "log" ? "/ws" : "/api/trace/ws";
   const socket = new WebSocket(`ws://127.0.0.1:${server.port}${path}?workspace_id=${workspace.id}`);
@@ -145,6 +145,37 @@ describe.each(["log", "trace"] as const)("MUL-438 pending %s subscriptions over 
 });
 
 describe("MUL-438 browser stream endpoints", () => {
+  it("sends a real WSClient's fromSeq zero registered while CONNECTING to the Hub unchanged", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+    const issue = store.createIssue({ title: "Zero anchor", workspaceId: workspace.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
+    const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+    const hub = createEmptyLiveHub(createLocalHubTransport());
+    const subscribe = hub.subscribe.bind(hub);
+    const anchors: number[] = [];
+    hub.subscribe = ((...args: Parameters<typeof hub.subscribe>) => {
+      anchors.push(args[1]);
+      return subscribe(...args);
+    }) as typeof hub.subscribe;
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null, liveHub: hub });
+    const client = new WSClient(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    client.setAuth(token.token, workspace.slug);
+    client.connect();
+    const socket = (client as unknown as { ws: WebSocket }).ws;
+    try {
+      expect(socket.readyState).toBe(WebSocket.CONNECTING);
+      const handshakeAndAck = nextWebSocketMessages(socket, 2);
+      client.subscribeStream("log", session.id, {}, { fromSeq: 0 });
+      expect(await handshakeAndAck).toMatchObject([{ type: "auth_ack" }, { type: "stream.ack" }]);
+      expect(anchors).toEqual([0]);
+    } finally {
+      client.disconnect();
+      server.stop(true);
+    }
+  });
+
   it("lets a real WSClient subscribe between open and auth_ack without breaking authentication", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();

@@ -149,6 +149,33 @@ describe("MUL-438 WSClient streams", () => {
     ws.disconnect();
   });
 
+  it("preserves fromSeq zero registered while CONNECTING until open and auth_ack", () => {
+    const ws = new WSClient("ws://example.test/ws");
+    ws.setAuth("tok", "acme");
+    ws.connect();
+    const socket = FakeWebSocket.instances.at(-1)!;
+    expect(socket.readyState).toBe(0);
+    ws.subscribeStream("log", "ises_zero", {}, { fromSeq: 0 });
+    socket.open();
+    expect(socket.streamFrames).toEqual([]);
+    socket.serverSend({ type: "auth_ack" });
+    expect(socket.streamFrames).toEqual([
+      { type: "stream.subscribe", payload: { stream: "log", id: "ises_zero", from_seq: 0 } },
+    ]);
+    ws.disconnect();
+  });
+
+  it("preserves the explicit anchor when send fails and retries it on resync", () => {
+    const { ws, socket } = connected();
+    vi.spyOn(socket, "send").mockImplementationOnce(() => { throw new Error("socket send failed"); });
+    expect(() => ws.subscribeStream("log", "ises_zero", {}, { fromSeq: 0 })).toThrow("socket send failed");
+    socket.serverSend({ type: "resync" });
+    expect(socket.streamFrames).toEqual([
+      { type: "stream.subscribe", payload: { stream: "log", id: "ises_zero", from_seq: 0 } },
+    ]);
+    ws.disconnect();
+  });
+
   it("tracks the local head and resumes from head + 1 after a reconnect", () => {
     const { ws, socket } = connected();
     const subscription = ws.subscribeStream("log", "ises_1", {});
