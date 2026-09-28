@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import type { ConversationLogTurnMetadata } from "@multiremi/contracts/conversation-log.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
@@ -61,6 +62,21 @@ export interface OrganizerInspectionSources {
   getTurnStats?: (taskId: string) => OrganizerTurnStats | null;
 }
 
+export function organizerTurnStats(store: MultiremiStore, taskId: string): OrganizerTurnStats | null {
+  const metadata = store.findTurnEntry(taskId)?.metadata as ConversationLogTurnMetadata | undefined;
+  if (metadata?.tool_call_count == null || metadata.event_count == null || !Array.isArray(metadata.type_histogram)) return null;
+  if (!Number.isSafeInteger(metadata.tool_call_count) || metadata.tool_call_count < 0
+    || !Number.isSafeInteger(metadata.event_count) || metadata.event_count < 0) return null;
+  if (metadata.type_histogram.some((bucket) => !bucket || typeof bucket.type !== "string"
+    || (bucket.tool != null && typeof bucket.tool !== "string")
+    || !Number.isSafeInteger(bucket.count) || bucket.count < 0)) return null;
+  return {
+    toolCallCount: metadata.tool_call_count,
+    eventCount: metadata.event_count,
+    typeHistogram: metadata.type_histogram.map((bucket) => ({ ...bucket, tool: bucket.tool ?? null })),
+  };
+}
+
 export async function organizerTaskInspection(
   store: MultiremiStore,
   task: MultiremiTask,
@@ -76,7 +92,7 @@ export async function organizerTaskInspection(
       if (tail.state === "ok") traceEvents = tail.events;
     }
   }
-  // TODO(MUL-433): remove the legacy-table fallback together with that table.
+  // TODO(MUL-432): remove the legacy-table fallback together with that table.
   const messages = card || traceEvents ? [] : store.listTaskMessages(task.id);
   const histogram = new Map<string, { type: string; tool: string | null; count: number }>();
   for (const message of traceEvents ?? messages) {

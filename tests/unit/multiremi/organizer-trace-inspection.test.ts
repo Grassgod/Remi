@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { organizerTaskInspection } from "@multiremi/api/helpers/organizer.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import type { TraceReader } from "@multiremi/trace/trace-reader.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -15,6 +16,37 @@ function fixture() {
 }
 
 describe("organizer trace inspection", () => {
+  for (const counts of [
+    { toolCallCount: 7, eventCount: 30, typeHistogram: [{ type: "tool_use", tool: "Read", count: 7 }] },
+    { toolCallCount: 0, eventCount: 0, typeHistogram: [] },
+    { toolCallCount: null, eventCount: null, typeHistogram: null },
+  ]) {
+    it(`wires persisted turn-card statistics through the default inspection HTTP source (${counts.eventCount})`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const runtime = store.registerRuntime({ name: "Organizer stats runtime", provider: "codex", workspaceId: "local" });
+      const agent = store.createAgent({ name: "Organizer stats target", provider: "codex", runtimeId: runtime.id, workspaceId: "local" });
+      const issue = store.createIssue({ title: "Organizer stats", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
+      store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      store.startTask(task.id);
+      store.completeTask(task.id, { output: "" });
+      db!.transaction(() => store.updateTurnCardWithinTransaction(task.id, counts))();
+      const app = createMultiremiApp({ store, authToken: "root-secret" });
+      const response = await app.request(`/api/tasks/${task.id}/inspection`, { headers: { Authorization: "Bearer root-secret" } });
+      expect(response.status).toBe(200);
+      const { inspection } = await response.json();
+      expect(inspection).toMatchObject(counts.eventCount === null ? {
+        tool_call_count: 1, event_count: 2,
+        message_type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Bash", count: 1 }],
+      } : {
+        tool_call_count: counts.toolCallCount, event_count: counts.eventCount,
+        message_type_histogram: counts.typeHistogram,
+      });
+    });
+  }
+
   it("uses injected turn-card counts for terminal tasks", async () => {
     const { store, task } = fixture();
     const inspection = await organizerTaskInspection(store, { ...task, status: "completed" }, {

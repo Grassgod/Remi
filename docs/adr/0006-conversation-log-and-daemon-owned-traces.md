@@ -131,6 +131,9 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    index). Web, share links, the Feishu concierge relay and the organizer all
    read through one `trace-reader` module that routes on the pointer. No copies,
    no share snapshots.
+   Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
+   missing card statistics or unavailable live reads retain the legacy-table
+   fallback until MUL-432 removes that table.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and

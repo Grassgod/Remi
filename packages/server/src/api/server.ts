@@ -124,6 +124,7 @@ import {
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { organizerTurnStats } from "./helpers/organizer.js";
 import {
   createRequestMetricsMiddleware,
   resolveRequestMetricsOptions,
@@ -293,7 +294,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     repositoryWiki,
     sessionArchives,
     traceReader,
-    getOrganizerTurnStats: options.getOrganizerTurnStats ?? (() => null),
+    getOrganizerTurnStats: options.getOrganizerTurnStats ?? ((taskId) => organizerTurnStats(store, taskId)),
     messagingProviders,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
