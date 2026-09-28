@@ -25,6 +25,7 @@ import { ReplicaEngine } from "./engine";
 import { SqlReplicaStorage } from "./sql-store";
 import { MemoryReplicaStorage, type ReplicaStorage } from "./storage";
 import { wasmSqlDatabase, type WasmDatabase } from "./sql";
+import { rangeOfFrames } from "./frames";
 import type { ReplicaWorkerRequest, ReplicaWorkerResponse, ReplicaWorkerStorage } from "./worker-protocol";
 
 /** The SAH pool name and directory. One per browser, matching the one database. */
@@ -280,22 +281,4 @@ export function installReplicaWorkerScope(scope: { onmessage: ((event: MessageEv
   scope.onmessage = (event: MessageEvent) => {
     void host.enqueue(event.data as ReplicaWorkerRequest);
   };
-}
-
-/**
- * The inclusive range a batch wrote.
- *
- * Reported as the batch's own span rather than the union of its seqs, because a
- * batch is delivered in order: the span is what the reader tabs need to re-read,
- * and a patch inside it changes a row they already have.
- */
-export function rangeOfFrames(frames: readonly { seq: number }[]): { from: number; to: number } | null {
-  if (frames.length === 0) return null;
-  let from = frames[0]!.seq;
-  let to = frames[0]!.seq;
-  for (const frame of frames) {
-    if (frame.seq < from) from = frame.seq;
-    if (frame.seq > to) to = frame.seq;
-  }
-  return { from, to };
 }

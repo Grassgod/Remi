@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-28T02:53:45.683Z",
-  "head": "068ecaf33ee70da6c7766669232b3d6aa8de28a1",
+  "generatedAt": "2026-09-28T03:20:16.893Z",
+  "head": "355f89762f715b140c6dae81a58591204a007ab6",
   "checks": [
     {
       "name": "three-tabs: exactly one leader",
@@ -25,8 +25,8 @@
     {
       "name": "handoff: a surviving page takes over within 1s",
       "ok": true,
-      "detail": "took 55ms",
-      "ms": 55
+      "detail": "took 51ms",
+      "ms": 51
     },
     {
       "name": "handoff: the new leader's head is continuous",
@@ -46,8 +46,8 @@
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 170 of 170, fresh true, 546ms after the append (budget 2000ms)",
-      "ms": 546
+      "detail": "head 170 of 170, fresh true, 648ms after the append (budget 2000ms)",
+      "ms": 648
     },
     {
       "name": "offline-catch-up: no full /log read",
@@ -117,8 +117,8 @@
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 225 of 225, fresh true, 11ms after the append (budget 2000ms)",
-      "ms": 11
+      "detail": "head 225 of 225, fresh true, 13ms after the append (budget 2000ms)",
+      "ms": 13
     },
     {
       "name": "offline-catch-up: no full /log read",

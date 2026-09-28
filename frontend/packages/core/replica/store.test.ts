@@ -243,6 +243,32 @@ describe("SQL replica storage", () => {
     engine.close();
   });
 
+  test("only the Worker imports sqlite-wasm", async () => {
+    // The page bundle must not carry the wasm build: a page-side
+    // `import ... from "./worker"` (or from a module that reaches it) made the
+    // fixture page's bundle 24 KB -> 495 KB, and in the app it would delay first
+    // paint for a dependency only the leader's Worker needs.
+    const { readFileSync, readdirSync } = await import("node:fs");
+    // `import.meta.dir` is Bun-only; the test also runs under Vitest, where the
+    // module URL is what is available.
+    const dir = new URL(".", import.meta.url).pathname;
+    const files = readdirSync(dir).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"));
+    for (const name of files) {
+      const src = readFileSync(`${dir}/${name}`, "utf8");
+      const importsWasm = /from\s*["']@sqlite\.org\/sqlite-wasm["']/.test(src);
+      if (name === "worker.ts") {
+        expect(importsWasm, "worker.ts must import sqlite-wasm").toBe(true);
+        continue;
+      }
+      expect(importsWasm, `${name} must not import sqlite-wasm`).toBe(false);
+      // And nothing below may reach it transitively through the Worker module.
+      expect(
+        /from\s*["']\.\/worker["']/.test(src),
+        `${name} imports ./worker, which pulls the wasm build into the page bundle`,
+      ).toBe(false);
+    }
+  });
+
   test("every statement the engine runs is in the shared SQL map", () => {
     // A statement spelled inline in one place and not in `schema.ts` is how the
     // Worker and the tests silently diverge; this pins the set.

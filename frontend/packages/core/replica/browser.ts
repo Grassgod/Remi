@@ -27,6 +27,7 @@ import { ReplicaLeader } from "./leader";
 import { MemoryReplicaStorage } from "./storage";
 import { ReplicaView } from "./view";
 import type { SessionLogEntry, SessionReplicaPort } from "./port";
+import { rangeOfFrames } from "./frames";
 import type { ReplicaWorkerRequest, ReplicaWorkerResponse } from "./worker-protocol";
 
 /** A browser Worker, narrowed to what the replica uses. */
@@ -563,12 +564,11 @@ function handleInline(
     case "frames": {
       const missing = engine.frames(request.sessionId, request.frames);
       const snapshot = engine.snapshot(request.sessionId);
-      const seqs = request.frames.map((frame) => frame.seq);
       return [
         {
           type: "appended",
           sessionId: request.sessionId,
-          range: seqs.length > 0 ? { from: Math.min(...seqs), to: Math.max(...seqs) } : null,
+          range: rangeOfFrames(request.frames),
           head: snapshot.head,
           fresh: snapshot.fresh,
           missing,
