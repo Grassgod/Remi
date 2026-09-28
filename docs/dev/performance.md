@@ -374,6 +374,26 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 同一分支的默认（清单）模式在本地与 CI 各跑一次，都是 9 行 × 3 轮 0 违例：本地 [reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json)，CI 的 `frontend-zero-jump` job 产物 [reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json)。
 
+### 会话日志列表自己的零跳动检查（MUL-443）
+
+[tests/integration/zero-jump-session-log-check.ts](../../tests/integration/zero-jump-session-log-check.ts) 测的是新的平铺会话日志列表（`frontend/packages/views/common/session-log/`），不是详情页。它对应用例里点名的三种扰动各跑 3 轮：
+
+| 场景 | 读者状态 | 扰动 | 断言 |
+|---|---|---|---|
+| `append-20` | `released`（停在末尾上方 300px） | 尾部追加 20 行 | 读者行与 `scrollTop` 都不动 |
+| `row-height-change` | `released` | 视口下方的一行变高 | 同上，且 `contentGrowthPx > 0` |
+| `width-change` | 揭示窗口内（尚未 `ready`） | 容器 800 → 640px | 揭示只定位一次，`jumps = 0` |
+
+另外每轮都断言 `data-perf-state=ready` 且 `data-perf-fresh=1`：只报 `jumps = 0` 而不看应用自己的判定，一个「从未揭示、内容直接可见」的页面同样会全绿。检查末尾另跑一条**阳性对照**（帧内故意滚动 200px，探针必须报出），对照不成立时整个检查失败——否则「全绿」只证明没测到东西。
+
+页面的构成：`Bun.build` 打包夹具（真实 `SessionLogList` + 内存副本端口），本地 HTTP 服务同时提供**应用自己的 `globals.css`**（PostCSS 编译；Tailwind 的 `@source` 不扫 `tests/`，少了它夹具的滚动根高度会是内容高度，等于没有可观测的滚动范围），Playwright + Chromium 装同一个记录器。
+
+```text
+bun run tests/integration/zero-jump-session-log-check.ts
+```
+
+报告写在 `reports/performance/MUL-443-session-log-zero-jump.json`。三条踩过的坑写在检查文件头注释里：合成 `WheelEvent` 只触发监听、不产生滚动；Chrome 自身的 scroll anchoring 会冒充应用的同帧补偿（夹具显式 `overflow-anchor:none`）；在两次 `page.evaluate` 之间做的扰动落在下一帧采样之前，记录器永远看不到变化（扰动改为在 rAF 回调里做）。还有一个探测能力边界：`jump-recorder` 把任何 >1px 的 `scrollTop` 变化都记为跳动，因此它无法区分「补偿式贴底」与「真跳动」；贴底补偿由 MUL-450 的 hook 单测覆盖，本检查不去断言它。
+
 **前基线**（`4248ef07`）仍存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。
 
 ## 优化不能破坏的约束
