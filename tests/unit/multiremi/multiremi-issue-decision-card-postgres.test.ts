@@ -11,10 +11,12 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
 const TEST_DB = `multiremi_dc412_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+const UPGRADE_DB = `${TEST_DB}_upgrade`;
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_pg_decision";
 
@@ -39,14 +41,22 @@ if (!available) console.warn(`[multiremi-issue-decision-card-postgres] Postgres 
 describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
+  let previousLarkAppId: string | undefined;
+  let previousLarkAppSecret: string | undefined;
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${UPGRADE_DB} WITH (FORCE)`);
     await admin.unsafe(`CREATE DATABASE ${TEST_DB}`);
+    await admin.unsafe(`CREATE DATABASE ${UPGRADE_DB}`);
     await admin.end();
+    previousLarkAppId = process.env.MULTIREMI_LARK_APP_ID;
+    previousLarkAppSecret = process.env.MULTIREMI_LARK_APP_SECRET;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
     process.env.MULTIREMI_PUBLIC_URL = "https://remi.example.com";
+    process.env.MULTIREMI_LARK_APP_ID = "cli_pg412";
+    process.env.MULTIREMI_LARK_APP_SECRET = APP_SECRET;
     db = new PostgresSyncDatabase(pgUrl(TEST_DB));
     store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
@@ -71,34 +81,43 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     try { db?.close(); } catch { /* best effort */ }
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${UPGRADE_DB} WITH (FORCE)`);
     await admin.end();
+    if (previousLarkAppId === undefined) delete process.env.MULTIREMI_LARK_APP_ID;
+    else process.env.MULTIREMI_LARK_APP_ID = previousLarkAppId;
+    if (previousLarkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
+    else process.env.MULTIREMI_LARK_APP_SECRET = previousLarkAppSecret;
   });
 
   // The bot is per-workspace, so each case gets its own; that keeps the
   // delivery queue from leaking between cases.
   let workspaceSeq = 0;
-  function scaffold(notifyMode?: "group_owner" | "person" | "none") {
+  function scaffold(
+    notifyMode?: "group_owner" | "person" | "none",
+    targetStore = store,
+    targetDb = db,
+  ) {
     workspaceSeq += 1;
-    const workspace = store.createWorkspace({
+    const workspace = targetStore.createWorkspace({
       id: `wspg412_${workspaceSeq}`, name: `PG 412 ${workspaceSeq}`, slug: `pg412-${workspaceSeq}`,
     });
     const workspaceId = workspace.id;
     // `createWorkspace` already seeded its owner member; bind it to a user whose
     // external_id is this case's Feishu open_id, the same way SSO login does.
-    const member = store.listWorkspaceMembers(workspaceId).find(item => item.role === "owner")!;
-    const user = store.getOrCreateUser({
+    const member = targetStore.listWorkspaceMembers(workspaceId).find(item => item.role === "owner")!;
+    const user = targetStore.getOrCreateUser({
       externalId: `ou_pg412_${workspaceSeq}`, name: "PG owner", email: `pg412-${workspaceSeq}@example.com`,
     });
-    db.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
-    const agentId = store.createAgent({ name: "PG Concierge", provider: "codex", workspaceId }).id;
+    targetDb.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
+    const agentId = targetStore.createAgent({ name: "PG Concierge", provider: "codex", workspaceId }).id;
     const runtimeId = `rt_pg412_${workspaceSeq}`;
-    store.registerRuntime({ id: runtimeId, name: "Bot", provider: "codex", workspaceId, daemonId: `d-${runtimeId}` });
-    store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true, supportsIssueDecisionCard: true });
-    const config = store.upsertFeishuBotConfig(workspaceId, {
+    targetStore.registerRuntime({ id: runtimeId, name: "Bot", provider: "codex", workspaceId, daemonId: `d-${runtimeId}` });
+    targetStore.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true, supportsIssueDecisionCard: true });
+    const config = targetStore.upsertFeishuBotConfig(workspaceId, {
       agentId, runtimeId, appId: "cli_pg412", appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true,
     });
-    store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
-    store.updateWorkspace(workspaceId, {
+    targetStore.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
+    targetStore.updateWorkspace(workspaceId, {
       settings: {
         ...workspace.settings,
         issueTopics: {
@@ -108,39 +127,54 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         },
       },
     });
-    const parent = store.createIssue({ title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
-    store.prepareFeishuIssueTopicWithinTransaction(parent);
-    const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
-    store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
+    const parent = targetStore.createIssue({ title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
+    targetStore.prepareFeishuIssueTopicWithinTransaction(parent);
+    const root = targetStore.claimFeishuBotOutbound(workspaceId, runtimeId)!;
+    targetStore.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
       claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${workspaceSeq}`,
     });
-    const child = store.createIssue({
+    const child = targetStore.createIssue({
       title: `PG child ${workspaceSeq}`, workspaceId, parentIssueId: parent.id, assigneeType: "agent", assigneeId: agentId,
     });
-    const task = store.createTask({ agentId, issueId: child.id, workspaceId, prompt: "W" });
+    const task = targetStore.createTask({ agentId, issueId: child.id, workspaceId, prompt: "W" });
     return { workspaceId, runtimeId, agentId, member, parent, child, task };
   }
 
-  function escalate(scope: ReturnType<typeof scaffold>, kind = "production_change") {
-    const decision = store.createIssueDecision(scope.child.id, {
+  function escalate(scope: ReturnType<typeof scaffold>, kind = "production_change", targetStore = store) {
+    const decision = targetStore.createIssueDecision(scope.child.id, {
       kind, title: "Deploy?", body: "please", options: ["yes", "no"],
     }, { type: "agent", id: scope.agentId, taskId: scope.task.id });
     return decision;
   }
 
-  it("upgrades an existing decision and delivery table without losing rows", () => {
-    // The columns this change adds must be visible on a database already
-    // migrated by main, which is what "additive nullable" has to mean in
-    // practice — both as a fresh create and after a re-run.
-    const columns = (table: string) => (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
-      .map(column => column.name);
-    expect(columns("multiremi_issue_decisions")).toContain("reminder_sent_at");
-    expect(columns("multiremi_feishu_bot_outbound_deliveries")).toContain("decision_id");
-    expect(columns("multiremi_feishu_bot_outbound_deliveries")).toContain("decision_issue_id");
-    const indexes = db.query(
+  it("upgrades the Postgres 828291b9 schema twice without losing existing rows", () => {
+    const upgradeDb = new PostgresSyncDatabase(pgUrl(UPGRADE_DB));
+    const baselineStore = new MultiremiStore(upgradeDb);
+    const scope = scaffold(undefined, baselineStore, upgradeDb);
+    const decision = escalate(scope, "production_change", baselineStore);
+    const card = baselineStore.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
+    const deliveryId = card.id;
+    restoreMul412Baseline828291b9Schema(upgradeDb);
+    expect(tableColumns(upgradeDb, "multiremi_issue_decisions")).not.toContain("reminder_sent_at");
+    expect(tableColumns(upgradeDb, "multiremi_feishu_bot_outbound_deliveries")).not.toContain("decision_id");
+    expect(tableColumns(upgradeDb, "multiremi_issues")).not.toContain("parent_done_grant_at");
+
+    new MultiremiStore(upgradeDb);
+    new MultiremiStore(upgradeDb);
+    expect(tableColumns(upgradeDb, "multiremi_issue_decisions")).toContain("reminder_sent_at");
+    expect(tableColumns(upgradeDb, "multiremi_feishu_bot_outbound_deliveries"))
+      .toEqual(expect.arrayContaining(["decision_id", "decision_issue_id"]));
+    expect(tableColumns(upgradeDb, "multiremi_issues"))
+      .toEqual(expect.arrayContaining(["parent_done_grant_at", "parent_done_grant_by", "parent_done_grant_agent_id"]));
+    expect(upgradeDb.query("SELECT title, status FROM multiremi_issue_decisions WHERE id = ?").get(decision.id))
+      .toEqual({ title: "Deploy?", status: "escalated" });
+    expect(upgradeDb.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(deliveryId))
+      .toEqual({ id: deliveryId, status: "sending" });
+    const indexes = upgradeDb.query(
       "SELECT indexname FROM pg_indexes WHERE tablename = 'multiremi_feishu_bot_outbound_deliveries'",
     ).all() as Array<{ indexname: string }>;
     expect(indexes.map(row => row.indexname)).toContain("idx_multiremi_feishu_bot_outbound_decision");
+    upgradeDb.close();
   });
 
   it("sends one card, then exactly one reminder inside the window", () => {
@@ -170,20 +204,46 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     expect(row.reminder_sent_at).toBe(due.toISOString());
   });
 
-  it("lets exactly one of two concurrent claims take the card", async () => {
+  it("lets two processes materialize and claim only one due reminder", async () => {
     const scope = scaffold();
-    escalate(scope);
-    const other = new MultiremiStore(new PostgresSyncDatabase(pgUrl(TEST_DB)));
-    const [a, b] = await Promise.all([
-      Promise.resolve().then(() => store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)),
-      Promise.resolve().then(() => other.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)),
-    ]);
-    const taken = [a, b].filter(Boolean);
+    const decision = escalate(scope);
+    const sentAt = new Date(Date.now() - 51 * 60 * 1000);
+    const card = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
+    store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_concurrent", interactionOpenId: CARD_OPEN_ID,
+    }, sentAt);
+    const now = new Date();
+    const startAt = Date.now() + 1_000;
+    const worker = `${import.meta.dir}/mul412-reminder-claim-worker.ts`;
+    const spawn = () => Bun.spawn([process.execPath, worker], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        MUL412_CLAIM_PG_URL: pgUrl(TEST_DB),
+        MUL412_CLAIM_WORKSPACE_ID: scope.workspaceId,
+        MUL412_CLAIM_RUNTIME_ID: scope.runtimeId,
+        MUL412_CLAIM_NOW: now.toISOString(),
+        MUL412_CLAIM_START_AT: String(startAt),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const processes = [spawn(), spawn()];
+    const results = await Promise.all(processes.map(async (process) => {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        process.exited,
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+      ]);
+      expect(exitCode, stderr).toBe(0);
+      return JSON.parse(stdout.trim().split("\n").at(-1) ?? "null") as { id: string; kind: string } | null;
+    }));
+    const taken = results.filter((row): row is { id: string; kind: string } => row !== null);
     expect(taken).toHaveLength(1);
-    expect(taken[0]!.kind).toBe("decision_card");
+    expect(taken[0]!.kind).toBe("decision_reminder");
     const rows = db.query(
-      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND decision_id = ?",
-    ).get(taken[0]!.decisionId) as { n: string | number };
+      "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_reminder' AND decision_id = ?",
+    ).get(decision.id) as { n: string | number };
     expect(Number(rows.n)).toBe(1);
   });
 

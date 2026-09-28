@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import type { MultiremiStore } from "@multiremi/store.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
 import {
@@ -19,18 +19,26 @@ import {
   registerIssueDecisionCardInteraction,
 } from "@connectors/feishu/task-interaction.js";
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
+import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
+import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
 
 let previousEncryptionKey: string | undefined;
 let previousPublicUrl: string | undefined;
+let previousLarkAppId: string | undefined;
+let previousLarkAppSecret: string | undefined;
 
 beforeEach(() => {
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   previousPublicUrl = process.env.MULTIREMI_PUBLIC_URL;
+  previousLarkAppId = process.env.MULTIREMI_LARK_APP_ID;
+  previousLarkAppSecret = process.env.MULTIREMI_LARK_APP_SECRET;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
   process.env.MULTIREMI_PUBLIC_URL = "https://remi.example.com";
+  process.env.MULTIREMI_LARK_APP_ID = "cli_issue_decision";
+  process.env.MULTIREMI_LARK_APP_SECRET = APP_SECRET;
 });
 
 afterEach(() => {
@@ -38,6 +46,10 @@ afterEach(() => {
   else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
   if (previousPublicUrl === undefined) delete process.env.MULTIREMI_PUBLIC_URL;
   else process.env.MULTIREMI_PUBLIC_URL = previousPublicUrl;
+  if (previousLarkAppId === undefined) delete process.env.MULTIREMI_LARK_APP_ID;
+  else process.env.MULTIREMI_LARK_APP_ID = previousLarkAppId;
+  if (previousLarkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
+  else process.env.MULTIREMI_LARK_APP_SECRET = previousLarkAppSecret;
   resetMultiremiTestEnv();
 });
 
@@ -124,12 +136,12 @@ function raiseDecision(
   }, { type: "agent", id: agentId, taskId });
 }
 
-function sendCard(store: MultiremiStore, messageId = "om_card", openId = CARD_OPEN_ID) {
+function sendCard(store: MultiremiStore, messageId = "om_card", openId = CARD_OPEN_ID, sentAt?: Date) {
   const card = store.claimFeishuBotOutbound("local", "rt_bot");
   if (!card) return null;
   store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
     claimToken: card.claimToken, status: "sent", externalMessageId: messageId, interactionOpenId: openId,
-  });
+  }, sentAt);
   return card;
 }
 
@@ -138,6 +150,38 @@ function daemonToken(store: MultiremiStore, daemonId = "bot-host") {
 }
 
 describe("MUL-412 issue decision cards", () => {
+  it("upgrades the SQLite 828291b9 schema twice without losing existing rows", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "SQLite upgrade", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Keep this row",
+    });
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    const deliveryId = card.id;
+    restoreMul412Baseline828291b9Schema(db!);
+    expect(tableColumns(db!, "multiremi_issue_decisions")).not.toContain("reminder_sent_at");
+    expect(tableColumns(db!, "multiremi_feishu_bot_outbound_deliveries")).not.toContain("decision_id");
+    expect(tableColumns(db!, "multiremi_issues")).not.toContain("parent_done_grant_at");
+
+    // Each construction runs the complete current migration. The second run is
+    // the idempotency pass required by the upgrade gate.
+    new MultiremiStore(db!);
+    new MultiremiStore(db!);
+    expect(tableColumns(db!, "multiremi_issue_decisions")).toContain("reminder_sent_at");
+    expect(tableColumns(db!, "multiremi_feishu_bot_outbound_deliveries"))
+      .toEqual(expect.arrayContaining(["decision_id", "decision_issue_id"]));
+    expect(tableColumns(db!, "multiremi_issues"))
+      .toEqual(expect.arrayContaining(["parent_done_grant_at", "parent_done_grant_by", "parent_done_grant_agent_id"]));
+    expect(db!.query("SELECT title, status FROM multiremi_issue_decisions WHERE id = ?").get(decision.id))
+      .toEqual({ title: "Keep this row", status: "escalated" });
+    expect(db!.query("SELECT id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(deliveryId))
+      .toEqual({ id: deliveryId, status: "sending" });
+    expect(db!.query(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name = 'idx_multiremi_feishu_bot_outbound_decision'",
+    ).get()).toEqual({ n: 1 });
+  });
+
   it("sends a card when the owner agent escalates a decision to a person", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Escalated decision", { type: "agent", id: agentId });
@@ -248,15 +292,22 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId, member } = scaffold();
     const parent = issueWithTopic(store, "Card click", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
+    // Model the source task as in flight. The answer must enqueue one fresh
+    // continuation and wake it, rather than merely append to an existing queued
+    // task (which deliberately emits no second wake).
+    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?", options: ["yes", "no"] });
     sendCard(store, "om_answer_card");
     const host = await daemonToken(store);
+    const wakeTaskIds: string[] = [];
+    const stopWake = store.onTaskEnqueued(task => wakeTaskIds.push(task.id));
     const answerPath = `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`;
     const response = await app(store).request(answerPath, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
       body: JSON.stringify({ answer: "yes\n自定义回答：after CI", operator_open_id: CARD_OPEN_ID }),
     });
+    stopWake();
     expect(response.status, await response.clone().text()).toBe(200);
     const settled = store.getIssueDecision(parent.id, decision.id)!;
     expect(settled.status).toBe("answered");
@@ -272,7 +323,11 @@ describe("MUL-412 issue decision cards", () => {
     const sourceOwnerTask = store.listTasksForIssue(child.id).find(item => item.status === "queued");
     expect(sourceOwnerTask).toBeTruthy();
     expect(sourceOwnerTask!.prompt).toContain(decision.id);
-    expect(store.listInboxItems(member.id).length).toBeGreaterThanOrEqual(0);
+    expect(store.listInboxItems(member.id)).toHaveLength(1);
+    expect(store.listInboxItems(member.id)[0]).toMatchObject({
+      type: "decision_requested", issueId: parent.id,
+    });
+    expect(wakeTaskIds).toEqual([sourceOwnerTask!.id]);
     // The card row was sent above; its id is what the terminal patch targets.
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(patch.kind).toBe("decision_card_patch");
@@ -303,7 +358,8 @@ describe("MUL-412 issue decision cards", () => {
     const other = store.createWorkspaceMember({
       workspaceId: "local", userId: otherUser.id, name: "Other", email: "other@example.com", role: "member",
     });
-    expect(store.resolveFeishuDecisionOperatorMember("local", "ou_other_member")!.id).toBe(other.id);
+    expect(store.resolveFeishuDecisionOperatorMember("local", "cli_issue_decision", "ou_other_member"))
+      .toEqual({ status: "resolved", member: other });
     const notAddressed = await app(store).request(
       `/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
         method: "POST",
@@ -386,6 +442,210 @@ describe("MUL-412 issue decision cards", () => {
     expect(unmapped.status).toBe(403);
     expect(await unmapped.json()).toMatchObject({ code: "decision_member_unmapped" });
     expect(store.getIssueDecision(stranger.id, strangerDecision.id)!.status).toBe("escalated");
+  });
+
+  it("does not reuse another app's sender open_id and writes nothing on rejection", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Cross-app identity", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?",
+    });
+    const otherAppUser = store.getOrCreateUser({
+      externalId: "ou_other_app_sso", feishuUnionId: "on_cross_app", name: "Other app user", email: "other-app@example.com",
+    });
+    store.createWorkspaceMember({
+      workspaceId: "local", userId: otherAppUser.id, name: "Other app user", email: "other-app@example.com", role: "member",
+    });
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_senders
+       (id, workspace_id, app_id, open_id, union_id, display_name, allowed, first_seen_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ["fbs_other_app", "local", "cli_another_app", "ou_cross_app", "on_cross_app", "Other app user", now, now],
+    );
+    sendCard(store, "om_cross_app", "ou_cross_app")!;
+    const before = {
+      decision: store.getIssueDecision(parent.id, decision.id),
+      parentActivity: store.listIssueActivity(parent.id).length,
+      childActivity: store.listIssueActivity(child.id).length,
+      inbox: store.listInboxItems(member.id).length,
+      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+      tasks: store.listTasksForIssue(child.id).length,
+    };
+    let wakes = 0;
+    const events: string[] = [];
+    const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
+    const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
+    const host = await daemonToken(store);
+    const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_cross_app" }),
+    });
+    stopWake();
+    stopEvents();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "decision_member_unmapped" });
+    expect(store.getIssueDecision(parent.id, decision.id)).toEqual(before.decision);
+    expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
+    expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
+    expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+      .toEqual({ n: before.deliveries });
+    expect(store.listTasksForIssue(child.id)).toHaveLength(before.tasks);
+    expect(wakes).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  it("does not treat SSO external_id as evidence when the SSO app differs", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Different SSO app", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?",
+    });
+    sendCard(store, "om_sso_mismatch")!;
+    process.env.MULTIREMI_LARK_APP_ID = "cli_different_sso_app";
+    const before = {
+      parentActivity: store.listIssueActivity(parent.id).length,
+      childActivity: store.listIssueActivity(child.id).length,
+      inbox: store.listInboxItems(member.id).length,
+      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+    };
+    let wakes = 0;
+    const events: string[] = [];
+    const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
+    const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
+    const host = await daemonToken(store);
+    const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ answer: "yes", operator_open_id: CARD_OPEN_ID }),
+    });
+    stopWake();
+    stopEvents();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "decision_member_unmapped" });
+    expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "escalated", history: [] });
+    expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
+    expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
+    expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+      .toEqual({ n: before.deliveries });
+    expect(wakes).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  it("resolves sender union_id only after the same app has seen the open_id", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Same-app identity", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?",
+    });
+    const senderUser = store.getOrCreateUser({
+      externalId: "ou_sender_sso", feishuUnionId: "on_same_app", name: "Sender member", email: "same-app@example.com",
+    });
+    const senderMember = store.createWorkspaceMember({
+      workspaceId: "local", userId: senderUser.id, name: "Sender member", email: "same-app@example.com", role: "member",
+    });
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_senders
+       (id, workspace_id, app_id, open_id, union_id, display_name, allowed, first_seen_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ["fbs_same_app", "local", "cli_issue_decision", "ou_same_app", "on_same_app", "Sender member", now, now],
+    );
+    sendCard(store, "om_same_app", "ou_same_app")!;
+    const host = await daemonToken(store);
+    const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_same_app" }),
+    });
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect(store.getIssueDecision(parent.id, decision.id)!.answeredByMemberId).toBe(senderMember.id);
+  });
+
+  it("rejects an open_id that maps to multiple live members without any write", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Ambiguous identity", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?",
+    });
+    const firstUser = store.getOrCreateUser({ externalId: "ou_ambiguous", name: "First", email: "first@example.com" });
+    const secondUser = store.getOrCreateUser({ externalId: "ou_second_before_collision", name: "Second", email: "second@example.com" });
+    db!.run("UPDATE multiremi_users SET external_id = ? WHERE id = ?", ["ou_ambiguous", secondUser.id]);
+    for (const [userId, name, email] of [
+      [firstUser.id, "First", "first@example.com"],
+      [secondUser.id, "Second", "second@example.com"],
+    ]) {
+      store.createWorkspaceMember({ workspaceId: "local", userId, name, email, role: "member" });
+    }
+    sendCard(store, "om_ambiguous", "ou_ambiguous")!;
+    const before = {
+      decision: store.getIssueDecision(parent.id, decision.id),
+      parentActivity: store.listIssueActivity(parent.id).length,
+      childActivity: store.listIssueActivity(child.id).length,
+      inbox: store.listInboxItems(member.id).length,
+      deliveries: (db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get() as { n: number }).n,
+      tasks: store.listTasksForIssue(child.id).length,
+    };
+    let wakes = 0;
+    const events: string[] = [];
+    const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
+    const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
+    const host = await daemonToken(store);
+    const response = await app(store).request(`/api/daemon/issues/${parent.id}/decisions/${decision.id}/answer`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ answer: "yes", operator_open_id: "ou_ambiguous" }),
+    });
+    stopWake();
+    stopEvents();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "decision_member_ambiguous" });
+    expect(store.getIssueDecision(parent.id, decision.id)).toEqual(before.decision);
+    expect(store.listIssueActivity(parent.id)).toHaveLength(before.parentActivity);
+    expect(store.listIssueActivity(child.id)).toHaveLength(before.childActivity);
+    expect(store.listInboxItems(member.id)).toHaveLength(before.inbox);
+    expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries").get())
+      .toEqual({ n: before.deliveries });
+    expect(store.listTasksForIssue(child.id)).toHaveLength(before.tasks);
+    expect(wakes).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  it("detects multiple members reached through one same-app sender union_id", () => {
+    const { store } = scaffold();
+    const firstUser = store.getOrCreateUser({
+      externalId: "ou_union_first", feishuUnionId: "on_ambiguous", name: "Union first", email: "union-first@example.com",
+    });
+    const secondUser = store.getOrCreateUser({
+      externalId: "ou_union_second", feishuUnionId: "on_before_collision", name: "Union second", email: "union-second@example.com",
+    });
+    // Production historically allowed duplicate union ids; current fresh
+    // schemas may have a uniqueness index, so remove it to exercise the legacy
+    // rows the resolver must still reject safely.
+    db!.run("DROP INDEX IF EXISTS idx_multiremi_users_feishu_union_id");
+    db!.run("UPDATE multiremi_users SET feishu_union_id = ? WHERE id = ?", ["on_ambiguous", secondUser.id]);
+    for (const [userId, name, email] of [
+      [firstUser.id, "Union first", "union-first@example.com"],
+      [secondUser.id, "Union second", "union-second@example.com"],
+    ]) {
+      store.createWorkspaceMember({ workspaceId: "local", userId, name, email, role: "member" });
+    }
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_feishu_bot_senders
+       (id, workspace_id, app_id, open_id, union_id, display_name, allowed, first_seen_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ["fbs_union_ambiguous", "local", "cli_issue_decision", "ou_union_ambiguous", "on_ambiguous", "Ambiguous", now, now],
+    );
+    expect(store.resolveFeishuDecisionOperatorMember("local", "cli_issue_decision", "ou_union_ambiguous"))
+      .toEqual({ status: "ambiguous" });
   });
 
   it("cannot be answered with a task token, and a host outside the topic cannot read or answer", async () => {
@@ -564,9 +824,56 @@ describe("MUL-412 issue decision cards", () => {
     }, due);
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(due.getTime() + 60 * 60 * 1000))).toBeNull();
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_reminder")).toHaveLength(1);
-    // A host that was offline across the moment still gets the one reminder.
+    // The decision row is the once-only CAS after the delivery-based due check.
     expect(db!.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(decision.id))
       .toMatchObject({ reminder_sent_at: due.toISOString() });
+  });
+
+  it("starts the fifty-minute clock when an old pending decision is finally carded", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Old pending decision", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge?" });
+    expect(decision.status).toBe("pending");
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    db!.run("UPDATE multiremi_issue_decisions SET created_at = ?, updated_at = ? WHERE id = ?",
+      [twoHoursAgo, twoHoursAgo, decision.id]);
+    const ownerTask = parentTask(store, agentId, parent.id);
+    store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
+    const sentAt = new Date();
+    sendCard(store, "om_old_pending", CARD_OPEN_ID, sentAt)!;
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", sentAt)).toBeNull();
+    expect(store.claimFeishuBotOutbound(
+      "local", "rt_bot", new Date(sentAt.getTime() + 49 * 60 * 1000),
+    )).toBeNull();
+    const reminder = store.claimFeishuBotOutbound(
+      "local", "rt_bot", new Date(sentAt.getTime() + 50 * 60 * 1000),
+    );
+    expect(reminder).toMatchObject({ kind: "decision_reminder", decisionId: decision.id });
+  });
+
+  it("starts the fifty-minute clock when an offline host sends the queued card late", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Late card", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?",
+    });
+    const sentAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    // Until the host comes back this is still the original queued card. There is
+    // no successful sent_at, so materializing the reminder is impossible.
+    const card = store.claimFeishuBotOutbound("local", "rt_bot", sentAt)!;
+    expect(card.kind).toBe("decision_card");
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_late_card", interactionOpenId: CARD_OPEN_ID,
+    }, sentAt);
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", sentAt)).toBeNull();
+    expect(store.claimFeishuBotOutbound(
+      "local", "rt_bot", new Date(sentAt.getTime() + 49 * 60 * 1000),
+    )).toBeNull();
+    expect(store.claimFeishuBotOutbound(
+      "local", "rt_bot", new Date(sentAt.getTime() + 50 * 60 * 1000),
+    )).toMatchObject({ kind: "decision_reminder", decisionId: decision.id });
   });
 
   it("never reminds for a decision that was answered first", () => {
@@ -578,6 +885,18 @@ describe("MUL-412 issue decision cards", () => {
     store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
       type: "member", id: member.id, taskId: null,
     });
+    const patch = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 51 * 60 * 1000), true, true, true)!;
+    expect(patch.kind).toBe("decision_card_patch");
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 52 * 60 * 1000))).toBeNull();
+  });
+
+  it("never reminds for a decision that was withdrawn first", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Withdrawn early", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
+    sendCard(store, "om_withdrawn_early")!;
+    store.withdrawIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 51 * 60 * 1000), true, true, true)!;
     expect(patch.kind).toBe("decision_card_patch");
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 52 * 60 * 1000))).toBeNull();
@@ -815,7 +1134,9 @@ describe("MUL-412 issue decision cards", () => {
       context: { open_message_id: "om_clickable", open_chat_id: "oc_issue_decision" },
       action: { name: marker, form_value: { [`${marker}_answer`]: "yes" } },
     });
-    expect(JSON.stringify(wrongOperator)).toContain("请由卡片中指定的处理人提交");
+    expect(wrongOperator).toEqual({
+      toast: { type: "error", content: "本次没有提交：这条只能由被问的人回答。" },
+    });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
 
     const click = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -828,6 +1149,71 @@ describe("MUL-412 issue decision cards", () => {
     expect(settled.status).toBe("answered");
     expect(settled.answer?.answer).toBe("自定义：先灰度");
     expect(settled.answeredByMemberId).toBe(member.id);
+  });
+
+  it("maps decision callback HTTP failures to complete user-facing toasts", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Callback errors", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?", options: ["yes"],
+    });
+    const marker = decisionInteractionMarker(parent.id, decision.id);
+    const action = (messageId: string) => ({
+      operator: { open_id: CARD_OPEN_ID },
+      context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+      action: { name: `${marker}_o0`, form_value: {} },
+    });
+    const cases = [
+      {
+        status: 403, code: "decision_member_unmapped", stage: "submit",
+        expected: "本次没有提交：飞书身份还未关联到 Remi 成员。请先用飞书登录一次网页端，或在本话题给机器人发一条消息后再试；也可以直接去网页端回答。",
+      },
+      {
+        status: 403, code: "decision_member_ambiguous", stage: "submit",
+        expected: "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。",
+      },
+      {
+        status: 403, code: "decision_operator_mismatch", stage: "submit",
+        expected: "本次没有提交：这条只能由被问的人回答。",
+      },
+      {
+        status: 404, code: null, stage: "read",
+        expected: "本次没有提交：这个决定已经结束了。",
+      },
+      {
+        status: 500, code: "decision_backend_failed", stage: "submit",
+        expected: "本次没有提交：提交失败，请稍后重试（错误码：decision_backend_failed）。",
+      },
+    ] as const;
+    for (const [index, testCase] of cases.entries()) {
+      const messageId = `om_callback_error_${index}`;
+      const error = new MultiremiDaemonHttpError(
+        testCase.status,
+        testCase.stage === "read" ? "GET" : "POST",
+        `/api/daemon/issues/${parent.id}/decisions/${decision.id}`,
+        JSON.stringify({ error: "raw server detail must not reach the toast", code: testCase.code }),
+        testCase.code,
+      );
+      const registration = registerIssueDecisionCardInteraction({
+        appId: "cli_issue_decision",
+        chatId: "oc_issue_decision",
+        messageId,
+        recipientOpenId: CARD_OPEN_ID,
+        getDecision: async () => {
+          if (testCase.stage === "read") throw error;
+          return decision;
+        },
+        submit: async () => { throw error; },
+      });
+      try {
+        expect(await handleIssueDecisionInteractionEvent("cli_issue_decision", action(messageId))).toEqual({
+          toast: { type: "error", content: testCase.expected },
+        });
+      } finally {
+        registration.dispose();
+      }
+    }
   });
 });
 
