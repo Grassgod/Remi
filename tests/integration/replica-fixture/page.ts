@@ -62,6 +62,7 @@ class FixtureSocket {
   readonly sent: Array<{ type: string; sessionId: string; fromSeq?: number; at: number }> = [];
   /** Reconnect attempts, so the check can wait for "the socket came back". */
   reconnects = 0;
+  reconnectDelayMs = 150;
   /**
    * Who re-subscribes after a reconnect.
    *
@@ -112,7 +113,7 @@ class FixtureSocket {
     socket.onopen = () => socket.send(JSON.stringify({ type: "auth", payload: { token: "fixture" } }));
     socket.onclose = () => {
       this.reconnects += 1;
-      this.reconnectTimer = setTimeout(() => this.connect(), 150);
+      this.reconnectTimer = setTimeout(() => this.connect(), this.reconnectDelayMs);
     };
     socket.onerror = () => {
       // `onclose` follows; the reconnect path is the one that matters.
@@ -255,6 +256,7 @@ export async function boot(): Promise<void> {
     clearedEvents: () => (window as unknown as { __replicaCleared?: string[] }).__replicaCleared ?? [],
     /** Drop and restore the socket, to exercise the offline catch-up path. */
     kickSocket: () => socket.kick(),
+    setReconnectDelay: (milliseconds: number) => { socket.reconnectDelayMs = milliseconds; },
     reconnects: () => socket.reconnects,
   };
 

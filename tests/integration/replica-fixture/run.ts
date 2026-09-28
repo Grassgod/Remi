@@ -461,6 +461,10 @@ async function runScope(
     const readsBefore = server.hub.logReads.length;
     const serverHeadBefore = server.hub.head;
     const subscribesBefore = server.hub.subscribes.length;
+    if (key === "opfs-off") {
+      await pages[2]!.evaluate(() =>
+        (window as unknown as { __replica: { setReconnectDelay(ms: number): void } }).__replica.setReconnectDelay(600));
+    }
     await context.setOffline(true);
     await Promise.all(pages.map(page => page.evaluate(() =>
       (window as unknown as { __replica: { kickSocket(): void } }).__replica.kickSocket())));
@@ -480,6 +484,17 @@ async function runScope(
 
       `head ${state.head} of ${server.hub.head}, fresh ${state.fresh}, ${Math.round(elapsed)}ms after the append (budget 2000ms)`,
       elapsed,
+    );
+    // Per-tab memory sockets can reconnect at different times. Observe the
+    // whole group before sampling subscriptions or reads from that reconnect.
+    const allAfter = await waitFor(async () => {
+      const current = await states();
+      return current.every((state) => state?.head === server.hub.head && state.fresh) ? current : false;
+    }, 3_000).catch(() => null);
+    check(
+      `offline-catch-up: all three pages converge on the new head`,
+      allAfter !== null,
+      allAfter === null ? "not every page matched within 3s" : `heads ${allAfter.map((state) => state?.head).join(", ")}`,
     );
     const reads = server.hub.logReads.slice(readsBefore);
     const full = reads.filter((read) => read.from === 1);
@@ -501,16 +516,6 @@ async function runScope(
         `${server.activeSubscriptions()} active server subscriptions`,
       );
     }
-    // Every page must converge, not just the one that was watched.
-    const allAfter = await waitFor(async () => {
-      const current = await states();
-      return current.every((state) => state?.head === server.hub.head) ? current : false;
-    }, 3_000).catch(() => null);
-    check(
-      `offline-catch-up: all three pages converge on the new head`,
-      allAfter !== null,
-      allAfter === null ? "not every page matched within 3s" : `heads ${allAfter.map((state) => state?.head).join(", ")}`,
-    );
   }
 
   if (key === "cleared") {
