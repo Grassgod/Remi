@@ -22,6 +22,7 @@ import type {
   MultiremiTask,
   MultiremiTaskMessage,
 } from "./types.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 
 export const PEER_EVENT_PROTOCOL_VERSION = 1 as const;
 
@@ -89,7 +90,9 @@ export interface PeerTaskEventPayload {
 }
 
 export interface PeerTaskMessagesPayload {
-  task: MultiremiTask;
+  task?: TaskMessageFanoutSubject;
+  task_id: string;
+  degraded?: true;
   /** One message per event: the sender splits a batch of appends before queueing. */
   messages: MultiremiTaskMessage[];
 }

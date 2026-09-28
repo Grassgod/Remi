@@ -34,6 +34,7 @@ import {
   createCommitEventQueue,
   type CommitEventQueue,
   type StoreContext,
+  type TaskMessageFanoutSubject,
   type WorkspaceEvent,
 } from "@multiremi/store/context.js";
 import {
@@ -1481,19 +1482,24 @@ export class TasksRepo {
    * (>=100 KB in production), `result`, `usage`, the duplicated plugin snapshot —
    * made every 2.5 s poll pay for columns nobody read.
    */
-  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout"): MultiremiTaskIdentity | TaskMessageFanoutSubject | null {
     const cache = activeRequestReadCache();
-    const key = cacheKey("multiremi_tasks", "identity", id);
+    const key = cacheKey("multiremi_tasks", projection ?? "identity", id);
+    const convert = projection === "fanout" ? toTaskMessageFanoutSubject : toTaskIdentity;
     if (cache) {
       const cached = cache.get<Row | null>(key);
-      if (cached !== undefined) return cached ? toTaskIdentity(cached) : null;
+      if (cached !== undefined) return cached ? convert(cached) : null;
     }
+    const columns = projection === "fanout"
+      ? "id, workspace_id, agent_id, chat_session_id, issue_id, issue_session_id"
+      : "id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id";
     const row = this.ctx.db.query(
-      `SELECT id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id
-       FROM multiremi_tasks WHERE id = ?`,
+      `SELECT ${columns} FROM multiremi_tasks WHERE id = ?`,
     ).get(id) as Row | null;
     cache?.set(key, row);
-    return row ? toTaskIdentity(row) : null;
+    return row ? convert(row) : null;
   }
 
   /**
@@ -5315,10 +5321,16 @@ function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) =>
 
 function toTaskIdentity(row: Row): MultiremiTaskIdentity {
   return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id ?? "local"),
+    ...toTaskMessageFanoutSubject(row),
     runtimeId: nullableString(row.runtime_id),
     status: String(row.status) as MultiremiTaskStatus,
+  };
+}
+
+function toTaskMessageFanoutSubject(row: Row): TaskMessageFanoutSubject {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
     agentId: String(row.agent_id),
     chatSessionId: nullableString(row.chat_session_id),
     issueId: nullableString(row.issue_id),

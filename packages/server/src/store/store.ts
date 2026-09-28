@@ -4690,8 +4690,10 @@ runMigrations(this.db);
   }
 
   /** MUL-474: identity/status columns only, request-scoped. */
-  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
-    return this.tasks.getTaskIdentity(id);
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): import("@multiremi/store/context.js").TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout") {
+    return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
   }
 
   /** MUL-474: the `status` route's projection, without the prompt column. */

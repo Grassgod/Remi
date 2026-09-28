@@ -32,6 +32,7 @@
  * so the browser still sees one frame per message in `seq` order.
  */
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type { ApiRole } from "../config/api-role.js";
 import type { MultiremiTask, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import {
@@ -118,7 +119,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
     }
   };
 
-  const deliverTaskMessages = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }): void => {
+  const deliverTaskMessages = (event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] }): void => {
     if (!deliversToBrowser) return;
     notifyBrowserTaskMessages(
       store,
@@ -157,7 +158,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
         return;
       }
       case "task_messages": {
-        const task = resolveRemoteTask(store, envelope.payload);
+        const task = envelope.payload.task ?? store.getTaskIdentity(envelope.payload.task_id, "fanout");
         if (task) deliverTaskMessages({ task, messages: envelope.payload.messages });
         return;
       }
@@ -180,7 +181,12 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   });
   const unsubscribeTaskMessages = store.onTaskMessages((event) => {
     deliverTaskMessages(event);
-    forwardToPeer("task_messages", { task: event.task, task_id: event.task.id, messages: event.messages });
+    const { id, workspaceId, agentId, chatSessionId, issueId, issueSessionId } = event.task;
+    forwardToPeer("task_messages", {
+      task: { id, workspaceId, agentId, chatSessionId, issueId, issueSessionId },
+      task_id: id,
+      messages: event.messages,
+    });
   });
   const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
     deliverWorkspaceEvent(event);
