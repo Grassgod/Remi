@@ -139,10 +139,24 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    a first event exceeding the serialized page budget is shortened by Unicode
    code point in `content`, `output`, then string values inside `input`, and
    returned alone with `truncated: true` and `original_bytes` (the original
-   event JSON's UTF-8 size). Identifiers and the real head/cursor are preserved;
-   if payload removal is insufficient, only identifiers and these markers remain.
-   These read-only markers are not persisted or added to daemon frames. The
-   share view appends a truncation notice and continues paging to `eof`.
+   event JSON's UTF-8 size). If payload removal is insufficient, only identity
+   fields and these markers remain. If that minimum still exceeds the budget,
+   string identity fields `tool_call_id`, `tool`, `type`, `status`, `ts` are
+   shortened from longest to shortest by their current UTF-8 byte size, using
+   the same code-point binary prefix search as payload strings. `seq` and the
+   real head/cursor never change. `truncated_fields: string[]` lists only identity
+   fields actually shortened and is absent when none were shortened. The final
+   `Buffer.byteLength(JSON.stringify(events))` check includes array punctuation
+   and all markers; marker overhead is reclaimed from identity strings if needed.
+   `TRACE_READ_MIN_BYTES = 256`: an event with all five identity strings empty,
+   all three markers, all five names in `truncated_fields`, and `seq` and
+   `original_bytes` equal to `Number.MAX_SAFE_INTEGER` measures 197 UTF-8 bytes,
+   or 199 including array brackets, leaving 57 bytes of margin. `readTrace`
+   rejects smaller `maxBytes` values with `RangeError` before accessing any source.
+   These read-only markers are not persisted or added to daemon frames; A's
+   write/sanitize contract is unchanged (MUL-402 `cmt_037dbjdd5rxs`, ruling (t)).
+   The share view displays shortened identity values, keeps the existing
+   truncation notice, and continues paging to `eof` without additional controls.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and

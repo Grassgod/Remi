@@ -10,6 +10,40 @@ const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}`
 
 describe("Multiremi API - issue sharing", () => {
   for (const endpoint of ["page", "share"] as const) {
+    it(`QA B5 P2: ${endpoint} trace bounds oversized tool_call_id and keeps pagination`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const trace = new InMemoryTraceStore(() => "2026-09-28T00:00:00Z");
+      const runtime = store.registerRuntime({ id: "rt_identity_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
+      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Identity budget issue", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+      store.markTaskTraceDaemon(task.id, runtime.id);
+      const original = trace.append(task.id, [
+        { type: "tool_result", tool: "Bash", tool_call_id: "i".repeat(1024 * 1024 + 1000), status: "completed", output: "" },
+        { type: "text", content: "last" },
+      ]).events;
+      const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
+      const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+      expect(shared.status).toBe(201);
+      const token = (await shared.json()).share.token;
+      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      const response = await app.request(path, { headers: { "X-Remi-Share": token } });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const page = JSON.parse(text);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1_049_088);
+      expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(1_048_576);
+      expect(page).toMatchObject({ state: "ok", head: 2, next_after_seq: original[0]!.seq, eof: false });
+      expect(page.events).toHaveLength(1);
+      expect(page.events[0]).toMatchObject({ seq: original[0]!.seq, truncated: true,
+        original_bytes: Buffer.byteLength(JSON.stringify(original[0])), truncated_fields: ["tool_call_id"] });
+      const next = await app.request(`${path}?after_seq=${page.next_after_seq}`, { headers: { "X-Remi-Share": token } });
+      expect(next.status).toBe(200);
+      expect(await next.json()).toMatchObject({ state: "ok", head: 2, next_after_seq: original[1]!.seq, eof: true, events: [original[1]!] });
+      console.log(`QA B5 P2 HTTP ${endpoint}: events=${Buffer.byteLength(JSON.stringify(page.events))}, body=${Buffer.byteLength(text)}`);
+    });
+
     it(`${endpoint} trace keeps the JSON-expanded event within 1MiB and pages through last`, async () => {
       const store = createStore();
       store.ensureLocalWorkspace();

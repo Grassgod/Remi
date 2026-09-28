@@ -138,6 +138,8 @@ export interface TraceReadEvent extends TraceEvent {
   truncated?: true;
   /** UTF-8 bytes of the original event's JSON, before read-time truncation. */
   original_bytes?: number;
+  /** Names of string identity fields shortened in this read projection. */
+  truncated_fields?: string[];
 }
 
 /**
