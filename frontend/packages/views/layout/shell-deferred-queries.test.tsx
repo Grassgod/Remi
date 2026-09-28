@@ -72,7 +72,6 @@ function flushIdle(): void {
   for (const handle of queued) handle.callback();
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function memoryStorage() {
   const values = new Map<string, string>();
   return {
@@ -92,7 +91,7 @@ beforeEach(() => {
   registerAuthStore(
     createAuthStore({
       storage: memoryStorage(),
-      initialUser: { id: "user-1" } as never,
+      api: { getMe: async () => ({ id: "user-1" }) } as never,
     }),
   );
   registerChatStore(createChatStore({ storage: memoryStorage() }));
@@ -109,8 +108,6 @@ beforeEach(() => {
     getBaseUrl: () => "http://127.0.0.1:8080",
     acceptInvitation: vi.fn(),
     declineInvitation: vi.fn(),
-    listWorkspaces: listSquads,
-    listChatSessions,
     listAgents,
     listSquads,
     getAgentTaskSnapshot,

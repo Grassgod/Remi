@@ -8,6 +8,7 @@ import { api } from "@multiremi/core/api";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import type { AgentTask, TaskFailureReason } from "@multiremi/core/types";
 import { useTimeAgo } from "../../i18n";
 import {
@@ -65,7 +66,8 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
   const [open, setOpen] = useState(true);
   const [showPast, setShowPast] = useState(false);
   const wsId = useWorkspaceId();
-  const { data: agents = [] } = useQuery({ ...agentListOptions(wsId ?? ""), enabled: !!wsId });
+  const afterFirstScreen = useAfterFirstScreen();
+  const { data: agents = [] } = useQuery({ ...agentListOptions(wsId ?? ""), enabled: !!wsId && afterFirstScreen });
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
 
   // Cache key registered in `issueKeys.tasks` (packages/core/issues/queries.ts)

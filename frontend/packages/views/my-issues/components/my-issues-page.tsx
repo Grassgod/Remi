@@ -64,14 +64,13 @@ export function MyIssuesPage() {
   const snapshotQuery = useQuery(
     agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
   );
-  const snapshot = snapshotQuery.data ?? [];
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const t of snapshot) {
+    for (const t of snapshotQuery.data ?? []) {
       if (t.status === "running" && t.issue_id) ids.add(t.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   // Clear filter state when switching between workspaces (URL-driven).
   useClearFiltersOnWorkspaceChange(myIssuesViewStore, wsId);
@@ -143,7 +142,9 @@ export function MyIssuesPage() {
     : statusIssuesQuery.isLoading) || snapshotPending;
   // MUL-472 item 5: see issues-page.tsx — same marker, same meaning.
   const perfMarker = useListPerfMarker({
-    status: usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    status: snapshotPending ? "pending"
+      : snapshotIsLoadBearing && snapshotQuery.isError ? "error"
+      : usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
     isPlaceholderData: usesAssigneeBoard
       ? assigneeGroupsQuery.isPlaceholderData
       : statusIssuesQuery.isPlaceholderData,

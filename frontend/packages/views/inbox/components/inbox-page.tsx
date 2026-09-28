@@ -31,6 +31,7 @@ import {
   useMarkInboxItemsRead,
   MarkInboxItemsReadError,
 } from "@multiremi/core/inbox/mutations";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 
 import { FeishuInboxActions } from "./feishu-inbox-actions";
 import { IssueDetail } from "../../issues/components";
@@ -101,7 +102,7 @@ function InboxLoadError({ onRetry }: { onRetry: () => void }) {
 export function InboxPage() {
   const { t } = useT("inbox");
   const { t: tCommon } = useT("common");
-  const { searchParams, replace } = useNavigation();
+  const { searchParams, replace, pathname } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
   const urlItem = searchParams.get("item") ?? "";
   const urlSession = searchParams.get("session") ?? "";
@@ -149,6 +150,7 @@ export function InboxPage() {
     status: inboxStatus,
     isPlaceholderData: inboxIsPlaceholderData,
   });
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const rawItems = useMemo(
     () => inboxPages?.pages.flatMap((page) => page.items) ?? [],
     [inboxPages],
@@ -259,7 +261,8 @@ export function InboxPage() {
   });
 
   const isMobile = useIsMobile();
-  const unreadCount = useInboxUnreadCount(wsId);
+  // The unread total is decoration; the list above publishes page readiness.
+  const unreadCount = useInboxUnreadCount(wsId, afterFirstScreen);
 
   const archiveMutation = useArchiveInboxItems();
   const markAllReadMutation = useMarkAllInboxRead();

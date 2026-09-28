@@ -84,14 +84,13 @@ export function IssuesPage() {
   const snapshotQuery = useQuery(
     agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
   );
-  const snapshot = snapshotQuery.data ?? [];
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const t of snapshot) {
+    for (const t of snapshotQuery.data ?? []) {
       if (t.status === "running" && t.issue_id) ids.add(t.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(() => {
     const filter: AssigneeGroupedIssuesFilter = {
@@ -138,7 +137,9 @@ export function IssuesPage() {
   // MUL-472 item 5: prove this list is showing the rows the page's own request
   // returned (`status === "success"` and not `keepPreviousData` leftovers).
   const perfMarker = useListPerfMarker({
-    status: usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    status: snapshotPending || archivedCountQuery.isPending ? "pending"
+      : archivedCountQuery.isError || (snapshotIsLoadBearing && snapshotQuery.isError) ? "error"
+      : usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
     isPlaceholderData: usesAssigneeBoard
       ? assigneeGroupsQuery.isPlaceholderData
       : statusIssuesQuery.isPlaceholderData,

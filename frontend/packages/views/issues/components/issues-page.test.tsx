@@ -533,8 +533,8 @@ describe("IssuesPage (shared)", () => {
     // Let every list request settle, then look at what the page claims.
     await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
     await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+      // Flush Query's batched notification, not only the request promises.
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     // The list body renders one accordion per status; an empty one says
@@ -542,6 +542,7 @@ describe("IssuesPage (shared)", () => {
     // claiming that — the rows it would show depend on the snapshot.
     expect(screen.queryAllByText("No issues").length).toBe(0);
     expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
 
     releaseSnapshot([
       { id: "task-1", status: "running", issue_id: "issue-1", agent_id: "agent-1" },
@@ -580,6 +581,21 @@ describe("IssuesPage (shared)", () => {
     await screen.findByText("Backlog");
     expect(screen.getAllByText("Todo").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the ready marker absent while the archive count holds the body skeleton", async () => {
+    let releaseArchive!: () => void;
+    mockListIssues.mockImplementation((params: any) => params?.archived_only
+      ? new Promise((resolve) => { releaseArchive = () => resolve({ issues: [], total: 0 }); })
+      : Promise.resolve({ issues: mockIssues.filter((i) => i.status === params?.status), total: 0 }));
+    renderWithQuery(<IssuesPage />);
+    await waitFor(() => expect(releaseArchive).toBeDefined());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(document.querySelector('[data-perf-scroll="list"]')).toBeNull();
+    expect(screen.queryByText("Implement auth")).not.toBeInTheDocument();
+    await act(async () => { releaseArchive(); });
+    await screen.findByText("Implement auth");
+    expect(document.querySelector('[data-perf-scroll="list"]')).not.toBeNull();
   });
 
   it("keeps the archived pseudo-column hidden and shows its server count", async () => {

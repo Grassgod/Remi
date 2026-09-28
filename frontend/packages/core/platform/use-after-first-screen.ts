@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useLayoutEffect, useSyncExternalStore, type ReactNode } from "react";
 import { useNavigationStore } from "../navigation";
 
 /**
@@ -27,7 +27,10 @@ import { useNavigationStore } from "../navigation";
  *     condition that drives their `data-perf-scroll="list"` marker (query
  *     settled, not `keepPreviousData`); the issue detail publishes its own
  *     body readiness. Success, empty and failure all count: a failed list must
- *     not keep the deferred shell content away forever.
+ *     not keep the deferred shell content away forever. Readiness is taken one
+ *     animation frame later, so the rows have actually painted: a request that
+ *     left in the same commit as the rows would still race the user's first
+ *     look at them.
  *  2. **the first idle callback after that** (`requestIdleCallback` with a 1 s
  *     `timeout`, per A5).
  *
@@ -76,14 +79,31 @@ interface RouteGate {
   passed: boolean;
   cancelIdle: (() => void) | null;
   fallbackHandle: ReturnType<typeof setTimeout> | null;
+  /**
+   * The route mounts a readiness publisher. The fallback exists for routes that
+   * have none; once a publisher is present it owns the decision, because its
+   * contract is to settle for success, empty *and* failure. Without this the
+   * timer would open the gate on a slow first load — measured on a cold `next
+   * dev` compile, where the timer fired ~500 ms before the rows.
+   */
+  hasPublisher: boolean;
 }
 
 const gates = new Map<string, RouteGate>();
 const listeners = new Set<() => void>();
+const RouteContext = createContext<string | null>(null);
+
+/** Supplies the current render's pathname, before persisted navigation updates. */
+export function FirstScreenRouteProvider({ routeKey, children }: {
+  routeKey: string;
+  children: ReactNode;
+}) {
+  return createElement(RouteContext.Provider, { value: routeKey }, children);
+}
 
 /** Session-wide: the shell class never closes again after its first opening. */
 let shellPassed = false;
-/** The route key the registry currently describes; see {@link observeRoute}. */
+/** The route visit the registry currently describes. */
 let currentRouteKey: string | null = null;
 
 let idleTimeoutMs = AFTER_FIRST_SCREEN_IDLE_TIMEOUT_MS;
@@ -158,28 +178,24 @@ function ensureGate(routeKey: string): RouteGate {
     passed: false,
     cancelIdle: null,
     fallbackHandle: null,
+    hasPublisher: false,
   };
   gates.set(routeKey, gate);
-  // Fallback: a route with no readiness publisher still has to open, or the
-  // deferred shell content would never appear on it.
-  gate.fallbackHandle = setTimeout(() => {
-    const current = gates.get(routeKey);
-    if (!current || current.passed || current.contentReady) return;
-    current.contentReady = true;
-    scheduleGateIdle(routeKey);
-  }, contentFallbackMs);
   return gate;
 }
 
 /**
- * Marks a route visit as current, dropping every other visit's gate.
+ * Marks a route visit as the current one, dropping every other visit's gate.
  *
  * Identity is the route key *plus* the visit: revisiting a path after a
  * navigation is a new visit and starts closed, because its query cache may be
  * gone and its data has to be fetched again. Dropping the other gates also
  * releases their timers.
+ *
+ * Publishers and consumers of the current navigation context can claim it.
+ * An explicitly lagging consumer cannot evict the new page's publisher.
  */
-function observeRoute(routeKey: string): void {
+function claimRoute(routeKey: string): void {
   if (currentRouteKey === routeKey) return;
   currentRouteKey = routeKey;
   for (const [key, gate] of [...gates]) {
@@ -189,6 +205,23 @@ function observeRoute(routeKey: string): void {
     gates.delete(key);
   }
   ensureGate(routeKey);
+  notify();
+}
+
+/**
+ * Arms the fallback for the current route if nothing has published readiness
+ * for it yet. Called after the first commit of a route's consumers, which is the
+ * point by which a publisher would have registered.
+ */
+function armFallbackIfPublisherless(routeKey: string): void {
+  const gate = gates.get(routeKey);
+  if (!gate || gate.hasPublisher || gate.passed || gate.contentReady || gate.fallbackHandle) return;
+  gate.fallbackHandle = setTimeout(() => {
+    const current = gates.get(routeKey);
+    if (!current || current.passed || current.contentReady || current.hasPublisher) return;
+    current.contentReady = true;
+    scheduleGateIdle(routeKey);
+  }, contentFallbackMs);
 }
 
 /**
@@ -198,7 +231,7 @@ function observeRoute(routeKey: string): void {
  */
 export function markRouteContentReady(routeKey: string): void {
   if (!routeKey) return;
-  observeRoute(routeKey);
+  claimRoute(routeKey);
   const gate = gates.get(routeKey);
   if (!gate || gate.passed || gate.contentReady) return;
   gate.contentReady = true;
@@ -210,6 +243,27 @@ export function markRouteContentReady(routeKey: string): void {
 }
 
 /**
+ * Records that `routeKey` mounts a readiness publisher, and disarms the
+ * fallback timer for it.
+ *
+ * Called on each committed route by {@link useRouteContentReady}, including the ones
+ * where `ready` is false: a page that is still loading has told us it will say
+ * so when it settles, which is exactly when the timer must not speak for it.
+ */
+export function markRouteHasContentPublisher(routeKey: string): void {
+  if (!routeKey) return;
+  claimRoute(routeKey);
+  const gate = gates.get(routeKey);
+  if (!gate) return;
+  gate.hasPublisher = true;
+
+  if (gate.fallbackHandle) {
+    clearTimeout(gate.fallbackHandle);
+    gate.fallbackHandle = null;
+  }
+}
+
+/**
  * Publisher half: a page reports whether its own main content has settled.
  *
  * `ready` must be true for success, empty and failure alike — the ruling is
@@ -217,10 +271,28 @@ export function markRouteContentReady(routeKey: string): void {
  * is still loading or showing `keepPreviousData` rows from another filter.
  */
 export function useRouteContentReady(routeKey: string, ready: boolean): void {
+  useLayoutEffect(() => {
+    markRouteHasContentPublisher(routeKey);
+  }, [routeKey]);
   useEffect(() => {
     if (!routeKey) return;
-    if (ready) markRouteContentReady(routeKey);
-    else observeRoute(routeKey);
+    if (!ready) {
+      // Still claim: a page whose content is merely pending is nevertheless the
+      // route that is on screen, and its own gate is the one to keep.
+      claimRoute(routeKey);
+      return;
+    }
+    // Wait one frame so the commit that rendered the rows has painted. Without
+    // this, the gate's queries can leave in the same commit as the content and
+    // still beat it to the screen by a frame.
+    let cancelled = false;
+    const handle = requestAnimationFrame(() => {
+      if (!cancelled) markRouteContentReady(routeKey);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(handle);
+    };
   }, [routeKey, ready]);
 }
 
@@ -253,20 +325,28 @@ export function useAfterFirstScreen(
   options: UseAfterFirstScreenOptions = {},
 ): boolean {
   const storedPath = useNavigationStore((state) => state.lastPath);
-  const routeKey = options.routeKey ?? storedPath ?? "";
+  const renderedPath = useContext(RouteContext);
+  const routeKey = options.routeKey ?? renderedPath ?? storedPath ?? "";
   const scope = options.scope ?? "page";
 
   useEffect(() => {
-    if (routeKey) observeRoute(routeKey);
-  }, [routeKey]);
+    if (!routeKey) return;
+    // With a navigation provider every subscriber sees the same pathname. A
+    // publisher claims it in layout; otherwise consumers own fallback routes.
+    if (renderedPath && renderedPath !== routeKey) return;
+    claimRoute(routeKey);
+    const handle = setTimeout(() => armFallbackIfPublisherless(routeKey), 0);
+    return () => clearTimeout(handle);
+  }, [routeKey, renderedPath]);
 
   const getSnapshot = useCallback((): boolean => {
     if (scope === "shell") return shellPassed;
+    if (renderedPath && renderedPath !== routeKey) return false;
     if (!routeKey) return false;
     // Not "has any route passed": an unvisited route has no gate yet, which is
     // exactly the `false` the new page's first render must observe.
     return gates.get(routeKey)?.passed === true;
-  }, [routeKey, scope]);
+  }, [routeKey, scope, renderedPath]);
 
   return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }

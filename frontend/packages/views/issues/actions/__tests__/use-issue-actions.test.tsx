@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
+import { isShellGatePassedForTest, markRouteContentReady, resetAfterFirstScreenForTest } from "@multiremi/core/platform/use-after-first-screen";
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -104,7 +105,10 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  resetAfterFirstScreenForTest();
+  act(() => markRouteContentReady("/test/issues/issue-1"));
+  await waitFor(() => expect(isShellGatePassedForTest()).toBe(true));
   mockOpenModal.mockReset();
   mockUpdateMutate.mockReset();
   mockCreatePinMutate.mockReset();

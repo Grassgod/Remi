@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Issue } from "@multiremi/core/types";
 import type { UseIssueActionsResult } from "../actions";
 import type { IssueSessionSelection } from "../hooks/use-issue-session-selection";
+import { NavigationProvider } from "../../navigation";
 
 vi.mock("./issue-detail-header", () => ({
   IssueDetailHeader: ({
@@ -62,6 +63,7 @@ function renderMain(
   };
 
   const result = render(
+    <NavigationProvider value={{ pathname: "/test/issues/issue-1", searchParams: new URLSearchParams(), push: vi.fn(), replace: vi.fn(), back: vi.fn(), getShareableUrl: (path) => path }}>
     <IssueDetailMain
       issue={issue}
       issueId={issue.id}
@@ -80,7 +82,8 @@ function renderMain(
       onShowKeyResults={vi.fn()}
       onScrollContainerRef={vi.fn()}
       scrollContainerEl={null}
-    />,
+    />
+    </NavigationProvider>,
   );
 
   return { ...result, onToggleSessionSidebar };

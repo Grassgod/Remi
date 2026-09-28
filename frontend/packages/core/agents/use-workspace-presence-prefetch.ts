@@ -35,5 +35,8 @@ export function useWorkspacePresencePrefetch(
   useQuery({ ...agentListOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
   useQuery({ ...runtimeListOptions(wsId ?? ""), enabled: !!wsId });
   useQuery({ ...agentTaskSnapshotOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
-  useQuery({ ...squadListOptions(wsId ?? "", { enabled: warmChildSurfaces }), enabled: !!wsId && warmChildSurfaces });
+  useQuery({
+    ...squadListOptions(wsId ?? "", { enabled: warmChildSurfaces }),
+    enabled: !!wsId && warmChildSurfaces,
+  });
 }

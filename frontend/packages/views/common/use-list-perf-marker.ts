@@ -68,7 +68,7 @@ export function useListPerfMarker(source: ListPerfMarkerSource): ListPerfMarkerP
     setMounted(true);
   }, []);
   const settled = source.status !== "pending" && !source.isPlaceholderData;
-  useRouteContentReady(pathname, settled);
+  useRouteContentReady(pathname, mounted && settled);
   return mounted && listPerfFresh(source)
     ? { [LIST_PERF_MARKER_ATTRIBUTE]: LIST_PERF_MARKER_VALUE }
     : null;

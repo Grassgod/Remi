@@ -122,10 +122,13 @@ export function WorkbenchPage() {
   // MUL-472 item 5: the workbench's own measured viewport is its list panel, and
   // its rows are "new" once both bucket queries resolved. `in_progress` is
   // context below the fold, so it does not gate the marker.
+  // Snapshot determines the review buckets, so it is primary data here.
+  const { data: snapshot = [], status: snapshotStatus } = useQuery(agentTaskSnapshotOptions(wsId));
+  const sourceStatuses = [reviewStatus, blockedStatus, snapshotStatus];
   const perfMarker = useListPerfMarker({
-    status: reviewStatus === "success" && blockedStatus === "success" ? "success" : "pending",
+    status: sourceStatuses.includes("pending") ? "pending"
+      : sourceStatuses.includes("error") ? "error" : "success",
   });
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
   const { awaitingInput, awaitingReview } = useMemo(
     () => partitionReviewIssues(reviewData?.issues ?? [], snapshot),
@@ -133,7 +136,7 @@ export function WorkbenchPage() {
   );
   const blocked = blockedData?.issues ?? [];
   const inProgress = inProgressData?.issues ?? [];
-  const loading = reviewLoading || blockedLoading;
+  const loading = reviewLoading || blockedLoading || snapshotStatus === "pending";
   const loadFailed = reviewLoadFailed || blockedLoadFailed;
 
   const failureSummaryByIssueId = useMemo(() => {

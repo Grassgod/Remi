@@ -65,6 +65,8 @@ import {
   type ActorFilterValue,
 } from "@multiremi/core/issues/stores/view-store";
 import { useViewStore, useViewStoreApi } from "@multiremi/core/issues/stores/view-store-context";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useNavigation } from "../../navigation";
 import type { SortField, IssueGrouping, SwimlaneGrouping, ViewMode } from "@multiremi/core/issues/stores/view-store";
 import {
   useIssuesScopeStore,
@@ -193,8 +195,14 @@ function ActorSubContent({
   const [search, setSearch] = useState("");
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
+  // MUL-472 b: the squad list only feeds the assignee picker, which is closed
+  // until the user opens it, so it waits for the page gate.
+  const { pathname } = useNavigation();
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "page" });
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
+  const { data: squads = [] } = useQuery(
+    squadListOptions(wsId, { enabled: afterFirstScreen }),
+  );
   const query = search.trim().toLowerCase();
   const filteredMembers = members.filter((m) =>
     m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query),

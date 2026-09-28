@@ -5,7 +5,7 @@
  * own resolved request". The probe resolves `--selectors auto` from the
  * marker's presence, so the negative cases matter as much as the positive one.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   isRouteContentReadyForTest,
@@ -25,6 +25,7 @@ const navigation = {
   searchParams: new URLSearchParams(),
   push: () => {},
   replace: () => {},
+  back: () => {},
   getShareableUrl: (path: string) => path,
 };
 
@@ -73,7 +74,7 @@ describe("useListPerfMarker", () => {
     expect(screen.getByTestId("list")).not.toHaveAttribute(LIST_PERF_MARKER_ATTRIBUTE);
   });
 
-  it("publishes route readiness only once the rows are this request's rows", () => {
+  it("publishes route readiness only once the rows are this request's rows", async () => {
     // The gate must not open while the list is still loading: that was QA's
     // finding (snapshot 660 ms / pins 102 ms before the first content row).
     resetAfterFirstScreenForTest();
@@ -84,7 +85,7 @@ describe("useListPerfMarker", () => {
     renderProbe({ status: "error" });
     // A failed request still counts as settled: a broken page must not hold the
     // deferred shell content back forever.
-    expect(isRouteContentReadyForTest(navigation.pathname)).toBe(true);
+    await waitFor(() => expect(isRouteContentReadyForTest(navigation.pathname)).toBe(true));
 
     resetAfterFirstScreenForTest();
     renderProbe({ status: "success", isPlaceholderData: true });
@@ -92,7 +93,7 @@ describe("useListPerfMarker", () => {
 
     resetAfterFirstScreenForTest();
     renderProbe({ status: "success" });
-    expect(isRouteContentReadyForTest(navigation.pathname)).toBe(true);
+    await waitFor(() => expect(isRouteContentReadyForTest(navigation.pathname)).toBe(true));
   });
 
   it("drops the marker while a key-changing filter refetches, then restores it (MUL-472 item 5)", () => {
