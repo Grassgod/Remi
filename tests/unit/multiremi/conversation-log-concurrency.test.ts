@@ -268,12 +268,26 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeTasks = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_tasks WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeEvents = store.listSessionEvents(session.id).length;
+  const beforeComments = store.listIssueComments(issue.id);
+  const parentLog = () => db.query("SELECT * FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq ASC")
+    .all(session.id);
+  const beforeLog = parentLog();
+  const beforeHeadSeq = store.getConversationLogHead(session.id)?.headSeq;
+  const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
+    .get(issue.id) as { n: number | string }).n);
+  const beforeStatus = store.getIssue(issue.id)?.status;
+  // MUL-406 S1 (ADR 0003): child status commits; the notification hook transaction rolls back in full.
   expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
-  expect(store.getIssue(child.id)?.status).not.toBe("done");
-  expect(store.listIssueComments(issue.id)).toEqual([]);
+  expect(store.getIssue(child.id)?.status).toBe("done");
+  expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);
+  expect(parentLog()).toEqual(beforeLog);
+  expect(store.getConversationLogHead(session.id)?.headSeq).toBe(beforeHeadSeq);
+  expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
+    .get(issue.id) as { n: number | string }).n)).toBe(beforeActivity);
   expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_tasks WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n)).toBe(beforeTasks);
+  expect(store.getIssue(issue.id)?.status).toBe(beforeStatus);
 }
 
 function verifyHeadRollback(db: SqlDatabase, backend: "sqlite" | "pg", rejectedIndex: 0 | 1): void {
