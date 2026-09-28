@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-28T01:34:26.304Z",
-  "head": "6fc85a1c05cbfb3d724b1e6814ffc72cb8d93692",
+  "generatedAt": "2026-09-28T02:08:55.990Z",
+  "head": "5b910e029af74d2d7c24282b78eecc0cdc372ffe",
   "checks": [
     {
       "name": "three-tabs: exactly one leader",
@@ -25,8 +25,8 @@
     {
       "name": "handoff: a surviving page takes over within 1s",
       "ok": true,
-      "detail": "took 51ms",
-      "ms": 51
+      "detail": "took 54ms",
+      "ms": 54
     },
     {
       "name": "handoff: the new leader's head is continuous",
@@ -46,8 +46,8 @@
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 170 of 170, fresh true, 594ms after the append (budget 2000ms)",
-      "ms": 594
+      "detail": "head 170 of 170, fresh true, 577ms after the append (budget 2000ms)",
+      "ms": 577
     },
     {
       "name": "offline-catch-up: no full /log read",
@@ -75,6 +75,26 @@
       "detail": "revisions 2, 2, 2"
     },
     {
+      "name": "cleared: the tabs start with a populated window",
+      "ok": true,
+      "detail": "170 entries before the clear"
+    },
+    {
+      "name": "cleared: every tab drops its window and its freshness",
+      "ok": true,
+      "detail": "entries 0, 0, 0, heads , , "
+    },
+    {
+      "name": "cleared: the followers acted on the broadcast they received",
+      "ok": true,
+      "detail": "cleared events per tab: [[\"logout\"],[\"logout\"],[\"logout\"]]"
+    },
+    {
+      "name": "cleared: the replica refills from the server afterwards",
+      "ok": true,
+      "detail": "heads 175, 175, 175 (server 175)"
+    },
+    {
       "name": "opfs-off: every tab subscribes for itself (documented fallback)",
       "ok": true,
       "detail": "3 leaders, 3 active server subscriptions"
@@ -82,7 +102,7 @@
     {
       "name": "opfs-off: all three pages hold identical entries",
       "ok": true,
-      "detail": "170 entries on each page, heads 170, 170, 170 (server head 170)"
+      "detail": "175 entries on each page, heads 175, 175, 175 (server head 175)"
     },
     {
       "name": "opfs-off: every page reports the memory fallback",
@@ -92,13 +112,13 @@
     {
       "name": "opfs-off: the fallback still reaches the server head",
       "ok": true,
-      "detail": "heads 170, 170, 170 (server 170)"
+      "detail": "heads 175, 175, 175 (server 175)"
     },
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 220 of 220, fresh true, 8ms after the append (budget 2000ms)",
-      "ms": 8
+      "detail": "head 225 of 225, fresh true, 9ms after the append (budget 2000ms)",
+      "ms": 9
     },
     {
       "name": "offline-catch-up: no full /log read",
@@ -108,7 +128,7 @@
     {
       "name": "offline-catch-up: the resume cursor is the stored head + 1",
       "ok": true,
-      "detail": "subscribe from_seq values 1, 1, 1, 121, 1, 1, 1, 1, 1, 1, 1, 171 (local head was 170, server head 170 -> 220)"
+      "detail": "subscribe from_seq values 1, 1, 1, 121, 1, 1, 1, 1, 1, 1, 1, 1, 176 (local head was 175, server head 175 -> 225)"
     },
     {
       "name": "opfs-off: the fallback still keeps one subscription per tab after a reconnect",
@@ -118,12 +138,12 @@
     {
       "name": "offline-catch-up: all three pages converge on the new head",
       "ok": true,
-      "detail": "heads 220, 220, 220"
+      "detail": "heads 225, 225, 225"
     },
     {
       "name": "patch-in-place: the row updates without a second row",
       "ok": true,
-      "detail": "seq 5 revision 2 -> 3 body \"edited body\", 220 rows (was 220)"
+      "detail": "seq 5 revision 2 -> 3 body \"edited body\", 225 rows (was 225)"
     },
     {
       "name": "patch-in-place: every tab saw the edit",
@@ -132,8 +152,8 @@
     }
   ],
   "summary": {
-    "total": 25,
-    "passed": 25,
+    "total": 29,
+    "passed": 29,
     "failed": 0
   }
 }

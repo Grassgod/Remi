@@ -18,6 +18,15 @@ import type { ReplicaView } from "./view";
 
 export interface ReplicaFollowerOptions {
   view: ReplicaView;
+  /**
+   * Called when the leader says the whole database was dropped.
+   *
+   * A follower owns no database, but it does own the cached window its consumer
+   * is rendering, so the clear has to reach the tab's own state — otherwise the
+   * app would keep whatever it had already read while a leader elsewhere deleted
+   * the rows underneath it.
+   */
+  onCleared?: (reason: "logout" | "user_mismatch" | "schema_upgrade") => void;
   broadcast: (message: ReplicaChannelMessage) => void;
   /** Request ids, injectable so a test can be deterministic. */
   nextRequestId?: () => string;
@@ -114,9 +123,16 @@ export class ReplicaFollower implements SessionReplicaPort {
       }
       case "replica:cleared": {
         this.options.view.dropAll();
-        // Every open session is re-announced against the fresh database, which is
-        // what makes the clear reach tabs the leader did not know about.
-        for (const sessionId of [...this.requested]) {
+        this.options.onCleared?.(message.reason);
+        // Reset the "already announced" memory, or `getSnapshot` would never
+        // announce this session again and the fresh database would stay empty on
+        // this tab — the clear would look like a permanent loss of data.
+        const sessions = [...this.requested];
+        this.requested.clear();
+        for (const sessionId of sessions) {
+          this.requested.add(sessionId);
+          // Announce first: the leader refcounts opens, and after a clear its own
+          // subscription is gone too.
           this.options.broadcast({ type: "replica:open", sessionId });
           this.request(sessionId);
         }

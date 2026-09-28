@@ -59,6 +59,20 @@ export interface WasmDatabase {
  * statement cache would have to be invalidated on every whole-database clear for
  * no measurable gain at this call volume.
  */
+/**
+ * Bind parameters, or skip the call when there are none.
+ *
+ * `sqlite-wasm` throws "This statement has no bindable parameters." on
+ * `stmt.bind([])`, so a statement that takes no arguments — the whole-database
+ * deletes are the ones this bit — would fail for a reason that has nothing to do
+ * with SQL. `node:sqlite` accepts the empty call, which is exactly why this only
+ * showed up in the browser suite.
+ */
+function bind(statement: WasmStatement, params: readonly SqlValue[]): void {
+  if (params.length === 0) return;
+  statement.bind(params);
+}
+
 export function wasmSqlDatabase(db: WasmDatabase): SqlDatabase {
   return {
     exec: (sql) => {
@@ -68,19 +82,19 @@ export function wasmSqlDatabase(db: WasmDatabase): SqlDatabase {
       const statement = db.prepare(sql);
       return {
         run: (params) => {
-          statement.bind(params);
+          bind(statement, params);
           statement.step();
           statement.reset(true);
         },
         all: <T,>(params: readonly SqlValue[]) => {
           const rows: unknown[] = [];
-          statement.bind(params);
+          bind(statement, params);
           while (statement.step()) rows.push(statement.get({}));
           statement.reset(true);
           return rows as T[];
         },
         get: <T,>(params: readonly SqlValue[]) => {
-          statement.bind(params);
+          bind(statement, params);
           const hasRow = statement.step();
           const row = hasRow ? statement.get({}) : null;
           statement.reset(true);

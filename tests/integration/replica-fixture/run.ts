@@ -271,6 +271,7 @@ async function main(): Promise<void> {
       { key: "handoff", opfs: "on" },
       { key: "offline-catch-up", opfs: "on" },
       { key: "patch-in-place", opfs: "on" },
+      { key: "cleared", opfs: "on" },
       { key: "opfs-off", opfs: "off" },
     ];
     for (const scope of scopes) {
@@ -494,6 +495,61 @@ async function runScope(
       `offline-catch-up: all three pages converge on the new head`,
       allAfter !== null,
       allAfter === null ? "not every page matched within 3s" : `heads ${allAfter.map((state) => state?.head).join(", ")}`,
+    );
+  }
+
+  if (key === "cleared") {
+    // Scope item 8: the whole database is dropped and every tab hears about it.
+    // The leader sends `clear`; the Worker wipes storage and the leader broadcasts
+    // `replica:cleared`, which is what a follower has to act on — it owns no
+    // database, so if the broadcast did not reach it, it would keep serving rows
+    // from a replica the leader just deleted.
+    const leaderIndex = (await waitForLeader(pages)).index;
+    const before = await readState(pages[(leaderIndex + 1) % pages.length]!);
+    check("cleared: the tabs start with a populated window", before.entries.length > 0, `${before.entries.length} entries before the clear`);
+
+    await pages[leaderIndex]!.evaluate(() =>
+      (window as unknown as { __replica: { clear(reason: string): Promise<void> } }).__replica.clear("logout"),
+    );
+
+    const drained = await waitFor(async () => {
+      const current = await states();
+      return current.every((state) => state !== null && state.entries.length === 0 && state.head === null && !state.fresh && !state.ready) ? current : false;
+    }, 5_000).catch(() => null);
+    const heard = await Promise.all(
+      pages.map((page) =>
+        page.evaluate(() => {
+          const api = window as unknown as { __replica: { clearedEvents(): string[] } };
+          return api.__replica.clearedEvents();
+        }),
+      ),
+    );
+    check(
+      "cleared: every tab drops its window and its freshness",
+      drained !== null,
+      drained === null
+        ? `entries ${(await states()).map((state) => state?.entries.length).join(", ")}`
+        : `entries ${drained.map((state) => state?.entries.length).join(", ")}, heads ${drained.map((state) => state?.head).join(", ")}`,
+    );
+    check(
+      "cleared: the followers acted on the broadcast they received",
+      heard.filter((reasons) => reasons.includes("logout")).length === pages.length,
+      `cleared events per tab: ${JSON.stringify(heard)}`,
+    );
+
+    // A cleared replica must be able to refill from the server, which proves the
+    // database was left usable rather than left inconsistent.
+    server.append(5);
+    const refilled = await waitFor(async () => {
+      const current = await states();
+      return current.every((state) => state?.head === server.hub.head) ? current : false;
+    }, 8_000).catch(() => null);
+    check(
+      "cleared: the replica refills from the server afterwards",
+      refilled !== null,
+      refilled === null
+        ? `heads ${(await states()).map((state) => state?.head).join(", ")} (server ${server.hub.head})`
+        : `heads ${refilled.map((state) => state?.head).join(", ")} (server ${server.hub.head})`,
     );
   }
 

@@ -28,6 +28,12 @@ export interface NodeSqlDatabase {
 /**
  * Wrap `node:sqlite`.
  *
+ * No empty-parameter special case here on purpose: `node:sqlite` accepts a
+ * zero-argument `run()`/`all()`/`get()`, and the wasm adapter is the one that has
+ * to skip the call. A test against this driver therefore cannot catch that
+ * difference — the browser suite does, which is why the check runs in both
+ * places.
+ *
  * `node:sqlite` returns null-prototype objects, which the callers read by field
  * name only; no row is ever spread into a class instance, so no prototype
  * copying is needed here.

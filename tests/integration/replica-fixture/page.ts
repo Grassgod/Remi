@@ -201,6 +201,10 @@ export async function boot(): Promise<void> {
           terminate(): void;
         },
     },
+    onCleared: (reason) => {
+      (window as unknown as { __replicaCleared?: string[] }).__replicaCleared ??= [];
+      (window as unknown as { __replicaCleared: string[] }).__replicaCleared.push(reason);
+    },
     onDegraded: (reason) => {
       (window as unknown as { __replicaDegraded?: string[] }).__replicaDegraded ??= [];
       (window as unknown as { __replicaDegraded: string[] }).__replicaDegraded.push(reason);
@@ -237,7 +241,12 @@ export async function boot(): Promise<void> {
     open: () => replica?.open(cfg.sessionId),
     resubscribe: () => replica?.resubscribe(cfg.sessionId),
     close: () => instanceSafe()?.close(cfg.sessionId),
-    clear: (reason: "logout" | "user_mismatch" | "schema_upgrade") => instanceSafe()?.clear(reason),
+    clear: (reason: "logout" | "user_mismatch" | "schema_upgrade") => {
+      instanceSafe()?.clear(reason);
+      return Promise.resolve();
+    },
+    /** A clear this tab received, so the check can tell it acted on the broadcast. */
+    clearedEvents: () => (window as unknown as { __replicaCleared?: string[] }).__replicaCleared ?? [],
     /** Drop and restore the socket, to exercise the offline catch-up path. */
     kickSocket: () => socket.kick(),
     reconnects: () => socket.reconnects,

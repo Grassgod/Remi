@@ -169,6 +169,7 @@ class ReplicaFacade implements BrowserReplica {
       view,
       broadcast: (message) => this.broadcast(message),
       requestWindow: (input) => this.broadcast({ type: "replica:query", ...input }),
+      onCleared: options.onCleared,
     });
     if (channel) {
       channel.onmessage = (event: MessageEvent) => {
@@ -611,8 +612,14 @@ function handleInline(
     case "writeHeight":
       engine.writeRowHeight(request.sessionId, request.seq, request.key, request.height);
       return [];
-    case "clear":
+    case "clear": {
+      // The Worker host reports a clear through `Engine.onClear`; this bridge has
+      // no such callback wired, so it answers here instead.
+      const clears: ReplicaWorkerResponse[] = [];
+      engine.onClear = (reason) => clears.push({ type: "cleared", reason });
       engine.clear(request.reason);
-      return [{ type: "cleared", reason: request.reason }];
+      engine.onClear = undefined;
+      return clears;
+    }
   }
 }

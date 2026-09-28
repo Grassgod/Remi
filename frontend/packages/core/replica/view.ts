@@ -116,7 +116,13 @@ export class ReplicaView implements SessionReplicaPort {
     this.invalidate(sessionId);
   }
 
-  /** Drop everything — logout, a user mismatch or a schema upgrade. */
+  /**
+   * Drop everything — logout, a user mismatch or a schema upgrade.
+   *
+   * Listeners are kept: they belong to components that are still mounted, and
+   * dropping them would leave the list subscribed to nothing after the replica
+   * refills. Only the data goes.
+   */
   dropAll(): void {
     const sessions = [...this.sessions.keys()];
     this.sessions.clear();

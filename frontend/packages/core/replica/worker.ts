@@ -255,8 +255,10 @@ export class ReplicaWorkerHost {
           return;
         }
         case "clear": {
+          // `engine.clear` reports through `onClear` (wired to this Worker's
+          // `post` at init), so posting here as well would announce the clear
+          // twice and every tab would run its reset twice.
           engine.clear(request.reason);
-          post({ type: "cleared", reason: request.reason });
           return;
         }
       }
