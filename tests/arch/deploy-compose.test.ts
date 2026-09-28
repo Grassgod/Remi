@@ -9,6 +9,7 @@ import { parse } from "yaml";
 
 const repoRoot = resolve(import.meta.dir, "../..");
 const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.application.yml"), "utf8")) as {
+  name?: string;
   services: Record<string, Record<string, any>>;
   volumes?: Record<string, unknown>;
 };
