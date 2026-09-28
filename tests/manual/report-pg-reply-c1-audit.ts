@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DB_REPLY_TRANSITION_EXCEPTIONS } from "../../packages/server/src/observability/request-metrics.js";
 
@@ -95,7 +95,7 @@ const rules: Array<[RegExp, Audit]> = [
     caller: "autopilots.ts → AutopilotsRepo.listWebhookDeliveries/getWebhookDelivery",
   }],
   [/\/autopilot-runs|\/autopilots|\/scheduler$|\/knowledge\/events\/repository-merged/, {
-    tables: "multiremi_autopilot_runs *: payload, result, schedule_prompt；autopilots: prompt, compiled_prompt",
+    tables: "multiremi_autopilot_runs *: payload, result, schedule_prompt；autopilots: description, issue_title_template",
     shape: "run list LIMIT 20/最大100，getter 单行仍带大列；autopilot 集合无字节界；触发/定时目标 queued SELECT * 无 LIMIT",
     caller: "autopilots.ts / daemon.ts / knowledge.ts → AutopilotsRepo.getAutopilotRun/listAutopilotRuns/advanceScheduledTargetRuns",
   }],
@@ -132,6 +132,36 @@ const rules: Array<[RegExp, Audit]> = [
 ];
 
 const all = [...DB_REPLY_TRANSITION_EXCEPTIONS];
+type ResolvedCaller = { key: string; file: string; line: number; hazards: string[] };
+const resolvedCallers = JSON.parse(readFileSync(resolve(import.meta.dir,
+  "../../reports/performance/MUL-398-c1-callers.json"), "utf8")) as ResolvedCaller[];
+const callerByKey = new Map(resolvedCallers.map(row => [row.key, row]));
+const readerTables: Array<[RegExp, string]> = [
+  [/^(getProject|listProjects|searchProjects)$/, "multiremi_projects: description/instructions/delta_instructions"],
+  [/^(getAgent|getAgentLite|listAgents|listAgentsLite|listAgentsLiteByIds|getAgentByName)$/, "multiremi_agents: instructions/skills/custom_env/mcp_config"],
+  [/^(listSkills|getSkill|listAgentSkills)$/, "multiremi_skills: content/config；listAgentSkills 还整读agent行"],
+  [/^(listSkillFiles|getSkillFile)$/, "multiremi_skill_files: content"],
+  [/^(getTask|listTasks|listAgentTasks)$/, "multiremi_tasks: prompt/result/error/usage"],
+  [/^listTaskMessages$/, "multiremi_task_messages: content/input/output/meta"],
+  [/^getTaskPrompt$/, "multiremi_task_prompts: prompt"],
+  [/^(getAutopilotRun|listAutopilotRuns|advanceScheduledTargetRuns)$/, "multiremi_autopilot_runs: payload/result/schedule_prompt"],
+  [/^(getAutopilot|listAutopilots)$/, "multiremi_autopilots: description/issue_title_template"],
+  [/^(getSubmission|listSubmissionsFull|listSubmissions)$/, "multiremi_knowledge_submissions: body/patch"],
+  [/^listRunSources$/, "multiremi_knowledge_compilation_run_sources: metadata"],
+  [/^getRun$/, "multiremi_knowledge_compilation_runs: result_summary"],
+  [/^(getProjectDoc|listProjectDocs)$/, "multiremi_project_docs: body/tags/refs"],
+  [/^listProjectDocRevisions$/, "multiremi_project_doc_revisions: body/tags/refs"],
+  [/^(getRepositoryWikiDoc|listRepositoryWikiDocs)$/, "multiremi_repository_wiki_docs: body"],
+  [/^listRepositoryWikiDocRevisions$/, "multiremi_repository_wiki_doc_revisions: body"],
+  [/^listSessionEvents$/, "multiremi_session_events: body/metadata"],
+  [/^listIssueSessionResults$/, "multiremi_session_results: body/metadata"],
+  [/^(getIssueComment|listIssueComments)$/, "multiremi_issue_comments: body"],
+  [/^listIssueActivity$/, "multiremi_issue_activity: body/data"],
+  [/^listIssueTimelinePage$/, "multiremi_issue_comments/body；multiremi_issue_activity/body/data"],
+  [/^(getIssue|listIssues|searchIssues)$/, "multiremi_issues: description/metadata"],
+  [/^(listChatMessages|getChatMessage)$/, "multiremi_chat_messages: body/failure_reason"],
+  [/^(getChatSession|listChatSessions)$/, "multiremi_chat_sessions: title/work_dir等整行标量；last-message excerpt已SQL截240字符，缺本轮排除长样本"],
+];
 const observed = new Set(all.slice(0, 18));
 const queuedEntries = new Set([
   "POST /api/multiremi/autopilots/:id/run", "POST /api/multiremi/autopilots/:id/run-scheduled",
@@ -156,6 +186,19 @@ const rows = all.map(key => {
     condition = "C-2: MUL-402 去掉该读 OR 另单按实际行宽算法；不必等三天";
   } else {
     audit = rules.find(([pattern]) => pattern.test(key))?.[1];
+    const resolvedCaller = callerByKey.get(key);
+    if (resolvedCaller) {
+      const tables = [...new Set(resolvedCaller.hazards.map(name => {
+        const table = readerTables.find(([pattern]) => pattern.test(name))?.[1];
+        if (!table) throw new Error(`Missing table for ${name}`);
+        return table;
+      }))].join("；");
+      audit = audit ? { ...audit, tables: `${audit.tables}；调用链可达：${tables}`,
+        caller: `${audit.caller}；${resolvedCaller.file}:${resolvedCaller.line} → ${resolvedCaller.hazards.join(", ")}` }
+        : { tables, shape: "条件/鉴权/写后回读的静态可达大列；整行getter或集合，行LIMIT/读后裁剪不等于字节界；缺少排除所需长样本证据",
+          caller: `${resolvedCaller.file}:${resolvedCaller.line} → ${resolvedCaller.hazards.join(", ")}` };
+      source += " + 解析符号调用链审计";
+    }
     if (/POST .*\/(run|run-scheduled|trigger|build)$/.test(key)) {
       condition += "；advanceScheduledTargetRuns queued 读必须有界";
     }
@@ -176,6 +219,8 @@ const report = `# MUL-398 C-1 最终例外逐条审计
 209 \`cmt_5ncm70lxe805\`：v0.2.83 无单次回包埋点。最先18行全部是 >500ms 慢请求内 **总** DB 字节 ≥6 MiB 的保守超集，并非单条超限证据；其余来自审计或续做/Senior裁定。快请求只能由源码审计覆盖。行 LIMIT、id 单行、读后裁剪均不能单独证明字节有界。
 
 本轮没有排除已识别风险项，尤其 repository-wikis 保守保留；当前 PG 规模测量见正式报告。原文档/代码归属以下表具体 caller 和对应 repos 为依据，\`*\` 指整行或未去掉所列大列的读取。表中同一类辅助读取可能在鉴权、actor scope 或写后回读中执行，例外覆盖整个 method+pattern。
+
+补审计使用 TypeScript checker 解析实际函数/方法声明和import别名，避免按同名方法字符串串错调用链。\`audit-pg-reply-c1-callers.ts\` 对704个字面量handler生成364条保守大列可达记录，见 \`MUL-398-c1-callers.json\`，补入原表遗漏的226条。覆盖项目指令、agent指令/skill正文及鉴权、写后回读辅助路径。它是可能路径审计，不是当前生产字节测量；条件/回调也保守纳入。动态路由及不在seed内的读取仍由前述逐类人工审计覆盖，没有根据静态分析做任何排除。
 
 | method + Hono 模式 | 来源 | 表 / 大列 | LIMIT / 投影 / 字节界 | 具体调用方 | 是否进表 / 收回条件 |
 |---|---|---|---|---|---|

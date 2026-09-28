@@ -1,0 +1,3591 @@
+[
+  {
+    "key": "POST /api/webhooks/autopilots/:token",
+    "file": "packages/server/src/api/routers/webhooks.ts",
+    "line": 10,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAutopilot",
+      "getAutopilotRun",
+      "listAutopilots"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/scm/git-credentials",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 159,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 513,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/runtimes/:runtimeId/tasks/claim",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 931,
+    "hazards": [
+      "getAgent",
+      "getAgentLite",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getProject",
+      "getTask",
+      "getTaskPrompt",
+      "listAgentsLite",
+      "listAutopilots",
+      "listChatMessages",
+      "listIssueSessionResults",
+      "listSessionEvents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 995,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/start",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1000,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/dispatch-lease",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1012,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/wait-local-directory",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1021,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/human-requests",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1040,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1065,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1078,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/progress",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1093,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/messages",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1109,
+    "hazards": [
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/prompt",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1130,
+    "hazards": [
+      "getTask",
+      "getTaskPrompt"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/tasks/:taskId/messages",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1153,
+    "hazards": [
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/session",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1164,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/workspace",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1181,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/complete",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1239,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/fail",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1268,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/usage",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1287,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/tasks/:taskId/steer",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1330,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/tasks/:taskId/steer/consume",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1339,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/issues/:issueId/gc-check",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1349,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/issues/:issueId/workspace/cleaned",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1358,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1431,
+    "hazards": [
+      "getChatSession"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/autopilot-runs/:runId/gc-check",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1436,
+    "hazards": [
+      "getAutopilotRun"
+    ]
+  },
+  {
+    "key": "GET /api/daemon/tasks/:taskId/gc-check",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 1441,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/workspaces/:id/session-archive",
+    "file": "packages/server/src/api/routers/session-archives.ts",
+    "line": 471,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/session-archive",
+    "file": "packages/server/src/api/routers/session-archives.ts",
+    "line": 483,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:issueId/session-archives",
+    "file": "packages/server/src/api/routers/session-archives.ts",
+    "line": 530,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:issueId/session-archives/:archiveId/verify",
+    "file": "packages/server/src/api/routers/session-archives.ts",
+    "line": 543,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:issueId/session-archives/:archiveId/retry",
+    "file": "packages/server/src/api/routers/session-archives.ts",
+    "line": 563,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/me/onboarding/runtime-bootstrap",
+    "file": "packages/server/src/api/routers/me.ts",
+    "line": 59,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listAgents",
+      "listIssues",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/me/onboarding/no-runtime-bootstrap",
+    "file": "packages/server/src/api/routers/me.ts",
+    "line": 69,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 142,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/issue-topics",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 269,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/workspaces/:id/repository-wikis",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 501,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 602,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 658,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 757,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAutopilot",
+      "getAutopilotRun",
+      "listAutopilots",
+      "listRepositoryWikiDocs"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 822,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 872,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/workspaces/:id/repos/:repositoryId",
+    "file": "packages/server/src/api/routers/workspaces.ts",
+    "line": 1003,
+    "hazards": [
+      "getProject",
+      "listProjects"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/change-requests",
+    "file": "packages/server/src/api/routers/scm.ts",
+    "line": 23,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PUT /api/issues/:issueId/change-requests/:changeRequestId",
+    "file": "packages/server/src/api/routers/scm.ts",
+    "line": 45,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:issueId/change-requests/:changeRequestId",
+    "file": "packages/server/src/api/routers/scm.ts",
+    "line": 57,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/workspaces/:id/feishu-bot",
+    "file": "packages/server/src/api/routers/feishu-bot.ts",
+    "line": 84,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/workspaces/:id/feishu-bot/candidates",
+    "file": "packages/server/src/api/routers/feishu-bot.ts",
+    "line": 108,
+    "hazards": [
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/workspaces/:id/feishu-bot",
+    "file": "packages/server/src/api/routers/feishu-bot.ts",
+    "line": 267,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/workspaces/:id/feishu-bot",
+    "file": "packages/server/src/api/routers/feishu-bot.ts",
+    "line": 308,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agents",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 54,
+    "hazards": [
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/agents",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 66,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/agents/default",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 80,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listAgentSkills",
+      "listAgentTasks",
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agents/:id",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 119,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/agents/:id",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 124,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listAgentSkills",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/agents/:id",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 135,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agents/:id/skills",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 142,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agents/:id/tasks",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 148,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/multiremi/agents/:id/skills",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 155,
+    "hazards": [
+      "getAgent",
+      "getSkill",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/agents/:id/tasks",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 162,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/agents/:id/skills",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 168,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/agents/:id/skills",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 173,
+    "hazards": [
+      "getAgent",
+      "getSkill",
+      "listAgentSkills",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "POST /api/agents/:id/skills/add",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 186,
+    "hazards": [
+      "getAgent",
+      "getSkill",
+      "listAgentSkills",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/agents/:id/env",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 203,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/agents/:id/env",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 209,
+    "hazards": [
+      "getAgent",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/agents",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 219,
+    "hazards": [
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/agents",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 231,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/agents/from-template",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 245,
+    "hazards": [
+      "getAgent",
+      "getSkill",
+      "getTask",
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/agents/:id",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 263,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/agents/:id",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 268,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listAgentSkills",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/agents/:id/supervisor",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 279,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/agents/:id/role",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 291,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listAgentTasks",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/agents/:id/archive",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 305,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/agents/:id/restore",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 312,
+    "hazards": [
+      "getAgent",
+      "listAgentSkills",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/agents/:id/cancel-tasks",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 319,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/agents/from-template",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 324,
+    "hazards": [
+      "getAgent",
+      "getSkill",
+      "getTask",
+      "listAgentSkills",
+      "listAgents",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agent-task-snapshot",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 338,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/agent-task-snapshot",
+    "file": "packages/server/src/api/routers/agents.ts",
+    "line": 347,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/agents/:id/plugins",
+    "file": "packages/server/src/api/routers/agent-plugins.ts",
+    "line": 279,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/agents/:id/plugins",
+    "file": "packages/server/src/api/routers/agent-plugins.ts",
+    "line": 290,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/agents/:id/plugins/:bindingId",
+    "file": "packages/server/src/api/routers/agent-plugins.ts",
+    "line": 306,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/agents/:id/plugins/:bindingId",
+    "file": "packages/server/src/api/routers/agent-plugins.ts",
+    "line": 325,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/skills",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 38,
+    "hazards": [
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/skills",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 47,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/skills/import",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 60,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/skills/search",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 76,
+    "hazards": [
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 84,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 89,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "PUT /api/multiremi/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 102,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 115,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/skills",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 126,
+    "hazards": [
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/skills/search",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 133,
+    "hazards": [
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "POST /api/skills",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 141,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "POST /api/skills/import",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 155,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 172,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 177,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "PUT /api/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 191,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "DELETE /api/skills/:id",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 205,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/skills/:id/files",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 216,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "PUT /api/skills/:id/files",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 225,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "DELETE /api/skills/:id/files/:fileId",
+    "file": "packages/server/src/api/routers/skills.ts",
+    "line": 236,
+    "hazards": [
+      "getSkill",
+      "listSkillFiles",
+      "listSkills"
+    ]
+  },
+  {
+    "key": "GET /api/execution-groups",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 628,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/execution-groups",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 629,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/models",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 654,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/models",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 655,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/runtimes/:id",
+    "file": "packages/server/src/api/routers/runtimes.ts",
+    "line": 721,
+    "hazards": [
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/runtime-workspaces",
+    "file": "packages/server/src/api/routers/runtime-workspaces.ts",
+    "line": 12,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/runtimes/:id/workspaces",
+    "file": "packages/server/src/api/routers/runtime-workspaces.ts",
+    "line": 20,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/runtime-workspaces/:id",
+    "file": "packages/server/src/api/routers/runtime-workspaces.ts",
+    "line": 35,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "PATCH /api/runtime-workspaces/:id",
+    "file": "packages/server/src/api/routers/runtime-workspaces.ts",
+    "line": 39,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "DELETE /api/runtime-workspaces/:id",
+    "file": "packages/server/src/api/routers/runtime-workspaces.ts",
+    "line": 46,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/projects",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 74,
+    "hazards": [
+      "listProjects"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/projects/search",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 82,
+    "hazards": [
+      "listProjects",
+      "searchProjects"
+    ]
+  },
+  {
+    "key": "GET /api/projects/search",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 99,
+    "hazards": [
+      "listProjects",
+      "searchProjects"
+    ]
+  },
+  {
+    "key": "GET /api/projects",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 123,
+    "hazards": [
+      "listProjects"
+    ]
+  },
+  {
+    "key": "POST /api/projects",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 133,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/projects",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 166,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 193,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 198,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 217,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/projects/:id/restore",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 222,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/projects/:id/resources",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 227,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 233,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PUT /api/multiremi/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 238,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 257,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/projects/:id/devices/:daemonId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 276,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/projects/:id/resources",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 289,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/projects/:id/resources/:resourceId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 305,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/projects/:id/resources/:resourceId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 320,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 327,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PUT /api/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 332,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/projects/:id",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 352,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/projects/:id/restore",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 359,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/resources",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 367,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 373,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PUT /api/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 378,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/projects/:id/devices",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 397,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/projects/:id/devices/:daemonId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 420,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/projects/:id/resources",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 434,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PUT /api/projects/:id/resources/:resourceId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 451,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "DELETE /api/projects/:id/resources/:resourceId",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 467,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/docs",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 474,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/projects/:id/docs",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 491,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getProjectDoc",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/docs/:ref",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 536,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "PUT /api/projects/:id/docs/:ref",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 549,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getProjectDoc",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/projects/:id/docs/:ref",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 597,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getProjectDoc",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/docs/:ref/revisions",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 643,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/docs/:ref/backlinks",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 655,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/projects/:id/knowledge/recall",
+    "file": "packages/server/src/api/routers/projects.ts",
+    "line": 667,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 102,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/move",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 176,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/merge",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 177,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 179,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 225,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/knowledge/submissions",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 310,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/knowledge/submissions",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 356,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/knowledge/submissions/:id",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 390,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getSubmission",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/knowledge/runs",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 398,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/knowledge/runs/:id",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 436,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getIssue",
+      "getProjectDoc",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listRepositoryWikiDocs",
+      "listRunSources",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/projects/:id/knowledge/publish",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 444,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getProjectDoc",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listRunSources",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 528,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listRunSources",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/knowledge/events/repository-merged",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 614,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getRun",
+      "getSubmission",
+      "getTask",
+      "listRunSources",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/knowledge/migrate-legacy",
+    "file": "packages/server/src/api/routers/knowledge.ts",
+    "line": 649,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getSubmission",
+      "getTask",
+      "listProjects",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/squads",
+    "file": "packages/server/src/api/routers/squads.ts",
+    "line": 49,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/squads/:id",
+    "file": "packages/server/src/api/routers/squads.ts",
+    "line": 147,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/squads/:id/members/status",
+    "file": "packages/server/src/api/routers/squads.ts",
+    "line": 194,
+    "hazards": [
+      "getAgent",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/autopilots",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 151,
+    "hazards": [
+      "listAutopilots"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 160,
+    "hazards": [
+      "listAutopilots"
+    ]
+  },
+  {
+    "key": "POST /api/autopilots",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 173,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 198,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 223,
+    "hazards": [
+      "getAutopilot",
+      "listAutopilotRuns"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 236,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 256,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/autopilots/:id/runs",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 265,
+    "hazards": [
+      "getAutopilot",
+      "listAutopilotRuns"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/autopilots/:id/deliveries",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 270,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 276,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 283,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots/:id/run",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 293,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots/:id/run-scheduled",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 310,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots/:id/trigger",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 328,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/autopilots/:id/webhook",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 347,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 374,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "PATCH /api/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 385,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/autopilots/:id",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 410,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/autopilots/:id/trigger",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 424,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots/:id/runs",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 444,
+    "hazards": [
+      "getAutopilot",
+      "listAutopilotRuns"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots/:id/runs/:runId",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 460,
+    "hazards": [
+      "getAutopilot",
+      "getAutopilotRun"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots/:id/deliveries",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 468,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "GET /api/autopilots/:id/deliveries/:deliveryId",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 473,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 480,
+    "hazards": [
+      "advanceScheduledTargetRuns",
+      "getAgent",
+      "getAutopilot",
+      "getAutopilotRun",
+      "getTask",
+      "listAutopilots",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/autopilots/:id/triggers",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 490,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/autopilots/:id/triggers/:triggerId",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 517,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/autopilots/:id/triggers/:triggerId",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 545,
+    "hazards": [
+      "getAutopilot"
+    ]
+  },
+  {
+    "key": "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 553,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
+    "file": "packages/server/src/api/routers/autopilots.ts",
+    "line": 570,
+    "hazards": [
+      "getAgent",
+      "getAutopilot",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/pins",
+    "file": "packages/server/src/api/routers/pins.ts",
+    "line": 29,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "POST /api/pins",
+    "file": "packages/server/src/api/routers/pins.ts",
+    "line": 74,
+    "hazards": [
+      "getProject"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 502,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "GET /api/issues",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 510,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "GET /api/issues/status-pages",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 519,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/grouped",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 538,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "GET /api/issues/grouped",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 546,
+    "hazards": [
+      "getIssue",
+      "listIssues"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/search",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 570,
+    "hazards": [
+      "getIssue",
+      "listIssues",
+      "searchIssues"
+    ]
+  },
+  {
+    "key": "GET /api/issues/search",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 585,
+    "hazards": [
+      "getIssue",
+      "listIssues",
+      "searchIssues"
+    ]
+  },
+  {
+    "key": "GET /api/issues/children",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 626,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/children",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 635,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/batch-update",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 655,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/issues/batch-update",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 679,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/batch-delete",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 709,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/batch-delete",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 722,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 736,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/issues",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 791,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getProject",
+      "getTask",
+      "listIssueActivity",
+      "listProjects",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/quick-create",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 893,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/issues/quick-create",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 918,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/generated-issues",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 940,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 948,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "listIssueActivity",
+      "listIssueComments",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 979,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/workspace",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 994,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/timeline",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1035,
+    "hazards": [
+      "getIssue",
+      "listIssueActivity",
+      "listIssueComments",
+      "listIssueTimelinePage"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/timeline",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1050,
+    "hazards": [
+      "getIssue",
+      "listIssueActivity",
+      "listIssueComments",
+      "listIssueTimelinePage"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/active-task",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1065,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/task-runs",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1082,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/usage",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1097,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/rerun",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1104,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/tasks/:taskId/cancel",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1129,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/squad-evaluated",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1140,
+    "hazards": [
+      "getIssue",
+      "listIssueActivity"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/children",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1194,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/children",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1202,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/decisions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1218,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/decisions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1225,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/decisions/:decisionId/answer",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1242,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/decisions/:decisionId/escalate",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1259,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/decisions/:decisionId/withdraw",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1270,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/dependencies",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1281,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/dependencies",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1289,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/dependencies",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1297,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/dependencies",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1315,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id/dependencies/:dependencyId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1334,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/dependencies/:dependencyId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1342,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1385,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "PATCH /api/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1478,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "PUT /api/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1479,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/retitle",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1480,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getIssueComment",
+      "getProject",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/restore",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1503,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/restore",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1512,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1522,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1537,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/assign",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1552,
+    "hazards": [
+      "getIssue",
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/sessions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1600,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/sessions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1612,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/sessions/:sessionId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1643,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PATCH /api/issues/:id/sessions/:sessionId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1654,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/sessions/:sessionId/participants",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1670,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/sessions/:sessionId/participants",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1678,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1699,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/sessions/:sessionId/events",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1708,
+    "hazards": [
+      "getIssue",
+      "listSessionEvents"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/sessions/:sessionId/messages",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1722,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/sessions/:sessionId/tasks",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1738,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/sessions/:sessionId/tasks",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1754,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/session-results",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1787,
+    "hazards": [
+      "getIssue",
+      "listIssueSessionResults"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/sessions/:sessionId/results",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1794,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/comments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1813,
+    "hazards": [
+      "getIssue",
+      "listIssueComments"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/comments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1828,
+    "hazards": [
+      "getIssue",
+      "listIssueComments"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/comments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1843,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/comments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1851,
+    "hazards": [
+      "getIssue",
+      "getIssueComment",
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1864,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1871,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1878,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1886,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1897,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/reactions",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1906,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/attachments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1918,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/attachments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1925,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/attachments",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1932,
+    "hazards": [
+      "getAgent",
+      "getChatMessage",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/labels",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1948,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/labels",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1956,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id/labels/:labelId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1969,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/labels",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1977,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/labels",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 1985,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/labels/:labelId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2001,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/subscribers",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2013,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/subscribers",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2020,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/issues/:id/subscribers",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2027,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/subscribe",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2037,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/unsubscribe",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2064,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id/subscribers/:memberId",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2091,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/issues/:id/metadata",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2099,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/metadata",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2106,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PUT /api/multiremi/issues/:id/metadata/:key",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2113,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "PUT /api/issues/:id/metadata/:key",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2134,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/issues/:id/metadata/:key",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2153,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/metadata/:key",
+    "file": "packages/server/src/api/routers/issues.ts",
+    "line": 2168,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/issues/:id/share",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 32,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/share",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 41,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/issues/:id/share/extend",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 55,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "DELETE /api/issues/:id/share",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 67,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "GET /api/shares/:token",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 77,
+    "hazards": [
+      "getAgent",
+      "getIssue",
+      "getProject",
+      "listIssueActivity",
+      "listIssueComments",
+      "listIssueSessionResults",
+      "listSessionEvents",
+      "listSkillFiles",
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "GET /api/shares/:token/attachments/:attachmentId/content",
+    "file": "packages/server/src/api/routers/issue-shares.ts",
+    "line": 92,
+    "hazards": [
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "PUT /api/multiremi/comments/:id",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 26,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/comments/:id",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 32,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/comments/:id",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 38,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/comments/:id/resolve",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 44,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/comments/:id/resolve",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 52,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "PUT /api/comments/:id",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 57,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/comments/:id",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 68,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "POST /api/comments/:id/resolve",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 78,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/comments/:id/resolve",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 89,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "POST /api/comments/:id/reactions",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 98,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/comments/:id/reactions",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 107,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/comments/:id/reactions",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 118,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/comments/:id/reactions",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 123,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "DELETE /api/multiremi/comments/:id/reactions",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 129,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/comments/:id/attachments",
+    "file": "packages/server/src/api/routers/comments.ts",
+    "line": 136,
+    "hazards": [
+      "getIssue",
+      "getIssueComment"
+    ]
+  },
+  {
+    "key": "POST /api/chat/attachments/send",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 28,
+    "hazards": [
+      "getTask"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/attachments/:id",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 63,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/attachments",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 70,
+    "hazards": [
+      "getAgent",
+      "getChatMessage",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/upload-file",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 94,
+    "hazards": [
+      "getAgent",
+      "getChatMessage",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/attachments/:id",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 145,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/attachments/:id/download",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 153,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/attachments/:id/content",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 164,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/attachments/:id",
+    "file": "packages/server/src/api/routers/attachments.ts",
+    "line": 175,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/chats",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 38,
+    "hazards": [
+      "getAgent",
+      "listChatSessions",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/chats",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 49,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/chats/:id",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 55,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listChatMessages",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/multiremi/chats/:id",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 61,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/chats/:id/messages",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 69,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listChatMessages",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/chats/:id/messages",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 74,
+    "hazards": [
+      "getAgent",
+      "getChatMessage",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/sessions",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 88,
+    "hazards": [
+      "getAgent",
+      "listChatSessions",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/chat/sessions",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 98,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/sessions/:sessionId",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 104,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/chat/sessions/:sessionId",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 109,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/chat/sessions/:sessionId",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 117,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/sessions/:sessionId/messages",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 124,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listChatMessages",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/sessions/:sessionId/messages/page",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 131,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listChatMessages",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/chat/sessions/:sessionId/messages",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 171,
+    "hazards": [
+      "getAgent",
+      "getChatMessage",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/sessions/:sessionId/pending-task",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 182,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "PATCH /api/chat/sessions/:sessionId/queue/:taskId",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 195,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/chat/sessions/:sessionId/queue/:taskId",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 202,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "DELETE /api/chat/sessions/:sessionId/queue",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 210,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/chat/sessions/:sessionId/queue/:taskId/prioritize",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 218,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/chat/sessions/:sessionId/read",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 223,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/chat/pending-tasks",
+    "file": "packages/server/src/api/routers/chat.ts",
+    "line": 229,
+    "hazards": [
+      "listAgentsLiteByIds"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 63,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/tasks",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 117,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks/:id",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 332,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/tasks/:id/cancel",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 362,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/tasks/:id/cancel",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 363,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/tasks/:id/steer",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 408,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/tasks/:id/steer",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 409,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks/:id/steer",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 410,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/tasks/:id/steer",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 411,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks/:id/inspection",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 420,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getTask",
+      "listSkillFiles",
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "GET /api/tasks/:id/inspection",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 421,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getTask",
+      "listSkillFiles",
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/tasks/:id/redispatch",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 457,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/tasks/:id/redispatch",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 458,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getIssue",
+      "getIssueComment",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks/:id/messages",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 459,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles",
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "GET /api/multiremi/tasks/:id/human-requests",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 503,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/tasks/:id/human-requests",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 504,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 505,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "POST /api/tasks/:id/human-requests/:requestId/respond",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 506,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/tasks/:taskId/messages",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 507,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "listSkillFiles",
+      "listTaskMessages"
+    ]
+  },
+  {
+    "key": "GET /api/tasks/:taskId/prompt",
+    "file": "packages/server/src/api/routers/tasks.ts",
+    "line": 520,
+    "hazards": [
+      "getAgent",
+      "getChatSession",
+      "getTask",
+      "getTaskPrompt",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/cli/context",
+    "file": "packages/server/src/api/routers/cli.ts",
+    "line": 33,
+    "hazards": [
+      "getAgent",
+      "getAutopilotRun",
+      "getChatSession",
+      "getIssue",
+      "getProject",
+      "getTask",
+      "listProjects",
+      "listSkillFiles"
+    ]
+  },
+  {
+    "key": "GET /api/cli/capabilities",
+    "file": "packages/server/src/api/routers/cli.ts",
+    "line": 44,
+    "hazards": [
+      "getAgent",
+      "getTask",
+      "listSkillFiles"
+    ]
+  }
+]

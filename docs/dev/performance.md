@@ -99,7 +99,7 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 | 来源 | 例外 / 原因 | C-2 收回条件 |
 | --- | --- | --- |
 | 209 请求总量超集 | GET dashboard 的 usage/by-agent、agent-runtime、runtime/daily、usage/daily；GET knowledge/submissions、knowledge/runs；GET projects/:id/knowledge/recall、projects/:id/docs；GET workspaces/:id/repository-wikis；GET issues/:id、inbox、tasks/:id/inspection、tasks/:taskId/messages、multiremi/tasks；POST autopilots/:id/trigger、daemon/tasks/:taskId/fail、complete、daemon/runtimes/:runtimeId/tasks/claim。完整模式带 `/api/` 前缀，18 条全部保留 | 修复随同包或更早上线；有埋点的单次回包按路由 <6 MiB，至少三天并含一个工作日高峰；Explorer 只读复核，带头大哥派单逐条收回 |
-| 审计 | 全量 task/chat messages、inspection 别名、issue share、session events/results、comments/timeline、task 集合、run payload/result/schedule_prompt、SQL 文档与 revision 正文、迁移/发布、prompt 和相应 write 回读/actor scope。行数 LIMIT 或 TS 读后分页不等于字节有界；完整键及逐条依据见常量和本单报告 | 先做对应投影/有界读（messages 等待 MUL-402），再满足上行单次数据条件 |
+| 审计 | 全量 task/chat messages、inspection 别名、issue share、session events/results、comments/timeline、task 集合、run payload/result/schedule_prompt、SQL 文档与 revision 正文、迁移/发布、task/project/agent 指令、skill/file 正文及相应 write 回读/actor scope。agent lite 仍整读 agent 行，只跳过文件水合；行数 LIMIT 或 TS 读后分页不等于字节有界。完整键及逐条解析调用方依据见常量和本单报告 | 先做对应投影/有界读（messages 等待 MUL-402），再满足上行单次数据条件 |
 | C-1 续做裁定与 Senior `cmt_tvxpad98uqtz` | POST `/api/daemon/tasks/:taskId/messages`：保留 MUL-462 回读 8 行，避免每批多出的桥调用；同时纳入 POST `/internal/peer/events`，其同步消费会继承 HTTP 上下文 | MUL-402 去掉该读路径，或另一个任务把页大小改为按实际行宽；任一成立即收回，不必等三天观测 |
 | C-1 后台裁定 | `<background> <background>` 为独立、可一行删除的例外。Scheduler.sync → advanceScheduledTargetRuns 仍无界读 queued run 的 schedule_prompt/payload/result；独立 peer 消费也保留 8 行 | queued run 读取有界之后，且 v0.2.84 之后的后台单次数据 <6 MiB，才收回；本 PR 不修改 autopilots-repo.ts |
 

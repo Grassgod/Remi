@@ -137,16 +137,21 @@ describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
       MULTIREMI_REQUEST_METRICS: enabled ? "1" : "0",
     }))(c, next));
     const read = (size: number) => db.query("SELECT repeat('x', ?) AS body").get(size) as { body: string };
-    app.get("/api/tasks/:taskId/messages", c => c.json({ bytes: read(24 * MIB).body.length }));
+    const exceptionPaths = ["/api/tasks/fixture/messages", "/api/projects", "/api/agents", "/api/skills"];
+    for (const pattern of ["/api/tasks/:taskId/messages", "/api/projects", "/api/agents", "/api/skills"]) {
+      app.get(pattern, c => c.json({ bytes: read(24 * MIB).body.length }));
+    }
     app.get("/api/c1/nonexception", c => c.json({ bytes: read(9 * MIB).body.length }));
     app.onError((error, c) => { caught = error; return c.json({ error: error.message }, 500); });
     try {
       for (const mode of [true, false]) {
         enabled = mode;
         lines.length = 0;
-        const exception = await app.request("/api/tasks/fixture/messages");
-        expect(exception.status).toBe(200);
-        expect(await exception.json()).toEqual({ bytes: 24 * MIB });
+        for (const path of exceptionPaths) {
+          const exception = await app.request(path);
+          expect(exception.status).toBe(200);
+          expect(await exception.json()).toEqual({ bytes: 24 * MIB });
+        }
         expect(lines.some(line => JSON.parse(line).event === "api_db_reply_rejected")).toBe(false);
         const ordinary = await app.request("/api/c1/nonexception");
         expect(ordinary.status).toBe(500);
