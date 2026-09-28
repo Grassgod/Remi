@@ -104,6 +104,20 @@ const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
 
+export interface DependencyForceStartedInput {
+  source: "status" | "comment" | "mention" | "rerun";
+  status: string;
+  previousStatus: string;
+  unmet: IssueDependencyUnmetRef[];
+  actorType: string;
+  actorId: string | null;
+  commentId?: string | null;
+  taskId?: string | null;
+  agentId?: string | null;
+  assigneeDispatched?: boolean;
+  parentTaskId?: string | null;
+}
+
 /**
  * MUL-400 E1 kill switch. The parent-status guards ship enabled; flipping this
  * to a false-y value restores the pre-MUL-400 passthrough for an emergency
@@ -4149,19 +4163,14 @@ export class IssuesRepo {
       // The override and its dispatch decision are part of the caller's owner
       // transaction. Runnable agent/squad owners get a round; member, missing,
       // or unavailable owners get `dispatch_skipped` with the requested status.
-      this.ctx.appendIssueActivity(id, {
+      this.recordDependencyForceStarted(id, {
+        source: "status",
+        status: nextStatus,
+        previousStatus: current.status,
+        unmet,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        type: "dependency_force_started",
-        body: nextStatus,
-        data: {
-          status: nextStatus,
-          previousStatus: current.status,
-          previous_status: current.status,
-          unmet: unmet.map((row) => ({ issueId: row.dependsOnIssueId, issue_id: row.dependsOnIssueId, key: row.key, status: row.status })),
-          actor: input.actorType === "agent" ? `agent:${input.actorId ?? ""}` : `member:${input.actorId ?? ""}`,
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
-        },
+        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
       }, deferredEvents);
       return;
     }
@@ -4170,6 +4179,55 @@ export class IssuesRepo {
       `${current.key} is waiting on ${unmet.length} unfinished prerequisite issue(s): ${unmet.map((row) => row.key).join(", ")}; finish them, or repeat the request with force`,
       { unmet },
     );
+  }
+
+  recordDependencyForceStarted(
+    issueId: string,
+    input: DependencyForceStartedInput,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const unmet = input.unmet.map((row) => ({
+      issueId: row.dependsOnIssueId,
+      issue_id: row.dependsOnIssueId,
+      dependsOnIssueId: row.dependsOnIssueId,
+      depends_on_issue_id: row.dependsOnIssueId,
+      dependencyId: row.dependencyId,
+      dependency_id: row.dependencyId,
+      key: row.key,
+      status: row.status,
+    }));
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: input.actorType,
+      actorId: input.actorId,
+      type: "dependency_force_started",
+      body: input.source,
+      data: {
+        source: input.source,
+        status: input.status,
+        previousStatus: input.previousStatus,
+        previous_status: input.previousStatus,
+        unmet,
+        unmetPrerequisites: unmet,
+        unmet_prerequisites: unmet,
+        actor: `${input.actorType}:${input.actorId ?? ""}`,
+        ...(input.commentId
+          ? { commentId: input.commentId, comment_id: input.commentId }
+          : {}),
+        ...(input.taskId
+          ? { taskId: input.taskId, task_id: input.taskId }
+          : {}),
+        ...(input.agentId
+          ? { agentId: input.agentId, agent_id: input.agentId }
+          : {}),
+        ...(input.assigneeDispatched !== undefined
+          ? {
+              assigneeDispatched: input.assigneeDispatched,
+              assignee_dispatched: input.assigneeDispatched,
+            }
+          : {}),
+        ...sourceTaskActivityData(input.parentTaskId),
+      },
+    }, deferredEvents);
   }
 
   /**
@@ -4466,6 +4524,11 @@ export class IssuesRepo {
         triggerCommentId: comment.id,
         workspaceId: issue.workspaceId,
         prompt: assigneeCommentPrompt(comment),
+        dependencyForce: {
+          source: "comment",
+          actorMemberId: comment.authorId ?? "local",
+          commentId: comment.id,
+        },
       });
     } catch (err) {
       // MUL-400 E3 gate 3: the comment still lands (it was persisted before the
@@ -6094,6 +6157,13 @@ export class IssuesRepo {
           delegatedByAgentId: delegationId ? comment.authorId : null,
           assignmentAuthorType: comment.authorType,
           assignmentAuthorId: comment.authorId,
+          dependencyForce: comment.authorType === "member"
+            ? {
+                source: "mention",
+                actorMemberId: comment.authorId ?? "local",
+                commentId: comment.id,
+              }
+            : undefined,
         });
       } catch (err) {
         // MUL-400 E3 gate 3: the mention is persisted either way; on a waiting
