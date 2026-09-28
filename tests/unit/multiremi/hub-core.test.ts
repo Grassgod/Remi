@@ -456,6 +456,90 @@ describe("hub core: fan-out and backpressure", () => {
   });
 });
 
+// ── In-place updates (MUL-402 B1's patch) ───────────────────────────────────────────────────────
+
+describe("hub core: in-place updates", () => {
+  it("delivers a patch for a row the subscriber already holds, on the row's own seq", async () => {
+    const t = bed();
+    const sink = new RecordingSink();
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, sink);
+    t.hub.onEntry("ises_1", entry(1));
+    await t.flush();
+    expect(sink.frames.map((frame) => frame.seq)).toEqual([1]);
+
+    t.hub.onEntry("ises_1", {
+      session_id: "ises_1", target_seq: 1, revision: 2, fields: { body_md: "edited" },
+    });
+    await t.flush();
+
+    // The frame keeps the patched row's seq: a client replaces the row it holds
+    // rather than appending a second one.
+    expect(sink.frames.map((frame) => frame.seq)).toEqual([1, 1]);
+    expect(sink.frames.map((frame) => frame.kind)).toEqual(["entry", "patch"]);
+  });
+
+  it("does not extend the window for a patched row", async () => {
+    const t = bed();
+    const key = "log:ises_1" as HubStreamKey;
+    t.hub.onEntry("ises_1", entry(1));
+    t.hub.onEntry("ises_1", entry(2));
+    t.hub.onEntry("ises_1", {
+      session_id: "ises_1", target_seq: 2, revision: 3, fields: { body_md: "edited" },
+    });
+    await t.flush();
+
+    // A patch keeps its row's seq, so the window is still 1..2: three frames went in,
+    // two positions are held.
+    expect(t.hub.snapshot().frames).toBe(2);
+    expect(t.hub.snapshot().streams).toBe(1);
+  });
+
+  it("tells a replaying subscriber to fetch a row that was patched in place", async () => {
+    const t = bed();
+    const current = new RecordingSink();
+    const key = "log:ises_1" as HubStreamKey;
+    t.hub.subscribeWithSink(key, 0, current);
+    t.hub.onEntry("ises_1", entry(1));
+    await t.flush();
+    current.batches.length = 0;
+    current.gaps.length = 0;
+
+    t.hub.onEntry("ises_1", {
+      session_id: "ises_1", target_seq: 1, revision: 2, fields: { body_md: "edited" },
+    });
+    await t.flush();
+    // The subscriber that holds the row is given the patch and no gap.
+    expect(current.frames.map((frame) => frame.kind)).toEqual(["patch"]);
+    expect(current.gaps).toEqual([]);
+
+    // A subscriber arriving afterwards is not served the patch: a patch carries only
+    // the fields that changed, so on its own it is a fragment of a row. It is told
+    // the range to fetch instead — through the subscription, which is what the caller
+    // puts in its ack — and nothing is replayed for it, because the only position the
+    // ring holds is the one it must read for itself.
+    const late = new RecordingSink();
+    const lateSub = t.hub.subscribeWithSink(key, 0, late);
+    expect(lateSub.gap).toEqual({ from: 0, to: 1 });
+    await t.flush();
+    expect(late.frames).toEqual([]);
+  });
+
+  it("announces a patch to the transport, so a peer learns the row changed", async () => {
+    const published: HubFrame[] = [];
+    const spy = new (class extends LocalHubTransport {
+      override publish(input: { key: HubStreamKey; frames: readonly HubFrame[] }): void {
+        published.push(...input.frames);
+      }
+    })();
+    const t = bed({ transport: spy });
+    t.hub.onEntry("ises_1", entry(1));
+    t.hub.onEntry("ises_1", {
+      session_id: "ises_1", target_seq: 1, revision: 2, fields: { body_md: "edited" },
+    });
+    expect(published.map((frame) => frame.kind)).toEqual(["entry", "patch"]);
+  });
+});
+
 // ── Ring retention and LRU ──────────────────────────────────────────────────────────────────────
 
 describe("hub ring: retention and LRU eviction", () => {

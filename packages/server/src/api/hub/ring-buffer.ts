@@ -104,6 +104,16 @@ export interface HubRingStream {
   lastAccess: number;
   /** Set by {@link HubRingBuffer.markClosed}; the trace completeness signal. */
   closed: boolean;
+  /**
+   * Sequences whose retained frame is no longer the whole truth.
+   *
+   * An in-place update (`patch`) replaces part of a row that the ring already
+   * holds. The ring cannot rebuild the row from the patch — only the database can —
+   * so a subscriber replaying that position would get a fragment it has no base
+   * for. Marking the sequence lets the hub report it as a `gap` instead of serving
+   * a patch as if it were the row.
+   */
+  readonly staleSeqs: Set<number>;
   /** Frames dropped because their sequence was at or below the head. */
   droppedFrames: number;
   /** Frames dropped from the front because a budget bit. */
@@ -163,6 +173,7 @@ export class HubRingBuffer {
       logVersion: null,
       lastAccess: this.now(),
       closed: false,
+      staleSeqs: new Set<number>(),
       droppedFrames: 0,
       trimmedFrames: 0,
     };
@@ -202,6 +213,7 @@ export class HubRingBuffer {
     const { serialized, bytes } = serializeHubFrame(frame);
     const entry: HubRingEntry = { frame: freezeHubFrame(frame), serialized, bytes };
     const wasEmpty = stream.entries.length === 0;
+    stream.staleSeqs.delete(frame.seq);
     stream.entries.push(entry);
     stream.bytes += bytes;
     this.bytes += bytes;
@@ -213,26 +225,22 @@ export class HubRingBuffer {
   }
 
   /**
-   * Replace the retained frame for an in-place update.
+   * Mark the retained frame at `seq` stale after an in-place update.
    *
-   * A patch keeps the `seq` of the row it patches, so it is not a new sequence
-   * and must not extend the window — but the ring's copy of that row is now stale.
-   * The frame keeps its original position, which is what lets a subscriber that
-   * already holds the row replace it in place instead of appending a second one.
+   * A patch keeps the `seq` of the row it patches, so it is not a new sequence and
+   * must not extend the window — but it also does not contain the whole row. The
+   * retained frame therefore stays where it is (the window must not gain a hole)
+   * and the sequence is flagged: a live subscriber that already holds the row is
+   * handed the patch, and a subscriber that replays this position is told a `gap`,
+   * because only the database can serve the current row.
    *
-   * Returns false when the ring does not hold that sequence (a patch for a row
-   * outside the window, which a subscriber will get from its next window read).
+   * Returns false when the ring does not hold that sequence — a patch for a row
+   * outside the window changes nothing here, and a later replay cannot reach it
+   * either.
    */
-  replace(stream: HubRingStream, frame: HubFrame): boolean {
-    const index = stream.entries.findIndex((entry) => entry.frame.seq === frame.seq);
-    if (index < 0) return false;
-    const previous = stream.entries[index]!;
-    const { serialized, bytes } = serializeHubFrame(frame);
-    const entry: HubRingEntry = { frame: freezeHubFrame(frame), serialized, bytes };
-    stream.entries[index] = entry;
-    stream.bytes += bytes - previous.bytes;
-    this.bytes += bytes - previous.bytes;
-    this.trim(stream);
+  markStale(stream: HubRingStream, seq: number): boolean {
+    if (!stream.entries.some((entry) => entry.frame.seq === seq)) return false;
+    stream.staleSeqs.add(seq);
     this.touch(stream);
     return true;
   }
@@ -249,6 +257,7 @@ export class HubRingBuffer {
   refound(stream: HubRingStream, seq: number): void {
     this.bytes -= stream.bytes;
     stream.entries.length = 0;
+    stream.staleSeqs.clear();
     stream.bytes = 0;
     stream.headSeq = seq - 1;
     stream.tailSeq = seq;
@@ -277,6 +286,7 @@ export class HubRingBuffer {
     ) {
       const dropped = stream.entries.shift();
       if (!dropped) break;
+      stream.staleSeqs.delete(dropped.frame.seq);
       stream.bytes -= dropped.bytes;
       this.bytes -= dropped.bytes;
       stream.trimmedFrames += 1;

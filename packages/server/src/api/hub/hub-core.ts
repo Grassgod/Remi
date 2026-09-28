@@ -202,6 +202,16 @@ export interface HubKnownHead {
 interface HubSubscriber {
   readonly key: HubStreamKey;
   readonly sink: HubSubscriberSink;
+  /**
+   * The `fromSeq` the subscription was created with.
+   *
+   * Kept beside `cursor` because the two answer different questions. `cursor` is
+   * delivery bookkeeping and moves as frames are handed over; the numbers a
+   * subscription *reports* (`first_seq`, `gap`) describe the request, and A-0 types
+   * `first_seq` as fixed at subscribe time for exactly that reason — a caller
+   * building an ack after a replay started must not see its gap shrink under it.
+   */
+  readonly requested: number;
   /** Last sequence handed to this subscriber. */
   cursor: number;
   lagging: boolean;
@@ -454,16 +464,21 @@ export class HubImpl implements ObservableLiveHub {
     const stream = this.ring.ensure(key);
     this.ring.touch(stream);
     const subscriber = this.newSubscriber(key, fromSeq, sink, null, null);
+    // Whatever the ring cannot serve is reported through `gap` (the caller puts it
+    // in its ack) and the replay starts after it: plan 2/6's rule is that a
+    // subscriber which falls behind gets the range *and* everything the ring still
+    // holds, so the view degrades instead of going silent.
+    this.skipUnservable(subscriber, stream);
     // A subscription that starts behind the head is a replay, and a replay is
     // delivered the same way a live frame is: one batch per flush tick. Without
     // this the backlog would wait for the next write, which may never come.
     this.scheduleFlushFor(key);
     void this.ensureWarm(key);
     return {
-      get first_seq() { return stream.tailSeq; },
+      get first_seq() { return firstServableSeq(stream); },
       get head() { return stream.headSeq; },
       get log_version() { return stream.kind === "log" ? stream.logVersion : null; },
-      get gap() { return gapRange(stream, subscriber); },
+      get gap() { return gapFor(stream, subscriber.requested); },
       unsubscribe: () => { this.removeSubscriber(subscriber); },
       notifyDrain: () => { this.resume(subscriber); },
     };
@@ -483,12 +498,13 @@ export class HubImpl implements ObservableLiveHub {
     // be read off the subscription — which is exactly why A-0 types them as live
     // getters rather than snapshot fields.
     const subscriber = this.newSubscriber(key, fromSeq, listenerSink(key, () => {}), onEvents, taskId);
+    this.skipUnservable(subscriber, stream);
     this.scheduleFlushFor(key);
     void this.ensureWarm(key);
     return {
-      get first_seq() { return stream.tailSeq; },
+      get first_seq() { return firstServableSeq(stream); },
       get head() { return stream.headSeq; },
-      get gap() { return subscriber.cursor < stream.tailSeq - 1; },
+      get gap() { return hasUnservableAfter(stream, subscriber.requested); },
       get closed() { return stream.closed; },
       unsubscribe: () => { this.removeSubscriber(subscriber); },
     };
@@ -635,13 +651,22 @@ export class HubImpl implements ObservableLiveHub {
     let dropped = 0;
     for (const frame of frames) {
       if (frame.kind === "patch") {
-        // A patch only exists for `log:` streams (B1's in-place update), and it
-        // keeps its row's seq, so it is news for the peer without being a new
-        // sequence: the adapter turns it into the same head pointer as an insert.
-        this.ring.replace(stream, frame);
-        this.queueLiveChange(key, frame);
+        // A patch only exists for `log:` streams (B1's in-place update) and keeps
+        // its row's seq, so it is news for a peer without being a new sequence: the
+        // adapter turns it into the same head pointer as an insert.
+        //
+        // It does *not* replace the retained frame: a patch carries only the fields
+        // that changed, and nothing in this process can rebuild the row from it. So
+        // the window keeps its entry and the sequence is flagged stale — a live
+        // subscriber that holds the row gets the patch, and one that replays that
+        // position is told a `gap` instead of being served a fragment.
+        if (this.ring.markStale(stream, frame.seq)) {
+          this.queueLiveChange(key, frame);
+          // A live change is delivered by the flush, so the stream has to be in the
+          // dirty set even though no new sequence entered the window.
+          dirty = true;
+        }
         if (origin === "local" && stream.kind === "log") this.transport.publish({ key, frames: [frame] });
-        dirty = true;
         continue;
       }
       if (frame.seq <= stream.headSeq) {
@@ -892,11 +917,13 @@ export class HubImpl implements ObservableLiveHub {
       const changes = this.liveChanges.get(key);
       for (const subscriber of set) {
         if (!subscriber.active) continue;
-        if (changes && changes.length > 0) {
-          this.send(subscriber, [...changes]);
-          for (const frame of changes) {
-            if (frame.seq > subscriber.cursor) subscriber.cursor = frame.seq;
-          }
+        if (changes && changes.length > 0 && !subscriber.lagging) {
+          // Only to a subscriber that already holds the row being patched. One that
+          // is still behind will get the *current* version of that frame from its
+          // replay — the ring replaced its copy — so sending the patch too would
+          // deliver the same `seq` twice.
+          const applicable = changes.filter((frame) => frame.seq <= subscriber.cursor);
+          if (applicable.length > 0) this.send(subscriber, applicable);
         }
         const more = this.deliverOneBatch(subscriber, stream);
         if (more) this.flushDirty.add(key);
@@ -961,10 +988,22 @@ export class HubImpl implements ObservableLiveHub {
     subscriber.lagging = false;
     const stream = this.ring.get(subscriber.key);
     if (!stream) return;
-    if (subscriber.cursor + 1 < stream.tailSeq) {
-      this.reportGap(subscriber, stream.tailSeq - 1);
+    if (hasUnservableAfter(stream, subscriber.cursor)) {
+      this.reportGap(subscriber, firstServableSeq(stream) - 1);
     }
     this.scheduleFlushFor(subscriber.key);
+  }
+
+  /**
+   * Move a new subscription's delivery cursor to the servable boundary.
+   *
+   * The range it skips is the one `gap`/`gap` reports, so this is bookkeeping, not a
+   * second notification: the keyed spelling hands the range back in the
+   * subscription object and A-0's spelling reports it as `gap: true`.
+   */
+  private skipUnservable(subscriber: HubSubscriber, stream: HubRingStream): void {
+    const first = firstServableSeq(stream);
+    if (subscriber.cursor < first - 1) subscriber.cursor = first - 1;
   }
 
   /**
@@ -1011,6 +1050,7 @@ export class HubImpl implements ObservableLiveHub {
     const subscriber: HubSubscriber = {
       key,
       sink,
+      requested: fromSeq,
       cursor: fromSeq,
       lagging: false,
       active: true,
@@ -1172,24 +1212,54 @@ export class HubImpl implements ObservableLiveHub {
   }
 }
 
-function traceKey(taskId: string): HubStreamKey {
-  return `trace:${taskId}` as HubStreamKey;
+/**
+ * The oldest sequence this stream can serve.
+ *
+ * `tailSeq` is the oldest retained frame, and a stale position is one whose
+ * retained frame is only a fragment of a row, so serving starts after the newest of
+ * them. The two conditions compose: trimming moves the tail, patching moves the
+ * boundary.
+ */
+function firstServableSeq(stream: HubRingStream): number {
+  let first = stream.tailSeq;
+  for (const seq of stream.staleSeqs) {
+    if (seq + 1 > first) first = seq + 1;
+  }
+  return first;
 }
 
 /**
- * The range a keyed subscription can no longer serve.
+ * The range a subscription created at `requested` cannot get from this ring.
  *
- * `from` is the cursor the subscriber is actually resuming from rather than
- * `cursor + 1`, so the range is conservative by one sequence: a subscriber that
- * re-reads `from` de-duplicates by sequence, while one that skipped `cursor + 1`
- * could silently lose a frame. C0's contract test pins this shape.
+ * `from` is the requested cursor rather than `requested + 1`, so the range is
+ * conservative by one sequence: a subscriber that re-reads `from` de-duplicates by
+ * sequence, while one that skipped it could silently lose a frame. C0's contract
+ * test pins this shape.
  */
-function gapRange(stream: HubRingStream, subscriber: HubSubscriber): HubSeqRange | null {
-  // C0's formula: a `fromSeq` older than `first_seq` reports
-  // `{from: fromSeq, to: first_seq - 1}`. `first_seq` is the oldest retained
-  // sequence, so a cursor that has reached it has nothing left to fetch.
-  if (subscriber.cursor >= stream.tailSeq) return null;
-  return { from: subscriber.cursor, to: stream.tailSeq - 1 };
+function gapFor(stream: HubRingStream, requested: number): HubSeqRange | null {
+  if (stream.headSeq === 0) return null;
+  const first = firstServableSeq(stream);
+  if (requested >= first - 1) return null;
+  return { from: requested, to: Math.min(stream.headSeq, first - 1) };
+}
+
+/**
+ * Whether a subscriber at `cursor` has sequences it cannot be served.
+ *
+ * One predicate covers both ways a ring goes short, because `firstServableSeq`
+ * already folds them together: `cursor + 1 < first` means the next sequence the
+ * subscriber wants is either below the retained tail or a position whose frame was
+ * patched in place. The comparison is `cursor < first - 1` rather than
+ * `cursor + 1 < first` for the one-sequence convention `gap` uses: `from` is the
+ * requested cursor, so a request that only just reaches the servable range is not a
+ * gap.
+ */
+function hasUnservableAfter(stream: HubRingStream, cursor: number): boolean {
+  return cursor < firstServableSeq(stream) - 1;
+}
+
+function traceKey(taskId: string): HubStreamKey {
+  return `trace:${taskId}` as HubStreamKey;
 }
 
 function listenerSink(key: HubStreamKey, onFrames: HubFrameListener): HubSubscriberSink {
