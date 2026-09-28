@@ -17,6 +17,22 @@ import {
 import type { MultiremiStore } from "@multiremi/store.js";
 import { normalizeDaemonRuntimeInput } from "@multiremi/worker/client.js";
 
+function configuredRuntimeCapabilities(metadata: Record<string, unknown>): DaemonRuntimeCapabilities {
+  return {
+    supports_batch_import: metadata.supports_batch_import === true,
+    supports_directory_scan: metadata.supports_directory_scan === true,
+    supports_skill_directory: metadata.supports_skill_directory === true,
+    supports_bot_menu: metadata.feishu_bot_menu === true,
+    agent_plugin_protocol: Number(metadata.agent_plugin_protocol) || 0,
+    feishu_concierge_protocol: metadata[FEISHU_CONCIERGE_CONFIG_CAPABILITY] === true
+      ? FEISHU_CONCIERGE_PROTOCOL_VERSION : 0,
+    feishu_decision_card: metadata[FEISHU_DECISION_CARD_CAPABILITY] === 1
+      ? FEISHU_DECISION_CARD_PROTOCOL_VERSION : 0,
+    feishu_issue_decision_card: metadata[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] === 1
+      ? FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION : 0,
+  };
+}
+
 export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: string,
   options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; capabilities?: DaemonRuntimeCapabilities } = {}) {
   const runtime = store.getRuntimeLite(runtimeId);
@@ -63,17 +79,12 @@ export async function receiveRuntimeInputs(store: MultiremiStore, runtimeId: str
   // a separate store heartbeat would advance plugin reconciliation twice.
   // Bare openRuntimeDownlinks still omits capabilities for missing-field tests.
   const capabilities: DaemonRuntimeCapabilities = {
+    ...configuredRuntimeCapabilities(metadata),
     supports_batch_import: true,
     supports_directory_scan: true,
     supports_skill_directory: true,
     supports_bot_menu: true,
     agent_plugin_protocol: 1,
-    feishu_concierge_protocol: metadata[FEISHU_CONCIERGE_CONFIG_CAPABILITY] === true
-      ? FEISHU_CONCIERGE_PROTOCOL_VERSION : 0,
-    feishu_decision_card: metadata[FEISHU_DECISION_CARD_CAPABILITY] === 1
-      ? FEISHU_DECISION_CARD_PROTOCOL_VERSION : 0,
-    feishu_issue_decision_card: metadata[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] === 1
-      ? FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION : 0,
   };
   const connection = await openRuntimeDownlinks(store, runtimeId, { ...options, capabilities });
   const fields: Record<string, string> = { "runtime.update": "pending_update", "runtime.model_list": "pending_model_list",
@@ -112,7 +123,8 @@ export async function requestRuntimeRpc(store: MultiremiStore, runtimeId: string
     { headers: { Authorization: `Bearer ${token}` } }), authToken);
   resolver.stop();
   if ("response" in identity) return { ok: false, transport_status: identity.response.status, ...await identity.response.json() };
-  const connection = await openRuntimeDownlinks(store, runtimeId, { identity: identity.identity });
+  const capabilities = configuredRuntimeCapabilities(store.getRuntimeLite(runtimeId)?.metadata ?? {});
+  const connection = await openRuntimeDownlinks(store, runtimeId, { identity: identity.identity, capabilities });
   try {
     if (connection.session.isClosed) {
       if (!connection.closeCode) throw new Error("RPC handshake closed without a protocol close code");

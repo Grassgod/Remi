@@ -740,17 +740,6 @@ describe("Multiremi API — agent plugins", () => {
     expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
     expect(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins[0]?.status).toBe("pending");
 
-    const masterHeartbeat = await app.request("/api/daemon/heartbeat", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer root-secret",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ runtime_id: runtime.id, agent_plugin_protocol: 2 }),
-    });
-    expect(masterHeartbeat.status).toBe(200);
-    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(2);
-
     const desiredBody = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, daemonToken.token);
     expect(desiredBody.ok).toBe(true);
     expect(desiredBody.runtime_id).toBe(runtime.id);
@@ -780,6 +769,20 @@ describe("Multiremi API — agent plugins", () => {
     });
     expect(repeatedReport.status).toBe(200);
     expect(runtimeStateEvents).toHaveLength(1);
+
+    // With v2, each new socket's hello counts as a runtime heartbeat. Verify
+    // master capability writes after the daemon reports ready so this auth check
+    // does not trip the separate three-heartbeat reconciliation timeout.
+    const masterHeartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer root-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runtime_id: runtime.id, agent_plugin_protocol: 2 }),
+    });
+    expect(masterHeartbeat.status).toBe(200);
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(2);
 
     const masterReport = await app.request(statePath, {
       method: "POST",
