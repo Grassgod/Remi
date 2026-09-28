@@ -139,9 +139,9 @@ function checkOperations(body: unknown) {
   });
 }
 
-function assertOnlyAuthWrites(writes: Write[], requestCount = 1) {
+function assertOnlyAuthWrites(writes: Write[], writeCount = 1) {
   expect(writes, "only last_used_at authentication bookkeeping may be written").toEqual(
-    Array.from({ length: requestCount }, () => ({ sql: authWrite, changes: 1 })),
+    Array.from({ length: writeCount }, () => ({ sql: authWrite, changes: 1 })),
   );
 }
 
@@ -166,6 +166,10 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
           expect(gate.status, gate.stderr).toBe(0);
         }
         console.info(JSON.stringify({ endpoint: "operations", scenario, writes: f.audit.writes }));
+        f.audit.writes.length = 0;
+        await f.request("/api/multiremi/platform/operations?limit=100");
+        assertOnlyAuthWrites(f.audit.writes, 0);
+        expect(f.snapshot()).toEqual(f.before);
       } finally { f.close(); }
     });
 
@@ -197,9 +201,10 @@ describe("MUL-464 operation pre-check over real loopback HTTP and SQLite", () =>
       const f = await fixture(scenario);
       try {
         const body = await f.cli();
-        // The CLI negotiates capabilities before the operations GET.
+        // The CLI negotiates capabilities first; MUL-474 throttles the second
+        // request's last_used_at stamp within the same minute.
         expect(f.requests).toEqual(["GET /api/cli/capabilities", "GET /api/multiremi/platform/operations"]);
-        assertOnlyAuthWrites(f.audit.writes, 2);
+        assertOnlyAuthWrites(f.audit.writes);
         expect(f.snapshot()).toEqual(f.before);
         const gate = checkOperations(body);
         expect(gate.status, gate.stderr).toBe(scenario === "missing-state" ? 0 : 1);
