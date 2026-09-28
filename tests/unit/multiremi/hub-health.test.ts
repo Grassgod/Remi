@@ -63,9 +63,16 @@ describe("hub health payloads", () => {
   });
 
   it("adds nothing for an app built without a hub, keeping the old body byte-identical", async () => {
-    const app = createMultiremiApp({ store: createStore(), hub: null, realtimeState: { enabled: true, connections: 0 } });
-    expect(await (await app.request("/health")).json()).toEqual({ ok: true });
-    expect(await (await app.request("/readyz")).json()).toEqual({ ok: true });
+    const apiRole = process.env.MULTIREMI_API_ROLE;
+    delete process.env.MULTIREMI_API_ROLE;
+    try {
+      const app = createMultiremiApp({ store: createStore(), hub: null, realtimeState: { enabled: true, connections: 0 } });
+      expect(await (await app.request("/health")).json()).toEqual({ ok: true });
+      expect(await (await app.request("/readyz")).json()).toEqual({ ok: true });
+    } finally {
+      if (apiRole === undefined) delete process.env.MULTIREMI_API_ROLE;
+      else process.env.MULTIREMI_API_ROLE = apiRole;
+    }
   });
 
   it("does not attach the human-request feed when background jobs are off", () => {

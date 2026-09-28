@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { createHub } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
@@ -9,7 +9,13 @@ import {
   resetMultiremiTestEnv,
 } from "./helpers.js";
 
-afterEach(resetMultiremiTestEnv);
+let savedApiRole: string | undefined;
+beforeEach(() => { savedApiRole = process.env.MULTIREMI_API_ROLE; });
+afterEach(() => {
+  resetMultiremiTestEnv();
+  if (savedApiRole === undefined) delete process.env.MULTIREMI_API_ROLE;
+  else process.env.MULTIREMI_API_ROLE = savedApiRole;
+});
 
 async function fixture() {
   const store = createStore();
