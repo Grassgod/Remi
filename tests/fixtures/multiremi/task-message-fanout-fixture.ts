@@ -21,6 +21,7 @@ import type {
 export const FANOUT_WORKSPACE_TASK_ID = "tsk_fanout_workspace";
 export const FANOUT_CHAT_TASK_ID = "tsk_fanout_chat";
 export const FANOUT_CHAT_SESSION_ID = "chs_fanout";
+let pinMessageClock: ((time: string) => void) | undefined;
 
 export interface FanoutClient {
   client: MultiremiWebSocketClient;
@@ -64,7 +65,9 @@ export interface TaskMessageFanoutFixture {
 export function installDeterministicFanoutClock(): () => void {
   const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
   const RealDate = globalThis.Date;
+  const previousPinMessageClock = pinMessageClock;
   let clock = Date.UTC(2026, 8, 27, 12, 0, 0);
+  pinMessageClock = time => { clock = RealDate.parse(time); };
   class FixtureDate extends RealDate {
     constructor(...args: unknown[]) {
       if (args.length === 0) super(clock++);
@@ -91,6 +94,7 @@ export function installDeterministicFanoutClock(): () => void {
       return array;
     };
   return () => {
+    pinMessageClock = previousPinMessageClock;
     (globalThis.crypto as { getRandomValues: unknown }).getRandomValues = realGetRandomValues;
     (globalThis as { Date: unknown }).Date = RealDate;
   };
@@ -140,6 +144,8 @@ export function driveTaskMessageFanout(
     workspaceId: "local",
     prompt: "p".repeat(4_096),
   });
+  // Message timestamps are fixture inputs, independent of migration clock reads.
+  pinMessageClock?.("2026-09-27T12:00:00.041Z");
   const messages = store.appendTaskMessages(task.id, [
     { seq: 1, type: "text", content: "hello" },
     { seq: 2, type: "tool_use", tool: "Bash", input: { command: "ls" }, toolCallId: "tc_1", status: "in_progress" },
@@ -162,6 +168,7 @@ export function driveTaskMessageFanout(
     chatSessionId: chat.id,
     prompt: "q".repeat(4_096),
   });
+  pinMessageClock?.("2026-09-27T12:00:00.044Z");
   const chatMessages = store.appendTaskMessages(chatTask.id, [
     { seq: 1, type: "text", content: "chat hello" },
   ]);
