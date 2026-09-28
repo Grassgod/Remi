@@ -145,12 +145,13 @@ export function executionGroupListOptions(wsId: string, agentId?: string) {
   });
 }
 
-export function latestCliVersionOptions() {
+export function latestCliVersionOptions(options: { enabled?: boolean } = {}) {
   return queryOptions({
     queryKey: runtimeKeys.latestVersion(),
     // Proxied through the backend: a direct api.github.com call from the
     // browser hits rate limits and logs a console error on every page.
     queryFn: () => api.getLatestCliVersion(),
+    enabled: options.enabled ?? true,
     staleTime: 10 * 60 * 1000, // 10 minutes
   });
 }

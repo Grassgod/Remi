@@ -33,6 +33,7 @@ import {
 } from "@multiremi/core/chat/mutations";
 import { useChatStore } from "@multiremi/core/chat";
 import { getCurrentWsId } from "@multiremi/core/platform";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import type {
   Agent,
   ChatSession,
@@ -58,6 +59,7 @@ export function SessionDropdown({
   activeSessionId,
   onSelectSession,
   presentation = "dropdown",
+  chatVisible = true,
   onSessionDeleted,
 }: {
   sessions: ChatSession[];
@@ -65,6 +67,7 @@ export function SessionDropdown({
   activeSessionId: string | null;
   onSelectSession: (session: ChatSession) => void;
   presentation?: "dropdown" | "list";
+  chatVisible?: boolean;
   onSessionDeleted?: () => void;
 }) {
   const { t } = useT("chat");
@@ -125,7 +128,11 @@ export function SessionDropdown({
   // Aggregate "which sessions have an in-flight task right now". Reuses
   // the same workspace-scoped query the FAB consumes, so toggling the chat
   // window doesn't fire a second request — TanStack dedupes by key.
-  const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
+  // Hidden windows share the FAB's session gate; opening chat takes precedence.
+  const shellGateOpen = useAfterFirstScreen({ scope: "shell" });
+  const { data: pending } = useQuery(pendingChatTasksOptions(wsId, {
+    enabled: chatVisible || shellGateOpen,
+  }));
   const pendingTaskBySessionId = useMemo(
     () =>
       new Map(

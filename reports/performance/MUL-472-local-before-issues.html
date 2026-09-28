@@ -1,0 +1,1727 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUL-383 页面测速基线（schema 3）</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif; background: #fafafa; color: #18181b; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  .muted { color: #71717a; }
+  .warn { color: #b45309; }
+  .bad { color: #b91c1c; font-weight: 600; }
+  .good { color: #15803d; }
+  tr.withheld td { color: #71717a; font-style: italic; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 12px 0 0; }
+  .meta dt { color: #71717a; }
+  .meta dd { margin: 0; }
+  .tablewrap { overflow-x: auto; border: 1px solid #e4e4e7; border-radius: 6px; background: #fff; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #f0f0f1; text-align: left; white-space: nowrap; }
+  thead th { background: #f4f4f5; font-weight: 600; position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.key { font-weight: 600; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  footer { margin-top: 28px; color: #71717a; }
+</style>
+</head>
+<body>
+<main>
+<h1>MUL-383 页面测速基线（schema 3）</h1>
+<p class="muted">每轮 20s 超时；超时轮不进分位数。生成于 2026-09-27T21:15:40.790Z。</p>
+<dl class="meta">
+  <dt>窗口</dt><dd>offpeak</dd>
+  <dt>目标</dt><dd>http://localhost:3325（工作区 <code>local</code>）</dd>
+  <dt>被测用户</dt><dd>Local User</dd>
+  <dt>运行机器</dt><dd>n37-066-008 (linux 5.15.120.bsk.3-amd64 x64, 64 vCPU, 248 GiB RAM)</dd>
+  <dt>轮数</dt><dd>3</dd>
+  <dt>选择器模式</dt><dd>auto</dd>
+  <dt>前端 / API 版本</dt><dd>? / ?</dd>
+  <dt>写护栏自检</dt><dd>deliberate POST /api/inbox/unread-count was aborted by the guard</dd>
+  <dt>warm 时基</dt><dd>页面内记录的 click（<code>navStartMs</code>）；帧、跳动与首屏集合都从它起算，cold 为文档 origin</dd>
+  <dt>入口页安静</dt><dd>500 ms 无新 <code>/api</code> 请求才开始点击，上限 5000 ms</dd>
+</dl>
+<h2>每场景汇总</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>场景</th><th>模式</th><th>状态</th><th>目标</th><th>选择器</th><th>anchor</th><th class="num">n</th><th class="num">ready p50</th><th class="num">p75</th><th class="num">p95</th><th class="num">max</th><th class="num">超时</th><th class="num">firstReal p50</th><th class="num">jumps max</th><th class="num">位移 max</th><th class="num">串行深度</th><th class="num">首屏 API p50</th></tr></thead>
+<tbody>
+<tr>
+      <td class="key">page-issues</td>
+      <td>cold</td>
+      <td><span class="good">measured</span></td>
+      <td>issues</td>
+      <td class="muted">legacy</td>
+      <td class="muted">h1-no-skeleton</td>
+      <td class="num">3</td>
+      <td class="num">2679.7</td>
+      <td class="num">2803.5</td>
+      <td class="num">2803.5</td>
+      <td class="num">2803.5</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">14</td>
+      <td class="num">27.0</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>warm</td>
+      <td><span class="good">measured</span></td>
+      <td>issues</td>
+      <td class="muted">legacy</td>
+      <td class="muted">h1-no-skeleton</td>
+      <td class="num">3</td>
+      <td class="num">22.5</td>
+      <td class="num">24.8</td>
+      <td class="num">24.8</td>
+      <td class="num">24.8</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0.0</td>
+    </tr>
+</tbody>
+</table></div>
+<h2>每轮明细</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>场景</th><th>模式</th><th class="num">轮</th><th class="num">ready ms</th><th class="num">firstReal ms</th><th class="num">anchorVisible ms</th><th>anchor</th><th>anchorRect(top/bottom/height/root)</th><th class="num">appReady ms</th><th class="num">跳动数</th><th class="num">位移 px</th><th class="num">CLS</th><th class="num">LCP ms</th><th class="num">最慢 Server-Timing ms</th><th class="num">chunks</th><th class="num">chunk bytes</th><th class="num">串行深度</th><th class="num">首屏 API</th><th class="num">拦截写请求</th><th class="num">桩写请求</th><th class="num">URL 提交 ms</th><th>目标前置</th><th class="num">前置前 inbox 请求</th><th>点击行文本</th><th>error</th></tr></thead>
+<tbody>
+<tr>
+      <td class="key">page-issues</td>
+      <td>cold</td>
+      <td class="num">1</td>
+      <td class="num">2624.3</td>
+      <td class="num">-</td>
+      <td class="num">2624.3</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2328.0</td>
+      <td class="num">2.7</td>
+      <td class="num">7</td>
+      <td class="num">22.57 MiB</td>
+      <td class="num">9</td>
+      <td class="num">27/27</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">-</td>
+      <td class="muted">-</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>cold</td>
+      <td class="num">2</td>
+      <td class="num">2803.5</td>
+      <td class="num">-</td>
+      <td class="num">2803.5</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2524.0</td>
+      <td class="num">2.4</td>
+      <td class="num">7</td>
+      <td class="num">22.57 MiB</td>
+      <td class="num">10</td>
+      <td class="num">27/27</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">-</td>
+      <td class="muted">-</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>cold</td>
+      <td class="num">3</td>
+      <td class="num">2679.7</td>
+      <td class="num">-</td>
+      <td class="num">2679.7</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2376.0</td>
+      <td class="num">1.2</td>
+      <td class="num">7</td>
+      <td class="num">22.57 MiB</td>
+      <td class="num">14</td>
+      <td class="num">27/27</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">-</td>
+      <td class="muted">-</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>warm</td>
+      <td class="num">1</td>
+      <td class="num">22.4</td>
+      <td class="num">-</td>
+      <td class="num">22.4</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2424.0</td>
+      <td class="num">-</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num">0</td>
+      <td class="num">0/0</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">Issues</td>
+      <td class="muted">-</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>warm</td>
+      <td class="num">2</td>
+      <td class="num">22.5</td>
+      <td class="num">-</td>
+      <td class="num">22.5</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2388.0</td>
+      <td class="num">-</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num">0</td>
+      <td class="num">0/0</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">Issues</td>
+      <td class="muted">-</td>
+    </tr>
+<tr>
+      <td class="key">page-issues</td>
+      <td>warm</td>
+      <td class="num">3</td>
+      <td class="num">24.8</td>
+      <td class="num">-</td>
+      <td class="num">24.8</td>
+      <td class="muted">none</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num good">0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2192.0</td>
+      <td class="num">-</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num">0</td>
+      <td class="num">0/0</td>
+      <td class="num">0</td>
+      <td class="num">0</td>
+      <td class="num">-</td>
+      <td>-</td>
+      <td class="num">-</td>
+      <td class="muted">Issues</td>
+      <td class="muted">-</td>
+    </tr>
+</tbody>
+</table></div>
+<h2>首屏 API 表（按 path 聚合）</h2>
+<p class="muted">只统计 <code>startMs ≥ navStartMs</code> 且不晚于就绪帧的请求（warm 从 click 起算）；<code>gap</code> = 客户端 duration − 服务端 <code>total</code>。红色表示超出 total p95 ≤ 200ms 或 gap p50 ≤ 80ms。本轮入口页安静：500 ms / 上限 5000 ms。</p>
+<h3>page-issues（cold）</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>path</th><th>方法</th><th class="num">n</th><th class="num">轮</th><th class="num">total p50</th><th class="num">total p95</th><th class="num">db p95</th><th class="num">dbq max</th><th class="num">dbb max</th><th class="num">gap p50</th></tr></thead>
+<tbody>
+<tr>
+      <td><code>/api/invitations</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.6</td>
+      <td class="num good">2.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">14.0</td>
+    </tr>
+<tr>
+      <td><code>/api/squads</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.8</td>
+      <td class="num good">2.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">11.4</td>
+    </tr>
+<tr>
+      <td><code>/api/cli/latest-version</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.5</td>
+      <td class="num good">2.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">13.6</td>
+    </tr>
+<tr>
+      <td><code>/api/agent-task-snapshot</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1.2</td>
+      <td class="num good">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">12.7</td>
+    </tr>
+<tr>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">27</td>
+      <td class="num">3</td>
+      <td class="num">0.9</td>
+      <td class="num good">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">12.8</td>
+    </tr>
+<tr>
+      <td><code>/api/workspaces/:id/members</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.8</td>
+      <td class="num good">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">14.7</td>
+    </tr>
+<tr>
+      <td><code>/api/agents</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1.1</td>
+      <td class="num good">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">11.6</td>
+    </tr>
+<tr>
+      <td><code>/api/projects</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.8</td>
+      <td class="num bad">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num bad">199.9</td>
+    </tr>
+<tr>
+      <td><code>/api/runtimes</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.7</td>
+      <td class="num good">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">10.9</td>
+    </tr>
+<tr>
+      <td><code>/api/assignee-frequency</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.9</td>
+      <td class="num good">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">56.5</td>
+    </tr>
+<tr>
+      <td><code>/api/chat/sessions</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.7</td>
+      <td class="num good">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">11.0</td>
+    </tr>
+<tr>
+      <td><code>/api/workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.5</td>
+      <td class="num good">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">11.2</td>
+    </tr>
+<tr>
+      <td><code>/api/me</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.8</td>
+      <td class="num good">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">12.7</td>
+    </tr>
+<tr>
+      <td><code>/api/chat/pending-tasks</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.6</td>
+      <td class="num good">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">13.5</td>
+    </tr>
+<tr>
+      <td><code>/api/inbox/summary</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.6</td>
+      <td class="num good">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">15.2</td>
+    </tr>
+<tr>
+      <td><code>/api/issues/child-progress</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.3</td>
+      <td class="num good">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">14.8</td>
+    </tr>
+<tr>
+      <td><code>/api/runtime-workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.6</td>
+      <td class="num good">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">11.7</td>
+    </tr>
+<tr>
+      <td><code>/api/pins</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.5</td>
+      <td class="num good">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">17.6</td>
+    </tr>
+<tr>
+      <td><code>/api/config</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">0.2</td>
+      <td class="num good">0.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">0 B</td>
+      <td class="num good">12.5</td>
+    </tr>
+</tbody>
+</table></div>
+<h2>逐请求明细</h2>
+<p class="muted">JSON <code>scenarios[].rounds[].apiFirstScreenEntries[]</code> 的展开视图。</p>
+<details><summary>page-issues（cold）：3 轮</summary>
+<div class="tablewrap"><table>
+<thead><tr><th class="num">轮</th><th>path</th><th>方法</th><th class="num">wave</th><th class="num">after</th><th class="num">start ms</th><th class="num">end ms</th><th class="num">duration ms</th><th class="num">total ms</th><th class="num">db ms</th><th class="num">dbq</th><th class="num">bytes</th><th class="num">gap ms</th></tr></thead>
+<tbody>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/config</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1610.0</td>
+      <td class="num">1622.7</td>
+      <td class="num">12.7</td>
+      <td class="num">0.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">132 B</td>
+      <td class="num">12.5</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/me</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1611.1</td>
+      <td class="num">1624.6</td>
+      <td class="num">13.5</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">575 B</td>
+      <td class="num">12.7</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1612.0</td>
+      <td class="num">1624.8</td>
+      <td class="num">12.8</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">314 B</td>
+      <td class="num">11.8</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/agents</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1904.4</td>
+      <td class="num">1923.7</td>
+      <td class="num">19.3</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">715 B</td>
+      <td class="num">18.5</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/runtimes</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1906.6</td>
+      <td class="num">1926.2</td>
+      <td class="num">19.6</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">19.0</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/agent-task-snapshot</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1908.5</td>
+      <td class="num">1930.5</td>
+      <td class="num">22.0</td>
+      <td class="num">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">831 B</td>
+      <td class="num">20.7</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/squads</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1910.3</td>
+      <td class="num">1928.8</td>
+      <td class="num">18.5</td>
+      <td class="num">2.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">16.0</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/invitations</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1913.4</td>
+      <td class="num">1930.1</td>
+      <td class="num">16.7</td>
+      <td class="num">2.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">14.0</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/inbox/summary</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1915.3</td>
+      <td class="num">1931.2</td>
+      <td class="num">15.9</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">26 B</td>
+      <td class="num">15.2</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/cli/latest-version</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1917.3</td>
+      <td class="num">1931.4</td>
+      <td class="num">14.1</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">21 B</td>
+      <td class="num">13.6</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1919.3</td>
+      <td class="num">1937.8</td>
+      <td class="num">18.5</td>
+      <td class="num">0.9</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">17.6</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1921.1</td>
+      <td class="num">1940.3</td>
+      <td class="num">19.2</td>
+      <td class="num">0.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">18.8</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/pins</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1922.9</td>
+      <td class="num">1941.0</td>
+      <td class="num">18.1</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">17.6</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/workspaces/:id/members</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">9</td>
+      <td class="num">1925.3</td>
+      <td class="num">1941.3</td>
+      <td class="num">16.0</td>
+      <td class="num">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">160 B</td>
+      <td class="num">14.7</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/chat/pending-tasks</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">9</td>
+      <td class="num">1927.7</td>
+      <td class="num">1941.8</td>
+      <td class="num">14.1</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">12 B</td>
+      <td class="num">13.5</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/runtime-workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">9</td>
+      <td class="num">1929.9</td>
+      <td class="num">1942.3</td>
+      <td class="num">12.4</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">17 B</td>
+      <td class="num">11.7</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/projects</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">9</td>
+      <td class="num">1932.5</td>
+      <td class="num">2133.2</td>
+      <td class="num">200.7</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">199.9</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/chat/sessions</code></td>
+      <td class="muted">GET</td>
+      <td class="num">5</td>
+      <td class="num">13</td>
+      <td class="num">2123.8</td>
+      <td class="num">2133.6</td>
+      <td class="num">9.8</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">9.2</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">6</td>
+      <td class="num">17</td>
+      <td class="num">2349.7</td>
+      <td class="num">2361.8</td>
+      <td class="num">12.1</td>
+      <td class="num">1.1</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">11.0</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">6</td>
+      <td class="num">17</td>
+      <td class="num">2351.6</td>
+      <td class="num">2364.9</td>
+      <td class="num">13.3</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">625 B</td>
+      <td class="num">12.3</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">6</td>
+      <td class="num">17</td>
+      <td class="num">2353.5</td>
+      <td class="num">2371.0</td>
+      <td class="num">17.5</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">445 B</td>
+      <td class="num">16.5</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">18</td>
+      <td class="num">2355.4</td>
+      <td class="num">2369.0</td>
+      <td class="num">13.6</td>
+      <td class="num">1.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">12.1</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">18</td>
+      <td class="num">2357.3</td>
+      <td class="num">2371.4</td>
+      <td class="num">14.1</td>
+      <td class="num">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">12.8</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">18</td>
+      <td class="num">2359.2</td>
+      <td class="num">2370.7</td>
+      <td class="num">11.5</td>
+      <td class="num">0.9</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">10.6</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">21</td>
+      <td class="num">2361.3</td>
+      <td class="num">2372.1</td>
+      <td class="num">10.8</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">681 B</td>
+      <td class="num">10.0</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/issues/child-progress</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">21</td>
+      <td class="num">2363.7</td>
+      <td class="num">2379.2</td>
+      <td class="num">15.5</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">14.8</td>
+    </tr>
+<tr>
+      <td class="num">1</td>
+      <td><code>/api/assignee-frequency</code></td>
+      <td class="muted">GET</td>
+      <td class="num">9</td>
+      <td class="num">24</td>
+      <td class="num">2575.5</td>
+      <td class="num">2631.7</td>
+      <td class="num">56.2</td>
+      <td class="num">0.9</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">55.3</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/config</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1206.9</td>
+      <td class="num">1223.6</td>
+      <td class="num">16.7</td>
+      <td class="num">0.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">132 B</td>
+      <td class="num">16.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/me</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1214.4</td>
+      <td class="num">1225.7</td>
+      <td class="num">11.3</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">575 B</td>
+      <td class="num">10.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1215.3</td>
+      <td class="num">1226.9</td>
+      <td class="num">11.6</td>
+      <td class="num">0.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">314 B</td>
+      <td class="num">11.2</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/agents</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1948.6</td>
+      <td class="num">1960.9</td>
+      <td class="num">12.3</td>
+      <td class="num">1.1</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">715 B</td>
+      <td class="num">11.2</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/runtimes</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1951.3</td>
+      <td class="num">1961.5</td>
+      <td class="num">10.2</td>
+      <td class="num">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">9.0</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/agent-task-snapshot</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1953.6</td>
+      <td class="num">1967.0</td>
+      <td class="num">13.4</td>
+      <td class="num">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">831 B</td>
+      <td class="num">12.2</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/squads</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">3</td>
+      <td class="num">1955.8</td>
+      <td class="num">1967.8</td>
+      <td class="num">12.0</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">11.4</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/invitations</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1959.4</td>
+      <td class="num">2134.3</td>
+      <td class="num">174.9</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">174.3</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/inbox/summary</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1961.7</td>
+      <td class="num">2135.8</td>
+      <td class="num">174.1</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">26 B</td>
+      <td class="num">173.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/cli/latest-version</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1964.1</td>
+      <td class="num">2140.6</td>
+      <td class="num">176.5</td>
+      <td class="num">2.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">21 B</td>
+      <td class="num">174.1</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1966.6</td>
+      <td class="num">2144.2</td>
+      <td class="num">177.6</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">176.6</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1968.9</td>
+      <td class="num">2144.5</td>
+      <td class="num">175.6</td>
+      <td class="num">1.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">174.3</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/pins</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1971.2</td>
+      <td class="num">2147.3</td>
+      <td class="num">176.1</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">175.6</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/workspaces/:id/members</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1973.9</td>
+      <td class="num">2149.0</td>
+      <td class="num">175.1</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">160 B</td>
+      <td class="num">174.6</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/chat/pending-tasks</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">5</td>
+      <td class="num">1977.0</td>
+      <td class="num">2149.1</td>
+      <td class="num">172.1</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">12 B</td>
+      <td class="num">171.4</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/runtime-workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">5</td>
+      <td class="num">7</td>
+      <td class="num">2136.2</td>
+      <td class="num">2150.0</td>
+      <td class="num">13.8</td>
+      <td class="num">0.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">17 B</td>
+      <td class="num">13.4</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/projects</code></td>
+      <td class="muted">GET</td>
+      <td class="num">5</td>
+      <td class="num">7</td>
+      <td class="num">2138.8</td>
+      <td class="num">2331.9</td>
+      <td class="num">193.1</td>
+      <td class="num">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">191.9</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/chat/sessions</code></td>
+      <td class="muted">GET</td>
+      <td class="num">6</td>
+      <td class="num">15</td>
+      <td class="num">2312.7</td>
+      <td class="num">2332.9</td>
+      <td class="num">20.2</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">19.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">17</td>
+      <td class="num">2537.1</td>
+      <td class="num">2548.1</td>
+      <td class="num">11.0</td>
+      <td class="num">1.1</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">9.9</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">17</td>
+      <td class="num">2539.0</td>
+      <td class="num">2549.9</td>
+      <td class="num">10.9</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">625 B</td>
+      <td class="num">10.1</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">18</td>
+      <td class="num">2540.9</td>
+      <td class="num">2555.5</td>
+      <td class="num">14.6</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">445 B</td>
+      <td class="num">13.9</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">18</td>
+      <td class="num">2542.5</td>
+      <td class="num">2557.6</td>
+      <td class="num">15.1</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">14.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">18</td>
+      <td class="num">2544.3</td>
+      <td class="num">2558.0</td>
+      <td class="num">13.7</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">12.9</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">18</td>
+      <td class="num">2546.0</td>
+      <td class="num">2559.0</td>
+      <td class="num">13.0</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">12.3</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">9</td>
+      <td class="num">20</td>
+      <td class="num">2548.1</td>
+      <td class="num">2559.6</td>
+      <td class="num">11.5</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">681 B</td>
+      <td class="num">10.5</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/issues/child-progress</code></td>
+      <td class="muted">GET</td>
+      <td class="num">9</td>
+      <td class="num">20</td>
+      <td class="num">2550.3</td>
+      <td class="num">2561.6</td>
+      <td class="num">11.3</td>
+      <td class="num">0.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">11.0</td>
+    </tr>
+<tr>
+      <td class="num">2</td>
+      <td><code>/api/assignee-frequency</code></td>
+      <td class="muted">GET</td>
+      <td class="num">10</td>
+      <td class="num">24</td>
+      <td class="num">2756.2</td>
+      <td class="num">2815.5</td>
+      <td class="num">59.3</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">58.6</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/config</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1171.9</td>
+      <td class="num">1181.3</td>
+      <td class="num">9.4</td>
+      <td class="num">0.1</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">132 B</td>
+      <td class="num">9.3</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/me</code></td>
+      <td class="muted">GET</td>
+      <td class="num">1</td>
+      <td class="num">-</td>
+      <td class="num">1173.1</td>
+      <td class="num">1187.9</td>
+      <td class="num">14.8</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">575 B</td>
+      <td class="num">14.1</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">2</td>
+      <td class="num">0</td>
+      <td class="num">1180.9</td>
+      <td class="num">1190.4</td>
+      <td class="num">9.5</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">314 B</td>
+      <td class="num">9.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/agents</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">2</td>
+      <td class="num">1908.0</td>
+      <td class="num">1920.8</td>
+      <td class="num">12.8</td>
+      <td class="num">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">715 B</td>
+      <td class="num">11.6</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/runtimes</code></td>
+      <td class="muted">GET</td>
+      <td class="num">3</td>
+      <td class="num">2</td>
+      <td class="num">1910.7</td>
+      <td class="num">1922.3</td>
+      <td class="num">11.6</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">10.9</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/agent-task-snapshot</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">3</td>
+      <td class="num">1913.1</td>
+      <td class="num">1927.0</td>
+      <td class="num">13.9</td>
+      <td class="num">1.2</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">831 B</td>
+      <td class="num">12.7</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/squads</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">3</td>
+      <td class="num">1915.4</td>
+      <td class="num">1927.5</td>
+      <td class="num">12.1</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">11.3</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/invitations</code></td>
+      <td class="muted">GET</td>
+      <td class="num">4</td>
+      <td class="num">3</td>
+      <td class="num">1918.9</td>
+      <td class="num">1929.0</td>
+      <td class="num">10.1</td>
+      <td class="num">0.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">9.7</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/inbox/summary</code></td>
+      <td class="muted">GET</td>
+      <td class="num">5</td>
+      <td class="num">5</td>
+      <td class="num">1921.3</td>
+      <td class="num">1931.8</td>
+      <td class="num">10.5</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">26 B</td>
+      <td class="num">9.9</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/cli/latest-version</code></td>
+      <td class="muted">GET</td>
+      <td class="num">5</td>
+      <td class="num">5</td>
+      <td class="num">1923.6</td>
+      <td class="num">1934.0</td>
+      <td class="num">10.4</td>
+      <td class="num">0.4</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">21 B</td>
+      <td class="num">10.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">6</td>
+      <td class="num">8</td>
+      <td class="num">1926.2</td>
+      <td class="num">1936.0</td>
+      <td class="num">9.8</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">9.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">10</td>
+      <td class="num">1928.4</td>
+      <td class="num">1939.4</td>
+      <td class="num">11.0</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">10.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/pins</code></td>
+      <td class="muted">GET</td>
+      <td class="num">7</td>
+      <td class="num">10</td>
+      <td class="num">1930.7</td>
+      <td class="num">1939.9</td>
+      <td class="num">9.2</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">8.7</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/workspaces/:id/members</code></td>
+      <td class="muted">GET</td>
+      <td class="num">8</td>
+      <td class="num">11</td>
+      <td class="num">1933.6</td>
+      <td class="num">1943.0</td>
+      <td class="num">9.4</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">160 B</td>
+      <td class="num">8.6</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/chat/pending-tasks</code></td>
+      <td class="muted">GET</td>
+      <td class="num">9</td>
+      <td class="num">13</td>
+      <td class="num">1936.7</td>
+      <td class="num">1944.4</td>
+      <td class="num">7.7</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">12 B</td>
+      <td class="num">7.2</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/runtime-workspaces</code></td>
+      <td class="muted">GET</td>
+      <td class="num">10</td>
+      <td class="num">14</td>
+      <td class="num">1939.4</td>
+      <td class="num">1947.7</td>
+      <td class="num">8.3</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">17 B</td>
+      <td class="num">7.7</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/projects</code></td>
+      <td class="muted">GET</td>
+      <td class="num">11</td>
+      <td class="num">15</td>
+      <td class="num">1941.9</td>
+      <td class="num">2189.0</td>
+      <td class="num">247.1</td>
+      <td class="num">0.8</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">246.3</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/chat/sessions</code></td>
+      <td class="muted">GET</td>
+      <td class="num">11</td>
+      <td class="num">15</td>
+      <td class="num">2177.7</td>
+      <td class="num">2189.7</td>
+      <td class="num">12.0</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">11.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">12</td>
+      <td class="num">16</td>
+      <td class="num">2469.2</td>
+      <td class="num">2480.2</td>
+      <td class="num">11.0</td>
+      <td class="num">0.9</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">10.1</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">12</td>
+      <td class="num">16</td>
+      <td class="num">2471.2</td>
+      <td class="num">2482.9</td>
+      <td class="num">11.7</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">625 B</td>
+      <td class="num">10.7</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2472.9</td>
+      <td class="num">2495.4</td>
+      <td class="num">22.5</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">445 B</td>
+      <td class="num">21.8</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2474.7</td>
+      <td class="num">2497.1</td>
+      <td class="num">22.4</td>
+      <td class="num">0.6</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">21.8</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2476.5</td>
+      <td class="num">2497.4</td>
+      <td class="num">20.9</td>
+      <td class="num">0.9</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">20.0</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2478.3</td>
+      <td class="num">2499.1</td>
+      <td class="num">20.8</td>
+      <td class="num">0.7</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">23 B</td>
+      <td class="num">20.1</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2480.3</td>
+      <td class="num">2499.9</td>
+      <td class="num">19.6</td>
+      <td class="num">0.5</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">681 B</td>
+      <td class="num">19.1</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/issues/child-progress</code></td>
+      <td class="muted">GET</td>
+      <td class="num">13</td>
+      <td class="num">18</td>
+      <td class="num">2482.5</td>
+      <td class="num">2500.2</td>
+      <td class="num">17.7</td>
+      <td class="num">0.3</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">25 B</td>
+      <td class="num">17.4</td>
+    </tr>
+<tr>
+      <td class="num">3</td>
+      <td><code>/api/assignee-frequency</code></td>
+      <td class="muted">GET</td>
+      <td class="num">14</td>
+      <td class="num">20</td>
+      <td class="num">2632.9</td>
+      <td class="num">2690.4</td>
+      <td class="num">57.5</td>
+      <td class="num">1.0</td>
+      <td class="num">0.0</td>
+      <td class="num">0</td>
+      <td class="num">2 B</td>
+      <td class="num">56.5</td>
+    </tr>
+</tbody>
+</table></div></details>
+
+
+
+
+
+<footer>由 frontend/scripts/perf/page-speed.ts 生成。自包含 HTML：无外链资源、无存储、无父窗口访问。</footer>
+</main>
+</body>
+</html>

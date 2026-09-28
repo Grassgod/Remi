@@ -4070,45 +4070,46 @@ ${placementAfter.sql}
    * tasks — there is no run left to steer.
    */
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.ctx.db.transaction(() => this.createTaskSteerMessageWithinTransaction(input))();
+  }
+
+  /** Caller owns the transaction and any post-commit notifications. Emits no events. */
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     const content = String(input.content ?? "").trim();
     if (!content) throw new Error("steer content must not be empty");
     const kind: MultiremiTaskSteerKind = input.kind === "force_answer" ? "force_answer" : "steer";
     const id = input.id ?? createId("steer");
     const initial = this.getTask(input.taskId);
     if (!initial) throw new Error(`Task not found: ${input.taskId}`);
-    return this.ctx.db.transaction(() => {
-      // Serialize against completeTask/cancelTask on their workspace→session
-      // lock order. On Postgres two connections could otherwise each observe
-      // "running" / "no pending steer" and commit both the steer insert and
-      // the completion — the steer barrier is only a real barrier when both
-      // sides contend on the same lock.
-      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      const task = this.getTask(input.taskId);
-      if (!task || task.workspaceId !== initial.workspaceId) throw new Error(`Task not found: ${input.taskId}`);
-      if (["completed", "failed", "cancelled"].includes(task.status)) {
-        throw new TaskSteerConflictError(`Task is already ${task.status}: steer messages can only target a live task`);
-      }
-      this.lockTaskIssueSessionsWithinWorkspaceLock([task]);
-      const now = nowIso();
-      this.ctx.db.run(
-        `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at, source_chat_message_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, input.taskId, input.authorType ?? "user", input.authorId ?? null, kind, content, now, input.sourceChatMessageId ?? null],
-      );
-      // The steer must be visible on the session timeline even before the
-      // daemon consumes it — auditability is part of the contract.
-      if (task.issueSessionId) {
-        this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, {
-          authorType: input.authorType ?? "user",
-          authorId: input.authorId ?? null,
-          kind: "task_steer",
-          body: content,
-          taskId: task.id,
-          metadata: { steer_id: id, steer_kind: kind },
-        });
-      }
-      return this.getTaskSteerMessage(id)!;
-    })();
+    // Serialize against completeTask/cancelTask on their workspace->session
+    // lock order. An outer caller may already hold this workspace lock; taking
+    // it again stays in the same transaction and preserves the steer barrier.
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const task = this.getTask(input.taskId);
+    if (!task || task.workspaceId !== initial.workspaceId) throw new Error(`Task not found: ${input.taskId}`);
+    if (["completed", "failed", "cancelled"].includes(task.status)) {
+      throw new TaskSteerConflictError(`Task is already ${task.status}: steer messages can only target a live task`);
+    }
+    this.lockTaskIssueSessionsWithinWorkspaceLock([task]);
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_task_steer_messages (id, task_id, author_type, author_id, kind, content, created_at, source_chat_message_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, input.taskId, input.authorType ?? "user", input.authorId ?? null, kind, content, now, input.sourceChatMessageId ?? null],
+    );
+    // The steer must be visible on the session timeline even before the
+    // daemon consumes it -- auditability is part of the contract.
+    if (task.issueSessionId) {
+      this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, {
+        authorType: input.authorType ?? "user",
+        authorId: input.authorId ?? null,
+        kind: "task_steer",
+        body: content,
+        taskId: task.id,
+        metadata: { steer_id: id, steer_kind: kind },
+      });
+    }
+    return this.getTaskSteerMessage(id)!;
   }
 
   private withSteerAttachments(row: Row): MultiremiTaskSteerMessage {
@@ -5740,7 +5741,7 @@ ${placementAfter.sql}
           data: { sourceTaskId: task.id, status: "completed" },
           createdAt: now,
         });
-        this.ctx.notificationChannels().flushAgentIssueUpdatesForIssueWithinTransaction(issue.id, now);
+        this.ctx.notificationChannels().flushAgentIssueUpdatesForIssueWithinTransaction(issue.id, deferredEvents, now);
         roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
           issue,
           leaderTask: task,
