@@ -20,6 +20,7 @@
  *   bun run tests/integration/replica-fixture/run.ts --only opfs-off
  *   bun run tests/integration/replica-fixture/run.ts --headed --keep
  */
+import type { ServerWebSocket } from "bun";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,7 +159,7 @@ function startServer(assetDir: string) {
         : url.pathname.endsWith(".js")
           ? "text/javascript"
           : "application/octet-stream";
-      return new Response(asset, { headers: { "content-type": type } });
+      return new Response(new Blob([new Uint8Array(asset)]), { headers: { "content-type": type } });
     },
     websocket: {
       open(socket: ServerWebSocket<never>) {
@@ -803,7 +804,7 @@ async function readState(page: Page): Promise<PageState> {
  * Polling, not a fixed sleep: the criteria are about time budgets, and a fixed
  * sleep either hides a slow path or makes the run slow for no reason.
  */
-async function waitFor<T>(predicate: () => Promise<T | false>, timeoutMs = 10_000): Promise<T> {
+async function waitFor<T>(predicate: () => T | false | Promise<T | false>, timeoutMs = 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await predicate();
