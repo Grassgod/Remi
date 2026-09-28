@@ -1937,11 +1937,40 @@ export interface MultiremiIssue {
   labels: MultiremiLabel[];
   /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
   attachments?: MultiremiAttachment[];
+  /**
+   * MUL-400 S1c (A4): the raw `parent_done_grant` columns. All three are null
+   * when no member has authorized the owner agent, which is the default for
+   * every existing row. The derived shape the detail routes expose is
+   * {@link MultiremiIssueParentDoneGrant}.
+   */
+  parentDoneGrantAt: string | null;
+  parentDoneGrantBy: string | null;
+  parentDoneGrantAgentId: string | null;
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * MUL-400 S1c (A4): why a stored grant does or does not authorize the CURRENT
+ * owner agent to close the parent. `grant_missing` is "nobody granted";
+ * `assignee_changed` is "the grant still names a different agent" (D1: a grant
+ * never follows a re-assignment); `owner_not_agent` is "the owner resolves to no
+ * runnable agent at all", which is also what a member-owned parent reports.
+ */
+export type MultiremiIssueParentDoneGrantIneffectiveReason =
+  | "grant_missing"
+  | "assignee_changed"
+  | "owner_not_agent";
+
+export interface MultiremiIssueParentDoneGrant {
+  granted_at: string;
+  granted_by: string;
+  agent_id: string;
+  effective: boolean;
+  ineffective_reason: MultiremiIssueParentDoneGrantIneffectiveReason | null;
 }
 
 export interface MultiremiIssueWithTasks extends MultiremiIssue {
@@ -2353,6 +2382,16 @@ export interface UpdateIssueOptions {
   holdParentStatus?: boolean;
   /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
   holdParentStatusData?: Record<string, unknown> | null;
+  /**
+   * MUL-400 S1c (QA round 1): where the `parent_done_grant_used` audit row came
+   * from. The SCM merge effect closes the parent through the same in-transaction
+   * writer as the API, so the row must still distinguish the two. Server-only —
+   * `UpdateIssueOptions` is passed positionally by the store and is never built
+   * from the request body.
+   */
+  parentDoneGrantSource?: "api" | "scm_merge";
+  /** Extra audit fields for the merge-sourced grant use (PR number and URL). */
+  parentDoneGrantData?: Record<string, unknown> | null;
 }
 
 export interface BatchUpdateIssuesInput {
