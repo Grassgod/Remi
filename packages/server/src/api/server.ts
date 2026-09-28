@@ -78,7 +78,7 @@ import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
 import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
-import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
+import { hubHealthPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -664,7 +664,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     ...extra,
   });
   app.get("/health", (c) => c.json(healthBody(hubHealthPayload(hub))));
-  app.get("/readyz", (c) => c.json(healthBody(hubReadyzPayload(hub))));
+  app.get("/readyz", (c) => c.json(healthBody()));
   app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),

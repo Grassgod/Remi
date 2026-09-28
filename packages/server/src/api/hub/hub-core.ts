@@ -156,7 +156,7 @@ export const HUB_LIMITS: HubLimits = {
 
 export interface HubOptions {
   transport: HubTransport;
-  /** Reported through `/readyz`; behaviour does not depend on it. */
+  /** Reported through `/health`; behaviour does not depend on it. */
   role?: HubRole;
   /** The repair reader. Absent means "serve only what was handed to me". */
   fill?: HubFillReader | null;
@@ -169,7 +169,7 @@ export interface HubOptions {
   onWarn?: (message: string) => void;
 }
 
-/** The state `/health` and `/readyz` publish (plan 2/6 §1, item 9). */
+/** The state `/health` publishes (plan 2/6 §1, item 9). */
 export interface HubSnapshot {
   role: HubRole;
   transport: string;
