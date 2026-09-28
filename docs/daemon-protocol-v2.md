@@ -260,6 +260,9 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 `steer_pending` 也不进入 blocked，daemon 删除这一行，将结果交回正在等待的执行端。
 没有执行端等待时（重启重放或等待超时），改报 `task.fail`，原因 `runtime_recovery`，
 说明完成时有未注入的 steer，执行端已不在，并记 warn。
+尾帧例外：`task.progress(final:true)`（展示摘要）和 runAgent `finally` 的 `task.workspace`
+允许排在 complete 之后；complete 是最后一条改变任务状态的帧，其余帧类型仍须在它之前。
+服务端接收这两种终态尾帧，不改变任务状态，相同内容的重放只生效一次。
 
 `outbox_events.task_id` 语义扩展为分区键：runtime 级记录写 `rt:<runtime_id>`。每分区内保序，
 分区间可并行。断线期间照常入库，重连后从最小未删 id 续发。
@@ -289,7 +292,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 |---|---|---|---|
 | daemon 重启 | outbox 行仍在，启动后按 id 续发；服务端幂等吸收重复 | 重连后快照重推，实体 id 去重 | 从 `welcome.trace_heads` 续传；文件是唯一来源 |
 | 服务端重启 | daemon 收到 close，走 1 s→30 s 抖动退避；窗口内未 `res` 的帧不删行，重连后重发 | 服务端无状态可丢，从 DB 重推导 | head 归零，daemon 回放尾部，Hub 记 `first_seq` |
-| 任务进行中断线 | 同上；`task.complete` 永远在其 task 分区最后，不可能先于 progress 到达 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
+| 任务进行中断线 | 同上；`task.complete` 是其 task 分区最后一条改变状态的帧；只允许 §2.1 两种展示/工作区尾帧排在其后 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
 
 判定口径：每一帧在服务端**至少到达一次、至多生效一次**，用 `(分区键, seq)` 对账。重复到达允许，
 必须被幂等吸收。
@@ -307,8 +310,8 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | 帧 | 幂等键 | 重复到达时 |
 |---|---|---|
 | `task.start` | task id | 已离开 dispatched 视为成功（`start_replayed`） |
-| `task.progress` | task id | 覆盖写 |
-| `task.session_pin` / `task.workspace` | task id | 覆盖写 |
+| `task.progress` | task id | 覆盖写；终态的 `final:true` 尾帧相同内容即 ok，不重复写 |
+| `task.session_pin` / `task.workspace` | task id | 覆盖写；终态的 workspace 尾帧相同内容即 ok，不重复写 |
 | `task.usage` | task id + provider + model | 合并 |
 | `task.complete` / `task.fail` | task id | 已终态即 ok |
 | `runtime.*_result` | request id | 状态机 pending→running→completed/failed 只能前进 |

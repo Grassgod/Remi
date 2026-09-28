@@ -1,4 +1,5 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { isDeepStrictEqual } from "node:util";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
   ReportRuntimeUpdateInput, ReportRuntimeCommandInput, ReportRuntimeModelListInput,
@@ -82,11 +83,17 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             if (!nullable(p.session_id) && !nullable(p.work_dir)) reject();
             store.pinTaskSession(taskId, nullable(p.session_id), nullable(p.work_dir));
             break;
-          case "task.progress":
-            if (!terminal(task.status) || p.final === true) store.reportProgress(taskId, string(p.summary),
-              typeof p.step === "number" ? p.step : undefined, typeof p.total === "number" ? p.total : undefined,
+          case "task.progress": {
+            const summary = string(p.summary);
+            const step = typeof p.step === "number" ? p.step : undefined;
+            const total = typeof p.total === "number" ? p.total : undefined;
+            // Terminal display tails may replay after a lost ACK; identical values are already applied.
+            if (terminal(task.status) && task.progressSummary === summary
+              && task.progressStep === (step ?? null) && task.progressTotal === (total ?? null)) break;
+            if (!terminal(task.status) || p.final === true) store.reportProgress(taskId, summary, step, total,
               { allowTerminal: p.final === true });
             break;
+          }
           case "task.usage":
             store.reportTaskUsage(taskId, daemonTaskUsageEntries(p.usage));
             break;
@@ -103,8 +110,13 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
               status: (repo.status ?? (repo.dirty ? "dirty" : "ready")) as "ready" | "dirty" | "error",
               dirty: repo.dirty === true, error: nullable(repo.error),
             }));
-            try { store.reportIssueWorkspace({ issueId: task.issueId, runtimeId, rootPath: string(p.root_path).trim(),
-              branchName: p.branch_name.trim(), status: p.status as MultiremiIssueWorkspaceStatus, repos: mapped, lastTaskId: taskId }); }
+            const input = { issueId: task.issueId, runtimeId, rootPath: string(p.root_path).trim(),
+              branchName: p.branch_name.trim(), status: p.status as MultiremiIssueWorkspaceStatus, repos: mapped, lastTaskId: taskId };
+            const current = terminal(task.status) ? store.getIssueWorkspace(task.issueId) : null;
+            if (current?.lastTaskId === taskId && current.runtimeId === runtimeId
+              && current.rootPath === input.rootPath && current.branchName === input.branchName
+              && current.status === input.status && isDeepStrictEqual(current.repos, mapped)) break;
+            try { store.reportIssueWorkspace(input); }
             catch { reject(); }
             break;
           }
