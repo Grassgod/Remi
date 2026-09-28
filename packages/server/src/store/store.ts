@@ -3608,6 +3608,10 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    this.issues.replayDependencyAutoStart(event);
+  }
+
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,

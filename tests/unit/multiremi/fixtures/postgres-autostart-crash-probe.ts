@@ -1,39 +1,23 @@
 /**
- * MUL-409 fix round 4 (QA round 3, blockers 1+2): the process-exit probe for the
- * automatic start, on a real Postgres connection.
- *
- * Two exit points, both from QA's reproduction:
- *
- *   - `mode: "before-commit"` — exit while the auto-start transaction is open
- *     and before any of its writes. Pre-fix the claim had already committed, so
- *     the dependent stayed `todo` with no round and no activity forever. With
- *     the single-transaction fix the attempt is one unit: dying before COMMIT
- *     leaves nothing.
- *   - `mode: "after-commit"` — let the transaction commit, then exit on the
- *     first post-commit wakeup. The durable state must be complete (`todo` plus
- *     its queued round plus both activities); only the live notification is lost.
- *   - `mode: "after-claim-commit"` — exit on the first commit after which the
- *     dependent is `todo`. This is the seam QA's round-3 probe used, written so it
- *     runs unchanged on both versions: pre-fix that commit is the claim alone, so
- *     the dependent ends up `todo` with no round; post-fix it is the whole
- *     auto-start, so the same instant leaves a complete state.
+ * Real process-exit probe shared by Postgres and file-backed SQLite.
+ * Usage: <database URL/path> <prerequisiteId> <dependentId> <mode> [replayAt] [resumeFile]
+ * The parent kills this process after its phase marker. A resume file lets the
+ * concurrent PG test release the normal post-commit path while replay runs.
  */
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import type { StoreContext } from "@multiremi/store/context.js";
 
-/**
- * A real OS process: `process.exit` here is the crash under test, so the
- * transaction stays open with no ROLLBACK and the connection dies with it.
- *
- * Usage: bun run <this file> <databaseUrl> <prerequisiteId> <dependentId> <mode>
- * The process prints a phase marker to stdout, then sleeps until the parent
- * kills it.
- */
-const [databaseUrl, prerequisiteId, dependentId, mode] = process.argv.slice(2);
-const MODES = ["before-commit", "after-commit", "after-claim-commit"];
+const [databaseUrl, prerequisiteId, dependentId, mode, replayAt, resumeFile] = process.argv.slice(2);
+const MODES = [
+  "before-commit", "after-commit", "after-claim-commit", "after-done-commit",
+  "replay-before-commit", "replay-after-commit", "replay",
+];
 
 if (!databaseUrl || !prerequisiteId || !dependentId || !MODES.includes(mode ?? "")) {
-  console.error(`usage: <databaseUrl> <prerequisiteId> <dependentId> <${MODES.join("|")}>`);
+  console.error(`usage: <database URL/path> <prerequisiteId> <dependentId> <${MODES.join("|")}> [replayAt] [resumeFile]`);
   process.exit(2);
 }
 
@@ -41,78 +25,63 @@ function announce(phase: string): void {
   process.stdout.write(`${phase}\n`);
 }
 
-/** Burn CPU until the parent kills us; never returns in the probe path. */
-function holdUntilKilled(): never {
+function holdUntilKilled(): void {
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
-    // Busy wait on purpose: the parent terminates the process and the death of
-    // the process is what the test observes.
+    if (resumeFile && existsSync(resumeFile)) return;
+    Atomics.wait(sleeper, 0, 0, 10);
   }
   process.exit(97);
 }
 
-const db = new PostgresSyncDatabase(databaseUrl);
+const db: SqlDatabase = /^postgres(?:ql)?:\/\//.test(databaseUrl)
+  ? new PostgresSyncDatabase(databaseUrl)
+  : Object.assign(new Database(databaseUrl), { dialect: "sqlite" as const });
 const store = new MultiremiStore(db);
-type Internals = {
-  ctx: {
-    transactionWithDeferredEvents: <T>(database: unknown, fn: () => T) => T;
-    notifyTaskEnqueued: (task: unknown) => void;
-  };
-};
-const internals = store as unknown as Internals;
+const { ctx } = store as unknown as { ctx: StoreContext };
 
-if (mode === "before-commit") {
-  const original = internals.ctx.transactionWithDeferredEvents.bind(internals.ctx);
+function status(issueId: string): string | undefined {
+  return (db.query("SELECT status FROM multiremi_issues WHERE id = ?").get(issueId) as
+    { status: string } | null)?.status;
+}
+
+if (mode === "before-commit" || mode === "replay-before-commit") {
+  // BEGIN is real on both backends. Park before the auto-start's first write,
+  // after the prerequisite's own transaction has already committed.
+  const original = db.transaction.bind(db);
+  db.transaction = <T,>(fn: (...args: any[]) => T) => original((...args: any[]): T => {
+    if (status(prerequisiteId) === "done" && status(dependentId) === "backlog") {
+      announce(mode === "before-commit" ? "in-transaction" : "replay-before-commit");
+      holdUntilKilled();
+    }
+    return fn(...args);
+  });
+} else if (mode === "after-claim-commit" || mode === "after-done-commit") {
+  const original = db.transaction.bind(db);
   let armed = true;
-  internals.ctx.transactionWithDeferredEvents = <T,>(database: unknown, fn: () => T): T =>
-    original(database, () => {
-      if (armed) {
-        armed = false;
-        announce("in-transaction");
-        holdUntilKilled();
-      }
-      return fn();
-    });
-} else if (mode === "after-claim-commit") {
-  // QA's round-3 seam, expressed so it runs unchanged on both versions: exit on
-  // the first commit after which the DEPENDENT's status write is visible.
-  //
-  // Pre-fix that is the claim transaction on its own — the dependent is `todo`
-  // with no round, and the crash strands it there. Post-fix the same instant is
-  // the commit of the whole auto-start, so the dependent is `todo` WITH its
-  // round. The mode therefore measures exactly what the fix changed.
-  const dbHandle = (store as unknown as {
-    ctx: { db: { transaction: <T>(fn: () => T) => () => T; query(sql: string): { get(...args: unknown[]): unknown } } };
-  }).ctx.db;
-  const original = dbHandle.transaction.bind(dbHandle);
-  dbHandle.transaction = <T,>(fn: () => T): (() => T) => {
+  db.transaction = <T,>(fn: (...args: any[]) => T) => {
     const run = original(fn);
-    return () => {
-      const result = run();
-      const row = dbHandle.query("SELECT status FROM multiremi_issues WHERE id = ?").get(dependentId) as
-        | { status: string }
-        | null;
-      if (row?.status === "todo") {
-        announce("after-claim-commit");
+    return (...args: any[]): T => {
+      const result = run(...args);
+      const reached = mode === "after-claim-commit"
+        ? status(dependentId) === "todo"
+        : status(prerequisiteId) === "done" && status(dependentId) === "backlog";
+      if (armed && reached) {
+        armed = false;
+        announce(mode!);
         holdUntilKilled();
       }
       return result;
     };
   };
-} else {
-  // Park on the first commit-time event for the dependent: at that instant the
-  // auto-start transaction has committed and `emitCommitEvents` is draining its
-  // queue, so the durable state must already be complete.
-  const ctx = internals.ctx as unknown as {
-    emitCommitEvents(queue: { workspace: Array<{ payload?: { issue?: { id?: string } } }>; enqueuedTasks: unknown[] }): void;
-  };
+} else if (mode === "after-commit" || mode === "replay-after-commit") {
   const original = ctx.emitCommitEvents.bind(ctx);
-  let armed = true;
   ctx.emitCommitEvents = (queue) => {
-    const target = queue.workspace.find((event) => event.payload?.issue?.id === dependentId);
-    if (armed && target) {
-      armed = false;
-      announce("after-commit");
+    const target = queue.workspace.find((event) =>
+      (event.payload.issue as { id?: string } | undefined)?.id === dependentId);
+    if (target) {
+      announce(mode!);
       holdUntilKilled();
     }
     original(queue);
@@ -120,7 +89,11 @@ if (mode === "before-commit") {
 }
 
 try {
-  store.updateIssue(prerequisiteId, { status: "done" });
+  if (mode!.startsWith("replay")) {
+    store.dispatchPendingSystemEvents(new Date(replayAt ?? Date.now() + 5_000));
+  } else {
+    store.updateIssue(prerequisiteId, { status: "done" });
+  }
   announce("completed");
 } catch (error) {
   console.error(`probe failed: ${error instanceof Error ? error.message : String(error)}`);

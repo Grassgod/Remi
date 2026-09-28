@@ -248,17 +248,20 @@ squad rule about ordering was prose. The observable failures were:
      when no round is waiting, because the plan says the owner's *next* round;
    - no parent at all — the dependent's own member owner, or its subscribers,
      get an inbox item.
-   **Known crash window (not recovered automatically in this round).** The
-   prerequisite's `done` commits before the dependent's auto-start transaction
-   opens. A process that dies exactly in between leaves the dependent at
-   `backlog` with every prerequisite satisfied and no round. Nothing scans for
-   that state, so a human sees a waiting issue whose prerequisites are all done
-   and no automatic retry for it; the ways out are the public
-   `POST /api/multiremi/issues/:id/assign` (or the assignee picker) — which starts
-   it without `force`, because the gate is satisfied — or a member
-   `PATCH {status: todo}`. Systematic recovery is tracked by MUL-452: replay
-   post-commit hooks from `multiremi_system_events`, keyed idempotently by the
-   event id. This change adds no scanner or replay mechanism.
+   **Crash recovery (MUL-452).** The prerequisite's `done` transaction also
+   writes an independent `issue/dependency_auto_start_check` system event,
+   available after five seconds. The background system-event consumer retries
+   only E3 automatic starts: the prerequisite must still be `done`, and the
+   dependent must still be `backlog`, have every prerequisite satisfied, have
+   an agent/squad owner, and have no `dependency_auto_start_skipped` activity
+   since the event was created. Existing workspace/issue locks and the
+   conditional `backlog -> todo` update arbitrate competing attempts; the event
+   id is audit data (`replayed: true`, `replay_event_id`), not an idempotency key.
+   Recovery has its own lease and retry budget and does not trigger autopilots
+   or replay notifications. E2/E4 and E3 readiness/failure notifications belong
+   to MUL-404's atomic state-and-inbox acceptance. Background jobs must be
+   enabled for automatic recovery; the public assign/status paths remain
+   available for manual recovery. No schema migration is required.
 
    Structurally exempt tasks (retry, continuation, redispatch, delegation return
    and E2 parent wake-up) can still be created while the issue waits. Each such

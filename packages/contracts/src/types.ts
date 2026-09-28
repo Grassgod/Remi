@@ -4072,7 +4072,7 @@ export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
   resource: "issue" | "feishu_source";
-  event: "status_changed" | "messages_ingested";
+  event: "status_changed" | "messages_ingested" | "dependency_auto_start_check";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;
