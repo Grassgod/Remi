@@ -725,6 +725,7 @@ export function ChatWindow({
           ) : (
             <WorkLocationPicker
               wsId={wsId}
+              projectsEnabled={chatVisible}
               value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
               projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
               onChange={location => {

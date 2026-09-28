@@ -245,7 +245,7 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 聊天 aggregate pending 的两个 observer 是 ChatFab 和 [SessionDropdown](../../frontend/packages/views/chat/components/session-dropdown.tsx)。后者常驻于隐藏 ChatWindow，条件为 `chatVisible || shellGateOpen`：隐藏时等会话首 gate，用户打开窗口或进入聊天页面时立即查询。共享 key 的去重不能替代每个 observer 的 enabled；[壳层守卫](../../frontend/packages/views/layout/shell-deferred-queries.test.tsx)挂载完整 DashboardLayout、ChatFab 与真实隐藏 ChatWindow，核对门控前请求为 0。
 
-隐藏聊天窗口的缓存子树同样需要门控：ChatMessageList 的 live/assistant 任务消息、HumanRequestDock 表单仅在 `chatVisible` 时 enabled，旧消息分页回调也检查可见性。隐藏时包括 degraded task header 在内的 invalidate 只标 stale，重新打开立即正常 refetch；详情主体的执行行不受此可见性门控影响。壳层守卫预置缓存后逐 key invalidate，并经过真实 `createTaskHandlers`，防止新 observer 从失效路径绕过门控。
+隐藏聊天窗口的缓存子树同样需要门控：ChatMessageList 的 live/assistant 任务消息、HumanRequestDock 表单仅在 `chatVisible` 时 enabled，旧消息分页回调也检查可见性；无缓存会话时挂载的 WorkLocationPicker 项目候选同样继承聊天可见性，其他可见选择器保留默认立即查询。隐藏时包括 degraded task header 在内的 invalidate 只标 stale，重新打开立即正常 refetch；详情主体的执行行不受此可见性门控影响。壳层守卫预置 19 组 key 的缓存后逐 key invalidate，并经过真实 `createTaskHandlers`；虚拟列表提供测试尺寸并断言历史回复实际挂载，防止新 observer 从失效路径绕过门控。
 
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 

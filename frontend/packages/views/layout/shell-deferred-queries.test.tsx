@@ -232,11 +232,11 @@ function Shell() {
 
 function isDeferredShellKey(key: readonly unknown[]): boolean {
   if (["chat", "pins", "invitations", "task-messages", "task-human-requests"].includes(String(key[0]))) return true;
-  if (key[0] === "workspaces") return ["agents", "squads", "agent-task-snapshot"].includes(String(key[2]));
+  if (key[0] === "workspaces") return ["agents", "squads", "agent-task-snapshot", "members"].includes(String(key[2]));
   if (key[0] === "inbox") return key[2] === "summary";
   if (key[0] === "runtimes") return key[1] === "latestVersion";
   if (key[0] === "issues") return ["workbench", "child-progress", "detail"].includes(String(key[2]));
-  return key[0] === "projects" && key[2] === "detail";
+  return key[0] === "projects" && ["detail", "list"].includes(String(key[2]));
 }
 
 describe("complete shell observer guard (MUL-472 R1)", () => {
@@ -342,6 +342,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     useRecentContextStore.getState().recordVisit("ws-1", { type: "project", id: "prj_guard_pin" });
     const cached: Array<[readonly unknown[], unknown]> = [
       [workspaceKeys.agents("ws-1"), []], [workspaceKeys.squads("ws-1"), []],
+      [workspaceKeys.members("ws-1"), []], [projectKeys.list("ws-1"), { projects: [] }],
       [agentTaskSnapshotKeys.list("ws-1"), []], [pinKeys.list("ws-1", "user-1"), pins],
       [workspaceKeys.myInvitations(), []], [runtimeKeys.latestVersion(), "1.0.0"],
       [inboxKeys.summary("ws-1"), { unread: 0, attention: 0 }],
@@ -390,12 +391,18 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(listTaskMessages).not.toHaveBeenCalled();
       expect(listTaskHumanRequests).not.toHaveBeenCalled();
       expect(listChatMessagesPage).not.toHaveBeenCalled();
+      for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
+        expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(false);
+      }
       act(() => { useChatStore.getState().setOpen(true); });
       await waitFor(() => {
         expect(listTaskMessages).toHaveBeenCalledTimes(1);
         expect(listTaskHumanRequests).toHaveBeenCalledTimes(1);
         expect(listChatMessagesPage).toHaveBeenCalledTimes(1);
         expect(getPendingChatTask).toHaveBeenCalledTimes(1);
+        for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
+          expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(true);
+        }
       });
     } finally {
       view.unmount(); sync.dispose?.(); unsubscribe(); client.clear();
