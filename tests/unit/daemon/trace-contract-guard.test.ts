@@ -10,16 +10,17 @@ import {
 } from "@multiremi/contracts/trace.js";
 import {
   normalizeTraceStatus,
+  sanitizeTraceEventFields,
   TRACE_CONTENT_MAX_BYTES,
   TRACE_INPUT_MAX_BYTES,
   TRACE_META_MAX_BYTES,
   TRACE_OUTPUT_MAX_BYTES,
   TRACE_STATUSES,
   TRACE_TOOL_MAX_BYTES,
+  TRACE_TRUNCATION_MARKER,
 } from "@shared/trace-sanitize.js";
 
 const REPO_ROOT = join(import.meta.dir, "../../..");
-const TASKS_REPO = join(REPO_ROOT, "packages/server/src/store/repos/tasks-repo.ts");
 
 /**
  * Drift guards for the two things A-0 states about existing behaviour: the event
@@ -301,18 +302,25 @@ describe("trace contract drift guards", () => {
     expect(producers.has("ready")).toBe(false);
   });
 
-  it("keeps the field byte caps equal to the write path it mirrors", () => {
-    const src = readFileSync(TASKS_REPO, "utf8");
-    const read = (name: string): number => {
-      const match = new RegExp(`const ${name} = ([0-9*\\s]+);`).exec(src);
-      if (!match) throw new Error(`tasks-repo.ts no longer defines ${name}`);
-      return match[1]!.split("*").reduce((total, factor) => total * Number(factor.trim()), 1);
-    };
-    expect(TRACE_TOOL_MAX_BYTES).toBe(read("TASK_MESSAGE_TOOL_MAX"));
-    expect(TRACE_CONTENT_MAX_BYTES).toBe(read("TASK_MESSAGE_TEXT_MAX"));
-    expect(TRACE_INPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_INPUT_MAX"));
-    expect(TRACE_OUTPUT_MAX_BYTES).toBe(read("TASK_MESSAGE_OUTPUT_MAX"));
-    expect(TRACE_META_MAX_BYTES).toBe(read("TASK_MESSAGE_META_MAX"));
+  it("pins the shared sanitizer byte caps and tests both sides of each boundary", () => {
+    const fields = [
+      ["tool", TRACE_TOOL_MAX_BYTES, 512],
+      ["content", TRACE_CONTENT_MAX_BYTES, 256 * 1024],
+      ["input", TRACE_INPUT_MAX_BYTES, 256 * 1024],
+      ["output", TRACE_OUTPUT_MAX_BYTES, 64 * 1024],
+      ["meta", TRACE_META_MAX_BYTES, 64 * 1024],
+    ] as const;
+    for (const [field, cap, expectedCap] of fields) {
+      expect(cap).toBe(expectedCap);
+      const structured = field === "input" || field === "meta";
+      // Spaces avoid the base64 guard; quotes count toward the structured cap.
+      const value = " ".repeat(cap - (structured ? 2 : 0));
+      const atCap = structured ? JSON.stringify(value) : value;
+      expect(sanitizeTraceEventFields({ type: "text", [field]: value })[field]).toBe(atCap);
+      const overCap = structured ? JSON.stringify(value + " ") : value + " ";
+      expect(sanitizeTraceEventFields({ type: "text", [field]: value + " " })[field])
+        .toBe(overCap.slice(0, cap) + TRACE_TRUNCATION_MARKER);
+    }
   });
 
   it("derives the sanitizer's status set from the contract, so they cannot drift", () => {
