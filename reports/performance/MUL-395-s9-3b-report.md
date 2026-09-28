@@ -2,7 +2,7 @@
 
 before Web：e95b7a2345393fe7f79f13dcca3bdd4f6c32abe5
 after 产品实现：8a48b0b59d32b4aa00ba3ed4a8efcd9a77531f48
-合入 main：439aa1410a8a6040763221bad7423ea586b2d2ff
+合入 main：a30a8817daf891aabbb56fc7f85dc5a5d39074eb
 Draft PR：https://github.com/Grassgod/Remi/pull/331（依赖 PR #297；472 合入 main 前不合入）。
 
 ## 实测口径
@@ -67,7 +67,7 @@ my assigned/created/agents 各 1 次，all 按 assignee/creator/involves 三个�
 | 复现命令 | 结果 |
 | --- | --- |
 | bun run typecheck:frontend | 通过；main + 472 最后合并后的版本。 |
-| bun run test:frontend | 3625 pass / 18 skip / 0 fail；core 1106、views 2464、web 55。 |
+| bun run test:frontend | 3631 pass / 18 skip / 0 fail；core 1109、views 2467、web 55。 |
 | bun run --cwd frontend/packages/core test issues/status-pages.test.ts | 等价、请求数、失效、404 与错误隔离守卫全部通过；定向四文件合计 72/72。 |
 | bun run tests/manual/mul395-s9-3b-backend.ts postgres tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts | 真实 PG：新路由、静态 metrics 标签、归档可选成本用例通过；连同合并后专项共 52 pass / 0 fail。 |
 | bun run tests/manual/mul395-s9-3b-backend.ts sqlite tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts tests/unit/remi/cli-collaboration.test.ts | SQLite + CLI：85 pass / 8 PG 专项 skip / 0 fail。dbq 单个用例独立启动也通过，预热不再依赖前序。 |
@@ -91,7 +91,7 @@ my assigned/created/agents 各 1 次，all 按 assignee/creator/involves 三个�
 
 ## 限制与复核事项
 
-这是本地性能与定向测试报告。顺序执行的 PG/SQLite 全量和最终提交 CI 的完整结果见 MUL-395 的 S9-3b 交付评论；本报告不提前声称全量通过。
+这是本地性能与定向测试报告。顺序执行的 PG/SQLite 全量和最终提交 CI 的完整结果见 MUL-395 的 S9-3b 交付评论。测速对应 8a48b0b5；之后无冲突合入 main a30a8817，未改 issues/my-issues 前端，因此按续跑要求沿用这些配对采样。
 
 before 为 472 最终 head e95b7a23。前后 Next dev 都出现已有 use-kanban-drag.ts:121 的 Maximum update depth exceeded 告警；该 hook 不在本单改动内，真实行的 3 秒采样仍没有跳动或断连。合成 squad fixture 的 creator_id/leader_id=null 另触发 schema 告警。这些本地环境现象不代表生产页面。
 
@@ -99,7 +99,7 @@ before 为 472 最终 head e95b7a23。前后 Next dev 都出现已有 use-kanban
 
 472 的六场景是 issues/inbox/detail 的 cold/warm 各一轮；长样本是同一 fixture 中 MUL-454 的 210 条评论副本，cold/warm 各一轮。所有 after 固定行 px、S1 jumpPx 与断连帧都为 0。
 
-PG 全量中已有 MUL-473 inbox热点 N=200 用例曾在共享负载下接近或超过 20s。已单独重跑，并在纯 472 e95b7a23 上复现同一个 24.480s 超时；没有放宽断言、增加 timeout 或跳过用例。一次跨 main 合并的全量还读到 772/774 路由两版本；该次不作为最终验证，已固定合并态重跑。
+上一轮 PG 全量中已有 MUL-473 pending-tasks 的 1→200 Chat 夹具曾接近或超过 20s。该文件单跑通过 10/10，纯 472 e95b7a23 复现同一个 24.480s 超时；本轮在纯 main a30a8817、同一实例且本单全量并行的负载下，该用例通过（16.917s）。没有放宽断言、增加 timeout 或跳过用例。一次跨 main 合并的全量还读到 772/774 路由两版本；该次不作为最终验证，最终两套全量固定合并态顺序运行。
 
 按前置约定保留旧服务端 creator_id、involves_user_id、排序参数的既有语义；本单只合并往返和修复观测标签，不改变筛选结果。404 兼容模式仍需要旧请求数量，新 API 的请求数收益不适用于该模式。
 
