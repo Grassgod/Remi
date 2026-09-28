@@ -166,16 +166,12 @@ const SERVER_SRC = join(import.meta.dir, "../../../packages/server/src");
 const DEFAULT_KIND = "message";
 /** `afterTaskTerminal(status: "completed" | "failed" | "cancelled")` writes `task_${status}`. */
 const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
-/** The v2 resolve updates the comment row in place instead of appending a marker (B1). */
-const UNMAPPED_BY_DESIGN = ["thread_resolved", "thread_unresolved"];
 /**
- * Written through `appendSessionEventWithinTransaction` (MUL-324) but not
- * mirrored on this branch, so it still leaves a seq hole here. Ruling
- * cmt_u7m8e7yitmai maps it, with `thread_resolved` / `thread_unresolved`, in
- * MUL-427; listed here so the gap stays visible and the test fails once the kind
- * is mapped or removed.
+ * No exemptions. MUL-427 maps `follow_frozen`, `thread_resolved` and
+ * `thread_unresolved` (ruling cmt_u7m8e7yitmai), the last kinds this list used to
+ * name, so every kind a caller writes now has a log row at its seq.
  */
-const UNMAPPED_PENDING_DECISION = ["follow_frozen"];
+const UNMAPPED: string[] = [];
 
 function tsFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -296,6 +292,6 @@ describe("MUL-402 session event kinds all reach the conversation log", () => {
       "message_edited", "message_deleted"]));
 
     const unmapped = [...kinds.keys()].filter((kind) => conversationLogKindForSessionEvent(kind) == null).sort();
-    expect(unmapped).toEqual([...UNMAPPED_BY_DESIGN, ...UNMAPPED_PENDING_DECISION].sort());
+    expect(unmapped).toEqual(UNMAPPED);
   });
 });
