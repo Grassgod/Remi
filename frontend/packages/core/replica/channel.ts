@@ -19,14 +19,11 @@
 import type { HubSeqRange, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
 import type { SessionLogEntry } from "./port";
 
-/** One channel name per browser, not per tab: the leader is elected per `(user, ws)`. */
-export const REPLICA_CHANNEL = "remi-replica";
-
 /** `navigator.locks` name. The plan's spelling, kept verbatim: `remi-replica:<user>:<ws>`. */
 export const REPLICA_LOCK_PREFIX = "remi-replica:";
 
 export function replicaLockName(userId: string, workspaceId: string): string {
-  return `${REPLICA_LOCK_PREFIX}${userId}:${workspaceId}`;
+  return `${REPLICA_LOCK_PREFIX}${encodeURIComponent(userId)}:${encodeURIComponent(workspaceId)}`;
 }
 
 /** A read request from a non-leader tab; the leader answers with `replica:window`. */
@@ -110,7 +107,7 @@ export interface ReplicaAckMessage {
   ack: HubStreamAckPayload;
 }
 
-export type ReplicaChannelMessage =
+export type ReplicaChannelMessage = (
   | ReplicaQueryMessage
   | ReplicaQueryResultMessage
   | ReplicaOpenMessage
@@ -118,4 +115,5 @@ export type ReplicaChannelMessage =
   | ReplicaClearedMessage
   | ReplicaLeaderChangedMessage
   | ReplicaAckMessage
-  | ReplicaRowHeightMessage;
+  | ReplicaRowHeightMessage
+) & { identityKey?: string; senderTabId?: string };

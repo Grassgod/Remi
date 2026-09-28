@@ -20,7 +20,7 @@
  */
 
 import type { HubFrame, HubSeqRange, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
-import { REPLICA_CHANNEL, replicaLockName, type ReplicaChannelMessage } from "./channel";
+import { replicaLockName, type ReplicaChannelMessage } from "./channel";
 import { ReplicaEngine, type ReplicaClearEvent } from "./engine";
 import { ReplicaFollower } from "./follower";
 import { ReplicaLeader } from "./leader";
@@ -131,10 +131,11 @@ export async function openBrowserReplica(options: BrowserReplicaOptions): Promis
     return createMemoryTabsReplica(options, view);
   }
 
+  const identityKey = replicaLockName(options.userId, options.workspaceId);
   const channel = env.broadcastChannel
-    ? new env.broadcastChannel(REPLICA_CHANNEL)
+    ? new env.broadcastChannel(identityKey)
     : typeof BroadcastChannel === "function"
-      ? new BroadcastChannel(REPLICA_CHANNEL)
+      ? new BroadcastChannel(identityKey)
       : null;
   const facade = new ReplicaFacade(options, env, view, channel);
   facade.start();
@@ -175,6 +176,8 @@ class ReplicaFacade implements BrowserReplica {
     if (channel) {
       channel.onmessage = (event: MessageEvent) => {
         const message = event.data as ReplicaChannelMessage;
+        if (this.disposed || message.identityKey !== replicaLockName(this.options.userId, this.options.workspaceId)) return;
+        if (message.senderTabId === this.options.tabId) return;
         // A tab must not act on its own broadcast: the leader would open a
         // session twice and the refcount would never reach zero.
         if (message.type === "replica:leader" && message.tabId === this.options.tabId) return;
@@ -348,7 +351,12 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   broadcast(message: ReplicaChannelMessage): void {
-    this.channel?.postMessage(message);
+    if (this.disposed) return;
+    this.channel?.postMessage({
+      ...message,
+      identityKey: replicaLockName(this.options.userId, this.options.workspaceId),
+      senderTabId: this.options.tabId,
+    });
   }
 }
 
