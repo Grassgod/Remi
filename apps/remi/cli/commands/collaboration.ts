@@ -354,6 +354,30 @@ function sessionCommandSpecs(): CommandSpec[] {
 
 function issueExtendedSpecs(): CommandSpec[] {
   return [
+    nativeSpec("issue.status-pages", ["issue", "status-pages"], "List the first page of each issue status", "read", HUMAN_TASK, [], [
+      ...ISSUE_LIST_OPTIONS.filter((option) => !["offset", "metadata", "full-id"].includes(option.name)),
+      { name: "statuses", type: "string", valueName: "statuses", description: "Comma-separated statuses (default: all seven)" },
+      { name: "assignee-ids", type: "string", valueName: "refs", description: "Comma-separated assignee references" },
+      { name: "project-ids", type: "string", valueName: "ids", description: "Comma-separated project IDs" },
+      { name: "metadata", type: "string", valueName: "json", description: "Metadata equality filter as a JSON object" },
+      { name: "include-no-assignee", type: "boolean", description: "Only issues without an assignee" },
+      { name: "include-no-project", type: "boolean", description: "Only issues without a project" },
+      { name: "include-archived", type: "boolean", description: "Include archived issues in status pages" },
+      { name: "archived-only", type: "boolean", description: "Only archived issues in status pages" },
+      { name: "include-archived-total", type: "boolean", description: "Include the workspace-wide archived count" },
+    ], async (invocation) => {
+      await getAndRender(invocation, "/api/issues/status-pages", [], {
+        ...issueQuery(invocation),
+        assignee_types: stringOption(invocation, "assignee-type"),
+        assignee_ids: stringOption(invocation, "assignee-ids"),
+        project_ids: stringOption(invocation, "project-ids"),
+        statuses: stringOption(invocation, "statuses"),
+        parent_id: stringOption(invocation, "parent"),
+        metadata: stringOption(invocation, "metadata"),
+        ...Object.fromEntries(["top-level-only", "include-no-assignee", "include-no-project", "include-archived", "archived-only", "include-archived-total"]
+          .map((name) => [name.replaceAll("-", "_"), invocation.options[name] === true ? true : undefined])),
+      });
+    }),
     nativeSpec("issue.grouped", ["issue", "grouped"], "List issues grouped for planning", "read", HUMAN_TASK, [], ISSUE_LIST_OPTIONS, async (invocation) => {
       await getAndRender(invocation, "/api/issues/grouped", ["groups", "issues"], issueQuery(invocation));
     }),

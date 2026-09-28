@@ -515,6 +515,25 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
     return c.json({ issues, total: store.countIssues(query) });
   });
+  app.get("/api/issues/status-pages", (c) => {
+    const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
+    if (workspaceId instanceof Response) return workspaceId;
+    const query = issueListQuery(store, c, "compat", workspaceId);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    if (query.offset !== undefined && query.offset !== 0) {
+      return c.json({ error: "status-pages only supports offset=0; use /api/issues for subsequent pages" }, 400);
+    }
+    const result = store.listIssueStatusPages(query, c.req.query("include_archived_total") === "true");
+    return c.json({
+      ...result,
+      groups: Object.fromEntries(Object.entries(result.groups).map(([status, group]) => [status, {
+        issues: group.issues.map((issue) => issueCompatibilityResponse(issue, { includeLabels: true })),
+        total: group.total,
+        has_more: group.has_more,
+      }])),
+    });
+  });
   app.get("/api/multiremi/issues/grouped", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;

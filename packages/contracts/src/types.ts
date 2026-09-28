@@ -2517,6 +2517,12 @@ export interface ListIssuesInput {
   offset?: number;
 }
 
+export interface IssueStatusPages {
+  groups: Record<string, { issues: MultiremiIssue[]; total: number; has_more: boolean }>;
+  /** Workspace-wide count, independent of the page's status/assignee/project filters. */
+  archived_total?: number;
+}
+
 export interface AssignIssueInput {
   assigneeType?: MultiremiAssigneeType | null;
   assignee_type?: MultiremiAssigneeType | null;

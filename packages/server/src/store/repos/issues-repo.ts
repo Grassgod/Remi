@@ -48,6 +48,7 @@ import type {
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   ListIssuesInput,
+  IssueStatusPages,
   MultiremiAgent,
   MultiremiAssigneeFrequencyEntry,
   MultiremiAssigneeType,
@@ -1058,6 +1059,58 @@ export class IssuesRepo {
       `SELECT COUNT(*) AS total FROM multiremi_issues ${where}`,
     ).get(...params) as Row | null;
     return Number(row?.total ?? 0);
+  }
+
+  /** First page per status, including counts and labels from one read snapshot. */
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false): IssueStatusPages {
+    if (this.ctx.db.inTransaction) throw new Error("status pages require their own read snapshot");
+    return this.ctx.db.transaction(() => {
+      if (this.ctx.db.dialect === "postgres") {
+        this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      }
+      const resolved = this.resolveListHierarchyFilter(input);
+      const requested = normalizeIssueStatusList(input.statuses ?? input.status);
+      const statuses = requested.length ? requested : [...ISSUE_STATUSES];
+      const limit = normalizeListLimit(input.limit, 50);
+      const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+      const groups: IssueStatusPages["groups"] = {};
+      const params: unknown[] = [];
+      // Keep the exact single-status SELECT and its ordering. A partitioned
+      // window sort can choose different winners for tied updated_at values.
+      const selects = statuses.map((status) => {
+        groups[status] = { issues: [], total: 0, has_more: false };
+        const filter = buildIssueListWhere({ ...resolved, statuses: [status] });
+        params.push(...filter.params);
+        if (!hasMetadata) params.push(limit, 0);
+        return `SELECT * FROM (SELECT * FROM multiremi_issues ${filter.where}
+          ORDER BY updated_at DESC ${hasMetadata ? "" : "LIMIT ? OFFSET ?"}) AS status_page`;
+      });
+      const rows = this.ctx.db.query(selects.join(" UNION ALL ")).all(...params) as Row[];
+      let issues = rows.map((row) => toIssue(row));
+      if (hasMetadata) {
+        issues = issues.filter((issue) => issueMatchesListFilter(issue, resolved));
+        for (const issue of issues) groups[issue.status]!.total += 1;
+        const used = new Map<string, number>();
+        issues = issues.filter((issue) => {
+          const index = used.get(issue.status) ?? 0;
+          used.set(issue.status, index + 1);
+          return index < limit;
+        });
+      } else {
+        const filter = buildIssueListWhere({ ...resolved, statuses });
+        const counts = this.ctx.db.query(`SELECT status, COUNT(*) AS total
+          FROM multiremi_issues ${filter.where} GROUP BY status`).all(...filter.params) as Row[];
+        for (const row of counts) groups[String(row.status)]!.total = Number(row.total);
+      }
+      for (const issue of this.hydrateIssues(issues)) groups[issue.status]!.issues.push(issue);
+      for (const group of Object.values(groups)) group.has_more = group.issues.length < group.total;
+      return {
+        groups,
+        ...(includeArchivedTotal ? {
+          archived_total: this.countIssues({ workspaceId: this.listIssuesWorkspaceId(resolved), archivedOnly: true }),
+        } : {}),
+      };
+    })();
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
