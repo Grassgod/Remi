@@ -13,9 +13,22 @@ const services: ReturnType<typeof Bun.spawn>[] = [];
 const mask = (value: string) => value.replaceAll(marker, "[fixture auth]").replace(/(?:postgres(?:ql)?|redis):\/\/\S+/g, "[connection]");
 function start(command: string[], cwd: string, extra: Record<string, string> = {}) {
   const service = Bun.spawn(command, { cwd, env: { ...env, ...extra }, stdout: "pipe", stderr: "pipe" });
-  for (const stream of [service.stdout, service.stderr]) void new Response(stream).text().then((log) => {
-    if (service.exitCode && service.exitCode !== 130) console.error(mask(log).slice(-12000));
-  });
+  for (const stream of [service.stdout, service.stderr]) void (async () => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true });
+      let end: number;
+      while ((end = pending.indexOf("\n")) >= 0) {
+        process.stdout.write(`${mask(pending.slice(0, end))}\n`);
+        pending = pending.slice(end + 1);
+      }
+    }
+    if (pending) process.stdout.write(mask(pending));
+  })();
   services.push(service);
   return service;
 }
@@ -55,7 +68,7 @@ try {
     const web = start(["node", resolve(root, "node_modules/next/dist/bin/next"), "dev", "--webpack", "--port", port],
       resolve(root, "frontend/apps/web"), { REMOTE_API_URL: "http://127.0.0.1:18560" });
     const origin = `http://localhost:${port}`;
-    await ready(`${origin}/login`);
+    await ready(`http://127.0.0.1:${port}/login`);
     for (const page of ["page-issues", "page-my-issues"]) await probe(origin, `${phase}-${page}`, page, 5);
     if (phase === "after") {
       for (const scene of ["page-issues", "page-inbox", "detail-short", "detail-xlong"]) await probe(origin, `after-472-${scene}`, scene, 1);
