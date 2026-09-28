@@ -65,9 +65,9 @@ describe("daemon Session archive GC orchestration", () => {
     const blockedGc = new Promise<void>((resolve) => {
       finishGc = resolve;
     });
-    let heartbeatEntered!: () => void;
-    const heartbeatStarted = new Promise<void>((resolve) => {
-      heartbeatEntered = resolve;
+    let loopEntered!: () => void;
+    const loopStarted = new Promise<void>((resolve) => {
+      loopEntered = resolve;
     });
     Object.assign(daemon, {
       stopped: false,
@@ -79,14 +79,17 @@ describe("daemon Session archive GC orchestration", () => {
       gcTimer: null,
       gcInFlight: null,
       inflight: new Set<Promise<void>>(),
+      runtimeGoneInflight: new Set<string>(),
+      activeTaskCount: 0,
+      pendingClaimCount: 0,
       feishuOutboundRuns: new Map(),
-      options: { once: false, pollIntervalMs: 1, runtimeId: "rt_shutdown" },
+      options: { once: false, pollIntervalMs: 1, pluginDesiredRefreshMs: 30_000, maxConcurrency: 1, runtimeId: "rt_shutdown" },
       client: {
         recoverOrphans: async () => {},
-        heartbeatRuntime: async () => {
-          heartbeatEntered();
+        claimTask: async () => {
+          loopEntered();
           daemon.stop();
-          return {};
+          return null;
         },
       },
       sshMeshManager: {
@@ -127,7 +130,7 @@ describe("daemon Session archive GC orchestration", () => {
     const run = daemon.start().then(() => {
       stopped = true;
     });
-    await heartbeatStarted;
+    await loopStarted;
     await Promise.resolve();
     const daemonState = daemon as unknown as Record<string, unknown>;
     expect(daemonState.stopped).toBe(true);
@@ -280,6 +283,7 @@ describe("daemon Session archive GC orchestration", () => {
       restartRequestedFlag: false,
       workspaceOwnershipLost: false,
       inflight: new Set<Promise<void>>(),
+      runtimeGoneInflight: new Set<string>(),
       feishuOutboundRuns: new Map(),
       gcInFlight: null,
       runtimeModelRefreshTask: null,

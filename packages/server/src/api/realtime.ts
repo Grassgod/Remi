@@ -6,16 +6,12 @@ import {
   canUserViewTaskMessages,
   createTaskAuthMemo,
   hasJwtWorkspaceAccess,
-  isDaemonOwnerWorkspaceMember,
-  isDaemonTokenAllowedRequest,
-  isPendingForRuntime,
   verifyJwtToken,
 } from "./helpers.js";
 import type {
   BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
-  DaemonWebSocketRegistry,
   MultiremiWebSocketClient,
 } from "./helpers.js";
 import {
@@ -27,32 +23,10 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiAccessToken,
-  MultiremiDaemonSshMeshStatus,
   MultiremiTask,
   MultiremiTaskMessage,
 } from "@multiremi/contracts/types.js";
 
-export function registerDaemonWebSocketClient(registry: DaemonWebSocketRegistry, client: MultiremiWebSocketClient): void {
-  if (client.data.kind !== "daemon") return;
-  for (const runtimeId of client.data.runtimeIds) {
-    let clients = registry.get(runtimeId);
-    if (!clients) {
-      clients = new Set();
-      registry.set(runtimeId, clients);
-    }
-    clients.add(client);
-  }
-}
-
-export function unregisterDaemonWebSocketClient(registry: DaemonWebSocketRegistry, client: MultiremiWebSocketClient): void {
-  if (client.data.kind !== "daemon") return;
-  for (const runtimeId of client.data.runtimeIds) {
-    const clients = registry.get(runtimeId);
-    if (!clients) continue;
-    clients.delete(client);
-    if (clients.size === 0) registry.delete(runtimeId);
-  }
-}
 
 export function registerBrowserWebSocketClient(registry: BrowserWebSocketRegistry, client: MultiremiWebSocketClient): void {
   if (client.data.kind !== "browser" || !client.data.authenticated) return;
@@ -202,38 +176,6 @@ export function sendBrowserScopeFrame(
   client.sendText(JSON.stringify({ type, payload }));
 }
 
-export function notifyDaemonTaskAvailable(registry: DaemonWebSocketRegistry, store: MultiremiStore, task: MultiremiTask): void {
-  if (task.status !== "queued") return;
-  const runtimeIds = task.runtimeId ? [task.runtimeId] : [...registry.keys()];
-  const seen = new Set<string>();
-  for (const runtimeId of runtimeIds) {
-    if (seen.has(runtimeId)) continue;
-    seen.add(runtimeId);
-    const clients = registry.get(runtimeId);
-    if (!clients?.size) continue;
-    const runtime = store.getRuntime(runtimeId);
-    if (!runtime || !isPendingForRuntime(store, runtime, task)) continue;
-    const frame = JSON.stringify({
-      type: "daemon:task_available",
-      payload: {
-        runtime_id: runtimeId,
-        task_id: task.id,
-      },
-    });
-    for (const client of [...clients]) {
-      try {
-        client.sendText(frame);
-      } catch {
-        unregisterDaemonWebSocketClient(registry, client);
-        try {
-          client.close();
-        } catch {
-          // Already closed.
-        }
-      }
-    }
-  }
-}
 
 export function notifyBrowserTaskEvent(
   workspaceRegistry: BrowserWebSocketRegistry,
@@ -617,35 +559,6 @@ export function memberAddedEventUserId(payload: Record<string, unknown>): string
   return typeof userId === "string" && userId ? userId : null;
 }
 
-export function notifyDaemonTaskEvent(registry: DaemonWebSocketRegistry, type: string, task: MultiremiTask): void {
-  if (!task.runtimeId) return;
-  const clients = registry.get(task.runtimeId);
-  if (!clients?.size) return;
-  const payload: Record<string, unknown> = {
-    task_id: task.id,
-    agent_id: task.agentId,
-    issue_id: task.issueId,
-    runtime_id: task.runtimeId,
-    workspace_id: task.workspaceId,
-    status: task.status,
-  };
-  if (task.chatSessionId) payload.chat_session_id = task.chatSessionId;
-  if (task.autopilotRunId) payload.autopilot_run_id = task.autopilotRunId;
-  if (task.waitReason) payload.wait_reason = task.waitReason;
-  const frame = JSON.stringify({ type, payload });
-  for (const client of [...clients]) {
-    try {
-      client.sendText(frame);
-    } catch {
-      unregisterDaemonWebSocketClient(registry, client);
-      try {
-        client.close();
-      } catch {
-        // Already closed.
-      }
-    }
-  }
-}
 
 export function isWebSocketUpgrade(req: Request): boolean {
   return req.headers.get("upgrade")?.toLowerCase() === "websocket";
@@ -656,80 +569,6 @@ export function bearerToken(req: Request): string {
   return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
 }
 
-export async function authorizeDaemonWebSocketRequest(
-  req: Request,
-  store: MultiremiStore,
-  authToken: string,
-  runtimeIds: string[],
-): Promise<
-  | {
-      accessToken: MultiremiAccessToken | null;
-      canReportAgentPluginProtocol: boolean;
-    }
-  | { response: Response }
-> {
-  let accessToken: MultiremiAccessToken | null = null;
-  const token = bearerToken(req);
-  if (token && token !== authToken) {
-    accessToken = await store.verifyAccessToken(token);
-    if (!accessToken) return { response: Response.json({ error: "unauthorized" }, { status: 401 }) };
-    if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(req)) {
-      return { response: Response.json({ error: "forbidden for daemon token" }, { status: 403 }) };
-    }
-    if (accessToken.type !== "daemon") {
-      return {
-        response: Response.json(
-          { error: "daemon token required", code: "daemon_token_required" },
-          { status: 403 },
-        ),
-      };
-    }
-    if (!cleanString(accessToken.daemonId)) {
-      return {
-        response: Response.json(
-          { error: "forbidden for daemon identity", code: "daemon_identity_forbidden" },
-          { status: 403 },
-        ),
-      };
-    }
-    if (!isDaemonOwnerWorkspaceMember(store, accessToken)) {
-      return {
-        response: Response.json(
-          {
-            error: "daemon owner is no longer a workspace member",
-            code: "daemon_owner_membership_required",
-          },
-          { status: 403 },
-        ),
-      };
-    }
-  } else if (authToken && token !== authToken) {
-    return { response: Response.json({ error: "unauthorized" }, { status: 401 }) };
-  }
-
-  for (const runtimeId of runtimeIds) {
-    const runtime = store.getRuntime(runtimeId);
-    if (!runtime) return { response: Response.json({ error: "runtime not found" }, { status: 404 }) };
-    if (accessToken?.type === "daemon" && (runtime.workspaceId ?? "local") !== accessToken.workspaceId) {
-      return { response: Response.json({ error: "forbidden for daemon token workspace" }, { status: 403 }) };
-    }
-    if (accessToken?.type === "daemon") {
-      const tokenDaemonId = cleanString(accessToken.daemonId);
-      const runtimeDaemonId = cleanString(runtime.daemonId);
-      if (!tokenDaemonId || !runtimeDaemonId || runtimeDaemonId !== tokenDaemonId) {
-        return { response: Response.json({ error: "runtime not found" }, { status: 404 }) };
-      }
-    }
-  }
-  return {
-    accessToken,
-    // The deployment-wide master token is the historical daemon credential.
-    // Keep it compatible while preventing PAT/JWT websocket clients from
-    // rewriting daemon capability metadata. Open mode is trusted as before.
-    canReportAgentPluginProtocol:
-      !authToken || token === authToken || accessToken?.type === "daemon",
-  };
-}
 
 export function resolveBrowserWebSocketWorkspaceId(
   store: MultiremiStore,
@@ -819,20 +658,6 @@ export async function authorizeBrowserWebSocketToken(
   return { userId: jwt.userId, accessToken: null };
 }
 
-export function parseDaemonWebSocketRuntimeIds(url: URL): string[] {
-  const runtimeIds: string[] = [];
-  const add = (raw: string | null): void => {
-    if (raw == null) return;
-    for (const part of raw.split(",")) {
-      const runtimeId = part.trim();
-      if (!runtimeId || runtimeIds.includes(runtimeId)) continue;
-      runtimeIds.push(runtimeId);
-    }
-  };
-  for (const raw of url.searchParams.getAll("runtime_id")) add(raw);
-  for (const raw of url.searchParams.getAll("runtime_ids")) add(raw);
-  return runtimeIds;
-}
 
 export function parseDaemonWebSocketMessage(message: string | BufferSource): Record<string, any> {
   const text = typeof message === "string" ? message : decodeWebSocketMessage(message);
@@ -842,50 +667,6 @@ export function parseDaemonWebSocketMessage(message: string | BufferSource): Rec
   } catch {
     return { type: text || "message" };
   }
-}
-
-export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
-  runtimeId: string | null;
-  supportsBatchImport: boolean;
-  supportsDirectoryScan: boolean;
-  supportsSkillDirectory: boolean;
-  agentPluginProtocol: number | undefined;
-  sshMeshProtocol: number | undefined;
-  sshMeshStatus: MultiremiDaemonSshMeshStatus | undefined;
-} {
-  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
-  const runtimeId = cleanString(payload.runtime_id ?? event.runtime_id);
-  const protocolValue = Object.prototype.hasOwnProperty.call(payload, "agent_plugin_protocol")
-    ? payload.agent_plugin_protocol
-    : Object.prototype.hasOwnProperty.call(event, "agent_plugin_protocol")
-      ? event.agent_plugin_protocol
-      : undefined;
-  const sshMeshProtocolValue = Object.prototype.hasOwnProperty.call(payload, "ssh_mesh_protocol")
-    ? payload.ssh_mesh_protocol
-    : Object.prototype.hasOwnProperty.call(event, "ssh_mesh_protocol")
-      ? event.ssh_mesh_protocol
-      : undefined;
-  const sshMeshStatusValue = payload.ssh_mesh_status ?? event.ssh_mesh_status;
-  return {
-    runtimeId,
-    supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
-    supportsDirectoryScan: Boolean(payload.supports_directory_scan ?? event.supports_directory_scan),
-    supportsSkillDirectory: (payload.supports_skill_directory ?? event.supports_skill_directory) === true,
-    agentPluginProtocol: protocolValue === undefined
-      ? undefined
-      : normalizeProtocolVersion(protocolValue),
-    sshMeshProtocol: sshMeshProtocolValue === undefined
-      ? undefined
-      : normalizeProtocolVersion(sshMeshProtocolValue),
-    sshMeshStatus: sshMeshStatusValue && typeof sshMeshStatusValue === "object" && !Array.isArray(sshMeshStatusValue)
-      ? sshMeshStatusValue as MultiremiDaemonSshMeshStatus
-      : undefined,
-  };
-}
-
-function normalizeProtocolVersion(value: unknown): number {
-  const protocol = Number(value);
-  return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
 }
 
 export function decodeWebSocketMessage(message: BufferSource): string {

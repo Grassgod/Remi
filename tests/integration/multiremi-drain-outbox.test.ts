@@ -10,7 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon, type MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 
@@ -55,19 +57,28 @@ function gate(): StreamGate {
 }
 
 type ApiProxyInterceptor = (request: Request, url: URL) => Response | null | Promise<Response | null>;
+interface ProxySocketData { upstream: WebSocket; pending: string[] }
 
 function apiProxy(
   serverPort: number | undefined,
   intercept: ApiProxyInterceptor,
-): ReturnType<typeof Bun.serve> {
+): Bun.Server<ProxySocketData> {
   if (serverPort === undefined) throw new Error("test server did not bind a port");
-  return Bun.serve({
+  return Bun.serve<ProxySocketData>({
     hostname: "127.0.0.1",
     port: 0,
-    async fetch(request) {
+    async fetch(request, proxy) {
       const url = new URL(request.url);
       const intercepted = await intercept(request, url);
       if (intercepted) return intercepted;
+      if (url.pathname === "/api/daemon/ws" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const upstream = new WebSocket(`ws://127.0.0.1:${serverPort}${url.pathname}${url.search}`, {
+          headers: { Authorization: request.headers.get("authorization") ?? "" },
+        } as never);
+        if (proxy.upgrade(request, { data: { upstream, pending: [] } })) return;
+        upstream.close();
+        return new Response("upgrade failed", { status: 400 });
+      }
       const body = request.method === "GET" || request.method === "HEAD"
         ? undefined
         : await request.arrayBuffer();
@@ -77,10 +88,25 @@ function apiProxy(
         ...(body !== undefined ? { body } : {}),
       });
     },
+    websocket: {
+      open(socket) {
+        const { upstream, pending } = socket.data;
+        upstream.addEventListener("open", () => { for (const frame of pending.splice(0)) upstream.send(frame); });
+        upstream.addEventListener("message", event => socket.send(String(event.data)));
+        upstream.addEventListener("close", () => socket.close(4001, "upstream closed"));
+        upstream.addEventListener("error", () => socket.close(4001, "upstream unavailable"));
+      },
+      message(socket, message) {
+        const frame = typeof message === "string" ? message : new TextDecoder().decode(message);
+        if (socket.data.upstream.readyState === WebSocket.OPEN) socket.data.upstream.send(frame);
+        else socket.data.pending.push(frame);
+      },
+      close(socket) { socket.data.upstream.close(); },
+    },
   });
 }
 
-function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof Bun.serve> {
+function taskReportOutageProxy(serverPort: number | undefined): ReturnType<typeof apiProxy> {
   return apiProxy(serverPort, (request, url) => {
     if (request.method === "POST" && url.pathname.startsWith("/api/daemon/tasks/")) {
       return new Response("report API unavailable", { status: 503 });
@@ -120,10 +146,12 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       close: async () => {},
     });
 
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       daemonId: "daemon-drain-claims",
+      protocolClientOptions: { clock: protocolClock },
       provider: "claude",
       workspaceId: "local",
       pollIntervalMs: 25,
@@ -134,8 +162,13 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       outboxBackoffMs: [20, 20],
       providerFactory,
     });
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const run = daemon.start().catch(() => {});
     try {
+      await until(() => daemon.daemonProtocolClient().connectionState() === "connected");
+      await daemon.daemonProtocolClient().drain();
+      protocolClock.advance(15_000);
       // The daemon heartbeats, acks the drain generation, and does NOT claim.
       await until(() => store.getPlatformDrainStatus().ackedDaemons === 1, 5_000, "drain ack");
       await Bun.sleep(150);
@@ -146,6 +179,8 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
       // Release restores claiming without a daemon restart.
       store.releasePlatformDrain("pop_e2e");
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await until(() => store.getTask(task.id)?.status === "completed", 8_000, "post-release completion");
       expect(ran).toBe(true);
     } finally {
@@ -175,10 +210,12 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       close: async () => {},
     });
 
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       daemonId: "daemon-drain-running",
+      protocolClientOptions: { clock: protocolClock },
       provider: "claude",
       workspaceId: "local",
       pollIntervalMs: 25,
@@ -198,6 +235,9 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Drain begins mid-task: the daemon acks but the gate stays closed while
       // the task is in flight, and the task is NOT interrupted.
       store.beginPlatformDrain({ operationId: "pop_running", ttlMs: 120_000 });
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
+      protocolClock.advance(15_000);
       await until(() => store.getPlatformDrainStatus().ackedDaemons === 1, 8_000, "drain ack");
       expect(store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 1, ready: false });
       await Bun.sleep(100);
@@ -211,6 +251,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       store.releasePlatformDrain("pop_running");
     } finally {
       daemon.stop();
+      finish.release();
       await run;
       server.stop(true);
     }
@@ -811,6 +852,8 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
         getLastResponse: () => null,
       }),
     });
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const daemonRun = daemon.start();
     try {
       await until(async () => {

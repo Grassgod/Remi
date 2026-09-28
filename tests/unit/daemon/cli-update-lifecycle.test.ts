@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multiremi.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
+import type { DaemonProtocolConnect } from "@multiremi/worker/daemon-protocol-client.js";
+import { injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -16,10 +19,35 @@ for (const outcome of ["failed", "completed"] as const) {
     roots.push(root);
     let releaseInstall!: () => void;
     const installing = new Promise<void>((resolve) => { releaseInstall = resolve; });
-    let updatePending = false;
     let updateStarted = false;
     const reports: Array<{ status: string; error?: string }> = [];
     const heartbeats = [0, 0];
+    const clock = new ManualDaemonProtocolClock();
+    const connect: DaemonProtocolConnect = () => {
+      const listeners = new Map<string, Set<(event: any) => void>>();
+      let closed = false;
+      const emit = (type: string, event: any) => { if (!closed) for (const handler of [...listeners.get(type) ?? []]) handler(event); };
+      const socket = {
+        bufferedAmount: 0,
+        send: (text: string) => {
+          const frame = JSON.parse(text);
+          if (frame.t !== "hb") return;
+          heartbeats[0]++; heartbeats[1]++;
+          queueMicrotask(() => emit("message", { data: JSON.stringify({ v: 2, t: "res", re: frame.id, p: { runtime_acks: ["claude", "codex"].map(provider => ({ runtime_id: `rt_${provider}`, status: "ok" })) } }) }));
+        },
+        close: () => { closed = true; },
+        addEventListener: (type: string, handler: (event: any) => void) => {
+          if (!listeners.has(type)) listeners.set(type, new Set());
+          listeners.get(type)!.add(handler);
+        },
+        removeEventListener: (type: string, handler: (event: any) => void) => { listeners.get(type)?.delete(handler); },
+      };
+      queueMicrotask(() => {
+        emit("open", {});
+        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, session_id: "unit-update" } }) });
+      });
+      return socket;
+    };
     const claims = [0, 0];
     const exited = [false, false];
     let restarts = 0;
@@ -34,6 +62,7 @@ for (const outcome of ["failed", "completed"] as const) {
         pollIntervalMs: 5,
         gcEnabled: false,
         outboxPath: ":memory:",
+        protocolClientOptions: { clock, connect },
         updateRunner: async () => {
           updateStarted = true;
           await installing;
@@ -55,14 +84,6 @@ for (const outcome of ["failed", "completed"] as const) {
       reconcileRuntimeAgentPlugins: async () => {},
       client: {
         recoverOrphans: async () => {},
-        heartbeatRuntime: async () => {
-          heartbeats[index]++;
-          if (index === 0 && updatePending) {
-            updatePending = false;
-            return { pending_update: { id: "upd_test", target_version: "v9.9.9", scope: "cli" } };
-          }
-          return {};
-        },
         claimTask: async () => { claims[index]++; return null; },
         reportRuntimeUpdateResult: async (_runtime: string, _request: string, report: { status: string; error?: string }) => {
           reports.push(report);
@@ -70,12 +91,20 @@ for (const outcome of ["failed", "completed"] as const) {
       },
     }));
     const runs = daemons.map((daemon, index) => daemon.start().finally(() => { exited[index] = true; }));
+    let update: Promise<void> | undefined;
     try {
       await waitFor(() => claims.every((count) => count > 0), "both providers must poll before the update");
-      updatePending = true;
+      // MUL-419: 换回真实 v2 下发
+      update = injectDaemonHeartbeatInput(daemons[0]!, { input: {
+        runtime_id: "rt_claude", status: "ok", pending_update: { id: "upd_test", target_version: "v9.9.9", scope: "cli" },
+      } });
       await waitFor(() => updateStarted, "installer must start");
       const pausedClaims = [...claims];
       const siblingHeartbeats = heartbeats[1]!;
+      clock.advance(15_000);
+      await daemons[0]!.daemonProtocolClient().drain();
+      clock.advance(15_000);
+      await daemons[0]!.daemonProtocolClient().drain();
       await waitFor(() => exited[1]! || heartbeats[1]! >= siblingHeartbeats + 2, "sibling must keep heartbeating during installation");
       expect(exited).toEqual([false, false]);
       expect(claims).toEqual(pausedClaims);
@@ -86,10 +115,12 @@ for (const outcome of ["failed", "completed"] as const) {
       }
 
       releaseInstall();
+      await update;
       await waitFor(() => reports.some((report) => report.status === outcome), "update must report its outcome");
       if (outcome === "failed") {
         await waitFor(() => claims.every((count, index) => count > pausedClaims[index]!), "both providers must resume claims after failure");
         const afterFailure = [...heartbeats];
+        clock.advance(15_000);
         await waitFor(() => heartbeats.every((count, index) => count > afterFailure[index]!), "both providers must keep heartbeating after failure");
         expect(exited).toEqual([false, false]);
         expect(restarts).toBe(0);
@@ -104,6 +135,7 @@ for (const outcome of ["failed", "completed"] as const) {
     } finally {
       releaseInstall();
       for (const daemon of daemons) daemon.stop();
+      await update;
       await Promise.allSettled(runs);
     }
   });

@@ -103,7 +103,6 @@ import {
   createFeedbackOrApiError,
   createWebhookRateLimiter,
   denyCurrentUserWorkspaceAccess,
-  isDaemonOwnerWorkspaceMember,
   denyDaemonTokenAutopilotRunWorkspace,
   denyDaemonTokenChatSessionWorkspace,
   denyDaemonTokenIssueWorkspace,
@@ -137,12 +136,10 @@ import {
   resolveApiRole,
   type ApiRole,
 } from "../config/api-role.js";
-import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_PROTOCOL_MIN, DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   DaemonProtocolLayer,
-  hasRuntimeParameters,
-  requestsDaemonProtocolV2,
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
@@ -164,32 +161,24 @@ import {
 import {
   authorizeBrowserWebSocketAuthFrame,
   authorizeBrowserWebSocketUpgrade,
-  authorizeDaemonWebSocketRequest,
   handleBrowserScopeSubscribe,
   handleBrowserScopeUnsubscribe,
   isWebSocketUpgrade,
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
   notifyBrowserWorkspaceEvent,
-  notifyDaemonTaskAvailable,
-  notifyDaemonTaskEvent,
-  parseDaemonWebSocketHeartbeat,
   parseDaemonWebSocketMessage,
-  parseDaemonWebSocketRuntimeIds,
   registerBrowserUserWebSocketClient,
   registerBrowserWebSocketClient,
-  registerDaemonWebSocketClient,
   resolveBrowserWebSocketWorkspaceId,
   unregisterBrowserScopeWebSocketClient,
   unregisterBrowserUserWebSocketClient,
   unregisterBrowserWebSocketClient,
-  unregisterDaemonWebSocketClient,
 } from "./realtime.js";
 import type {
   BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
-  DaemonWebSocketRegistry,
   MultiremiRealtimeState,
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
@@ -239,6 +228,8 @@ function envEnabled(value: string | undefined, fallback = true): boolean {
 }
 
 export interface MultiremiApiOptions {
+  /** Transport injection for protocol integration tests; no store subscriptions. */
+  onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
   /** Undefined reads the opt-in env config; null explicitly disables it. */
@@ -862,9 +853,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const requestMetricsSummary = startRequestMetricsSummary(requestMetricsOptions);
   const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
-  const daemonWebSockets: DaemonWebSocketRegistry = new Map();
-  // MUL-417: the v2 connection layer. It coexists with the v1 wake-up path for
-  // exactly this sub-issue; A-2 removes `daemonWebSockets` and the `ready` frame.
   const daemonProtocol = new DaemonProtocolLayer({
     store,
     serverVersion: multiremiVersion,
@@ -874,16 +862,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     dbCounters: () => readProcessDbCounters(),
   });
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
+  options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
   const unsubscribeTaskEnqueued = store.onTaskEnqueued((task) => {
-    notifyDaemonTaskAvailable(daemonWebSockets, store, task);
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, "task:queued", task);
   });
   const unsubscribeTaskEvent = store.onTaskEvent((event) => {
-    if (event.type === "task:waiting_local_directory") {
-      notifyDaemonTaskEvent(daemonWebSockets, event.type, event.task);
-    }
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
   });
   const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
@@ -921,56 +906,20 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       ) {
         return app.fetch(req);
       }
-      if (url.pathname === "/api/daemon/ws") {
-        const runtimeIds = parseDaemonWebSocketRuntimeIds(url);
-        if (isWebSocketUpgrade(req)) {
-          // MUL-417: a v1 socket names its runtimes in the query string; a v2
-          // socket names none, because it reports them in `hello`. Everything that
-          // decides between the two lives in the connection layer so A-2 can
-          // delete the v1 branch in one piece.
-          if (!hasRuntimeParameters(url)) {
-            const explicitV2 = requestsDaemonProtocolV2(url);
-            // A missing credential with no marker is not a v2 attempt: answering
-            // it with the historical 400 keeps a malformed v1 upgrade (and a
-            // hand-typed URL) as debuggable as it is today.
-            const presented = (req.headers.get("Authorization") ?? "").trim();
-            if (explicitV2 || presented) {
-              const resolved = await daemonProtocol.resolveIdentity(req, authToken);
-              if ("response" in resolved) return resolved.response;
-              if (daemonProtocol.isV2Upgrade(url, resolved.identity, explicitV2)) {
-                const upgraded = server.upgrade(req, {
-                  data: {
-                    connectedAt: new Date().toISOString(),
-                    kind: "daemon-protocol",
-                    accessToken: resolved.identity.accessToken,
-                    masterToken: resolved.identity.masterToken,
-                    session: null,
-                  },
-                });
-                if (upgraded) return undefined;
-              }
-            }
-            return Response.json({ error: "runtime_ids required" }, { status: 400 });
-          }
-          if (runtimeIds.length === 0) {
-            return Response.json({ error: "runtime_ids required" }, { status: 400 });
-          }
-          const authorization = await authorizeDaemonWebSocketRequest(req, store, authToken, runtimeIds);
-          if ("response" in authorization) return authorization.response;
-          const upgraded = server.upgrade(req, {
-            data: {
-              connectedAt: new Date().toISOString(),
-              kind: "daemon",
-              runtimeId: runtimeIds[0] ?? null,
-              runtimeIds,
-              accessToken: authorization.accessToken,
-              canReportAgentPluginProtocol:
-                authorization.canReportAgentPluginProtocol,
-            },
-          });
-          if (upgraded) return undefined;
+      if (url.pathname === "/api/daemon/ws" && isWebSocketUpgrade(req)) {
+        if (url.searchParams.get("protocol") !== "2") {
+          return Response.json({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN }, { status: 426 });
         }
-        return app.fetch(req);
+        const resolved = await daemonProtocol.resolveIdentity(req, authToken);
+        if ("response" in resolved) return resolved.response;
+        if (server.upgrade(req, { data: {
+          connectedAt: new Date().toISOString(),
+          kind: "daemon-protocol",
+          accessToken: resolved.identity.accessToken,
+          masterToken: resolved.identity.masterToken,
+          session: null,
+        } })) return undefined;
+        return Response.json({ error: "websocket upgrade failed" }, { status: 400 });
       }
       if (url.pathname === "/ws" || url.pathname === "/api/realtime/ws") {
         if (isWebSocketUpgrade(req)) {
@@ -1018,17 +967,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           });
           return;
         }
-        if (ws.data.kind === "daemon") {
-          registerDaemonWebSocketClient(daemonWebSockets, ws);
-          ws.sendText(JSON.stringify({
-            type: "ready",
-            transport: "websocket",
-            runtime_id: ws.data.runtimeId,
-            runtime_ids: ws.data.runtimeIds,
-            connected_at: ws.data.connectedAt,
-          }));
-          return;
-        }
         if (ws.data.authenticated) {
           registerBrowserWebSocketClient(browserWebSockets, ws);
           registerBrowserUserWebSocketClient(browserUserWebSockets, ws);
@@ -1068,64 +1006,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           if (event.type === "ping") ws.sendText(JSON.stringify({ type: "pong" }));
           return;
         }
-        if (!isDaemonOwnerWorkspaceMember(store, ws.data.accessToken)) {
-          ws.sendText(JSON.stringify({
-            type: "error",
-            error: "daemon owner is no longer a workspace member",
-            code: "daemon_owner_membership_required",
-          }));
-          ws.close();
-          return;
-        }
-        const event = parseDaemonWebSocketMessage(message);
-        if (event.type === "daemon:heartbeat") {
-          const heartbeat = parseDaemonWebSocketHeartbeat(event);
-          if (!heartbeat.runtimeId) return;
-          if (!ws.data.runtimeIds.includes(heartbeat.runtimeId)) return;
-          if (
-            (heartbeat.agentPluginProtocol !== undefined || heartbeat.sshMeshProtocol !== undefined) &&
-            !ws.data.canReportAgentPluginProtocol
-          ) {
-            ws.sendText(JSON.stringify({
-              type: "error",
-              error: "daemon token required",
-              code: "daemon_token_required",
-            }));
-            return;
-          }
-          ws.data.runtimeId = heartbeat.runtimeId;
-          const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
-            supportsBatchImport: heartbeat.supportsBatchImport,
-            supportsDirectoryScan: heartbeat.supportsDirectoryScan,
-            supportsSkillDirectory: heartbeat.supportsSkillDirectory,
-            agentPluginProtocol: heartbeat.agentPluginProtocol,
-          });
-          if (heartbeat.sshMeshProtocol !== undefined) {
-            const meshAck = store.recordSshMeshHeartbeat(
-              heartbeat.runtimeId,
-              heartbeat.sshMeshProtocol,
-              heartbeat.sshMeshStatus,
-            );
-            if (meshAck) ack.ssh_mesh = meshAck;
-          } else {
-            store.recordSshMeshHeartbeat(heartbeat.runtimeId, 0);
-          }
-          ws.sendText(JSON.stringify({
-            type: "daemon:heartbeat_ack",
-            payload: ack,
-          }));
-          return;
-        }
-        if (event.runtime_id) {
-          ws.data.runtimeId = String(event.runtime_id);
-        }
-        ws.sendText(JSON.stringify({
-          type: event.type === "ping" ? "pong" : "ack",
-          received_type: event.type ?? null,
-          runtime_id: ws.data.runtimeId,
-          ok: true,
-          ts: new Date().toISOString(),
-        }));
       },
       drain(ws) {
         // The socket caught up: pausable traffic (offers, non-critical pushes)
@@ -1135,7 +1015,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       close(ws) {
         realtimeState.connections = Math.max(0, realtimeState.connections - 1);
         if (ws.data.kind === "daemon-protocol") ws.data.session?.handleSocketClose();
-        else if (ws.data.kind === "daemon") unregisterDaemonWebSocketClient(daemonWebSockets, ws);
         else {
           unregisterBrowserWebSocketClient(browserWebSockets, ws);
           unregisterBrowserUserWebSocketClient(browserUserWebSockets, ws);
