@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
 import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -12,6 +12,20 @@ import type { RelayHttpRequest } from "@shared/relay-http.js";
 import { removeOwnedDirectorySync } from "./safe-remove.js";
 import { SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { createLogger } from "@shared/logger.js";
+
+const log = createLogger("multiremi-task-tmp");
+
+/**
+ * macOS caps a unix socket path at 104 bytes (`sun_path`), while the real task
+ * temp directory lives under the provider home and can exceed 220 bytes for a
+ * delegation. Each execution therefore gets a short `/tmp/remi-XXXXXXXX` alias
+ * pointing at the real directory; TMPDIR/TMP/TEMP use the alias so tools that
+ * bind sockets inside them work.
+ */
+const TASK_TMP_ALIAS_DIRECTORY = "/tmp";
+const TASK_TMP_ALIAS_PREFIX = "remi-";
+const TASK_TMP_ALIAS_ATTEMPTS = 8;
 
 const SESSION_HOME_MARKER = ".multiremi-session-home.json";
 const PROVIDER_CONFIG_BASELINE = ".multiremi-provider-config-baseline.json";
@@ -43,6 +57,12 @@ export interface IssueSessionRuntimeRoot {
 export interface TaskPrivateTempDirectory {
   storageRoot: string;
   path: string;
+  /**
+   * macOS only: the short `/tmp/remi-XXXXXXXX` symlink that TMPDIR/TMP/TEMP
+   * point at. Absent when the alias could not be created (the execution then
+   * falls back to the long real path) or on every other platform.
+   */
+  aliasPath?: string;
 }
 
 export interface PrepareIssueSessionProviderHomeOptions {
@@ -269,13 +289,69 @@ export async function prepareIssueExecutionDirectory(resolvedHome: IssueSessionP
 export async function prepareTaskPrivateTempDirectory(
   resolvedHome: IssueSessionProviderHome,
   taskId: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<TaskPrivateTempDirectory> {
   const parent = join(resolvedHome.root, "task-tmp");
   await ensureRealDirectoryTree(resolvedHome.storageRoot, parent, "Task private temp root");
   const path = await mkdtemp(join(parent, `${safePathSegment(taskId)}-`));
   await chmod(path, 0o700);
   await assertRealDirectory(path, "Task private temp directory");
-  return { storageRoot: resolvedHome.storageRoot, path };
+  const aliasPath = platform === "darwin"
+    ? createTaskTmpAlias(path)
+    : null;
+  return { storageRoot: resolvedHome.storageRoot, path, ...(aliasPath ? { aliasPath } : {}) };
+}
+
+/**
+ * Create a short `/tmp/remi-XXXXXXXX` symlink to the real task temp directory.
+ *
+ * Names come from the CSPRNG and `symlink()` is atomic, so an existing path is
+ * never reused or followed: EEXIST just picks another name. Deliberately no
+ * startup sweep for links left behind by a daemon crash — macOS prunes /tmp
+ * periodically, and a leftover link points at a directory that is already gone,
+ * so it can leak a name but never data.
+ */
+function createTaskTmpAlias(realDirectory: string): string | null {
+  for (let attempt = 0; attempt < TASK_TMP_ALIAS_ATTEMPTS; attempt += 1) {
+    const name = `${TASK_TMP_ALIAS_PREFIX}${randomBytes(4).toString("hex")}`;
+    const alias = join(TASK_TMP_ALIAS_DIRECTORY, name);
+    try {
+      symlinkSync(realDirectory, alias);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      log.warn(`Could not create task temp alias ${alias}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+    // Prove it is the link WE just made before anyone depends on it.
+    try {
+      const info = lstatSync(alias);
+      if (info.isSymbolicLink() && readlinkSync(alias) === realDirectory) return alias;
+      log.warn(`Task temp alias ${alias} is not the expected symlink; falling back to the long path`);
+      return null;
+    } catch (error) {
+      log.warn(`Could not verify task temp alias ${alias}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+  log.warn(`Could not allocate a unique task temp alias after ${TASK_TMP_ALIAS_ATTEMPTS} attempts`);
+  return null;
+}
+
+/**
+ * Remove the alias, never the directory it points at. Both the link identity
+ * and the target are re-checked first, so a re-used name or a foreign link is
+ * left alone.
+ */
+function removeTaskTmpAlias(aliasPath: string, realDirectory: string): void {
+  try {
+    const info = lstatSync(aliasPath);
+    if (!info.isSymbolicLink()) return;
+    if (readlinkSync(aliasPath) !== realDirectory) return;
+    unlinkSync(aliasPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    log.warn(`Could not remove task temp alias ${aliasPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /** Remove only the exact directory allocated to this execution. */
@@ -284,6 +360,9 @@ export async function cleanupTaskPrivateTempDirectory(
   assertRootOwner?: () => void,
 ): Promise<void> {
   if (!directory) return;
+  // Drop the short alias first: it only ever names the directory, and removing
+  // it cannot recurse into (or delete) anything else.
+  if (directory.aliasPath) removeTaskTmpAlias(directory.aliasPath, directory.path);
   const runtimeRelative = relative(resolve(directory.storageRoot), resolve(directory.path));
   if (!runtimeRelative || runtimeRelative === ".." || runtimeRelative.startsWith(`..${sep}`) || isAbsolute(runtimeRelative)) {
     throw new Error(`Task private temp directory escapes daemon storage: ${directory.path}`);
