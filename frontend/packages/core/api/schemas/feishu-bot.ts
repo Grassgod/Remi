@@ -79,6 +79,7 @@ export const FeishuBotAvailabilitySchema = z.object({
 
 export const IssueTopicConfigResponseSchema = z.object({
   workspace_id: z.string().default(""),
+  invalid: z.object({ code: z.string(), message: z.string() }).nullable().optional(),
   config: z.object({
     enabled: z.boolean().default(false),
     chat_id: z.string().default(""),

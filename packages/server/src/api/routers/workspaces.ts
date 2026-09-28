@@ -51,7 +51,7 @@ import {
 import {
   IssueTopicConfigError,
   parseIssueTopicConfig,
-  readWorkspaceIssueTopics,
+  readWorkspaceIssueTopicsLenient,
 } from "@multiremi/issue-topics/config.js";
 import {
   SshMeshMutationConflictError,
@@ -62,6 +62,7 @@ import type {
   CreateWorkspaceRuntimeProvisionInput,
   CreateWorkspaceInput,
   IssueTopicConfig,
+  IssueTopicConfigInvalid,
   MultiremiBotMenuPublishRequest,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
@@ -261,7 +262,14 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     try {
-      return c.json(issueTopicConfigResponse(workspaceId, readWorkspaceIssueTopics(workspace.settings)));
+      let invalid: IssueTopicConfigInvalid | undefined;
+      const config = readWorkspaceIssueTopicsLenient(workspace.settings, (error) => {
+        invalid = { code: error.code, message: error.message };
+      });
+      return c.json({
+        ...issueTopicConfigResponse(workspaceId, config),
+        ...(invalid ? { invalid } : {}),
+      });
     } catch (error) {
       return issueTopicConfigErrorResponse(c, error);
     }
@@ -286,7 +294,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "only enabled, chat_id, project_ids, notify_mode, and notify_open_id are allowed" }, 400);
     }
     try {
-      const previous = readWorkspaceIssueTopics(workspace.settings);
+      const previous = readWorkspaceIssueTopicsLenient(workspace.settings);
       const issueTopics = parseIssueTopicConfig({
         enabled: body.enabled,
         chatId: body.chat_id,
