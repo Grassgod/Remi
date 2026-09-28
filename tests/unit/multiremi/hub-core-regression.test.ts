@@ -6,6 +6,7 @@ import {
   type HubSubscriberSink,
 } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+import type { ConversationLogPatch } from "@multiremi/api/hub/live-hub.js";
 import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub.js";
 
 const hubs: HubImpl[] = [];
@@ -30,7 +31,7 @@ function row(hub: HubImpl, seq: number): void {
   });
 }
 
-function patch(hub: HubImpl, seq: number, fields = { body_md: "edited" }, revision = 2): void {
+function patch(hub: HubImpl, seq: number, fields: ConversationLogPatch["fields"] = { body_md: "edited" }, revision = 2): void {
   hub.onEntry("s", { session_id: "s", target_seq: seq, revision, fields });
 }
 
@@ -144,5 +145,36 @@ describe("MUL-436 regression 3: edits outside retention", () => {
     patch(hub, 1); hub.flushNow();
     out.buffered = 0; sub.notifyDrain(); hub.flushNow();
     expect(out.gaps).toEqual([{ from: 1, to: 1 }]);
+  });
+});
+
+describe("MUL-436 regression 4: coalesced partial patches", () => {
+  it("preserves disjoint fields, explicit nulls, and the newest value for repeated fields", () => {
+    const hub = make(), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    row(hub, 1); hub.flushNow();
+    patch(hub, 1, { body_md: "edited", body_html: null }, 2);
+    patch(hub, 1, { metadata: { resolved: true } }, 3);
+    patch(hub, 1, { body_md: "latest" }, 4);
+    hub.flushNow();
+    expect(out.frames.filter((frame) => frame.kind === "patch")).toEqual([{
+      seq: 1, kind: "patch", payload: {
+        session_id: "s", target_seq: 1, revision: 4,
+        fields: { body_md: "latest", body_html: null, metadata: { resolved: true } },
+      },
+    }]);
+  });
+
+  it("merges an older queued revision without overwriting newer fields", () => {
+    const hub = make(), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    row(hub, 1); hub.flushNow();
+    patch(hub, 1, { body_md: "newer", metadata: { resolved: true } }, 3);
+    patch(hub, 1, { body_md: "older", body_html: null }, 2);
+    hub.flushNow();
+    expect(out.frames.at(-1)?.payload).toEqual({
+      session_id: "s", target_seq: 1, revision: 3,
+      fields: { body_md: "newer", metadata: { resolved: true }, body_html: null },
+    });
   });
 });

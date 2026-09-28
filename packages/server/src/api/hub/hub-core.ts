@@ -699,10 +699,18 @@ export class HubImpl implements ObservableLiveHub {
       this.liveChanges.set(key, [frame]);
       return;
     }
-    // A newer patch for the same row supersedes the one still waiting to be sent.
+    // Patches contain deltas, so a newer revision cannot replace earlier fields.
     const index = list.findIndex((existing) => existing.seq === frame.seq && existing.kind === frame.kind);
-    if (index >= 0) list[index] = frame;
-    else list.push(frame);
+    if (index >= 0) {
+      const previous = list[index]!.payload as ConversationLogPatch;
+      const incoming = frame.payload as ConversationLogPatch;
+      const [older, newer] = previous.revision <= incoming.revision
+        ? [previous, incoming] : [incoming, previous];
+      list[index] = { ...frame, payload: { ...newer, fields: { ...older.fields, ...newer.fields } } };
+    } else {
+      list.push(frame);
+      list.sort((a, b) => a.seq - b.seq);
+    }
   }
 
   private bufferPending(key: HubStreamKey, frame: HubFrame): void {
