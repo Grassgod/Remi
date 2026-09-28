@@ -14,6 +14,9 @@ import { join } from "node:path";
 
 import { AcpProvider } from "@acp/index.js";
 import { probeRuntimeModels } from "@multiremi/worker/runtime-model-probe.js";
+import { runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
+import { identityBlock } from "@daemon/agent-runtime/capabilities/identity.js";
+import type { RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
 import type { McpServerConfig, SessionConfigOption, SessionModeState, SessionModelState } from "@shared/contracts/acp-protocol.js";
 
 interface AgentProfile {
@@ -42,6 +45,8 @@ interface AgentProfile {
   normalizeCustomModelOption?: boolean;
   synthesizeStartupModel?: boolean;
   archivedModels?: Record<string, string>;
+  /** Simulate a bridge that does not acknowledge the startup env in its picker. */
+  ignoreStartupModelEnv?: boolean;
   ignoreEffortChange?: boolean;
 }
 
@@ -55,6 +60,7 @@ interface LoggedEnv {
   kind: "env";
   ANTHROPIC_API_KEY: string | null;
   ANTHROPIC_BASE_URL: string | null;
+  ANTHROPIC_MODEL: string | null;
   CODEX_HOME: string | null;
 }
 
@@ -157,7 +163,7 @@ const readline = require("node:readline");
 const LOG = ${JSON.stringify(logPath)};
 const PROFILE = ${JSON.stringify(profile)};
 const log = (entry) => fs.appendFileSync(LOG, JSON.stringify(entry) + "\\n");
-log({ kind: "env", ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null, ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null });
+log({ kind: "env", ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null, ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL ?? null, ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null });
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 let sessionSeq = 0;
 let configOptions = PROFILE.configOptions;
@@ -170,7 +176,8 @@ const adoptSession = (params, loading = false) => {
     configOptions = configOptions.map(o => o.id === "model" && !o.options.some(item => item.value === model)
       ? { ...o, options: [...o.options, { value: model, name: model }] } : o);
   }
-  if (loading && model) configOptions = configOptions.map(o => o.id === "model" ? { ...o, currentValue: model } : o);
+  const archived = loading ? (PROFILE.archivedModels || {})[params.sessionId] || model : undefined;
+  if (archived) configOptions = configOptions.map(o => o.id === "model" ? { ...o, currentValue: archived } : o);
   const custom = params._meta?.claudeCode?.options?.env?.ANTHROPIC_CUSTOM_MODEL_OPTION;
   if (custom && !PROFILE.ignoreCustomModelOption) {
     const value = PROFILE.normalizeCustomModelOption ? custom.replace(/\\[1m\\]$/i, "") : custom;
@@ -178,6 +185,9 @@ const adoptSession = (params, loading = false) => {
       ...o, options: [...o.options, { value, name: "Custom", description: "Custom model (" + custom + ")" }],
     } : o);
   }
+  const processModel = PROFILE.ignoreStartupModelEnv ? undefined : process.env.ANTHROPIC_MODEL;
+  if (processModel) configOptions = configOptions.map(o => o.id === "model" && o.options.some(item => item.value === processModel)
+    ? { ...o, currentValue: processModel } : o);
 };
 rl.on("line", (line) => {
   const msg = JSON.parse(line);
@@ -190,7 +200,7 @@ rl.on("line", (line) => {
       adoptSession(msg.params);
       return ok({ sessionId: "sess-" + (++sessionSeq), modes: PROFILE.modes, configOptions, models: PROFILE.models });
     case "session/resume":
-      adoptSession(msg.params);
+      adoptSession(msg.params, true);
       return ok({ sessionId: msg.params.sessionId, modes: PROFILE.modes, configOptions, models: PROFILE.models });
     case "session/load":
       adoptSession(msg.params, true);
@@ -431,6 +441,130 @@ describe("AcpProvider session/new payload", () => {
   });
 });
 
+describe("Claude bridge startup model", () => {
+  function profile(): AgentProfile {
+    return {
+      ...claudeProfile(),
+      configOptions: [{
+        id: "model", name: "Model", category: "model", type: "select", currentValue: "opus[1m]",
+        options: [
+          { value: "opus[1m]", name: "Opus 5.5 (1M)" },
+          { value: "claude-fable-5-1", name: "Fable 5.1" },
+          { value: "claude-opus-5-5", name: "Opus 5.5" },
+          { value: "claude-opus-5", name: "Opus 5" },
+        ],
+      }, CLAUDE_CONFIG_OPTIONS[1]!],
+      archivedModels: { saved: "claude-fable-5-1", other: "claude-fable-5-1" },
+      modelErrors: { "claude-fable-5-1": { code: -32603, message: "Model confirmation timed out" } },
+    };
+  }
+
+  it("pins the requested new-session model without a model RPC and still applies effort", async () => {
+    const model = "claude-fable-5-1";
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(), model,
+      env: { ANTHROPIC_MODEL: "claude-opus-5-5" },
+    });
+    try {
+      await drain(provider.sendStream("hi", { chatId: "startup", effort: "high" }));
+      await drain(provider.sendStream("again", { chatId: "startup", effort: "high" }));
+      expect(agent.env().ANTHROPIC_MODEL).toBe(model);
+      expect((provider as any)._pool.get("startup").startupModel).toBe(model);
+      expect((provider as any)._pool.get("startup").appliedModel).toBe(model);
+      expect(only(agent.requests(), "session/set_config_option").map(r => [r.params.configId, r.params.value])).toEqual([["effort", "high"]]);
+      expect(only(agent.requests(), "session/new")).toHaveLength(1);
+      expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
+    } finally { await provider.close(); }
+  });
+
+  it("does not inject the startup model on resume and keeps matching archived models on load", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd(), model: "claude-fable-5-1" });
+    try {
+      await drain(provider.sendStream("resume", { chatId: "restore", sessionId: "saved" }));
+      await drain(provider.sendStream("load", { chatId: "restore", sessionId: "other" }));
+      expect(agent.env().ANTHROPIC_MODEL).toBeNull();
+      expect((provider as any)._pool.get("restore").startupModel).toBeNull();
+      expect(only(agent.requests(), "session/resume")).toHaveLength(1);
+      expect(only(agent.requests(), "session/load")).toHaveLength(1);
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+    } finally { await provider.close(); }
+  });
+
+  it("recreates a model-pinned process when the requested model changes", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    const models = ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5-1"];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const model of models) await drain(provider.sendStream("hi", { chatId: "switch", model }));
+      expect(only(agent.requests(), "session/new")).toHaveLength(3);
+      expect(agent.envs().map(env => env.ANTHROPIC_MODEL)).toEqual(models);
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+      expect(warn.mock.calls.filter(([message]) => String(message).includes("startup model"))).toHaveLength(2);
+    } finally { await provider.close(); warn.mockRestore(); }
+  });
+
+  it("keeps resumed processes unpinned when a subsequent task changes model", async () => {
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
+    try {
+      await drain(provider.sendStream("resume", { chatId: "restore", sessionId: "saved", model: "claude-fable-5-1" }));
+      await drain(provider.sendStream("switch", { chatId: "restore", model: "claude-opus-5-5" }));
+      expect(agent.envs()).toHaveLength(1);
+      expect(agent.env().ANTHROPIC_MODEL).toBeNull();
+      expect(only(agent.requests(), "session/new")).toHaveLength(0);
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual(["claude-opus-5-5"]);
+    } finally { await provider.close(); }
+  });
+
+  it("only selects the declared 1M row after pinning its ordinary startup model", async () => {
+    const model = "claude-opus-5-5";
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd(), model, claudeOneMillionModels: [model] });
+    try {
+      await drain(provider.sendStream("hi"));
+      expect(agent.env().ANTHROPIC_MODEL).toBe(model);
+      expect(only(agent.requests(), "session/set_config_option").map(r => r.params.value)).toEqual([model + "[1m]"]);
+    } finally { await provider.close(); }
+  });
+
+  it("does not inject ANTHROPIC_MODEL for Codex or model capability discovery", async () => {
+    for (const agentType of ["codex", "claude"] as const) {
+      const agent = fakeAgent(agentType === "codex" ? codexProfile() : { ...profile(), modelErrors: undefined });
+      const provider = new AcpProvider({ agentType, executable: agent.executable, cwd: tempCwd() });
+      try {
+        if (agentType === "codex") await drain(provider.sendStream("hi", { model: "gpt-5.5" }));
+        else await provider.discoverModelCapabilities();
+        expect(agent.env().ANTHROPIC_MODEL).toBeNull();
+      } finally { await provider.close(); }
+    }
+  });
+
+  it("preserves the Runtime profile model across identity assembly and bridge env", async () => {
+    const connection: RuntimeClaudeProfile = {
+      name: "fixture", base_url: "https://profile.example", model: "claude-fable-5-1",
+      auth_mode: "env", auth_header: "bearer", env_key: "REMI_CLAUDE_FIXTURE",
+    };
+    const identity = identityBlock.ephemeral!({ task: {
+      id: "profile", claudeProfile: connection,
+      agent: { provider: "claude", model: "claude-opus-5-5" },
+    }, signal: new AbortController().signal } as any);
+    expect(identity.model).toBe(connection.model);
+    const agent = fakeAgent(profile());
+    const provider = new AcpProvider({
+      agentType: "claude", executable: agent.executable, cwd: tempCwd(), model: connection.model,
+      env: runtimeClaudeProfileRouting(connection),
+    });
+    try {
+      await drain(provider.sendStream("hi", { model: identity.model }));
+      expect(agent.env().ANTHROPIC_MODEL).toBe(connection.model);
+      expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+    } finally { await provider.close(); }
+  });
+});
+
 describe("Claude 1M session negotiation", () => {
   function profile(): AgentProfile {
     return {
@@ -591,7 +725,7 @@ describe("Claude 1M session negotiation", () => {
     { code: -32602, message: "Invalid value for config option model" },
     { code: -32603, message: 'Could not confirm model "claude-opus-5" with the API' },
   ])("falls back once after a live bridge rejects 1M: $code", async error => {
-    const agent = fakeAgent({ ...profile(), modelErrors: { "claude-opus-5[1m]": error } });
+    const agent = fakeAgent({ ...profile(), ignoreStartupModelEnv: true, modelErrors: { "claude-opus-5[1m]": error } });
     const provider = new AcpProvider({
       agentType: "claude", executable: agent.executable, cwd: tempCwd(), claudeOneMillionModels: ["claude-opus-5"],
     });
@@ -651,7 +785,7 @@ describe("Claude 1M session negotiation", () => {
   });
 
   it("preserves an explicit [1m] alias without injecting custom env", async () => {
-    const agent = fakeAgent(profile());
+    const agent = fakeAgent({ ...profile(), ignoreStartupModelEnv: true });
     const provider = new AcpProvider({
       agentType: "claude", executable: agent.executable, cwd: tempCwd(), claudeOneMillionModels: ["opus[1m]"],
     });
@@ -666,7 +800,7 @@ describe("Claude 1M session negotiation", () => {
     { selectedModelOverride: undefined, model: "unknown[1m]", error: "Invalid value" },
     { selectedModelOverride: "haiku", model: "opus[1m]", error: "acp_model_context_unsupported" },
   ])("keeps explicit 1M strict: $model", async params => {
-    const agent = fakeAgent({ ...profile(), synthesizeStartupModel: false, selectedModelOverride: params.selectedModelOverride });
+    const agent = fakeAgent({ ...profile(), ignoreStartupModelEnv: true, synthesizeStartupModel: false, selectedModelOverride: params.selectedModelOverride });
     const provider = new AcpProvider({ agentType: "claude", executable: agent.executable, cwd: tempCwd() });
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {

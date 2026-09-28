@@ -84,6 +84,18 @@ subprocess environment, so "process-level env" is not a sharing problem here.
    page states this next to the switch; a model that does not support 1M fails
    on its first prompt with the gateway's error, and the administrator turns
    the switch off.
+6. **Pin new-session bridge state to the requested model.** After merging the
+   provider environment, set bridge-process `ANTHROPIC_MODEL` to the original
+   requested model only for a new Claude session. The bridge reads this value
+   before settings and archived hints when constructing model/effort state;
+   `_meta` alone does not update that state. Fable's redundant `set_model`
+   otherwise sends a one-token API validation with an approximately five-second
+   deadline and can fail as `-32603`. Correct bridge state skips that Remi RPC
+   without weakening selection checks. Store `startupModel` in the pool entry
+   and recreate a pinned process when its requested model changes. Processes
+   created for resume keep a null pin and do not receive this additional env;
+   existing Runtime profile env is preserved, and its model equals the task's
+   requested model. Warm load retains the process env and the P1 session meta.
 
 ## Rejected
 
@@ -103,6 +115,15 @@ subprocess environment, so "process-level env" is not a sharing problem here.
   Cannot be known before the process is spawned, and the alias floats to the
   next Opus on a Claude Code upgrade. The pinned custom row is the truthful
   reading of an Agent configured with `claude-opus-5-5`.
+- **Skip selection by trusting startup metadata alone.** Leaves the bridge's
+  model, effort and initial context state inconsistent. Process-env pinning
+  gives the bridge itself the correct state with the same RPC count.
+- **Retry Fable confirmation or change the CLI deadline.** Retrying adds latency
+  without removing the deadline; changing native CLI/SDK confirmation requires
+  an upstream patch or undocumented control fields. The redundant new-session
+  call can instead be removed in this PR.
+- **Pin newly created resume processes as well.** The bridge reasserts the env
+  model on restore, adding a 1-5 second Fable confirmation to every resume.
 
 ## Consequences
 
@@ -115,3 +136,13 @@ subprocess environment, so "process-level env" is not a sharing problem here.
 - Bridge or CLI upgrades can change custom-row behaviour; the acceptance run
   (Opus 5.5 at >200K without compaction) must be repeated after
   `release:prepare` bumps `packages/acp/src/runtime-versions.json`.
+- A resume after the Agent's model changes to Fable can still require one
+  ordinary-model confirmation and fail at its deadline, as on main today.
+  Warm load into a pinned process can also internally reassert its model; the
+  pinned bridge logs a failed reassertion without rejecting the restore.
+  Declared 1M selection is still applied after restore when needed.
+- The new-session Fable gate is 20/20 exact current-model acknowledgments with
+  zero Remi model RPCs and zero failures, plus env/stale unit mutations.
+  The 24-hour post-release observation remains confirmation, not a merge gate.
+  Revert the isolated P2 implementation commit to roll back the startup pin;
+  the administrator declaration and P1 load fix remain independent.
