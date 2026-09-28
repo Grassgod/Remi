@@ -66,6 +66,8 @@ export interface IssueTopicConfig {
 export interface IssueTopicConfigResponse {
   workspace_id: string;
   config: IssueTopicConfig;
+  /** Static validation details when the stored configuration is invalid. */
+  invalid?: { code: string; message: string } | null;
 }
 
 export interface UpdateIssueTopicConfigRequest {

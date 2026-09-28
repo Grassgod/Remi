@@ -36,6 +36,7 @@ import {
   IssueTopicConfigError,
   readWorkspaceIssueTopics,
   readWorkspaceIssueTopicsForDelivery,
+  readWorkspaceIssueTopicsLenient,
 } from "@multiremi/issue-topics/config.js";
 import { findMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { createLogger } from "@shared/logger.js";
@@ -808,7 +809,9 @@ export class FeishuBotRepo {
       ? null : cleanOptionalString(input.replyToMessageId) ?? externalMessageId;
     const routeAgent = this.resolveRouteAgent(workspaceId, chatType, chatId)!;
     const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
-    const topicConfig = workspace ? readWorkspaceIssueTopics(workspace.settings) : null;
+    const topicConfig = workspace ? readWorkspaceIssueTopicsLenient(workspace.settings, () => {
+      log.warn(`Feishu inbound message: ignoring an invalid issueTopics config for ${workspaceId}`);
+    }) : null;
     let enqueuedTask: MultiremiTask | null = null;
     const submitChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const submitEvents = createCommitEventQueue();
