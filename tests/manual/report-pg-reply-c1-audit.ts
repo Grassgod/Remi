@@ -177,7 +177,7 @@ const rows = all.map(key => {
       shape: "Scheduler.sync → advanceScheduledTargetRuns queued/active SELECT * 无 LIMIT；peer 有8行分页；启动迁移整表读取",
       caller: "Scheduler.sync / startup migrations / background reader checklist" };
     source = "续做裁定 + Senior cmt_tvxpad98uqtz";
-    condition = "C-2: queued 读有界 AND v0.2.84+后台单次数据 <6 MiB；检查全部后台读者";
+    condition = "C-2: queued 读有界 AND 含埋点版本上线后后台单次数据 <6 MiB；检查全部后台读者";
   } else if (["POST /api/daemon/tasks/:taskId/messages", "POST /internal/peer/events"].includes(key)) {
     audit = { tables: "multiremi_task_messages *: content/input/output/meta；task identity",
       shape: "MUL-462 按8行 SQL分页；例外为保留页大小/桥调用数，算法未改",
@@ -204,7 +204,7 @@ const rows = all.map(key => {
     }
     if (queuedEntries.has(key)) {
       source = "审计 / Senior: advanceScheduledTargetRuns 无界读";
-      condition = "与后台相同：C-2 queued 读有界 AND v0.2.84+后台单次数据 <6 MiB";
+      condition = "与后台相同：C-2 queued 读有界 AND 含埋点版本上线后后台单次数据 <6 MiB";
     }
   }
   if (!audit) throw new Error(`Missing audit for ${key}`);
@@ -214,9 +214,9 @@ const rows = all.map(key => {
 
 const report = `# MUL-398 C-1 最终例外逐条审计
 
-前后实测基线 main \`b95dd2fa\`，后续已合入 main \`a30a8817\` 并重跑审计；机制与表以本 PR 当前代码为准。由 \`tests/manual/report-pg-reply-c1-audit.ts\` 读取集中 Set，生成 ${all.length} 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
+前后实测基线 main \`b95dd2fa\`，后续已合入 main \`5f696786\` 并重跑审计；机制与表以本 PR 当前代码为准。MUL-465/471 改动事务边界、issue 行锁及提交后事件，未新增路由或无界大列读入口。由 \`tests/manual/report-pg-reply-c1-audit.ts\` 读取集中 Set，生成 ${all.length} 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
 
-209 \`cmt_5ncm70lxe805\`：v0.2.83 无单次回包埋点。最先18行全部是 >500ms 慢请求内 **总** DB 字节 ≥6 MiB 的保守超集，并非单条超限证据；其余来自审计或续做/Senior裁定。快请求只能由源码审计覆盖。行 LIMIT、id 单行、读后裁剪均不能单独证明字节有界。
+209 \`cmt_5ncm70lxe805\`：v0.2.83 无单次回包埋点，且当前发布冻结，含埋点版本尚未部署。最先18行全部是 >500ms 慢请求内 **总** DB 字节 ≥6 MiB 的保守超集，并非单条超限证据；其余来自审计或续做/Senior裁定。合入前 Explorer 用 v0.2.83 慢请求总量再核对；快请求只能由源码审计覆盖。行 LIMIT、id 单行、读后裁剪均不能单独证明字节有界。
 
 本轮没有排除已识别风险项，尤其 repository-wikis 保守保留；当前 PG 规模测量见正式报告。原文档/代码归属以下表具体 caller 和对应 repos 为依据，\`*\` 指整行或未去掉所列大列的读取。表中同一类辅助读取可能在鉴权、actor scope 或写后回读中执行，例外覆盖整个 method+pattern。
 

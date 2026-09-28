@@ -6,6 +6,7 @@
 
 - 在受管 `agent/MUL-398` 上从 `4c077d60` fetch 后 merge `origin/main b95dd2fa`，合并提交 `4d370c6b`，无冲突。未创建/切换/重置分支，没有 rebase/force push。
 - 网关中断后补审计提交 `439a42cc`，随后 merge `origin/main a30a8817`（含MUL-412/459/466），合并提交 `84831dd0`，无冲突；在合并后的代码上重跑调用链审计并补两条新daemon decision入口。
+- 继续 merge `origin/main 5f696786`（含MUL-465/471/472），合并提交 `96d4f976`，无冲突。MUL-465 的事务边界与 MUL-471 的 issue 行锁改变写入顺序和锁语义，但没有新增路由或无界大列读入口；合并后静态审计仍为706个字面量handler、366条保守大列可达记录、零缺失例外，`<background>` 读者清单也没有新增类别。
 - [预检停止报告](MUL-398-c1-preflight-stop.md) 与原脚本保留；预检 main `e47b7759` 的结果不是本轮 before。本轮 before 是 main `b95dd2fa`，env `0`；after 是 C-1 实现，env 未设置。
 - 预检两项停止条件按续做裁定及 Senior `cmt_tvxpad98uqtz` 解决：独立 `<background>` 项保留64 MiB；daemon POST messages 与 HTTP peer 也保留64 MiB，分页算法不改。
 - 完整读过 MUL-398「授权更新」「范围 C」「验收3」、Explorer `cmt_5ncm70lxe805`、停止评论 `cmt_ivh834b1tmc0`、裁决请求 `cmt_w4doexd8w1w6` 和正式裁决 `cmt_tvxpad98uqtz`。
@@ -24,7 +25,7 @@
 
 完整逐条审计见 [394项例外表](MUL-398-c1-exception-audit.md)：每条列出 method+实际Hono模式、来源、表/大列、LIMIT/投影、具体调用方、进表理由及收回条件。集中常量由生成脚本读取，正式用例逐项验证393条HTTP模式真实注册和 `currentDbReplyOrigin()` 产出；没有前缀改写、参数名替换、消失条目或静默丢弃。
 
-来源为 **209请求总量18条超集 ∪ 审计 ∪ 后台裁定 ∪ daemon POST / HTTP peer分页裁定**。209仍为v0.2.83，缺少单次回包埋点；零条事件不代表安全。旧日志只覆盖 >500ms 慢请求，请求 `db_bytes` 是所有SQL回包总和。快请求风险由代码审计补足，行数 LIMIT 或读后裁剪不能证明字节有界。
+来源为 **209请求总量18条超集 ∪ 审计 ∪ 后台裁定 ∪ daemon POST / HTTP peer分页裁定**。209仍为v0.2.83，缺少单次回包埋点；零条事件不代表安全。发布已冻结，C-1 只能在发布恢复后的首个版本或更晚上线，不能声称生产已使用8 MiB默认值。合入前Explorer改用v0.2.83的慢请求总量再核对；旧日志只覆盖 >500ms 慢请求，请求 `db_bytes` 是所有SQL回包总和。快请求风险由代码审计补足，行数 LIMIT 或读后裁剪不能证明字节有界。
 
 覆盖 task/chat messages、autopilot payload/result/schedule_prompt、knowledge、SQL文档/修订正文、task prompts、session events/results、comments/timeline、归档metadata及相关actor/getter/写后回读。Trace/归档文件正文在外部存储；SQL归档metadata仍无字节cap，因此归档相关路径也保守进表。本轮没有排除已识别风险项，repository-wikis 的原18候选亦保留。
 
@@ -32,7 +33,7 @@
 
 四条附加HTTP入口来源明确为 `advanceScheduledTargetRuns` 无界读：multiremi run、run-scheduled、trigger 与 repository wiki build。收回条件与后台项相同。另有 canonical autopilot trigger 已在18条内。**Senior对真实规模的判断是该读远小于6 MiB（按autopilot分组）；20×512 KiB只是契约演示，不是209生产风险实测。** 本轮未访问209、未重新查库验证该规模判断。
 
-一般HTTP例外：读有界/投影修复同包或更早上线后，有埋点单次回包<6 MiB，至少三天含一个工作日高峰，Explorer复核后逐条收回。daemon POST messages 和 HTTP peer：MUL-402去掉该读路径，或另单按实际行宽算法，任一成立即收回，不必等待三天。本 PR 不改MUL-462算法。
+一般HTTP例外：读有界/投影修复同包或更早上线后，含埋点版本实际部署并取得单次回包<6 MiB数据，至少三天含一个工作日高峰，Explorer复核后逐条收回。daemon POST messages 和 HTTP peer：MUL-402去掉该读路径，或另单按实际行宽算法，任一成立即收回，不必等待三天。本 PR 不改MUL-462算法。
 
 ### 后台读者收回清单
 
@@ -103,7 +104,7 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 
 ### Repository-wikis模型复测
 
-引用 [A2报告](MUL-398-repository-wikis-a2-db-bytes.md) 的1842观测/1443构建行、26/46/92仓库模型；A/A2已在main（d905961b/d6714966），晚于v0.2.84，与C-1同包或更早上线。不能声称Explorer取证时生产已生效。
+引用 [A2报告](MUL-398-repository-wikis-a2-db-bytes.md) 的1842观测/1443构建行、26/46/92仓库模型；A/A2已在main（d905961b/d6714966），晚于v0.2.84，与C-1同包或更早上线。发布冻结期间209仍为v0.2.83，不能声称Explorer取证时生产已生效。
 
 现有scale脚本的MeteredDb补透传dialect，避免新迁移把PG当SQLite；两侧用相同脚本，不改产品查询。warmup1+n5，after默认env未设置；本轮仍保留该路由64 MiB例外，但每次请求所有SQL总量<1 MB，所以每条SQL亦<6 MiB且符合8 MiB。原始同口径数据在 [wiki-measurements.json](MUL-398-c1-wiki-measurements.json)。
 
@@ -139,4 +140,4 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 
 产品改动仅 `observability/request-metrics.ts` 和 `store/db/postgres.ts`；分页/queued run实现不改。其他为测试、测量脚本、docs/dev/performance.md、deploy/docker/api.env.example与报告。没有迁移、新配置开关、D shim或Wiki改动。
 
-正式合并后回滚：`git revert -m 1 <merge>`。应急：`MULTIREMI_PG_REPLY_MAX_BYTES=0`，仍受原64 MiB物理缓冲约束。改209配置由贺华杰决定，本轮不执行。PR不转Ready、不合入；合入前新的单次生产数据由带头大哥/Explorer补证，可追加集中常量与对应正式用例。
+正式合并后回滚：`git revert -m 1 <merge>`。应急：`MULTIREMI_PG_REPLY_MAX_BYTES=0`，仍受原64 MiB物理缓冲约束。改209配置由贺华杰决定，本轮不执行。PR不转Ready、不合入；冻结期合入前由带头大哥/Explorer按v0.2.83慢请求总量补证，表外候选可追加集中常量与对应正式用例。含单次埋点版本部署后再做C-2逐项收回的真实数据核对。
