@@ -160,6 +160,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "provider_auth",
   "provider_error",
   "queued_expired",
+  "queued_model_unavailable",
   "registration_failed",
   "runtime_offline",
   "runtime_recovery",
