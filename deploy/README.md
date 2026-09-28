@@ -762,6 +762,14 @@ installation, and record these alongside the timings:
 - the Full return result, including the empty
   `docker ps --filter label=com.docker.compose.project=...` check.
 
+Step 3 of Full return was replayed against a mock Docker Engine with the official
+Compose v2.29.7 client: `docker compose --profile split rm -sf api-runtime` issued
+`POST /containers/<id>/stop` and then `DELETE /containers/<id>?force=1`, and the
+project-scoped query went from one container to empty. The previous `stop` alone
+issued no `DELETE` at all and left the container visible, so this check could
+never have passed before. `rm -f` without `-s` is not a substitute: Compose only
+removes stopped containers, and this one is still running at that point.
+
 Whether the window plus the pre-check is sufficient, or an operation-level mutex
 is also needed, is decided from that evidence: the pre-check narrows the race to
 "an operation starts between the check and the edit", which the window makes
