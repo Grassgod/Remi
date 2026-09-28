@@ -4798,6 +4798,14 @@ runMigrations(this.db);
     return this.tasks.ensureDelegationWakeup(input);
   }
 
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: import("./context.js").CommitEventQueue,
+  ): { task: MultiremiTask | null; created: boolean; covered: boolean } {
+    return this.tasks.ensureDelegationWakeupWithinTransaction(input, childStatusChanges, deferredEvents);
+  }
+
   resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
     const deferredEvents = createCommitEventQueue();
     const lane = this.db.transaction(() =>

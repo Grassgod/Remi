@@ -195,6 +195,13 @@ seq-0 head without a creation marker, preserving the existing first event seq
 and stored follow/delegation cursors. Older rows without a log mirror retain
 their legacy read path until B7 backfills them.
 
+The five self-transactional comment operations own a commit-event queue when
+the caller has not supplied one. Workspace pushes and triggered-task enqueue
+notifications are released only after their transaction commits; rollback
+discards them. Update and delete cancel comment-triggered tasks after the
+comment transaction, so cancellation's workspace lifecycle lock and terminal
+notifications cannot run inside that transaction.
+
 ## Alternatives considered
 
 - **Immutable append-only log with reader-side folding** — every SSR and replica

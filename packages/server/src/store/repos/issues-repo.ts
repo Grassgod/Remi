@@ -43,6 +43,7 @@ import type {
   CreateIssueDecisionInput,
   IssueDecisionActor,
   CreateLabelInput,
+  CreateTaskInput,
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   ListIssuesInput,
@@ -2947,13 +2948,24 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
-    return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
+    if (options.deferredEvents) {
+      return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
+    }
+    const deferredEvents = createCommitEventQueue();
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const comment = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
+      issueId, input, { ...options, deferredEvents }, childStatusChanges,
+    ))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return comment;
   }
 
   private createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions,
+    childStatusChanges?: ChildStatusChangeCollector,
   ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
@@ -3075,8 +3087,10 @@ export class IssuesRepo {
       { comment_id: id, issue_session_id: issueSessionId },
     );
     if (options.deferAgentMentionDispatch) return comment;
-    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
-    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
+    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq, options.deferredEvents, childStatusChanges);
+    this.triggerAssigneeAutoResponse(
+      issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0, options.deferredEvents, childStatusChanges,
+    );
     return comment;
   }
 
@@ -3115,6 +3129,8 @@ export class IssuesRepo {
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
     hasExplicitMentions: boolean,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
   ): MultiremiTask | null {
     if (comment.authorType !== "member") return null;
     if (hasExplicitMentions) return null;
@@ -3122,13 +3138,13 @@ export class IssuesRepo {
     if (!issue.assigneeId) return null;
     const agent = this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId);
     if (!agent) return null;
-    const task = this.ctx.tasks().createTask({
+    const task = this.createCommentTriggeredTask({
       agentId: agent.id,
       issueId: issue.id,
       triggerCommentId: comment.id,
       workspaceId: issue.workspaceId,
       prompt: assigneeCommentPrompt(comment),
-    });
+    }, deferredEvents, childStatusChanges);
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
       actorId: null,
@@ -3141,12 +3157,14 @@ export class IssuesRepo {
         agentId: agent.id,
         taskId: task.id,
       },
-    });
+    }, deferredEvents);
     return task;
   }
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
-    const { comment, changed, issueId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input))();
+    const deferredEvents = createCommitEventQueue();
+    const { comment, changed, issueId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
     // Keep the comment and its log revision atomic. Trigger cancellation can
     // wait on a workspace lock, so it follows that commit rather than holding
     // the comment row invisible for the entire wait.
@@ -3154,7 +3172,7 @@ export class IssuesRepo {
     return comment;
   }
 
-  private updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput): {
+  private updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput, deferredEvents: CommitEventQueue): {
     comment: MultiremiIssueComment; changed: boolean; issueId: string;
   } {
     const current = this.ctx.getRawIssueComment(id);
@@ -3200,15 +3218,18 @@ export class IssuesRepo {
       type: "comment_updated",
       body,
       data: { commentId: id },
-    });
+    }, deferredEvents);
     return { comment: this.getIssueComment(id)!, changed: current.body !== body, issueId: current.issueId };
   }
 
   deleteIssueComment(id: string): void {
-    this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id))();
+    const deferredEvents = createCommitEventQueue();
+    const { issueId, commentIds } = this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.cancelTasksByTriggerComments(issueId, commentIds);
   }
 
-  private deleteIssueCommentWithinTransaction(id: string): void {
+  private deleteIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): { issueId: string; commentIds: string[] } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const ids = this.collectCommentTreeIds(id);
@@ -3216,7 +3237,6 @@ export class IssuesRepo {
       .map((commentId) => this.ctx.getRawIssueComment(commentId))
       .filter((comment): comment is MultiremiIssueComment => comment !== null);
     const now = nowIso();
-    this.cancelTasksByTriggerComments(current.issueId, ids);
     for (const commentId of ids) {
       this.ctx.db.run("DELETE FROM multiremi_comment_reactions WHERE comment_id = ?", [commentId]);
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE comment_id = ?", [commentId]);
@@ -3257,14 +3277,18 @@ export class IssuesRepo {
       type: "comment_deleted",
       body: current.body,
       data: { commentId: id, deletedCommentIds: ids },
-    });
+    }, deferredEvents);
+    return { issueId: current.issueId, commentIds: ids };
   }
 
   resolveIssueComment(id: string, input: { actorType?: string; actorId?: string | null } = {}): MultiremiIssueComment {
-    return this.ctx.db.transaction(() => this.resolveIssueCommentWithinTransaction(id, input))();
+    const deferredEvents = createCommitEventQueue();
+    const comment = this.ctx.db.transaction(() => this.resolveIssueCommentWithinTransaction(id, input, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return comment;
   }
 
-  private resolveIssueCommentWithinTransaction(id: string, input: { actorType?: string; actorId?: string | null }): MultiremiIssueComment {
+  private resolveIssueCommentWithinTransaction(id: string, input: { actorType?: string; actorId?: string | null }, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -3288,11 +3312,6 @@ export class IssuesRepo {
           updated_at: now,
         },
       });
-      // TODO(MUL-402 B2/B9): remove this legacy marker when readers move off
-      // session_events or the old table is deleted.
-      // The legacy table keeps this marker for internal readers until B2. The
-      // log and its `/events` compatibility read contain no resolved marker:
-      // resolution lives on the comment row and travels as a patch.
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: input.actorType ?? "member",
         authorId: input.actorId ?? "local",
@@ -3308,15 +3327,18 @@ export class IssuesRepo {
       type: "comment_resolved",
       body: current.body,
       data: { commentId: id },
-    });
+    }, deferredEvents);
     return this.getIssueComment(id)!;
   }
 
   unresolveIssueComment(id: string): MultiremiIssueComment {
-    return this.ctx.db.transaction(() => this.unresolveIssueCommentWithinTransaction(id))();
+    const deferredEvents = createCommitEventQueue();
+    const comment = this.ctx.db.transaction(() => this.unresolveIssueCommentWithinTransaction(id, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return comment;
   }
 
-  private unresolveIssueCommentWithinTransaction(id: string): MultiremiIssueComment {
+  private unresolveIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -3337,7 +3359,6 @@ export class IssuesRepo {
           updated_at: now,
         },
       });
-      // TODO(MUL-402 B2/B9): remove this legacy marker with the old read path.
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -3353,7 +3374,7 @@ export class IssuesRepo {
       type: "comment_unresolved",
       body: current.body,
       data: { commentId: id },
-    });
+    }, deferredEvents);
     return this.getIssueComment(id)!;
   }
 
@@ -4748,6 +4769,8 @@ export class IssuesRepo {
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
     requiredEventSeq: number,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
   ): MultiremiTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
@@ -4765,7 +4788,7 @@ export class IssuesRepo {
     )) {
       for (const target of targets) {
         const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
-        this.recordCommentMentionSkipped(issue, comment, agent, target, "side_session_delegation_blocked");
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "side_session_delegation_blocked", deferredEvents);
       }
       return [];
     }
@@ -4781,13 +4804,13 @@ export class IssuesRepo {
       const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
       if (!agent) {
         if (comment.authorType === "agent") {
-          this.recordCommentMentionSkipped(issue, comment, null, target, "target_unavailable");
+          this.recordCommentMentionSkipped(issue, comment, null, target, "target_unavailable", deferredEvents);
         }
         continue;
       }
       if (seenAgents.has(agent.id)) continue;
       if (comment.authorType === "agent" && comment.authorId === agent.id) {
-        this.recordCommentMentionSkipped(issue, comment, agent, target, "self_mention");
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "self_mention", deferredEvents);
         continue;
       }
       seenAgents.add(agent.id);
@@ -4804,11 +4827,14 @@ export class IssuesRepo {
         && !!sourceTask?.delegationId
         && sourceTask.delegatedByAgentId === agent.id;
       if (delegationReturn) {
-        const wakeup = this.ctx.tasks().ensureDelegationWakeup({
+        const wakeupInput = {
           sourceTaskId: sourceTask!.id,
           requiredEventSeq,
           triggerCommentId: comment.id,
-        });
+        };
+        const wakeup = deferredEvents && childStatusChanges
+          ? this.ctx.tasks().ensureDelegationWakeupWithinTransaction(wakeupInput, childStatusChanges, deferredEvents)
+          : this.ctx.tasks().ensureDelegationWakeup(wakeupInput);
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
@@ -4819,6 +4845,7 @@ export class IssuesRepo {
           agent,
           target,
           taskAuthoredByCommentAgent ? "unsupported_direction" : "unlinked_agent_comment",
+          deferredEvents,
         );
         continue;
       }
@@ -4852,7 +4879,7 @@ export class IssuesRepo {
             agentId: agent.id,
             taskId: queuedTask.id,
           },
-        });
+        }, deferredEvents);
         continue;
       }
 
@@ -4867,7 +4894,7 @@ export class IssuesRepo {
       const delegationId = leaderDelegation
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
-      const task = this.ctx.tasks().createTask({
+      const task = this.createCommentTriggeredTask({
         agentId: agent.id,
         issueId: issue.id,
         triggerCommentId: comment.id,
@@ -4877,7 +4904,7 @@ export class IssuesRepo {
         delegatedByAgentId: delegationId ? comment.authorId : null,
         assignmentAuthorType: comment.authorType,
         assignmentAuthorId: comment.authorId,
-      });
+      }, deferredEvents, childStatusChanges);
       tasks.push(task);
       this.ctx.appendIssueActivity(issue.id, {
         actorType: "system",
@@ -4893,7 +4920,7 @@ export class IssuesRepo {
           delegationId,
           delegatedByAgentId: delegationId ? comment.authorId : null,
         },
-      });
+      }, deferredEvents);
     }
     return tasks;
   }
@@ -4904,6 +4931,7 @@ export class IssuesRepo {
     agent: MultiremiAgent | null,
     target: { assigneeType: "agent" | "squad"; assigneeId: string },
     reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable" | "side_session_delegation_blocked",
+    deferredEvents?: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
@@ -4918,7 +4946,18 @@ export class IssuesRepo {
         assigneeId: target.assigneeId,
         agentId: agent?.id ?? null,
       },
-    });
+    }, deferredEvents);
+  }
+
+  private createCommentTriggeredTask(
+    input: CreateTaskInput,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
+  ): MultiremiTask {
+    if (!deferredEvents || !childStatusChanges) return this.ctx.tasks().createTask(input);
+    const task = this.ctx.tasks().createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(task);
+    return task;
   }
 
   private resolveCommentMentionTargets(body: string, workspaceId: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {

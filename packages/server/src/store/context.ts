@@ -478,6 +478,11 @@ export interface TasksSurface {
     terminalStatus?: "completed" | "failed" | "cancelled" | null;
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];

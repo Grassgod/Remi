@@ -270,7 +270,7 @@ const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
   )
 )`;
 
-interface DelegationWakeupInput {
+export interface DelegationWakeupInput {
   sourceTaskId: string;
   requiredEventSeq: number;
   triggerCommentId?: string | null;
@@ -639,6 +639,24 @@ export class TasksRepo {
     }
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    return result;
+  }
+
+  /** Caller owns COMMIT and must flush the queue and collected child-status hooks afterwards. */
+  ensureDelegationWakeupWithinTransaction(
+    input: DelegationWakeupInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): DelegationWakeupResult {
+    const initial = this.getTask(input.sourceTaskId);
+    if (!initial) return { task: null, created: false, covered: false };
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const source = this.getTask(input.sourceTaskId);
+    if (!source || source.workspaceId !== initial.workspaceId) {
+      return { task: null, created: false, covered: false };
+    }
+    const result = this.ensureDelegationWakeupWithinWorkspaceLock(source, input, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(...(result.createdTasks ?? (result.created && result.task ? [result.task] : [])));
     return result;
   }
 
