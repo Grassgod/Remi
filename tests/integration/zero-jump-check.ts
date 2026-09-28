@@ -560,7 +560,7 @@ async function clickEntryRow(page: Page, scenario: Scenario, slug: string): Prom
   const deadline = Date.now() + ENTRY_TIMEOUT_MS;
   const isInbox = scenario.entry === "inbox";
   const selector = isInbox
-    ? inboxRowSelector("contract")
+    ? inboxRowSelector("contract", scenario.inboxItemId ?? undefined)
     : issueRowSelector("contract", scenario.clickIssueId ?? "");
   while (Date.now() < deadline) {
     const skeletons = await page.locator(`${LEGACY.listRoot} [data-slot="skeleton"]`).count().catch(() => 0);
@@ -721,8 +721,6 @@ async function main(): Promise<void> {
       );
     }
   }
-
-
   // ── verdict ──────────────────────────────────────────────────────────────
   const grouped = groupResults(rounds);
   const allowlistRaw = JSON.parse(readFileSync(options.allowlist, "utf8")) as ZeroJumpAllowlist;
