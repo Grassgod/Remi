@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {

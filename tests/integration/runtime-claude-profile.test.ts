@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {

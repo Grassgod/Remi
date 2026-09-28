@@ -9,7 +9,7 @@ import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiRuntimeReregisterGate,
