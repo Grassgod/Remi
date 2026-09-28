@@ -1,3 +1,5 @@
+import type { RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
+
 export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
@@ -30,6 +32,7 @@ export interface RuntimeDevice {
   status: "online" | "offline";
   device_info: string;
   metadata: Record<string, unknown>;
+  protocol?: RuntimeProtocolStatus | null;
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;

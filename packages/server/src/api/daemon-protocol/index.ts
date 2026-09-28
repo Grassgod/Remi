@@ -104,6 +104,11 @@ export class DaemonProtocolLayer {
       serverVersion: this.serverVersion,
       ownerAccessToken: identity.accessToken,
       authorizeRuntime: (daemonId, runtimeId) => this.authorizeRuntime(identity, daemonId, runtimeId),
+      onHello: hello => {
+        for (const runtimeId of session.runtimeIds) {
+          this.store.recordDaemonProtocol(runtimeId, hello.daemonId, DAEMON_PROTOCOL_VERSION, hello.cliVersion);
+        }
+      },
       onHeartbeat: (heartbeat) => this.handleHeartbeat(heartbeat),
       onFrame: (sample) => this.metrics?.record(sample),
       onRpc: (frame) => this.dispatchRpc(frame),
