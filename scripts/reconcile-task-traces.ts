@@ -187,6 +187,7 @@ async function main(): Promise<void> {
       checked_tasks: result.checked_tasks,
       checked_rows: result.checked_rows,
       checked_none: result.checked_none,
+      checked_turn_cards: result.checked_turn_cards,
       checked_by_group: result.checked_by_group,
       mismatches: result.mismatches,
       mismatch_total: result.mismatch_total,

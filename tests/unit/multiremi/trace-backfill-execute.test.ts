@@ -591,6 +591,7 @@ for (const backend of backends) {
           member_unreadable: 0,
           archive_missing: 0,
           progress: 4,
+          turn_card: 0,
         });
         expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
           category: "line_digest", task_id: "tsk_chat_a", first_seq: 2,

@@ -123,6 +123,8 @@ import {
   type TraceBackfillProgressInput,
   type TraceBackfillTaskDigest,
   type TraceBackfillTaskRecord,
+  type TraceBackfillTurnCardCounts,
+  type TraceBackfillTurnSummary,
 } from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import {
   RuntimesRepo,
@@ -983,15 +985,16 @@ runMigrations(this.db);
 
   /**
    * One subject of the trace backfill in one transaction: the `ready`
-   * `trace_backfill` row, its pointers, the `none` pointers, the progress mark
-   * and the per-task digests.
+   * `trace_backfill` row, its pointers, the `none` pointers, the progress mark,
+   * the per-task digests and the summary fields of the tasks' `turn` cards.
    */
   commitTraceBackfill(
     input: TraceBackfillCommitInput & {
       progress: TraceBackfillProgressInput;
       taskDigests: readonly TraceBackfillTaskDigest[];
+      turnSummaries: readonly TraceBackfillTurnSummary[];
     },
-  ): TraceBackfillCommitResult {
+  ): TraceBackfillCommitResult & { turnCards: TraceBackfillTurnCardCounts } {
     return this.db.transaction(() => {
       const result = this.sessionArchives.commitTraceBackfill(input);
       const archiveId = result.archive?.id ?? null;
@@ -999,7 +1002,8 @@ runMigrations(this.db);
       if (archiveId) {
         this.traceBackfillProgress.replaceTasks(input.subjectKind, input.subjectId, archiveId, input.taskDigests);
       }
-      return result;
+      const turnCards = this.traceBackfillProgress.fillTurnCards(input.turnSummaries);
+      return { ...result, turnCards };
     })();
   }
 

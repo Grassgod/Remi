@@ -1167,7 +1167,8 @@ export interface TraceTaskRender {
 
 /**
  * Render one task from its rows, streaming. `onLine` receives every line of the
- * file in order — header, events, trailer — each ending in `\n`.
+ * file in order — header, events, trailer — each ending in `\n`; `onEvent`
+ * receives each event object before it is serialized.
  */
 export function renderTraceTask(
   db: SqlDatabase,
@@ -1177,6 +1178,7 @@ export function renderTraceTask(
     chunkBytes?: number;
     onLine?: (line: string) => void;
     onRow?: (row: TraceBackfillSourceRow) => { input: unknown; meta: unknown };
+    onEvent?: (event: Record<(typeof TRACE_EVENT_KEYS)[number], unknown>) => void;
     onInvalidEvent?: (sample: unknown) => void;
   } = {},
 ): TraceTaskRender {
@@ -1203,6 +1205,7 @@ export function renderTraceTask(
       }
       previousSeq = Math.max(previousSeq, row.seq);
       head = Math.max(head, row.seq);
+      options.onEvent?.(event);
       digest.line(traceEventDigest(event));
       const line = `${JSON.stringify(event)}\n`;
       bytes += Buffer.byteLength(line, "utf8");

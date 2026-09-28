@@ -1,3 +1,8 @@
+import type {
+  ConversationLogModel,
+  ConversationLogTurnMetadata,
+  ConversationLogTypeHistogramBucket,
+} from "@multiremi/contracts/conversation-log.js";
 import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
 import { nowIso } from "@multiremi/ids.js";
 import type { StoreContext } from "@multiremi/store/context.js";
@@ -41,6 +46,52 @@ export interface TraceBackfillTaskRecord extends TraceBackfillTaskDigest {
   subjectId: string;
   archiveId: string;
   updatedAt: string;
+}
+
+/**
+ * The `turn` card fields one task's stored rows produce (MUL-432 item 8). A
+ * `none` task has no rows: zero counts, no buckets, no model.
+ */
+export interface TraceBackfillTurnSummary {
+  taskId: string;
+  eventCount: number;
+  toolCallCount: number;
+  typeHistogram: ConversationLogTypeHistogramBucket[];
+  model: ConversationLogModel | null;
+}
+
+export interface TraceBackfillTurnCardCounts {
+  updated: number;
+  /** The card already carried these values. */
+  unchanged: number;
+  /** No `turn` card: a one-shot Task, or a chat turn whose reply never landed. */
+  missing: number;
+}
+
+/**
+ * The summary fields on which a card disagrees with `summary`, in card key
+ * names; empty when it already matches. An absent `model` equals a null one,
+ * the other three must be present.
+ */
+export function traceBackfillTurnCardDiff(
+  metadata: ConversationLogTurnMetadata,
+  summary: TraceBackfillTurnSummary,
+): string[] {
+  const diff: string[] = [];
+  if (metadata.event_count !== summary.eventCount) diff.push("event_count");
+  if (metadata.tool_call_count !== summary.toolCallCount) diff.push("tool_call_count");
+  const buckets = metadata.type_histogram;
+  if (!Array.isArray(buckets) || buckets.length !== summary.typeHistogram.length
+    || buckets.some((bucket, index) => {
+      const expected = summary.typeHistogram[index]!;
+      return bucket?.type !== expected.type || (bucket.tool ?? null) !== expected.tool || bucket.count !== expected.count;
+    })) diff.push("type_histogram");
+  const model = metadata.model ?? null;
+  if (model === null ? summary.model !== null
+    : summary.model === null || model.provider !== summary.model.provider || model.model !== summary.model.model) {
+    diff.push("model");
+  }
+  return diff;
 }
 
 function hydrateTask(row: Row): TraceBackfillTaskRecord {
@@ -183,5 +234,37 @@ export class TraceBackfillProgressRepo {
         nowIso(),
       ],
     );
+  }
+
+  /**
+   * Write each task's summary onto its `turn` card, the card MUL-427's
+   * conversation backfill created. Like {@link markDone}, this belongs to the
+   * transaction that publishes the subject. Only `event_count`,
+   * `tool_call_count`, `type_histogram` and `model` are written; a card that
+   * already carries the same values is left alone, so a rerun does not bump
+   * its revision.
+   */
+  fillTurnCards(summaries: readonly TraceBackfillTurnSummary[]): TraceBackfillTurnCardCounts {
+    const counts: TraceBackfillTurnCardCounts = { updated: 0, unchanged: 0, missing: 0 };
+    const log = this.ctx.conversationLog();
+    for (const summary of summaries) {
+      const card = log.findTurnEntry(summary.taskId);
+      if (!card) {
+        counts.missing++;
+        continue;
+      }
+      if (traceBackfillTurnCardDiff(card.metadata as ConversationLogTurnMetadata, summary).length === 0) {
+        counts.unchanged++;
+        continue;
+      }
+      log.updateTurnCardWithinTransaction(summary.taskId, {
+        eventCount: summary.eventCount,
+        toolCallCount: summary.toolCallCount,
+        typeHistogram: summary.typeHistogram,
+        model: summary.model,
+      });
+      counts.updated++;
+    }
+    return counts;
   }
 }

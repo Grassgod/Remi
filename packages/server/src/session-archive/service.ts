@@ -57,6 +57,8 @@ import {
 import type {
   TraceBackfillProgressInput,
   TraceBackfillTaskDigest,
+  TraceBackfillTurnCardCounts,
+  TraceBackfillTurnSummary,
 } from "@multiremi/store/repos/trace-backfill-progress-repo.js";
 import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
 
@@ -107,6 +109,8 @@ export interface TraceBackfillIngestInput {
   noneTaskIds: readonly string[];
   progress: TraceBackfillProgressInput;
   taskDigests: readonly TraceBackfillTaskDigest[];
+  /** One per rendered and `none` task; written onto the tasks' `turn` cards. */
+  turnSummaries: readonly TraceBackfillTurnSummary[];
 }
 
 export interface SessionArchiveVerifyResult {
@@ -1038,7 +1042,9 @@ export class SessionArchiveService {
    * marks the subject done. Until then the directory carries a marker, so an
    * interrupted run can tell its own leftovers from a live archive.
    */
-  async ingestTraceBackfill(input: TraceBackfillIngestInput): Promise<TraceBackfillCommitResult> {
+  async ingestTraceBackfill(
+    input: TraceBackfillIngestInput,
+  ): Promise<TraceBackfillCommitResult & { turnCards: TraceBackfillTurnCardCounts }> {
     const { subject } = input;
     if (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(subject.id)) {
       throw new SessionArchiveError("subject_id must be a plain identifier", 400, "session_archive_invalid_subject");
@@ -1109,6 +1115,7 @@ export class SessionArchiveService {
       noneTaskIds: input.noneTaskIds,
       progress: input.progress,
       taskDigests: input.taskDigests,
+      turnSummaries: input.turnSummaries,
     });
 
     const existing = this.store.listSessionArchivesForSubject(subject.kind, subject.id)

@@ -16,8 +16,10 @@
  * events with their original seq, trailer), build the zip with the
  * session-archive writer, re-read and verify every member, then in one
  * transaction insert a `ready` row with `metadata.kind = "trace_backfill"`,
- * move the pointers through the archive swap rule, write the `none` pointers
- * and mark the subject done. Existing archive rows are never modified.
+ * move the pointers through the archive swap rule, write the `none` pointers,
+ * write each task's event count, tool call count, `(type, tool)` histogram and
+ * model onto its `turn` card and mark the subject done. Existing archive rows
+ * are never modified.
  */
 import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
@@ -52,6 +54,8 @@ import {
   reconcileTraceBackfill,
   type TraceReconcileReport,
 } from "./lib/task-trace-reconcile.js";
+import { emptyTraceTurnSummary, TraceTurnSummaryBuilder } from "./lib/task-trace-turn-summary.js";
+import type { TraceBackfillTurnSummary } from "../packages/server/src/store/repos/trace-backfill-progress-repo.js";
 
 const WRITE_BUFFER_BYTES = 1024 * 1024;
 
@@ -86,6 +90,9 @@ export interface TraceBackfillGroupResult {
   archives_reused: number;
   pointers: number;
   none_pointers: number;
+  turn_cards_updated: number;
+  turn_cards_unchanged: number;
+  turn_cards_missing: number;
   orphan_archive_dirs_removed: number;
 }
 
@@ -122,6 +129,9 @@ function emptyGroupResult(): TraceBackfillGroupResult {
     archives_reused: 0,
     pointers: 0,
     none_pointers: 0,
+    turn_cards_updated: 0,
+    turn_cards_unchanged: 0,
+    turn_cards_missing: 0,
     orphan_archive_dirs_removed: 0,
   };
 }
@@ -222,9 +232,15 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
     digest: subject.digest,
   };
   store.markTraceBackfillRunning(progressInput);
+  const noneSummaries = subject.noneTaskIds.map(emptyTraceTurnSummary);
+  const countTurnCards = (counts: { updated: number; unchanged: number; missing: number }) => {
+    result.turn_cards_updated += counts.updated;
+    result.turn_cards_unchanged += counts.unchanged;
+    result.turn_cards_missing += counts.missing;
+  };
 
   if (subject.tasks.length === 0) {
-    store.commitTraceBackfill({
+    const committed = store.commitTraceBackfill({
       workspaceId: subject.workspaceId,
       subjectKind: subject.kind,
       subjectId: subject.id,
@@ -233,7 +249,9 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
       noneTaskIds: subject.noneTaskIds,
       progress: progressInput,
       taskDigests: [],
+      turnSummaries: noneSummaries,
     });
+    countTurnCards(committed.turnCards);
     result.none_only++;
     result.none_pointers += subject.noneTaskIds.length;
     result.written++;
@@ -241,7 +259,8 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
   }
 
   try {
-    const prepared = await stageSubject(run, stage);
+    const turnSummaries: TraceBackfillTurnSummary[] = [];
+    const prepared = await stageSubject(run, stage, turnSummaries);
     await run.options.hooks?.afterStage?.(subject, prepared.archivePath);
     const existing = new Set(store.listSessionArchivesForSubject(subject.kind, subject.id).map((archive) => archive.id));
     const committed = await service.ingestTraceBackfill({
@@ -268,10 +287,12 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
       taskDigests: subject.tasks.map((task) => ({
         taskId: task.taskId, rowCount: task.rowCount, headSeq: task.headSeq, digest: task.digest,
       })),
+      turnSummaries: [...turnSummaries, ...noneSummaries],
     });
     if (committed.archive && existing.has(committed.archive.id)) result.archives_reused++;
     else result.archives_created++;
     result.pointers += committed.pointerCount;
+    countTurnCards(committed.turnCards);
     result.none_pointers += subject.noneTaskIds.length;
     result.written++;
   } finally {
@@ -281,11 +302,13 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
 
 /**
  * Write the subject's trace files, build its zip with the session-archive
- * writer and verify every member against the plan.
+ * writer and verify every member against the plan. Each task's turn summary is
+ * derived from the same events and pushed onto `summaries`.
  */
 async function stageSubject(
   run: SubjectRun,
   stage: string,
+  summaries: TraceBackfillTurnSummary[],
 ): Promise<Awaited<ReturnType<typeof prepareSessionArchive>>> {
   const { subject, plan, options } = run;
   const runtimeRoot = join(stage, "runtime");
@@ -304,6 +327,7 @@ async function stageSubject(
         pending = [];
         pendingBytes = 0;
       };
+      const summary = new TraceTurnSummaryBuilder(planned.taskId);
       const rendered = renderTraceTask(options.db, task, {
         batchRows: options.batchRows,
         chunkBytes: options.chunkBytes,
@@ -312,12 +336,14 @@ async function stageSubject(
           pendingBytes += line.length;
           if (pendingBytes >= WRITE_BUFFER_BYTES) flush();
         },
+        onEvent: (event) => summary.add(event),
       });
       flush();
       fsyncSync(fd);
       if (rendered.task.digest !== planned.digest || rendered.task.rowCount !== planned.rowCount) {
         throw new TraceBackfillSourceChangedError(planned.taskId);
       }
+      summaries.push(summary.finish());
     } finally {
       closeSync(fd);
     }
@@ -483,6 +509,7 @@ async function main(): Promise<void> {
         checked_tasks: value.checked_tasks,
         checked_rows: value.checked_rows,
         checked_none: value.checked_none,
+        checked_turn_cards: value.checked_turn_cards,
         mismatch_total: value.mismatch_total,
         informational: value.informational,
       }])),

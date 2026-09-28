@@ -7,7 +7,9 @@
  * `parseStoredTraceJson`, so a `null` source must read back as `null`), a
  * trailer whose `event_count` is the row count, and an index entry and pointer
  * that agree. `head` is the largest seq, which is not the event count when seq
- * has gaps, so the two are never compared with each other.
+ * has gaps, so the two are never compared with each other. Each task's `turn`
+ * card, when it has one, must carry the event count, tool call count,
+ * `(type, tool)` histogram and model its rows produce.
  *
  * Nothing here writes: raw SELECTs only, no `MultiremiStore` (its constructor
  * migrates), archives opened read-only without following symlinks.
@@ -45,6 +47,12 @@ import {
   type TraceBackfillGroup,
 } from "./task-trace-backfill.js";
 import { sampleWithoutReplacement, seededRandom } from "./seeded-random.js";
+import { emptyTraceTurnSummary, TraceTurnSummaryBuilder } from "./task-trace-turn-summary.js";
+import {
+  traceBackfillTurnCardDiff,
+  type TraceBackfillTurnSummary,
+} from "../../packages/server/src/store/repos/trace-backfill-progress-repo.js";
+import type { ConversationLogTurnMetadata } from "../../packages/contracts/src/conversation-log.js";
 
 export type TraceReconcileMismatch =
   | "seq_set"
@@ -57,11 +65,12 @@ export type TraceReconcileMismatch =
   | "member_missing"
   | "member_unreadable"
   | "archive_missing"
-  | "progress";
+  | "progress"
+  | "turn_card";
 
 export const TRACE_RECONCILE_MISMATCHES: readonly TraceReconcileMismatch[] = [
   "seq_set", "line_digest", "event_count", "header", "trailer", "index", "pointer",
-  "member_missing", "member_unreadable", "archive_missing", "progress",
+  "member_missing", "member_unreadable", "archive_missing", "progress", "turn_card",
 ];
 
 export interface TraceReconcileOptions {
@@ -85,6 +94,8 @@ export interface TraceReconcileReport {
   checked_tasks: number;
   checked_rows: number;
   checked_none: number;
+  /** Tasks whose `turn` card was compared with their rows. */
+  checked_turn_cards: number;
   checked_by_group: Record<string, { tasks: number; none: number; rows: number }>;
   mismatches: Record<TraceReconcileMismatch, number>;
   mismatch_total: number;
@@ -353,6 +364,7 @@ export async function reconcileTraceBackfill(
     checked_tasks: 0,
     checked_rows: 0,
     checked_none: 0,
+    checked_turn_cards: 0,
     checked_by_group: {},
     mismatches: Object.fromEntries(TRACE_RECONCILE_MISMATCHES.map((key) => [key, 0])) as Record<TraceReconcileMismatch, number>,
     mismatch_total: 0,
@@ -369,6 +381,7 @@ export async function reconcileTraceBackfill(
       none_kept_existing_location: 0,
       pointer_moved_to_newer_archive: 0,
       pointer_kept_lost: 0,
+      turn_card_missing: 0,
     },
     samples: { mismatch: [], informational: [] },
     ok: true,
@@ -401,6 +414,10 @@ export async function reconcileTraceBackfill(
       chunkBytes: options.chunkBytes,
       mismatch,
       info,
+      turnCard: (checked) => {
+        if (checked) report.checked_turn_cards++;
+        else report.informational.turn_card_missing!++;
+      },
       counted: (tasks, rows, none) => {
         report.checked_tasks += tasks;
         report.checked_rows += rows;
@@ -422,6 +439,8 @@ interface SubjectContext {
   chunkBytes?: number;
   mismatch: (category: TraceReconcileMismatch, detail: Record<string, unknown>) => void;
   info: (key: string, detail: Record<string, unknown>) => void;
+  /** Count a task whose card was compared (`true`) or that has none (`false`). */
+  turnCard: (checked: boolean) => void;
   counted: (tasks: number, rows: number, none: number) => void;
 }
 
@@ -499,9 +518,12 @@ async function reconcileSubject(
       const sourceDigest = new TraceTaskDigest(header as unknown as Record<string, unknown>);
       const sourceSeqs: number[] = [];
       const sourceLineDigests: string[] = [];
+      const summary = new TraceTurnSummaryBuilder(taskId);
       for (const batch of iterateTaskRows(db, taskId, context)) {
         for (const row of batch) {
-          const lineDigest = traceEventDigest(traceEventFromRow(row));
+          const event = traceEventFromRow(row);
+          const lineDigest = traceEventDigest(event);
+          summary.add(event);
           sourceSeqs.push(row.seq);
           sourceLineDigests.push(lineDigest);
           sourceDigest.line(lineDigest);
@@ -512,6 +534,7 @@ async function reconcileSubject(
       const expectedEnd = { status: end.status, head, event_count: sourceSeqs.length, ended_at: end.endedAt };
       const expectedDigest = sourceDigest.finish(expectedEnd);
       taskDigests.push({ taskId, digest: expectedDigest });
+      checkTurnCard(db, summary.finish(), context, detail);
       if (!backfillRow) {
         context.mismatch("progress", { ...detail, reason: "no backfill task row" });
         continue;
@@ -596,6 +619,7 @@ async function reconcileSubject(
     for (const taskId of noneIds) {
       const pointer = readPointer(db, taskId);
       const detail = { ...where, task_id: taskId };
+      checkTurnCard(db, emptyTraceTurnSummary(taskId), context, detail);
       if (pointer?.location === "none") continue;
       if (pointer?.location === "lost" || pointer?.location === "backfilling") {
         context.info("none_kept_existing_location", { ...detail, location: pointer.location });
@@ -654,5 +678,57 @@ function checkPointer(
   }
   context.mismatch("pointer", {
     ...detail, expected: archiveId, location: pointer?.location ?? "absent", archive_id: pointer?.archive_id ?? null,
+  });
+}
+
+/**
+ * Compare a task's `turn` card with the summary of its rows. A task without a
+ * card (a one-shot Task, a chat turn whose reply never landed) is counted, not
+ * a mismatch: the backfill has nothing to write there.
+ */
+function checkTurnCard(
+  db: SqlDatabase,
+  summary: TraceBackfillTurnSummary,
+  context: SubjectContext,
+  detail: Record<string, unknown>,
+): void {
+  const raw = db.query(
+    "SELECT metadata FROM multiremi_conversation_log WHERE task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
+  ).get(summary.taskId) as { metadata: unknown } | null;
+  if (!raw) {
+    context.turnCard(false);
+    return;
+  }
+  context.turnCard(true);
+  let metadata: unknown = raw.metadata;
+  if (typeof metadata === "string") {
+    try {
+      metadata = JSON.parse(metadata) as unknown;
+    } catch {
+      metadata = null;
+    }
+  }
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    context.mismatch("turn_card", { ...detail, reason: "card metadata is not an object" });
+    return;
+  }
+  const card = metadata as ConversationLogTurnMetadata;
+  const fields = traceBackfillTurnCardDiff(card, summary);
+  if (fields.length === 0) return;
+  context.mismatch("turn_card", {
+    ...detail,
+    fields,
+    expected: {
+      event_count: summary.eventCount,
+      tool_call_count: summary.toolCallCount,
+      type_histogram: summary.typeHistogram,
+      model: summary.model,
+    },
+    actual: {
+      event_count: card.event_count ?? null,
+      tool_call_count: card.tool_call_count ?? null,
+      type_histogram: card.type_histogram ?? null,
+      model: card.model ?? null,
+    },
   });
 }
