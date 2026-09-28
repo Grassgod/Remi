@@ -2774,6 +2774,10 @@ runMigrations(this.db);
     return this.runtimes.listRuntimes();
   }
 
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
+    return this.runtimes.listRuntimesForWorkspace(workspaceId);
+  }
+
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {
     return this.agents.listActiveAgentsByRuntime(runtimeId);
   }

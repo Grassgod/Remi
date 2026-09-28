@@ -1,0 +1,61 @@
+{
+  "database": "postgres",
+  "bun": "1.3.14",
+  "fixture": {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 306,
+    "runtimes": 20,
+    "foreignRuntimes": 30,
+    "attachmentBytes": 262144
+  },
+  "bytesMethod": "nonempty rows: UTF-8 JSON.stringify({ rows, count }); empty replies excluded",
+  "warmups": 5,
+  "samples": 20,
+  "results": [
+    {
+      "label": "inbox summary",
+      "status": 200,
+      "dbq": 5,
+      "dbBytes": 55292,
+      "responseBytes": 28,
+      "responseSha256": "bf2c08fcbe24e8e1167d00db486cce838032835eb8ae9139f10b6ae3056c8dae",
+      "dbMs": 3.3462730000010197,
+      "p50Ms": 4.255721000000449,
+      "p95Ms": 6.843630000000303
+    },
+    {
+      "label": "attachment cold",
+      "status": 200,
+      "dbq": 3,
+      "dbBytes": 1566,
+      "responseBytes": 262144,
+      "responseSha256": "3637bbb97e98d009f2be4d0d4a50e73431d6b07b3ede39829e09bbf566a972a0",
+      "dbMs": 1.2669989999994868,
+      "p50Ms": 2.3671760000006543,
+      "p95Ms": 4.927364000000125
+    },
+    {
+      "label": "attachment conditional",
+      "status": 200,
+      "dbq": 3,
+      "dbBytes": 1566,
+      "responseBytes": 262144,
+      "responseSha256": "3637bbb97e98d009f2be4d0d4a50e73431d6b07b3ede39829e09bbf566a972a0",
+      "dbMs": 1.4924330000003465,
+      "p50Ms": 2.0719529999996666,
+      "p95Ms": 5.155840999999782
+    },
+    {
+      "label": "runtimes",
+      "status": 200,
+      "dbq": 153,
+      "dbBytes": 59968,
+      "responseBytes": 9875,
+      "responseSha256": "377bc9a281b405e48ed58834e98094a6963f1801a4e22368f1774901ca3947d2",
+      "dbMs": 63.37879900000189,
+      "p50Ms": 69.1686810000001,
+      "p95Ms": 75.86871999999948
+    }
+  ]
+}
