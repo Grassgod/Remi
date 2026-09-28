@@ -54,6 +54,7 @@ const OPTIONS: RequestMetricsOptions = {
   summaryIntervalMs: 60_000,
   summaryTopRoutes: 10,
   bufferCapacity: 256,
+  role: "all",
 };
 
 afterEach(() => {
@@ -283,8 +284,9 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
     // The exact field set is the contract the Issue fixed.
     expect(parsed.pid).toBe(process.pid);
     expect(Object.keys(parsed).sort()).toEqual([
-      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "pid", "route", "status", "total_ms", "ts",
+      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "pid", "role", "route", "status", "total_ms", "ts",
     ]);
+    expect(parsed.role).toBe("all");
   });
 
   it("uses <unmatched> for a request that matched no route", async () => {
@@ -332,6 +334,7 @@ describe("MUL-367 request metrics — environment switches", () => {
       summaryIntervalMs: 60_000,
       summaryTopRoutes: 10,
       bufferCapacity: 4096,
+      role: "all",
     });
   });
 
@@ -415,6 +418,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
         sample({ route: "/api/a", totalMs: 30 }),
         sample({ method: "POST", route: "/api/b", totalMs: 100 }),
       ],
+      role: "ui",
       dropped: 0,
       dbMs: 1000,
       dbQueries: 42,
@@ -433,6 +437,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
     const summary = summarizeWindow({
       windowMs: 10_000,
       samples: [sample({ status: 503, slow: true }), sample({ status: 200 })],
+      role: "runtime",
       dropped: 7,
       dbMs: 2500,
       dbQueries: 5,
@@ -457,6 +462,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
       dbQueries: 0,
       eventLoopLagMaxMs: 0,
       topRoutes: 10,
+      role: "all",
       now: new Date("2026-09-24T12:00:00.000Z"),
     });
     expect(summary).toEqual({
@@ -471,6 +477,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
       db_busy_pct: 0,
       db_queries: 0,
       event_loop_lag_max_ms: 0,
+      role: "all",
       routes: [],
     });
   });
@@ -511,8 +518,9 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     expect(summary.pid).toBe(process.pid);
     expect(Object.keys(summary).sort()).toEqual([
       "db_busy_pct", "db_queries", "dropped", "event", "event_loop_lag_max_ms",
-      "pid", "requests", "routes", "slow", "status_5xx", "ts", "window_ms",
+      "pid", "requests", "role", "routes", "slow", "status_5xx", "ts", "window_ms",
     ]);
+    expect(summary.role).toBe("all");
     expect(summary.requests).toBe(1);
     expect(summary.db_queries).toBe(1);
     expect(summary.routes).toEqual([
