@@ -748,7 +748,12 @@ function exemptRoute(route: string): CliManifestRoute | null {
     category,
     reason,
   });
-  if (path === "/ws" || path === "/api/daemon/ws" || path === "/api/realtime/ws") {
+  if (
+    path === "/ws"
+    || path === "/api/daemon/ws"
+    || path === "/api/realtime/ws"
+    || path === "/api/trace/ws"
+  ) {
     return exempt("websocket_transport", "Long-lived WebSocket transport is outside the CLI command surface.");
   }
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {

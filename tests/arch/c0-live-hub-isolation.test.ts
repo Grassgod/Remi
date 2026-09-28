@@ -17,18 +17,23 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 /**
  * Every module C0 adds, and whether runtime code may import it yet.
  *
- * `@multiremi/contracts/live-hub` was removed from this list by MUL-442 (C7): the
- * browser replica speaks the v2 frames C0 defines, so it imports the contract's
- * types — the same relationship MUL-435 (C0) took to A-0's `TraceEvent`, and the
- * plan's own instruction (C3 未合入时按 C0 契约先写). The three server modules stay
- * unwired: the hub's implementation is C1/C2/C3's to fill in. The removed entry's
- * real guarantee is kept below by
- * 「the contract is referenced by type only」, which is the property that broke
- * `next build` (MUL-108, MUL-314) rather than the presence of the reference.
+ * MUL-438 (C3) wired the live-hub seam: the browser socket subscribes through
+ * `LiveHub`, and `server.ts` builds the hub over the transport adapter, so those
+ * three modules (`contracts/live-hub`, `api/hub/live-hub`, `api/hub/hub-transport`)
+ * are reachable from the request path now.
+ *
+ * C7's narrower constraint remains independent: replica modules may reference
+ * the contract only as types, even though C3's runtime now imports its values.
+ * The AST guard below rejects value imports and re-exports in the replica.
  */
 const C0_MODULES = [
-  { specifier: "@multiremi/api/hub/live-hub", wired: false },
-  { specifier: "@multiremi/api/hub/hub-transport", wired: false },
+  { specifier: "@multiremi/contracts/live-hub", wired: true },
+  { specifier: "@multiremi/api/hub/live-hub", wired: true },
+  { specifier: "@multiremi/api/hub/hub-transport", wired: true },
+  // Still unreachable in the sense this guard measures: the only importer is
+  // `hub/live-hub.ts`, and it reaches the file relatively (`./upstream-contracts.js`)
+  // because they are two files of one seam. The stand-in leaves when B0 (PR #262)
+  // lands, which replaces it with `@multiremi/contracts/conversation-log.js`.
   { specifier: "@multiremi/api/hub/upstream-contracts", wired: false },
 ] as const;
 
@@ -57,6 +62,10 @@ const C0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/api/hub/live-hub.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/hub-transport.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/upstream-contracts.ts"),
+  // C3's own modules live in the same seam and import the C0 ones; counting them
+  // as consumers would make every entry above pass for the wrong reason.
+  join(REPO_ROOT, "packages/server/src/api/hub/browser-stream.ts"),
+  join(REPO_ROOT, "packages/server/src/api/hub/stream-auth.ts"),
 ]);
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;

@@ -32,10 +32,12 @@
 import { parseHubStreamKey } from "@multiremi/contracts/live-hub.js";
 import type {
   HubFrame,
+  HubFrameKind,
   HubFrameListener,
-  HubSubscription,
   HubSeqRange,
   HubStreamKey,
+  HubStreamName,
+  HubSubscription,
 } from "@multiremi/contracts/live-hub.js";
 import type {
   TraceEvent,
@@ -268,7 +270,15 @@ export function createEmptyLiveHub(transport: HubTransport): LiveHub {
 }
 
 /** Re-exported so a caller can name a hub shape without reaching into contracts. */
-export type { HubFrame, HubFrameListener, HubSubscription, HubSeqRange, HubStreamKey };
+export type {
+  HubFrame,
+  HubFrameKind,
+  HubFrameListener,
+  HubSeqRange,
+  HubStreamKey,
+  HubStreamName,
+  HubSubscription,
+};
 
 /**
  * Deliberately NOT re-exported: `TraceEvent` and the `TraceSink*` types live in
