@@ -48,3 +48,66 @@ const INBOX_LEDGER_TYPE_SET: ReadonlySet<string> = new Set(
 export function isInboxLedgerType(type: string): boolean {
   return INBOX_LEDGER_TYPE_SET.has(type);
 }
+
+export type EnvelopeKind =
+  | "request"
+  | "reply"
+  | "report"
+  | "decision_needed"
+  | "lifecycle"
+  | "final";
+export type EnvelopeWake = "now" | "next_turn" | "inbox_only";
+export type EnvelopePriority = 1 | 2 | 3 | 4;
+
+export type EnvelopeAddress =
+  | { role: "issue_owner"; issueId: string }
+  | { role: "parent_owner"; childIssueId: string }
+  | { role: "delegator"; delegationId: string }
+  | { role: "relay"; issueId: string }
+  | { role: "agent"; agentId: string; issueSessionId: string }
+  | { role: "chat"; chatSessionId: string; agentId: string };
+
+export interface Envelope {
+  to: EnvelopeAddress;
+  kind: EnvelopeKind;
+  wake: EnvelopeWake;
+  dedupeKey?: string;
+  replyTo?: string;
+  grantRef?: string;
+  body: string;
+  outcome?: "done" | "failed" | "blocked" | "cancelled";
+  source: { issueId?: string; taskId?: string; commentId?: string; decisionId?: string };
+}
+
+export interface EnvelopeMetadata {
+  envelope: Omit<Envelope, "body" | "to"> & {
+    to: EnvelopeAddress;
+    priority: EnvelopePriority;
+  };
+}
+
+export type EnvelopePriorityEntry = Pick<Envelope, "kind" | "wake" | "outcome"> & {
+  /** Source author, before an envelope is persisted as a system log entry. */
+  senderType?: string;
+  /** Lifecycle event name when it is not represented by outcome. */
+  lifecycleEvent?: string;
+};
+
+export function envelopePriority(entry: EnvelopePriorityEntry): EnvelopePriority {
+  if (entry.wake === "inbox_only") return 4;
+  if (entry.kind === "decision_needed" ||
+    (entry.kind === "request" && entry.senderType === "member")) return 1;
+  if (
+    (entry.kind === "report" || entry.kind === "final" || entry.kind === "lifecycle") &&
+    (entry.outcome === "failed" || entry.outcome === "blocked" || entry.outcome === "cancelled")
+  ) return 2;
+  if (
+    entry.kind === "lifecycle" &&
+    (entry.lifecycleEvent === "task_failed" || entry.lifecycleEvent === "task_cancelled")
+  ) return 2;
+  if (
+    entry.kind === "report" || entry.kind === "final" ||
+    entry.kind === "reply" || entry.kind === "request"
+  ) return 3;
+  return 4;
+}

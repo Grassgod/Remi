@@ -16,6 +16,7 @@
  */
 import type { MultiremiTaskStatus, TaskUsageEntry } from "./types.js";
 import type { TraceRef } from "./trace-file.js";
+import type { EnvelopeMetadata } from "./inbox.js";
 
 /** A row is either a display unit or a hidden lifecycle marker. */
 export type ConversationLogVisibility = "shown" | "hidden";
@@ -97,6 +98,8 @@ export interface ConversationLogModel {
  * event kinds, not a closed structural contract.
  */
 export interface ConversationLogEntryMetadata {
+  /** Cross-agent inbox message stored on a system comment or system chat message. */
+  envelope?: EnvelopeMetadata["envelope"];
   /** Hidden rows: seq of the row this marker describes. */
   target_seq?: number;
   /** `head`: Issue or chat title. `result_published`: published result title. */
