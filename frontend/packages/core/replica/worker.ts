@@ -145,7 +145,8 @@ export class ReplicaWorkerHost {
   }
 
   async handle(request: ReplicaWorkerRequest): Promise<void> {
-    const post = this.options.post ?? ((message: ReplicaWorkerResponse) => self.postMessage(message));
+    const emit = this.options.post ?? ((message: ReplicaWorkerResponse) => self.postMessage(message));
+    const post = (message: ReplicaWorkerResponse) => emit({ ...message, token: request.token });
     try {
       if (request.type === "init") {
         this.databaseName = this.options.databaseName ?? replicaDatabaseName(request.userId, request.workspaceId);

@@ -1,0 +1,62 @@
+import { describe, expect, test } from "vitest";
+import { ReplicaLeader } from "./leader";
+import { ReplicaFollower } from "./follower";
+import { ReplicaView } from "./view";
+import type { ReplicaChannelMessage } from "./channel";
+import type { ReplicaWorkerRequest, ReplicaWorkerResponse } from "./worker-protocol";
+
+function leaderHarness() {
+  const requests: ReplicaWorkerRequest[] = [];
+  const subscriptions: number[] = [];
+  const unsubs: string[] = [];
+  const view = new ReplicaView();
+  const leader = new ReplicaLeader({
+    userId: "user", workspaceId: "ws", tabId: "tab", view,
+    worker: { postMessage: (message) => requests.push(message), onMessage: () => () => {} },
+    subscription: { subscribe: (_id, from) => subscriptions.push(from), unsubscribe: (id) => unsubs.push(id) },
+    readRange: async () => [], broadcast: () => {},
+  });
+  const opened = (request: ReplicaWorkerRequest, fromSeq = 1): ReplicaWorkerResponse => ({
+    ...request, type: "opened", sessionId: "session", fromSeq, head: fromSeq - 1,
+    fresh: false, cleared: null, entries: [],
+  });
+  return { leader, requests, subscriptions, unsubs, view, opened };
+}
+
+describe("page and subscription lifetimes", () => {
+  test("late opened after close or dispose never subscribes", () => {
+    for (const action of ["close", "dispose"] as const) {
+      const h = leaderHarness(); h.leader.open("session");
+      const request = h.requests.at(-1)!;
+      if (action === "close") h.leader.close("session"); else h.leader.dispose();
+      h.leader.handleWorkerMessage(h.opened(request));
+      expect(h.subscriptions).toEqual([]);
+    }
+  });
+
+  test("close then reopen rejects the old opened and subscribes the new lifetime once", () => {
+    const h = leaderHarness(); h.leader.open("session");
+    const old = h.requests.at(-1)!;
+    h.leader.close("session"); h.leader.open("session");
+    const current = h.requests.at(-1)!;
+    h.leader.handleWorkerMessage(h.opened(old, 4));
+    h.leader.handleWorkerMessage(h.opened(current, 8));
+    h.leader.handleWorkerMessage(h.opened(current, 8));
+    expect(h.subscriptions).toEqual([8]);
+  });
+
+  test("follower reopens an already ready cache and receives future appends", () => {
+    const view = new ReplicaView();
+    const broadcasts: ReplicaChannelMessage[] = [];
+    const queries: unknown[] = [];
+    const follower = new ReplicaFollower({ view, broadcast: (m) => broadcasts.push(m), requestWindow: (q) => queries.push(q) });
+    follower.getSnapshot("session");
+    view.setWindow("session", [], { head: 3, fresh: true, ready: true });
+    follower.close("session");
+    // Explicit open belongs to the page handle, independent of cached readiness.
+    (follower as unknown as { open(id: string): void }).open("session");
+    follower.handle({ type: "replica:appended", sessionId: "session", head: 4, fresh: true, range: { from: 4, to: 4 } });
+    expect(broadcasts.filter((m) => m.type === "replica:open")).toHaveLength(2);
+    expect(queries).toHaveLength(3);
+  });
+});

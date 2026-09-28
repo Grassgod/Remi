@@ -53,19 +53,23 @@ export class ReplicaFollower implements SessionReplicaPort {
   private readonly requested = new Set<string>();
   private readonly pending = new Map<string, { sessionId: string; from: number; to: number }>();
   private requestCounter = 0;
+  private readonly closed = new Set<string>();
+  private disposed = false;
 
   constructor(private readonly options: ReplicaFollowerOptions) {}
 
   getSnapshot(sessionId: string): SessionReplicaSnapshot & { entries: readonly SessionLogEntry[] } {
     const snapshot = this.options.view.getSnapshot(sessionId);
-    if (!snapshot.ready && !this.requested.has(sessionId)) {
-      this.requested.add(sessionId);
-      // Announce interest first: the leader refcounts opens, and a query for a
-      // session the leader is not holding would race its own subscription.
-      this.options.broadcast({ type: "replica:open", sessionId });
-      this.request(sessionId);
-    }
+    if (!snapshot.ready && !this.closed.has(sessionId)) this.open(sessionId);
     return snapshot;
+  }
+
+  open(sessionId: string): void {
+    if (this.disposed || this.requested.has(sessionId)) return;
+    this.closed.delete(sessionId);
+    this.requested.add(sessionId);
+    this.options.broadcast({ type: "replica:open", sessionId });
+    this.request(sessionId);
   }
 
   subscribe(sessionId: string, listener: () => void): () => void {
@@ -87,6 +91,7 @@ export class ReplicaFollower implements SessionReplicaPort {
 
   /** Ask the leader for a window (a deep link, or the tail the list needs). */
   request(sessionId: string, range?: { from: number; to: number }): void {
+    if (this.disposed || this.closed.has(sessionId)) return;
     const resolved = range ?? this.options.defaultRange?.() ?? { from: 0, to: Number.MAX_SAFE_INTEGER };
     const requestId = this.nextRequestId();
     this.pending.set(requestId, { sessionId, from: resolved.from, to: resolved.to });
@@ -95,8 +100,28 @@ export class ReplicaFollower implements SessionReplicaPort {
 
   /** Leave the session; the leader drops the subscription when the last tab does. */
   close(sessionId: string): void {
-    this.requested.delete(sessionId);
+    this.closed.add(sessionId);
+    this.cancelPending(sessionId);
+    if (!this.requested.delete(sessionId)) return;
     this.options.broadcast({ type: "replica:close", sessionId });
+  }
+
+  /** Role changes invalidate follower requests before the Worker can publish. */
+  suspend(): void {
+    this.pending.clear();
+    this.requested.clear();
+  }
+
+  dispose(): void {
+    for (const sessionId of [...this.requested]) this.close(sessionId);
+    this.disposed = true;
+    this.pending.clear();
+  }
+
+  private cancelPending(sessionId: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.sessionId === sessionId) this.pending.delete(id);
+    }
   }
 
   /**
@@ -107,10 +132,11 @@ export class ReplicaFollower implements SessionReplicaPort {
    * place, a hidden marker removes one), and re-reading a window is one message.
    */
   handle(message: ReplicaChannelMessage): void {
+    if (this.disposed) return;
     switch (message.type) {
       case "replica:window": {
         const pending = this.pending.get(message.requestId);
-        if (!pending) return;
+        if (!pending || pending.sessionId !== message.sessionId) return;
         this.pending.delete(message.requestId);
         this.options.view.setWindow(message.sessionId, message.entries, {
           head: message.snapshot.head,

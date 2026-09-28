@@ -160,6 +160,7 @@ class ReplicaFacade implements BrowserReplica {
   private lastLeaderTabId: string | null = null;
   private degradedReason: string | null = null;
   private disposed = false;
+  private requestCounter = 0;
 
   constructor(
     private readonly options: BrowserReplicaOptions,
@@ -172,6 +173,7 @@ class ReplicaFacade implements BrowserReplica {
       broadcast: (message) => this.broadcast(message),
       requestWindow: (input) => this.broadcast({ type: "replica:query", ...input }),
       onCleared: options.onCleared,
+      nextRequestId: () => `${options.tabId}:${++this.requestCounter}`,
     });
     if (channel) {
       channel.onmessage = (event: MessageEvent) => {
@@ -206,11 +208,11 @@ class ReplicaFacade implements BrowserReplica {
       case "replica:open": {
         // Another tab is showing this session; refcount it so the subscription
         // outlives whichever tab is in front.
-        leader.leader.open(message.sessionId);
+        leader.leader.open(message.sessionId, message.senderTabId);
         return;
       }
       case "replica:close": {
-        leader.leader.close(message.sessionId);
+        leader.leader.close(message.sessionId, message.senderTabId);
         return;
       }
       case "replica:rowHeight": {
@@ -260,12 +262,18 @@ class ReplicaFacade implements BrowserReplica {
 
   private async becomeLeader(): Promise<void> {
     const session = await startLeader(this.options, this.env, this.view, (message) => this.broadcast(message), this.wanted);
+    if (this.disposed) {
+      session.leader.dispose();
+      session.bridge.terminate?.();
+      return;
+    }
+    this.follower.suspend();
     this.leader = session;
     this.degradedReason = session.degraded ? "leader opened without OPFS" : null;
     this.broadcast({ type: "replica:leader", tabId: this.options.tabId, sessions: [...this.wanted] });
     // Every session this tab is showing must be subscribed by *somebody*; the tab
     // that just took over is now that somebody.
-    for (const sessionId of this.wanted) this.leader.leader.open(sessionId);
+    for (const sessionId of this.wanted) this.leader.leader.open(sessionId, this.options.tabId);
   }
 
   get port(): SessionReplicaPort {
@@ -273,22 +281,22 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   open(sessionId: string): void {
+    if (this.disposed) return;
     if (this.wanted.has(sessionId)) return;
     this.wanted.add(sessionId);
     if (this.leader) {
-      this.leader.leader.open(sessionId);
+      this.leader.leader.open(sessionId, this.options.tabId);
       return;
     }
     // A follower's interest is announced over the channel; the leader refcounts
     // it and subscribes once, for every tab showing the session.
-    this.broadcast({ type: "replica:open", sessionId });
-    this.follower.getSnapshot(sessionId);
+    this.follower.open(sessionId);
   }
 
   close(sessionId: string): void {
     if (!this.wanted.delete(sessionId)) return;
     if (this.leader) {
-      this.leader.leader.close(sessionId);
+      this.leader.leader.close(sessionId, this.options.tabId);
       return;
     }
     this.follower.close(sessionId);
@@ -344,6 +352,8 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.follower.dispose();
     this.disposed = true;
     this.leader?.leader.dispose();
     this.leader?.bridge.terminate?.();
@@ -523,7 +533,7 @@ function createWorkerBridge(options: BrowserReplicaOptions, env: BrowserReplicaE
   return {
     postMessage: (message) => {
       for (const response of handleInline(engine, options, message)) {
-        for (const listener of [...listeners]) listener(response);
+        for (const listener of [...listeners]) listener({ ...response, token: message.token });
       }
     },
     onMessage: (listener) => {

@@ -82,7 +82,7 @@ export interface ReplicaWorkerSnapshotMessage {
   sessionId: string;
 }
 
-export type ReplicaWorkerRequest =
+export type ReplicaWorkerRequest = (
   | ReplicaWorkerInitMessage
   | ReplicaWorkerOpenMessage
   | ReplicaWorkerAckMessage
@@ -92,7 +92,8 @@ export type ReplicaWorkerRequest =
   | ReplicaWorkerReadHeightMessage
   | ReplicaWorkerWriteHeightMessage
   | ReplicaWorkerClearMessage
-  | ReplicaWorkerSnapshotMessage;
+  | ReplicaWorkerSnapshotMessage
+) & { token?: string };
 
 export interface ReplicaWorkerReadyMessage {
   type: "ready";
@@ -169,7 +170,7 @@ export interface ReplicaWorkerErrorMessage {
   message: string;
 }
 
-export type ReplicaWorkerResponse =
+export type ReplicaWorkerResponse = (
   | ReplicaWorkerReadyMessage
   | ReplicaWorkerOpenedMessage
   | ReplicaWorkerBackfillMessage
@@ -177,4 +178,5 @@ export type ReplicaWorkerResponse =
   | ReplicaWorkerWindowResultMessage
   | ReplicaWorkerHeightMessage
   | ReplicaWorkerClearedMessage
-  | ReplicaWorkerErrorMessage;
+  | ReplicaWorkerErrorMessage
+) & { token?: string };

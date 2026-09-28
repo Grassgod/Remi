@@ -77,6 +77,10 @@ export interface ReplicaLeaderOptions {
  */
 export class ReplicaLeader {
   private readonly openCounts = new Map<string, number>();
+  private readonly owners = new Map<string, Set<string>>();
+  private readonly tokens = new Map<string, string>();
+  private readonly pendingOpens = new Set<string>();
+  private generation = 0;
   /**
    * Sessions with a read in flight.
    *
@@ -96,11 +100,18 @@ export class ReplicaLeader {
    * The first announcement subscribes, later ones only bump the count — the
    * asymmetry is the acceptance criterion: three pages, one subscription.
    */
-  open(sessionId: string): void {
+  open(sessionId: string, ownerId?: string): void {
+    if (this.disposed) return;
+    if (ownerId !== undefined) {
+      const owners = this.owners.get(sessionId) ?? new Set<string>();
+      if (owners.has(ownerId)) return;
+      owners.add(ownerId);
+      this.owners.set(sessionId, owners);
+    }
     const count = this.openCounts.get(sessionId) ?? 0;
     this.openCounts.set(sessionId, count + 1);
     if (count > 0) return;
-    this.post({ type: "open", sessionId });
+    this.requestOpen(sessionId);
   }
 
   /**
@@ -115,28 +126,33 @@ export class ReplicaLeader {
    */
   resubscribe(sessionId: string): void {
     if (!this.openCounts.has(sessionId)) return;
-    this.post({ type: "open", sessionId });
+    this.requestOpen(sessionId);
   }
 
   /** The last close unsubscribes; an earlier one just decrements. */
-  close(sessionId: string): void {
+  close(sessionId: string, ownerId?: string): void {
+    if (ownerId !== undefined && !this.owners.get(sessionId)?.delete(ownerId)) return;
     const count = this.openCounts.get(sessionId) ?? 0;
     if (count > 1) {
       this.openCounts.set(sessionId, count - 1);
       return;
     }
     this.openCounts.delete(sessionId);
+    this.owners.delete(sessionId);
+    this.tokens.delete(sessionId);
+    this.pendingOpens.delete(sessionId);
     if (count === 1) this.options.subscription.unsubscribe(sessionId);
   }
 
   /** Frames from the page's socket, forwarded to the Worker unread. */
   frames(sessionId: string, frames: readonly HubFrame[]): void {
-    if (frames.length === 0) return;
+    if (frames.length === 0 || !this.openCounts.has(sessionId)) return;
     this.post({ type: "frames", sessionId, frames });
   }
 
   /** A `stream.ack`, forwarded so the Worker decides reset vs gap. */
   ack(sessionId: string, ack: HubStreamAckPayload): void {
+    if (!this.openCounts.has(sessionId)) return;
     this.post({ type: "ack", sessionId, ack });
   }
 
@@ -203,11 +219,18 @@ export class ReplicaLeader {
 
   dispose(): void {
     this.disposed = true;
+    for (const sessionId of this.openCounts.keys()) this.options.subscription.unsubscribe(sessionId);
+    this.openCounts.clear();
+    this.owners.clear();
+    this.tokens.clear();
+    this.pendingOpens.clear();
     for (const dispose of this.disposers) dispose();
     this.disposers.length = 0;
   }
 
   private async onWorkerMessage(message: ReplicaWorkerResponse): Promise<void> {
+    if (this.disposed) return;
+    if ("sessionId" in message && !this.isCurrent(message.sessionId, message.token)) return;
     switch (message.type) {
       case "ready": {
         // The fallback is logged once, per plan 3/6 §1: no user-visible prompt.
@@ -215,6 +238,7 @@ export class ReplicaLeader {
         return;
       }
       case "opened": {
+        if (!this.pendingOpens.delete(message.sessionId)) return;
         if (message.cleared) this.clearAndBroadcast(message.cleared);
         // Paint what the database already held before the socket answers: on a
         // takeover this is the previous leader's window, and showing it is what
@@ -287,7 +311,21 @@ export class ReplicaLeader {
    * exists without this side having to know when that happens.
    */
   private post(request: ReplicaWorkerRequest): void {
-    this.options.worker.postMessage(request);
+    if (this.disposed) return;
+    this.options.worker.postMessage("sessionId" in request
+      ? { ...request, token: this.tokens.get(request.sessionId) }
+      : request);
+  }
+
+  private requestOpen(sessionId: string): void {
+    this.tokens.set(sessionId, `${this.options.tabId}:${++this.generation}`);
+    this.pendingOpens.add(sessionId);
+    this.post({ type: "open", sessionId });
+  }
+
+  private isCurrent(sessionId: string, token?: string): boolean {
+    return !this.disposed && this.openCounts.has(sessionId)
+      && (token === undefined || token === this.tokens.get(sessionId));
   }
 
   private clearAndBroadcast(reason: "logout" | "user_mismatch" | "schema_upgrade"): void {
@@ -304,11 +342,13 @@ export class ReplicaLeader {
    * returns and the row set SQLite keeps are then the same set by construction.
    */
   private async backfill(sessionId: string, range: HubSeqRange): Promise<void> {
+    if (!this.isCurrent(sessionId)) return;
     if (this.inFlight.has(sessionId)) return;
     this.inFlight.add(sessionId);
+    const token = this.tokens.get(sessionId);
     try {
       const entries = await this.options.readRange(sessionId, range);
-      this.post({ type: "writeWindow", sessionId, entries, range });
+      if (this.isCurrent(sessionId, token)) this.post({ type: "writeWindow", sessionId, entries, range });
     } finally {
       this.inFlight.delete(sessionId);
     }
