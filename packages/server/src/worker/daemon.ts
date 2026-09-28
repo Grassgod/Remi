@@ -15,6 +15,7 @@ import {
   AcpProvider,
   AcpSessionFailureError,
   AcpRpcError,
+  redactProviderErrorText,
   createRuntimeProvider,
   type AcpModelCapability,
   type AcpProviderOptions,
@@ -3329,6 +3330,12 @@ export class MultiremiDaemon {
     let providerHome: IssueSessionProviderHome | null = null;
     let taskPrivateTmp: TaskPrivateTempDirectory | null = null;
     let providerEnv: Record<string, string> | undefined;
+    const failureCredentials: string[] = [];
+    const redactTaskError = (text: string) => redactProviderErrorText(text, [
+      ...failureCredentials, ...Object.entries(providerEnv ?? {})
+        .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+        .map(([, value]) => value),
+    ]);
     let providerInstallEnv: Record<string, string> | undefined;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
@@ -3427,6 +3434,8 @@ export class MultiremiDaemon {
         : task.agent?.provider === "codex"
           ? workspaceRelay?.codex
           : null;
+      if (relay?.auth_token) failureCredentials.push(relay.auth_token);
+      if (task.authToken) failureCredentials.push(task.authToken);
       if (providerHome) {
         providerEnv = await loadIssueSessionProviderEnv(providerHome, {
           ...(relayAuthoritative
@@ -3514,7 +3523,7 @@ export class MultiremiDaemon {
           ?? TaskFailureReason.AgentFallbackMessage;
         if (summary.usage.length) this.enqueueTaskReport(task.id, "usage", { usage: summary.usage });
         this.enqueueTaskReport(task.id, "fail", {
-          error: summary.output,
+          error: redactTaskError(summary.output),
           sessionId: summary.sessionId,
           workDir: summary.workDir,
           failureReason,
@@ -3531,7 +3540,7 @@ export class MultiremiDaemon {
       this.finalizeTaskProgress(progressSummarizer, "completed", summary.output);
       await awaitFinalReportDrain();
     } catch (err) {
-      const error = timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
+      const error = redactTaskError(timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err));
       if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
         if (serverTerminalStatus === "cancelled") this.outbox?.purgeTask(task.id);
         log.info(`Task ${task.id} is already ${serverTerminalStatus} on the server; stopped local execution`);
@@ -4289,6 +4298,9 @@ export class MultiremiDaemon {
       providerEnv,
     };
     const config = runtime.assemble(ctx);
+    const failureCredentials = Object.entries(config.env ?? {})
+      .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+      .map(([, value]) => value);
     if (config.agentType === "antigravity" && workDir !== codeWorkDir) {
       config.addDirs = [...new Set([...(config.addDirs ?? []), codeWorkDir])];
     }
@@ -4436,6 +4448,10 @@ export class MultiremiDaemon {
           for await (const event of session.run(prompt)) {
             const emitted = toMessages(event);
             for (const message of emitted) {
+              if (provider.typedSessionFailures === false && message.type === "text" && message.content
+                && classifyLegacyProviderFailure(message.content)) {
+                message.content = redactProviderErrorText(message.content, failureCredentials);
+              }
               lastTurnMessage = message;
               if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
@@ -4467,7 +4483,7 @@ export class MultiremiDaemon {
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
         if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastTurnMessage?.type === "text") {
-          const error = lastTurnMessage.content ?? "";
+          const error = redactProviderErrorText(lastTurnMessage.content ?? "", failureCredentials);
           const failureReason = classifyLegacyProviderFailure(error);
           if (failureReason) {
             await this.client.pinTaskSession(task.id, finalSessionId, workDir);

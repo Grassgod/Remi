@@ -52,6 +52,13 @@ the configured fallback even when a candidate Runtime supported it.
    truncating the appended text to 500 characters. Failure classification prefers known
    structured error kinds, then uses text. Model unavailability precedes auth;
    HTTP status matching excludes request IDs and UUID fragments.
+   One ACP redactor protects RPC, typed failure objects and their causes,
+   native failed-compaction events, and legacy terminal error messages. The
+   daemon applies the same function again before failure reports, logs and
+   terminal progress; task-injected credentials are replaced by exact value,
+   including URL-encoded and Base64 forms. Credential patterns cover encoded
+   parameter names, authentication schemes and Cookie/session values. Typed
+   failure copies are sanitized, and raw classification hints stay non-enumerable.
    Availability text must describe the model itself, not an unsupported input
    feature. Generic `invalid_request_error` wrappers classify as invalid input
    only with no HTTP error status or exclusively 400, after specific provider
@@ -109,6 +116,7 @@ limited ambiguity when a legitimate final answer is exactly a transport error.
 Queue failure records are intentional and expose why the model changed.
 
 Regression entry points are `tests/unit/acp/session-failure.test.ts`,
+`tests/unit/acp/provider-error-redaction.test.ts`,
 `tests/unit/multiremi/multiremi-task-failure.test.ts`,
 `tests/unit/multiremi/agent-model-fallback-recovery.test.ts` and
 `tests/integration/agent-model-fallback-drill.test.ts`. The drill isolates the

@@ -16,6 +16,8 @@ Windows 通过 Node 启动随仓库提供的无扩展名 `remi-claude-agent-acp`
 
 原生 `/compact` 失败另走 `tool_call_update(status: "failed", _meta.contextCompaction.error)`，随后可能正常返回 `end_turn`，不保证发 AIR error。provider 独立记录这条失败，以 error 文本作为详情；只有同一轮失败后再次输出 assistant 文本才视为恢复并记 warning。前一轮或失败前的正常输出、压缩横幅、thinking 和普通工具失败不改变这项判断。
 
+RPC、typed 失败对象及其 cause、原生失败压缩工具的文本共用 ACP 脱敏函数，覆盖编码参数名、Authorization/Basic、Cookie/session 等凭据形态。daemon 在失败报告、日志和终结进度写入前再次调用同一函数，并按本任务注入的凭据值精确替换（含 URL 编码和 Base64 形态）；原始分类 hint 不可枚举，typed failure 保存脱敏副本。
+
 Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容接口和一个默认模型。填写连接名称、API 基础地址、模型 ID，以及 API Key 或本机 `REMI_CLAUDE_*` 环境变量名；请求鉴权可选 Bearer Token 或 `x-api-key`。地址填写服务基础路径，Claude Code 在其后请求 `/v1/messages`，例如网关是 `https://gateway.example/anthropic`，不要填写完整 messages 路径。允许 Runtime 可访问的 HTTP(S) 本机或局域网地址，服务端不主动请求该地址。
 
 请求头对应 Claude Code 的 `ANTHROPIC_AUTH_TOKEN`（Bearer）或 `ANTHROPIC_API_KEY`（x-api-key），每次仅注入选中的一种。具体协议见 [Claude Code 官方网关接入说明](https://code.claude.com/docs/en/llm-gateway-connect)。这不是 OpenAI Chat Completions/Responses 协议转换器。

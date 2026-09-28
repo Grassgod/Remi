@@ -14,7 +14,7 @@
  * fallback model genuinely travelled from the Agent's configuration through the
  * recovery chain and the claim payload into the engine's hands.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,7 +72,7 @@ interface Drill {
 
 type FailureShape = "legacy-text" | "typed" | "rpc-detail" | "rpc-kind" | "compaction" | "native-compaction" | "typed-prose";
 
-function failureProviderFactory(engineModels: Drill["engineModels"], shape: FailureShape): MultiremiDaemonProviderFactory {
+function failureProviderFactory(engineModels: Drill["engineModels"], shape: FailureShape, failureText?: string): MultiremiDaemonProviderFactory {
   const baseFactory = gatewayProviderFactory(engineModels);
   return (options) => {
     const base = baseFactory(options);
@@ -83,7 +83,7 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
         engineModels.push(options.model ?? null);
         if (options.model === PRIMARY_MODEL) {
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Earlier progress. ".repeat(50) }] };
-          yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: `unexpected status 404 Not Found: Model "${PRIMARY_MODEL}" is not supported by any configured account in this group` }] };
+          yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: failureText ?? `unexpected status 404 Not Found: Model "${PRIMARY_MODEL}" is not supported by any configured account in this group` }] };
         } else {
           yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: FALLBACK_OUTPUT }] };
         }
@@ -112,12 +112,12 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
         if (shape === "native-compaction") {
           if (turn === 1) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Earlier successful turn. ".repeat(50) } });
           else update({ sessionUpdate: "tool_call_update", toolCallId: "compact:1", status: "failed",
-            _meta: { contextCompaction: { version: 1, error: "Error during compaction: API Error: 503 Service Unavailable" }, claudeCode: { toolName: "compact" } } });
+            _meta: { contextCompaction: { version: 1, error: failureText ?? "Error during compaction: API Error: 503 Service Unavailable" }, claudeCode: { toolName: "compact" } } });
           return { stopReason: "end_turn" };
         }
         if (shape === "compaction") update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Compacting..." } });
         update({ sessionUpdate: "session_info_update", _meta: { jetbrains: { air: { sessionFailure: {
-          id: "turn:error", revision: 1, category: "service", severity: "error", title: "unexpected status 503 Service Unavailable",
+          id: "turn:error", revision: 1, category: "service", severity: "error", title: failureText ?? "unexpected status 503 Service Unavailable",
         } } } } });
         return { stopReason: "end_turn" };
       },
@@ -142,12 +142,13 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
 function gatewayProviderFactory(
   engineModels: Drill["engineModels"],
   fallbackLevels: string[] = ["high"],
+  failureText?: string,
 ): MultiremiDaemonProviderFactory {
   return (options: AcpProviderOptions) => ({
     async *sendStream() {
       const model = options.model ?? null;
       engineModels.push(model);
-      if (model === PRIMARY_MODEL) throw new Error(GATEWAY_ERROR);
+      if (model === PRIMARY_MODEL) throw new Error(failureText ?? GATEWAY_ERROR);
       yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: FALLBACK_OUTPUT }] } as never;
     },
     getLastResponse: () => ({
@@ -189,6 +190,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 10_000, de
 async function runDrill(options: {
   fallback: boolean; fallbackLevels?: string[]; fallbackThinkingLevel?: string | null;
   provider?: "claude" | "codex"; failureShape?: FailureShape; delegated?: boolean;
+  failureText?: string; providerKey?: string;
 }): Promise<Drill & { taskId: string; issueId: string }> {
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-fallback-drill-"));
@@ -202,7 +204,7 @@ async function runDrill(options: {
     });
     store.upsertRelayConfig("local", "codex", {
       fragment: `model_provider = "gateway"\n[model_providers.gateway]\nbase_url = "http://127.0.0.1:${gateway.port}/v1"\nwire_api = "responses"\nrequires_openai_auth = true`,
-      tokenOp: "set", authToken: "fixture-gateway-key",
+      tokenOp: "set", authToken: options.providerKey ?? "fixture-gateway-key",
     });
   }
   const fallbackThinkingLevel = options.fallbackThinkingLevel === undefined ? "high" : options.fallbackThinkingLevel;
@@ -237,8 +239,8 @@ async function runDrill(options: {
     workspacesRoot: join(workDir, "daemon-state"),
     repoCacheRoot: join(workDir, "repo-cache"),
     providerFactory: options.failureShape
-      ? failureProviderFactory(engineModels, options.failureShape)
-      : gatewayProviderFactory(engineModels, options.fallbackLevels),
+      ? failureProviderFactory(engineModels, options.failureShape, options.failureText)
+      : gatewayProviderFactory(engineModels, options.fallbackLevels, options.failureText),
   });
 
   let daemonRun: Promise<void> | null = null;
@@ -250,7 +252,7 @@ async function runDrill(options: {
     await waitForCondition(() =>
       !store.listTasks().some((candidate) => ["queued", "dispatched", "running"].includes(candidate.status)), 30_000,
       () => JSON.stringify(store.listTasks().map((candidate) => ({
-        id: candidate.id, status: candidate.status, error: candidate.error,
+        id: candidate.id, status: candidate.status, error: options.failureText ? Boolean(candidate.error) : candidate.error,
         reason: candidate.failureReason, model: candidate.executionModel,
       }))));
     // Let the daemon finish the ack round-trip of the last terminal report.
@@ -344,6 +346,34 @@ describe("MUL-336 real-engine fallback drill", () => {
 });
 
 describe("MUL-478 turn failure recovery drill", () => {
+  for (const shape of ["typed", "native-compaction", "legacy-text", "generic"] as const) {
+    drillIt(`${shape} errors cannot leak into task records, activity, messages or delegation`, async () => {
+      const secret = `privacy_${crypto.randomUUID().replaceAll("-", "")}: /+?=`;
+      const provider = shape === "legacy-text" || shape === "generic" ? "codex" : "claude";
+      const details = shape === "generic" ? `upstream detail ${secret} ${encodeURIComponent(secret)}`
+        : `Bearer ${secret.split(":")[0]}`;
+      const raw = `unexpected status 503 Service Unavailable: ${details}`;
+      const logs: unknown[] = [];
+      const spies = ["log", "warn", "error"].map(method => spyOn(console, method as "log")
+        .mockImplementation((...args) => { logs.push(args); }));
+      try {
+        const { store, taskId, issueId, leaderId } = await runDrill({
+          fallback: false, provider, delegated: true, failureText: raw, providerKey: secret,
+          ...(shape === "generic" ? {} : { failureShape: shape }),
+        });
+        const records = [store.getTask(taskId)?.error, store.listTaskMessages(taskId),
+          store.listIssueActivity(issueId), store.listTasks().filter(task => task.agentId === leaderId).map(task => task.prompt), logs];
+        const needle = shape === "generic" ? secret : secret.split(":")[0];
+        for (const record of records) {
+          const serialized = JSON.stringify(record);
+          expect(serialized.includes(needle)).toBe(false);
+          expect(serialized.includes(encodeURIComponent(needle))).toBe(false);
+        }
+        expect(store.getTask(taskId)?.failureReason).toBe(TaskFailureReason.AgentProviderServerError);
+        expect(store.listTasks().filter(task => task.agentId === leaderId && task.delegationId === "dlg_drill")).toHaveLength(1);
+      } finally { for (const spy of spies) spy.mockRestore(); }
+    });
+  }
   drillIt("does not classify normal error-like prose from a typed bridge as a failed turn", async () => {
     const { store, taskId, issueId, engineModels } = await runDrill({
       fallback: true, provider: "codex", failureShape: "typed-prose",

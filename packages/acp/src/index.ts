@@ -15,7 +15,7 @@
 // ── Provider ──────────────────────────────────────────────────
 export { AntigravityProvider, resolveAntigravityExecutable } from "./antigravity.js";
 export { createRuntimeProvider } from "./runtime-provider.js";
-export { AcpSessionFailureError, AcpRpcError } from "./session-failure.js";
+export { AcpSessionFailureError, AcpRpcError, redactProviderErrorText } from "./session-failure.js";
 export {
   AcpProvider,
   resolveAcpPermissionMode,
