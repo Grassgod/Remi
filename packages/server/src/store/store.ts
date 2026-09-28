@@ -4681,6 +4681,18 @@ runMigrations(this.db);
     return this.tasks.refreshQueuedCapabilityWaitReasons(now);
   }
 
+  /**
+   * Read-only: the claim's own structural placement verdict for every
+   * registered Runtime, so operators and tests can see WHY a queued task
+   * cannot be taken without inferring it from claim side effects (MUL-449).
+   */
+  describeTaskPlacement(taskId: string): Array<{
+    runtimeId: string; provider: string; daemonId: string | null;
+    placementOk: boolean; routingOk: boolean;
+  }> {
+    return this.tasks.describeTaskPlacement(taskId);
+  }
+
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
     return this.runtimes.getRuntimeByDaemonAndProvider(daemonId, provider);
   }
