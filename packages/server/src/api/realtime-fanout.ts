@@ -139,6 +139,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
       registries.browserUser,
       registries.browserScope,
       event,
+      { store },
     );
   };
 
