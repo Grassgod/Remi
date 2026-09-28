@@ -7,12 +7,15 @@ import type { Workspace, MemberWithUser, Invitation } from "./workspace";
 import type { Project } from "./project";
 import type { ProjectDoc } from "./project-doc";
 import type { Label } from "./label";
+import type { MultiremiIssueDecision } from "@multiremi/contracts";
 
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
   | "issue:created"
   | "issue:updated"
   | "issue:deleted"
+  | "decision:created"
+  | "decision:updated"
   | "comment:created"
   | "comment:updated"
   | "comment:deleted"
@@ -115,6 +118,11 @@ export interface IssueUpdatedPayload {
 
 export interface IssueDeletedPayload {
   issue_id: string;
+}
+
+export interface IssueDecisionChangedPayload {
+  issue_id: string;
+  decision: MultiremiIssueDecision;
 }
 
 export interface IssueLabelsChangedPayload {
@@ -484,6 +492,8 @@ export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
+  "decision:created": IssueDecisionChangedPayload;
+  "decision:updated": IssueDecisionChangedPayload;
   "issue_labels:changed": IssueLabelsChangedPayload;
   "issue_reaction:added": IssueReactionAddedPayload;
   "issue_reaction:removed": IssueReactionRemovedPayload;

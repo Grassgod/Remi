@@ -3216,6 +3216,10 @@ runMigrations(this.db);
     return this.issues.countIssues(input);
   }
 
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false) {
+    return this.issues.listIssueStatusPages(input, includeArchivedTotal);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     return this.issues.listGroupedIssues(input);
   }
@@ -3905,7 +3909,7 @@ runMigrations(this.db);
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision {
     return this.issues.isSquadLeaderDelegation(input);
   }
 

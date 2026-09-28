@@ -6,6 +6,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import {
   agentBroadcastCompatibilityResponse,
   cleanString,
@@ -75,7 +76,9 @@ export function maybeDispatchOnIssueUpdate(
       assigneeId: issue.assigneeId,
       actorType: input.actorType,
       actorId: input.actorId,
-      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+      // MUL-456 fix round 1: the authoritative camelCase read; a present
+      // `parentTaskId` (including an explicit `null`) wins over the alias.
+      parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
     }, { force: input.force === true });
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
