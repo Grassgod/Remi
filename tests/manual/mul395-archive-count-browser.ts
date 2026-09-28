@@ -67,10 +67,17 @@ try {
     await ready("http://127.0.0.1:18572/login");
     await ready("http://127.0.0.1:18572/local/issues");
     await ready("http://127.0.0.1:18572/local/inbox");
+    const output = resolve(repo, `reports/performance/MUL-395-archive-count-${phase}.json`);
     const probe = start([process.execPath, resolve(import.meta.dir, "mul395-s9-3b-positions.ts"), phase!,
       "http://localhost:18572", "--issues-only", "--rounds", "3", "--timeout", "20000", "--out",
-      resolve(repo, `reports/performance/MUL-395-archive-count-${phase}.json`)], repo);
+      output], repo);
     if (await probe.exited !== 0) throw new Error(`Row-position recorder failed: ${phase}`);
+    const sample = await Bun.file(output).json() as { results: {
+      listRequests: number; archivedCountRequests: number;
+    }[] };
+    if (sample.results.length !== 6 || sample.results.some((row) => row.listRequests !== 1 || row.archivedCountRequests !== 0)) {
+      throw new Error(`First-screen request count regression: ${phase}`);
+    }
     await stop(web);
   }
 } catch (error) {
