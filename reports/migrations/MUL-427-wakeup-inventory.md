@@ -2,6 +2,8 @@
 
 Baseline: main `1653b038289f9eae79b426f1b8cd0577ce4d31ae` plus parent
 `a4b913c2cc8a132d2159a70cd486dbe9eda9b848`. No later main is merged.
+B5 dependency `3cb1114dd0092ef5407f5bb140236782611a37a4` is merged per
+`cmt_fw3taja4h9un` (v); (l) runtime trace allowlist is a separate commit.
 Authority: `cmt_gestk2r6imjh` (e)-(h), `cmt_o1oocq58vsbg` (s),
 `cmt_9z7t6hwo3xuh` (u). This is the first published W inventory;
 the proposal's W4/W10 labels are references, not an earlier complete numbering.
@@ -12,7 +14,7 @@ anchors, updated after the B7 cutover.
 
 | Item | Location | Previous source | New source / unchanged predicate | Proof | Proposal label |
 | --- | --- | --- | --- | --- | --- |
-| W1 | `context.ts:1227`, `getLogIssueComment` | Raw `issue_comments` shared lookup | Log comment id, issue-session join, message/system, no tombstone | comment task / rule parity / delegation | |
+| W1 | `context.ts:1230`, `getLogIssueComment` | Raw `issue_comments` shared lookup | Log comment id, issue-session join, message/system, no tombstone | comment task / rule parity / delegation | |
 | W2 | `helpers.ts:11`, `chatTaskRetryParentSql` | Chat user-row existence | Log message/member in a chat session; old startup migration explicitly keeps legacy source | chat store migration / queue / lineage | |
 | W3 | `repos/agent-issue-updates-repo.ts:191`, `flushOneWithinTransaction` | Aggregation state, then writes a chat system row | Same aggregation/state/debounce; B1 mirrors the same system row and delivery metadata | agent issue updates / pending delivery | W10 |
 | W4 | `repos/chat-repo.ts:478`, task projection | `chat_messages` ordered sequence/id | Log excluding head/tombstones; identical role/body mapping and queued-input lineage filter | chat store / queue / projection | |
@@ -27,18 +29,18 @@ anchors, updated after the B7 cutover.
 | W13 | `repos/issue-sessions-repo.ts:768`, parent max | Parent event max seq | Log max excluding head, no cursor remapping | follow / lane lifecycle / head regression | |
 | W14 | `repos/issues-repo.ts:1245`, materialized session | Event existence | Non-head log existence, participants/lanes unchanged | head regression / workspace lineage | |
 | W15 | `repos/issues-repo.ts:1544`, owner summary acceptance | Agent ordinary comments after child close | Current undeleted log comments, same issue/author/time/body predicate | parent status / decisions | |
-| W16 | `repos/issues-repo.ts:3106`, deferred mention comment | Hydrated legacy comment | Current log comment lookup | merge fixes / automatic reply / delegation | |
+| W16 | `repos/issues-repo.ts:3105`, deferred mention comment | Hydrated legacy comment | Current log comment lookup | merge fixes / automatic reply / delegation | |
 | W17 | `repos/issues-repo.ts:3112`, deferred mention seq | Event source_comment_id | Log comment row id at the same seq | merge fixes / delegation | |
 | W18 | `repos/tasks-repo.ts:724`, task trigger lookup | Raw comment | W1 log lookup, same task/session/parent inference | delegation / mention / task metadata | |
 | W19 | `repos/tasks-repo.ts:1515`, trigger metadata | Raw comment | W1 current log lookup | mention / delegation / rule parity | |
-| W20 | `repos/tasks-repo.ts:2366`, queued chat affinity | User chat row for task | Log message/member plus chat-session join, no tombstone | chat queue / migration / affinity | |
-| W21 | `repos/tasks-repo.ts:3594`, thread root | Raw parent comments | W1 current log parents, same cycle guard | delegation / mention | |
-| W22 | `repos/tasks-repo.ts:3623`, new comment count | Issue comments after anchor, other author | Log message/system comments, same time/id/SQL NULL semantics, no tombstone | task trigger / delegation | |
-| W23 | `repos/tasks-repo.ts:3732,3896`, coverage decision | Stored task projection_to_seq and terminal event seq | Guard unchanged: projection_to_seq >= requiredEventSeq; W24/W25 supply terminal row seq, not turn seq | delegation return / rule parity | W4 |
-| W24 | `repos/tasks-repo.ts:3802`, delegation terminal max | Terminal event MAX(seq) | Log terminal kind and same task, MAX(seq) unchanged | delegation return / lane lifecycle / rule parity | |
-| W25 | `repos/tasks-repo.ts:3814`, delegation terminal existence | Terminal event existence | Log terminal kind and same task; same report filtering | delegation return / lane lifecycle / rule parity | |
-| W26 | `repos/tasks-repo.ts:4624`, reply parent | Hydrated trigger comment | W1 log parent, same reply/mention dispatch | automatic reply / merge fixes | |
-| W27 | `repos/tasks-repo.ts:4662`, agentCommentedSince | Ordinary agent comment by issue/author/task/time | Log message comment by all issue sessions, same author/task/time, no tombstone | 15-case dual-backend equivalence / completion count = 1 | |
+| W20 | `repos/tasks-repo.ts:2367`, queued chat affinity | User chat row for task | Log message/member plus chat-session join, no tombstone | chat queue / migration / affinity | |
+| W21 | `repos/tasks-repo.ts:3607`, thread root | Raw parent comments | W1 current log parents, same cycle guard | delegation / mention | |
+| W22 | `repos/tasks-repo.ts:3636`, new comment count | Issue comments after anchor, other author | Log message/system comments, same time/id/SQL NULL semantics, no tombstone | task trigger / delegation | |
+| W23 | `repos/tasks-repo.ts:3745,3909`, coverage decision | Stored task projection_to_seq and terminal event seq | Guard unchanged: projection_to_seq >= requiredEventSeq; W24/W25 supply terminal row seq, not turn seq | delegation return / rule parity | W4 |
+| W24 | `repos/tasks-repo.ts:3815`, delegation terminal max | Terminal event MAX(seq) | Log terminal kind and same task, MAX(seq) unchanged | delegation return / lane lifecycle / rule parity | |
+| W25 | `repos/tasks-repo.ts:3827`, delegation terminal existence | Terminal event existence | Log terminal kind and same task; same report filtering | delegation return / lane lifecycle / rule parity | |
+| W26 | `repos/tasks-repo.ts:4637`, reply parent | Hydrated trigger comment | W1 log parent, same reply/mention dispatch | automatic reply / merge fixes | |
+| W27 | `repos/tasks-repo.ts:4671`, agentCommentedSince | Ordinary agent comment by issue/author/task/time | Log message comment by all issue sessions, same author/task/time, no tombstone | 15-case dual-backend equivalence / completion count = 1 | |
 
 ## Rule preservation
 
@@ -96,8 +98,8 @@ legacy-table read; both former /events reads are switched to the log.
 
 | Location | Read | Classification |
 | --- | --- | --- |
-| `context.ts:1222` | Raw comment for edit/delete/resolve, reactions and attachment mutation | Write path / old wire retained to MUL-432 third section |
-| `helpers.ts:13`, called only by `migrations.ts:5106` with legacy source | Retry user input before log backfill exists | Backfill source |
+| `context.ts:1225` | Raw comment for edit/delete/resolve, reactions and attachment mutation | Write path / old wire retained to MUL-432 third section |
+| `helpers.ts:13`, called only by `migrations.ts:5110` with legacy source | Retry user input before log backfill exists | Backfill source |
 | `repos/chat-repo.ts:41,43,45,47` | Chat list summary count/latest body/role/time | Old wire retained to MUL-432 third section |
 | `repos/chat-repo.ts:256` | Attachment ids before deleting chat | Write path |
 | `repos/chat-repo.ts:297` | User message ids before deleting task input attachments | Write path |
@@ -176,30 +178,30 @@ Every `task_assigned` hit in the requested directories:
 | --- | --- | --- |
 | `packages/contracts/src/conversation-log.ts:10` | Mapping documentation | Source kind is renamed to turn |
 | `packages/server/src/api/helpers/issues.ts:79` | Write documentation | Author attribution before task creation |
-| `packages/server/src/api/routers/tasks.ts:254` | Write documentation | Assignment-author producer contract |
+| `packages/server/src/api/routers/tasks.ts:255` | Write documentation | Assignment-author producer contract |
 | `packages/server/src/store/conversation-log-mirror.ts:7,58` | Mapping | Shared legacy-to-log mapping, used by B1 and B7 |
 | `packages/server/src/store/conversation-log-backfill.ts:141` | Mapping / backfill source | Historical assignment seq supplies marker target_seq |
 | `packages/server/src/store/session-projection.ts:44,302` | Mapping / approved projection | Normalize legacy input and retain agent JSONL output |
 | `packages/server/src/store/repos/tasks-repo.ts:1053` | Write | Legacy dual-write producer remains unchanged |
 | `scripts/benchmark-conversation-log.ts:43` | Write / synthetic input | Generates historical assignment rows in isolated fixtures |
-| `scripts/api-routes.golden.json:4266,5419` | Mapping / test snapshot | Frozen agent JSONL examples, not a runtime consumer |
+| `scripts/api-routes.golden.json:4270,5423` | Mapping / test snapshot | Frozen agent JSONL examples, not a runtime consumer |
 
 All non-test `listSessionEvents` and session `/events` consumers:
 
 | Location | Classification | Result |
 | --- | --- | --- |
 | `packages/server/src/store/repos/issue-sessions-repo.ts:489` | Read / implementation | Log adapter, excludes head, includes hidden markers |
-| `packages/server/src/store/store.ts:3874,3875` | Read / facade | Delegates without filtering kind |
+| `packages/server/src/store/store.ts:3888,3889` | Read / facade | Delegates without filtering kind |
 | `packages/server/src/api/routers/issues.ts:1610,1622` | Read / approved endpoint | Since/to bounds; compatibility wire mapping |
-| `packages/server/src/api/routers/issue-shares.ts:161` | Read / approved share bundle | Same adapter; every event retained |
+| `packages/server/src/api/routers/issue-shares.ts:181` | Read / approved share bundle | Same adapter; every event retained |
 | `frontend/packages/core/api/endpoints/comments.ts:167,168,170` | Read / API wrapper | No assignment-kind filter; no other UI caller |
 | `apps/remi/cli/commands/collaboration.ts:320` | Read / CLI | Renders raw session.event.list response, no kind filter |
 | `scripts/generate-cli-capabilities.ts:404` | Mapping | Maps endpoint to the registered CLI command |
-| `scripts/api-routes.golden.json:233,1001,15518,15519,15520` | Mapping / test snapshot | Route inventories and synthetic endpoint snapshot |
+| `scripts/api-routes.golden.json:233,1003,15533,15534,15535` | Mapping / test snapshot | Route inventories and synthetic endpoint snapshot |
 
 Other `/events` grep hits are SCM/knowledge endpoints, WebSocket type imports,
 or audit-report labels; none consumes Issue session events. The share renderer
-at `frontend/packages/views/share/shared-issue-page.tsx:171` maps every event to
+at `frontend/packages/views/share/shared-issue-page.tsx:173` maps every event to
 author/time/body without reading kind.
 
 `conversation-log-share-parity.test.ts` fetches the real share API with the

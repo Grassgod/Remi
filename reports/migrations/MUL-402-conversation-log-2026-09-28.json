@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-28T11:37:52.342Z",
+  "generatedAt": "2026-09-28T13:04:13.804Z",
   "scope": "Synthetic fixtures and cold-start qualification on Bun 1.3.14. No production data or credentials. Scale: 15,000 events, 5,106 live comments (6 missing-Issue orphans), 250 tombstones, 4,500 messages in 191 chats; 2 KiB synthetic bodies. Timings include the full Store startup, not fixture generation or reconciliation.",
   "runs": [
     {
@@ -34,13 +34,13 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_vavbqr6y8zpi",
+            "issueId": "iss_9owjn74lg5hp",
             "disposition": "appended"
           }
         ],
         "chatSequenceConflicts": [
           {
-            "sessionId": "chat_05g1sjas0y08",
+            "sessionId": "chat_86f1xgu9s2tu",
             "messages": [
               {
                 "id": "msg_history_assistant",
@@ -92,7 +92,7 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_vavbqr6y8zpi",
+            "issueId": "iss_9owjn74lg5hp",
             "disposition": "appended"
           }
         ],
@@ -100,36 +100,36 @@
         "mismatches": [],
         "sessions": [
           {
-            "sessionId": "ises_ppne0lmetiww",
+            "sessionId": "ises_okoc1reyzkbv",
             "kind": "issue",
             "expectedCount": 19,
             "actualCount": 19,
-            "sourceDigest": "be8fc0658608e0b72f5e0920652f93005d6a86ad16b21b1c71d3f452adfee5ea",
-            "logDigest": "be8fc0658608e0b72f5e0920652f93005d6a86ad16b21b1c71d3f452adfee5ea"
+            "sourceDigest": "7b54eced361ba734b8d13fd73f742dcc240561aabe95cca453a1cfcbe74efbc7",
+            "logDigest": "7b54eced361ba734b8d13fd73f742dcc240561aabe95cca453a1cfcbe74efbc7"
           },
           {
-            "sessionId": "chat_05g1sjas0y08",
+            "sessionId": "chat_86f1xgu9s2tu",
             "kind": "chat",
             "expectedCount": 4,
             "actualCount": 4,
-            "sourceDigest": "82e7256d7d6750e8418152f449cb350f02871aa866f1a838c1ab365799125369",
-            "logDigest": "82e7256d7d6750e8418152f449cb350f02871aa866f1a838c1ab365799125369"
+            "sourceDigest": "f785c5049e83f286d6f17edf6ab1c93d2dcc2552935d3261b428076d5b65d1d6",
+            "logDigest": "f785c5049e83f286d6f17edf6ab1c93d2dcc2552935d3261b428076d5b65d1d6"
           },
           {
-            "sessionId": "chat_s1osr3qaowpv",
+            "sessionId": "chat_u2ct2k1w7idv",
             "kind": "chat",
             "expectedCount": 2,
             "actualCount": 2,
-            "sourceDigest": "bc32617f555f3661612875370582dc12a3b8c777355fd42e4130ca920de59ff1",
-            "logDigest": "bc32617f555f3661612875370582dc12a3b8c777355fd42e4130ca920de59ff1"
+            "sourceDigest": "9c8001f6ecaeb54b43dd5b58f667a1536e918567f8fee53cb9565b93f520d64b",
+            "logDigest": "9c8001f6ecaeb54b43dd5b58f667a1536e918567f8fee53cb9565b93f520d64b"
           }
         ]
       }
     },
     {
       "label": "sqlite cold startup",
-      "startupMs": 697.628338,
-      "secondStartupMs": 30.042825999999877,
+      "startupMs": 748.712182,
+      "secondStartupMs": 31.454960999999912,
       "reconciliation": {
         "counts": {
           "issueSessions": 128,
@@ -2774,13 +2774,13 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_50qkzl8a9osv",
+            "issueId": "iss_gycz5l89cev6",
             "disposition": "appended"
           }
         ],
         "chatSequenceConflicts": [
           {
-            "sessionId": "chat_18qos0onxjea",
+            "sessionId": "chat_rasbjpvenig2",
             "messages": [
               {
                 "id": "msg_history_assistant",
@@ -2832,7 +2832,7 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_50qkzl8a9osv",
+            "issueId": "iss_gycz5l89cev6",
             "disposition": "appended"
           }
         ],
@@ -2840,36 +2840,36 @@
         "mismatches": [],
         "sessions": [
           {
-            "sessionId": "ises_gquheb5cld0j",
+            "sessionId": "ises_tf3zq5tdp6ad",
             "kind": "issue",
             "expectedCount": 19,
             "actualCount": 19,
-            "sourceDigest": "cea71a418f400af00ddf77c05a92c0ffe35a8a4c236da0c654b5ff429ceaf93f",
-            "logDigest": "cea71a418f400af00ddf77c05a92c0ffe35a8a4c236da0c654b5ff429ceaf93f"
+            "sourceDigest": "75fab33f66f2370d4cc7ff73e7a39dc40a0f16c45611d8b3e6623d0ea1842e69",
+            "logDigest": "75fab33f66f2370d4cc7ff73e7a39dc40a0f16c45611d8b3e6623d0ea1842e69"
           },
           {
-            "sessionId": "chat_18qos0onxjea",
-            "kind": "chat",
-            "expectedCount": 4,
-            "actualCount": 4,
-            "sourceDigest": "22d261696247c443eed9f79579bd1e0e5400a003718ecf2f9db61094ed0e709f",
-            "logDigest": "22d261696247c443eed9f79579bd1e0e5400a003718ecf2f9db61094ed0e709f"
-          },
-          {
-            "sessionId": "chat_91dj0rezq3jm",
+            "sessionId": "chat_ia858hc0wnjg",
             "kind": "chat",
             "expectedCount": 2,
             "actualCount": 2,
-            "sourceDigest": "fadebb97f37050b9f2145e66d84f685d61b35c31ce6ac413662ec8cd37ae906c",
-            "logDigest": "fadebb97f37050b9f2145e66d84f685d61b35c31ce6ac413662ec8cd37ae906c"
+            "sourceDigest": "c085c65e8382579eb75b9225fece6c83b1a0d0dcddc89ad294e3d4256b27640d",
+            "logDigest": "c085c65e8382579eb75b9225fece6c83b1a0d0dcddc89ad294e3d4256b27640d"
+          },
+          {
+            "sessionId": "chat_rasbjpvenig2",
+            "kind": "chat",
+            "expectedCount": 4,
+            "actualCount": 4,
+            "sourceDigest": "f90f105ec0b5cbbe81fc48a56623c931b442bd00a8aec9dea5bda0cab434cba2",
+            "logDigest": "f90f105ec0b5cbbe81fc48a56623c931b442bd00a8aec9dea5bda0cab434cba2"
           }
         ]
       }
     },
     {
       "label": "pg cold startup",
-      "startupMs": 6383.0890770000005,
-      "secondStartupMs": 984.3184840000013,
+      "startupMs": 6566.514521,
+      "secondStartupMs": 1041.980259,
       "reconciliation": {
         "counts": {
           "issueSessions": 128,

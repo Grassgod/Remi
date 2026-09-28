@@ -2,7 +2,7 @@
 
 Synthetic fixtures and cold-start qualification on Bun 1.3.14. No production data or credentials. Scale: 15,000 events, 5,106 live comments (6 missing-Issue orphans), 250 tombstones, 4,500 messages in 191 chats; 2 KiB synthetic bodies. Timings include the full Store startup, not fixture generation or reconciliation.
 
-Generated: 2026-09-28T11:37:52.342Z
+Generated: 2026-09-28T13:04:13.804Z
 
 Authority: MUL-427; cmt_gestk2r6imjh (f)(g), cmt_o1oocq58vsbg (s), Senior cmt_u7m8e7yitmai.
 
@@ -10,6 +10,12 @@ Counts and digests are read from synthetic/local sources. The reconciliation com
 Hash: SHA-256 over canonical tuples of mapped kind, author type/id, raw body, created_at, task_id and parent_id.
 Comment task ids come from comments (NULL for tombstones), other Issue rows from events, Chat rows from messages, heads from NULL.
 JSON metadata is parsed in Bun, without SQL JSON casts; marker targets and tombstones are checked separately.
+
+This rerun includes B5 `3cb1114d` and ruling (l) `42d83dcd`. Counts and all four
+zero-mismatch results are unchanged from the previous run. Previous cold / second
+startup: SQLite 697.63 / 30.04 ms, PostgreSQL 6383.09 / 984.32 ms. This run:
+SQLite 748.71 / 31.45 ms, PostgreSQL 6566.51 / 1041.98 ms. The timings include
+full Store startup and are observations, not a performance threshold.
 
 ## sqlite acceptance fixture
 
@@ -46,7 +52,7 @@ Orphan dispositions and Chat sequence remaps are listed in the JSON report; all 
 
 Mismatch: **0**
 
-Cold startup: 697.63 ms; second startup: 30.04 ms.
+Cold startup: 748.71 ms; second startup: 31.45 ms.
 
 | Counter | Reconciliation | Migration |
 | --- | ---: | ---: |
@@ -110,7 +116,7 @@ Orphan dispositions and Chat sequence remaps are listed in the JSON report; all 
 
 Mismatch: **0**
 
-Cold startup: 6383.09 ms; second startup: 984.32 ms.
+Cold startup: 6566.51 ms; second startup: 1041.98 ms.
 
 | Counter | Reconciliation | Migration |
 | --- | ---: | ---: |
