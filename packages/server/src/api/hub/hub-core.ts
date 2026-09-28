@@ -962,9 +962,9 @@ export class HubImpl implements ObservableLiveHub {
     // A paused subscriber is the drain callback's business, not the flush loop's:
     // returning true here would spin `setImmediate` until the socket drained.
     if (subscriber.lagging) return false;
-    let staleBoundary = subscriber.cursor;
-    for (const seq of stream.staleSeqs) staleBoundary = Math.max(staleBoundary, seq);
-    if (staleBoundary > subscriber.cursor) this.reportGap(subscriber, staleBoundary);
+    if (hasUnservableAfter(stream, subscriber.cursor)) {
+      this.reportGap(subscriber, firstServableSeq(stream) - 1);
+    }
     const entries = this.ring.entriesAfter(stream, subscriber.cursor);
     if (entries.length === 0) return false;
     const batch: HubFrame[] = [];

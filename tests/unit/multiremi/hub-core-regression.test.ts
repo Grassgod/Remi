@@ -178,3 +178,38 @@ describe("MUL-436 regression 4: coalesced partial patches", () => {
     });
   });
 });
+
+describe("MUL-436 regression 5: ordinary flush boundaries", () => {
+  it("reports trimmed log sequences before data without affecting a current consumer", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
+    const behind = new RecordingSink(), current = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, behind);
+    hub.subscribeWithSink("log:s", 9, current);
+    for (let seq = 1; seq <= 10; seq++) row(hub, seq);
+    hub.flushNow();
+    expect(behind.order).toEqual(["gap:0,7", "data:8,9,10"]);
+    expect(current.order).toEqual(["data:10"]);
+  });
+
+  it("reports a trimmed trace batch through the same sink boundary", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
+    const out = new RecordingSink();
+    hub.subscribeWithSink("trace:t", 0, out);
+    hub.append("t", Array.from({ length: 10 }, (_, i) => ({
+      seq: i + 1, ts: "2026-09-28T00:00:00Z", type: "text", content: `${i + 1}`,
+    })));
+    hub.flushNow();
+    expect(out.order).toEqual(["gap:0,7", "data:8,9,10"]);
+  });
+
+  it("rechecks retention between capped batches", () => {
+    const hub = make({ limits: { batchBytes: 1, ring: { streamMaxFrames: 3 } } });
+    const out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    for (let seq = 1; seq <= 3; seq++) row(hub, seq);
+    hub.flushNow();
+    for (let seq = 4; seq <= 8; seq++) row(hub, seq);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    expect(out.order).toEqual(["data:1", "gap:1,5", "data:6", "data:7", "data:8"]);
+  });
+});
