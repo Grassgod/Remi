@@ -81,7 +81,9 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
   } finally {
     daemon.stop();
     await run.catch(() => {});
-    await server.stop(true);
+    await daemon.daemonProtocolClient().drain();
+    // Bun 1.3.14 can retain closed WebSockets in the stop promise.
+    server.stop(true);
     db.close();
     if (originalKey === undefined) delete process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY; else process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = originalKey;
     if (originalHome === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = originalHome;
