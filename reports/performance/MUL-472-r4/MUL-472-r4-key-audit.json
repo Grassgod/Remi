@@ -212,8 +212,8 @@
       "keys": [
         "agents"
       ],
-      "category": "不等首屏 gate（交互）",
-      "reason": "窗口常驻但隐藏时 enabled=chatVisible；打开后立即加载 sessions/messages page/per-session pending/agents。"
+      "category": "可见性门控",
+      "reason": "唯一实际调用方 ChatWindow 传入 chatVisible；agents 与 members 两个 observer 都使用该 enabled。"
     },
     {
       "file": "frontend/packages/core/agents/use-workspace-agent-availability.ts",
@@ -231,8 +231,8 @@
       "keys": [
         "members"
       ],
-      "category": "不门控（主体 / 权限 / 交互）",
-      "reason": "项目主体列表、成员权限或已打开控件依赖；保留原 enabled，不能被隐藏聊天的延后策略限制。原表达式逐行列出。"
+      "category": "可见性门控",
+      "reason": "唯一实际调用方 ChatWindow 传入 chatVisible；agents 与 members 两个 observer 都使用该 enabled。"
     },
     {
       "file": "frontend/packages/core/agents/use-workspace-presence-prefetch.ts",
