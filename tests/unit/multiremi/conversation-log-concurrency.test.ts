@@ -40,6 +40,7 @@ async function runFirstComments(backend: "sqlite" | "pg", target: string, sessio
 function resetMigration(db: SqlDatabase): void {
   db.exec("DROP TABLE multiremi_conversation_log; DROP TABLE multiremi_conversation_heads;");
   db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [migrationId]);
+  db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260928_conversation_log_backfill"]);
 }
 
 function assertContiguous(db: SqlDatabase): void {
