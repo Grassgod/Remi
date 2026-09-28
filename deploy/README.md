@@ -117,8 +117,16 @@ image at a pinned, checksum-verified version, and the API server runs it
 directly, so there is no ingestion container, port, or endpoint registry to
 configure. Enable it by logging in once inside the API container:
 
+For a deployment using this repository's `compose.application.yml`, the command
+needs the same explicit env and Compose file as everything else (see
+[Split API roles](#split-api-roles) for the path definitions); for the
+single-file `compose.platform.yml` layout from
+[Docker Compose control plane](#docker-compose-control-plane), pass that file and
+its own env file instead:
+
 ```bash
-docker compose exec api lark-cli login
+docker compose --env-file /etc/multiremi/application.env \
+  -f /multiremi/platform/container/compose.application.yml exec api lark-cli login
 ```
 
 The credential lands in the container's home directory, which is the
@@ -352,6 +360,36 @@ rollback below:
 
 ### Prerequisites
 
+- **Only operate inside the authorized window, and only when the updater is
+  idle.** B1 authorizes 09:30-11:30 and 15:00-17:00 on the switch day. The
+  updater is a separate long-running process that can claim a release at any
+  time, so this runbook does not run at all while one is queued or in flight:
+  the steps below edit the same Compose env file the updater rewrites
+  (`writeImageEnv`, see "What the updater rewrites"), and an update landing in
+  the middle of a manual edit can interleave with it. The read-only check is
+  `remi platform status`, which reports the active operation and the drain
+  state without writing anything:
+
+  ```bash
+  remi platform status --output json | python3 -c "
+  import json,sys
+  d=json.load(sys.stdin)
+  op=d.get('activeOperation')
+  print('activeOperation:', 'none' if op is None else f\"{op['id']} {op['kind']} {op['status']}\")
+  print('maintenance:', d['maintenance']['mode'])
+  "
+  # expected, every time before and during the switch:
+  #   activeOperation: none
+  #   maintenance: normal
+  ```
+
+  `activeOperation` is the operations row holding `active_slot = 1`
+  (`packages/server/src/store/repos/platform-operations-repo.ts:214-219`), i.e.
+  exactly the set of queued/preparing/pulling/draining/switching/restarting/
+  verifying operations the updater can be working on. A non-`none` value, or
+  `maintenance: draining`, means stop and wait. Also avoid 04:00 (the release
+  build) and 07:00 (the daily image swap): the window above already excludes
+  both.
 - A release whose API image understands `MULTIREMI_API_ROLE`, `MULTIREMI_PEER_URL`
   and `MULTIREMI_PEER_SECRET` is already deployed, and `api_minute_summary` in
   the API logs carries a `pid`, so the two processes are distinguishable.
@@ -379,6 +417,10 @@ rollback below:
   which file is tabulated under "Rollback".
 
 ### Stage A: route the traffic
+
+Re-run the `remi platform status` check from the prerequisites immediately before
+starting, and again before each of the steps that touches a container or the
+Compose files (steps 2, 3, 4, 5 and 7).
 
 1. **Updater binary first.** This is the one step that cannot be undone by a
    reload. Build `apps/platform-updater/main.ts` from the release tag on a build
@@ -492,6 +534,9 @@ rollback below:
 
 ### Stage B: add the guard
 
+Re-run the `remi platform status` check from the prerequisites first; do not
+start while an operation is queued or in flight.
+
 Run this only after stage A has been stable for the agreed observation window
 and the `api` container's `/api/daemon/*` counters have reached zero (daemons
 reconnect within 1-30 s). Nothing about the performance win depends on this
@@ -513,6 +558,9 @@ being served by the wrong process.
    up on a direct probe).
 
 ### Rollback
+
+Re-run the `remi platform status` check from the prerequisites before starting
+Full return below.
 
 > **Precondition: rolling back the MUL-405 image requires a completed Full
 > return, not just the two stage rollbacks.** Run the stage B rollback, the stage
@@ -563,9 +611,18 @@ Then confirm both public server blocks serve the daemon surface and the archive
 path from `api` again:
 
 ```bash
+# 1. Gate on the exit code FIRST. If $NGINX_ARCHIVE was not restored, the
+#    `multica_api_runtime` upstream no longer exists after $NGINX_MAIN goes back,
+#    so `nginx -t` fails outright. Checking the count first would be misleading:
+#    `nginx -T | grep -c` prints 0 (and exits 1) both when the config is clean and
+#    when it is broken, so the number alone cannot tell the two apart.
+if ! nginx -t; then echo 'NOT RESTORED: nginx config does not parse'; fi
+# 2. Only after that, count the references in the fully expanded config:
+nginx -T | grep -c multica_api_runtime || true   # 0 = no runtime references left
+
+# 3. The two file-level checks, which name the offending file directly:
 grep -n 'proxy_pass' "$NGINX_ARCHIVE"      # -> proxy_pass http://multica_api;
 grep -n 'multica_api_runtime' "$NGINX_SITE" || echo 'site file clean'
-nginx -T | grep -c multica_api_runtime     # 0 only if $NGINX_MAIN was restored too
 ```
 
 The `api-runtime` container and the updater list stay as they are, which is
@@ -596,7 +653,7 @@ docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" \
 curl -s 127.0.0.1:6120/readyz
 ```
 
-**Full return to a single process: 2 edits + 4 commands**, on top of the two
+**Full return to a single process: 2 edits + 5 commands**, on top of the two
 rollbacks above, in exactly this order.
 
 ```bash
@@ -610,13 +667,25 @@ rollbacks above, in exactly this order.
 #    release that lands in the window bring api-runtime straight back.
 systemctl --user restart remi-platform-updater
 
-# 3. Stop the container (the service is still declared in the host Compose file
-#    at this point, so `--profile split` can address it):
+# 3. Stop and DELETE the container while the service is still declared in the
+#    host Compose file, so `--profile split` can still address it. `rm -sf`, not
+#    `stop` and not bare `rm -f`:
+#      - `stop` alone leaves the container in state `exited`, and step 4 removes
+#        its service definition, so nothing could ever delete it afterwards;
+#      - bare `rm -f` only removes STOPPED containers (see `docker compose rm
+#        --help`: `-f/--force` skips the confirmation prompt, `-s/--stop` is the
+#        flag that stops a running container first). It would therefore fail on
+#        this step, because the container is still running here - step 2 only
+#        restarted the updater, it did not stop the runtime;
+#      - `rm -sf` stops it if required and then removes it, in one command, with
+#        no prompt. That also covers a release that started between the checks.
 docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" --profile split \
-  stop api-runtime
+  rm -sf api-runtime
+# If a previous attempt already deleted it, Compose reports no such container;
+# verify the end state with the checks below rather than by this exit code.
 
 # 4. Restore the host Compose file, which drops the api-runtime service. Safe
-#    now: the updater no longer names it, and the container is already stopped.
+#    now: the updater no longer names it, and the container is gone.
 cp "$COMPOSE_DIR/backups/<date>/compose.application.yml.orig" "$COMPOSE_FILE"
 
 # 5. EDIT $COMPOSE_ENV: delete the stage A lines
@@ -630,20 +699,44 @@ docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" \
 ```
 
 Confirm the four single-process checks before rolling back the MUL-405 image (or
-declaring the return complete):
+declaring the return complete). `COMPOSE_PROJECT` is the Compose project name for
+this installation: it is `multiremi-platform-app`, from the `name:` key at the
+top of `compose.application.yml` (a `-p` flag or the directory name would
+override it; this runbook passes neither, so the `name:` key wins).
 
 ```bash
-# 1. No api-runtime container is left, running or stopped:
+COMPOSE_PROJECT=multiremi-platform-app
+
+# 1. No api-runtime container is left, running or stopped. Scope the query to
+#    this Compose project: the service label alone would also match another
+#    project on the same host.
+docker ps -a --filter label=com.docker.compose.project="$COMPOSE_PROJECT" \
+  --filter label=com.docker.compose.service=api-runtime --format '{{.ID}}'
+# expected: no output (empty). Any ID here means step 3 did not delete it.
 docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" ps -a
-docker ps -aq --filter label=com.docker.compose.service=api-runtime   # empty
+# expected: api, ssh-mesh-control-plane, web - no api-runtime row.
+
 # 2. `api` answers on its own, with the default /readyz body (no `role` field):
 curl -s 127.0.0.1:6120/readyz
-# 3. The role `api` actually runs with has no peer URL:
+
+# 3. The `api` container's peer state is OFF. Both "key absent" and "key present
+#    but empty" are valid off states; a non-empty value is a failure.
+#    - key absent: Full return, because the restored pre-switch Compose file has
+#      no MULTIREMI_PEER_URL line at all;
+#    - empty value: the intermediate state where only the env lines were deleted
+#      but the split Compose file is still in place.
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
   "$(docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" ps -q api)" \
-  | grep MULTIREMI_PEER_URL      # -> MULTIREMI_PEER_URL=   (empty)
+  | awk -F= '/^MULTIREMI_PEER_URL=/ {print "peer: " ($2 == "" ? "empty" : "SET=" $2); found=1} END {if (!found) print "peer: unset"}'
+# expected: exactly one of
+#   peer: unset        (key absent - Full return)
+#   peer: empty        (key present, empty value - partial revert)
+# Anything else is a failure: `peer: SET=<url>` means the peer channel is still
+# pointed at a container that should no longer exist.
+
 # 4. Both public server blocks route the daemon surface and the archive path to
-#    `api` (see the stage A rollback checks above), and:
+#    `api` (see the stage A rollback checks above, including the nginx -t
+#    exit-code gate), and:
 docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" --profile split \
   config --services | grep -c api-runtime    # 0
 ```
@@ -652,6 +745,29 @@ To restore the previous updater binary instead (only if the updater itself
 misbehaves), copy the file back from `bin/pre-<tag>.<rand>/` and restart
 `remi-platform-updater`; that is 2 commands and no edit. No database change is
 involved at any layer, so no data layer needs rolling back.
+
+### Rehearsal checklist (MUL-463 stage 2, non-209)
+
+Rehearse the whole sequence on a non-production host before touching the real
+installation, and record these alongside the timings:
+
+- the `remi platform status` output taken before each transition, showing
+  `activeOperation: none` and `maintenance: normal` for the whole rehearsal
+  window - this is the quiet-window evidence that a queued or in-flight release
+  did not interleave with the manual edits;
+- the wall-clock start and end of the window used, to show it fell inside
+  09:30-11:30 or 15:00-17:00 and outside 04:00 and 07:00;
+- the stage A rollback measurement (three restores + `nginx -t` + reload),
+  against the one-minute budget;
+- the Full return result, including the empty
+  `docker ps --filter label=com.docker.compose.project=...` check.
+
+Whether the window plus the pre-check is sufficient, or an operation-level mutex
+is also needed, is decided from that evidence: the pre-check narrows the race to
+"an operation starts between the check and the edit", which the window makes
+unlikely but not impossible. If the rehearsal shows a release landing inside that
+gap, the follow-up is a mutex (for example a lock file the updater honors), not
+a longer window.
 
 ## Drain-protected updates (MUL-74)
 

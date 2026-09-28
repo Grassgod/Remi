@@ -157,6 +157,76 @@ describe("application compose stack", () => {
     expect(rollback).toContain("REMI_API_PEER_URL=http://api-runtime:6120");
   });
 
+  test("Full return deletes the runtime container before the Compose file loses its definition", () => {
+    // MUL-464 QA r3 (B1): `stop` leaves the container in state `exited`, and the
+    // next step restores the pre-switch Compose file, which no longer declares
+    // `api-runtime`. After that nothing can delete it, so the runbook's own
+    // "no api-runtime container, running or stopped" gate could never pass.
+    // The delete must therefore come after the updater restart, before the
+    // Compose restore, with the full prefix and the profile flag.
+    const section = splitSection(deployReadme);
+    const fullReturn = section.slice(section.indexOf("**Full return to a single process"));
+    const rmIndex = fullReturn.indexOf("rm -sf api-runtime");
+    const restoreIndex = fullReturn.indexOf('cp "$COMPOSE_DIR/backups/<date>/compose.application.yml.orig"');
+    expect(rmIndex).toBeGreaterThan(-1);
+    expect(restoreIndex).toBeGreaterThan(-1);
+    expect(rmIndex).toBeLessThan(restoreIndex);
+    // Full prefix + profile on the same command line (the line wrap is escaped).
+    expect(fullReturn.slice(Math.max(0, rmIndex - 200), rmIndex)).toMatch(
+      /docker compose --env-file "\$COMPOSE_ENV" -f "\$COMPOSE_FILE" --profile split/u,
+    );
+    // `rm -f` alone removes only stopped containers; `-s` is what stops a running
+    // one first. Both flags must be present or the step fails on a live runtime.
+    expect(fullReturn).toMatch(/rm -sf api-runtime/u);
+    expect(fullReturn).not.toMatch(/\n\s*stop api-runtime\n/u);
+  });
+
+  test("the runtime-container existence check is scoped to this Compose project", () => {
+    // MUL-464 QA r3 (B1): a bare `label=com.docker.compose.service=api-runtime`
+    // filter also matches other Compose projects on the same host, so an empty
+    // result would not prove this installation was cleaned up. The project name
+    // has to be stated, and its source documented (the `name:` key here, since
+    // the runbook passes neither `-p` nor a directory override).
+    const section = splitSection(deployReadme);
+    const checks = section.slice(section.indexOf("Confirm the four single-process checks"));
+    expect(checks).toContain("COMPOSE_PROJECT=multiremi-platform-app");
+    expect(checks).toMatch(/label=com\.docker\.compose\.project="\$COMPOSE_PROJECT"/u);
+    expect(checks).toMatch(/label=com\.docker\.compose\.service=api-runtime/u);
+    // The Compose file is the source of that project name.
+    expect(compose.name).toBe("multiremi-platform-app");
+  });
+
+  test("the peer check accepts both an absent key and an empty value", () => {
+    // MUL-464 QA r3 (B2): after Full return restores the pre-switch Compose
+    // file, `MULTIREMI_PEER_URL` is absent entirely - a valid "off" state that
+    // the old `grep MULTIREMI_PEER_URL=` could not accept (no output, exit 1).
+    // Only a non-empty value is a failure.
+    const section = splitSection(deployReadme);
+    const checks = section.slice(section.indexOf("Confirm the four single-process checks"));
+    expect(checks).toContain("peer: unset");
+    expect(checks).toContain("peer: empty");
+    expect(checks).toMatch(/peer: SET=/u);
+    // Both states are named in prose, with the stage each one belongs to.
+    expect(checks).toMatch(/key absent: Full return/u);
+    expect(checks).toMatch(/empty value: the intermediate state/u);
+    // The old single-answer expectation must be gone.
+    expect(checks).not.toMatch(/-> MULTIREMI_PEER_URL=   \(empty\)/u);
+  });
+
+  test("stage A rollback gates on the nginx -t exit code before counting references", () => {
+    // MUL-464 QA r3: with the archive include left pointing at the removed
+    // upstream, `nginx -T | grep -c multica_api_runtime` prints 0 while nginx
+    // itself fails to parse, so a count-only check reports "restored" on a
+    // broken config. The exit code has to be judged first.
+    const section = splitSection(deployReadme);
+    const verify = section.slice(section.indexOf("Then confirm both public server blocks"), section.indexOf("The `api-runtime` container and the updater list"));
+    const gateIndex = verify.indexOf("if ! nginx -t");
+    const countIndex = verify.indexOf("nginx -T | grep -c multica_api_runtime");
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(countIndex).toBeGreaterThan(gateIndex);
+    expect(verify).toMatch(/NOT RESTORED: nginx config does not parse/u);
+  });
+
   test("grants no container the Docker socket or host control", () => {
     for (const [name, service] of Object.entries(compose.services)) {
       const volumes: string[] = (service.volumes ?? []).filter((entry: unknown) => typeof entry === "string");
