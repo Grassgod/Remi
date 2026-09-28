@@ -24,6 +24,7 @@ import {
   taskRealtimePayload,
 } from "./wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiAccessToken,
   MultiremiDaemonSshMeshStatus,
@@ -266,7 +267,7 @@ export function notifyBrowserTaskMessages(
   store: MultiremiStore,
   workspaceRegistry: BrowserWebSocketRegistry,
   scopeRegistry: BrowserScopeWebSocketRegistry,
-  task: MultiremiTask,
+  task: TaskMessageFanoutSubject,
   messages: MultiremiTaskMessage[],
 ): void {
   if (messages.length === 0) return;

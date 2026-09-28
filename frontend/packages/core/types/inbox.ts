@@ -1,6 +1,6 @@
 import type { IssueStatus } from "./issue";
 
-export type InboxSeverity = "action_required" | "attention" | "info";
+export type InboxSeverity = "action_required" | "attention" | "warning" | "info";
 
 export type InboxItemType =
   | "issue_assigned"
@@ -29,7 +29,9 @@ export type InboxItemType =
   | "feishu_message_notification"
   | "feishu_reply_draft"
   | "feishu_issue_proposal"
-  | "feishu_ingest_connection_alert";
+  | "feishu_ingest_connection_alert"
+  | "child_issue_terminal"
+  | "decision_requested";
 
 export interface AutopilotRunTriggerObject {
   event_type: string | null;
@@ -78,7 +80,7 @@ export interface InboxItemDetails extends Record<string, unknown> {
   new_assignee_id?: string;
   new_assignee_type?: string;
   original_prompt?: string;
-  outcome?: AutopilotRunOutcome;
+  outcome?: AutopilotRunOutcome | "done" | "cancelled" | "blocked" | "failed";
   run_id?: string;
   task_id?: string;
   to?: string;
@@ -97,6 +99,9 @@ export interface InboxItem {
   type: InboxItemType;
   severity: InboxSeverity;
   issue_id: string | null;
+  issue_parent_id?: string | null;
+  issue_parent_key?: string | null;
+  issue_parent_title?: string | null;
   title: string;
   body: string | null;
   issue_status: IssueStatus | null;

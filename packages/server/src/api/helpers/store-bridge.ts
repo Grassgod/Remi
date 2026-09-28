@@ -5,6 +5,7 @@
 //             subscribers and the analytics recorders in one place.
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import {
   agentBroadcastCompatibilityResponse,
   cleanString,
@@ -20,6 +21,7 @@ import type {
   AssignIssueInput,
   CreateFeedbackInput,
   CreateRuntimeUpdateInput,
+  CreateTaskInput,
   MultiremiAgent,
   MultiremiIssue,
   MultiremiProject,
@@ -64,13 +66,17 @@ export function maybeDispatchOnIssueUpdate(
   const leftBacklog = hasRequestField(input, "status") && previous.status === "backlog";
   if (!assigneeChanged && !leftBacklog) return unchanged;
   try {
+    // MUL-400 E3: the update already recorded `dependency_force_started` (the
+    // routes refuse `force` for a task identity), so the internal option carries
+    // the same decision into the dispatch. It is not part of the request-bound
+    // AssignIssueInput.
     return store.assignIssue(issue.id, {
       assigneeType: issue.assigneeType,
       assigneeId: issue.assigneeId,
       actorType: input.actorType,
       actorId: input.actorId,
       parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-    });
+    }, { force: input.force === true });
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
     return unchanged;
@@ -564,8 +570,14 @@ export function createOnboardingIssue(
 export function safeRerunIssue(
   store: MultiremiStore,
   issueId: string,
-  body: { agent_id?: string; agentId?: string; prompt?: string; parentTaskId?: string | null },
-): { task: MultiremiTask } | { error: string; status: 400 | 404 } {
+  body: {
+    agent_id?: string;
+    agentId?: string;
+    prompt?: string;
+    parentTaskId?: string | null;
+    dependencyForce?: CreateTaskInput["dependencyForce"];
+  },
+): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
   const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
@@ -576,14 +588,24 @@ export function safeRerunIssue(
   // access can't redirect the run to another workspace's agent (createTask
   // would reject the cross-workspace link, but fail loudly here first).
   if (agent.workspaceId !== issue.workspaceId) return { error: "agent not found", status: 404 };
-  const task = store.createTask({
-    agentId,
-    issueId: issue.id,
-    workspaceId: issue.workspaceId,
-    prompt: body.prompt ?? issue.title,
-    parentTaskId: body.parentTaskId ?? null,
-  });
-  return { task };
+  try {
+    const task = store.createTask({
+      agentId,
+      issueId: issue.id,
+      workspaceId: issue.workspaceId,
+      prompt: body.prompt ?? issue.title,
+      parentTaskId: body.parentTaskId ?? null,
+      dependencyForce: body.dependencyForce,
+    });
+    return { task };
+  } catch (error) {
+    // MUL-400 E3 gate 3: a rerun is a *new* round, so a waiting issue cannot
+    // start one. The route answers 409 with the same code the status gate uses.
+    if (error instanceof IssueDependencyError) {
+      return { error: error.message, status: 409, code: error.code, unmet: error.details.unmet ?? [] };
+    }
+    throw error;
+  }
 }
 
 export function safeAssignIssue(
