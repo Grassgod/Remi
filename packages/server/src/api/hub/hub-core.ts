@@ -351,9 +351,7 @@ export class HubImpl implements ObservableLiveHub {
    */
   head(taskId: string): number | null {
     const stream = this.ring.get(traceKey(taskId));
-    if (stream && stream.headSeq > 0) return stream.headSeq;
-    if (this.closedTasks.has(taskId)) return null;
-    return null;
+    return stream && stream.headSeq > 0 ? stream.headSeq : null;
   }
 
   /**
