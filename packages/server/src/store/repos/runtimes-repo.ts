@@ -623,12 +623,26 @@ export class RuntimesRepo {
       models.push(toRuntimeModel(row));
       modelsByRuntime.set(runtimeId, models);
     }
+    const updateRows = this.ctx.db.query(
+      `SELECT runtime_id, status, error FROM (
+         SELECT runtime_id, status, error,
+                ROW_NUMBER() OVER (
+                  PARTITION BY runtime_id
+                  ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                           created_at DESC, updated_at DESC, id DESC
+                ) AS rank
+         FROM multiremi_runtime_update_requests
+         WHERE scope = 'cli' AND runtime_id IN (${workspaceRuntimes})
+       ) WHERE rank = 1`,
+    ).all(workspaceId) as Array<{ runtime_id: string; status: string; error: string | null }>;
+    const latestUpdateByRuntime = new Map(updateRows.map(row => [row.runtime_id, row]));
     return runtimes.map((runtime) => withRuntimeLiveness({
       ...runtime,
       ...(usageByRuntime.get(runtime.id) ?? {
         taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
       }),
+      protocol: this.runtimeProtocolStatus(runtime, latestUpdateByRuntime.get(runtime.id) ?? null),
       executionGroupIds: groupsByRuntime.get(runtime.id) ?? [],
       models: modelsByRuntime.get(runtime.id) ?? [],
     }));
@@ -2321,13 +2335,17 @@ export class RuntimesRepo {
   }
 
   private runtimeProtocol(runtime: MultiremiRuntime): RuntimeProtocolStatus {
-    const version = runtime.daemonProtocolVersion ?? 1;
     const latest = this.ctx.db.query(
       `SELECT status, error FROM multiremi_runtime_update_requests
        WHERE runtime_id = ? AND scope = 'cli'
        ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
                 created_at DESC, updated_at DESC, id DESC LIMIT 1`,
     ).get(runtime.id) as { status: string; error: string | null } | null;
+    return this.runtimeProtocolStatus(runtime, latest);
+  }
+
+  private runtimeProtocolStatus(runtime: MultiremiRuntime, latest: { status: string; error: string | null } | null): RuntimeProtocolStatus {
+    const version = runtime.daemonProtocolVersion ?? 1;
     // A successfully negotiated current daemon is healthy even if an old upgrade failed.
     const compatible = version === DAEMON_PROTOCOL_VERSION && meetsDaemonMinCliVersion(runtimeCliVersion(runtime));
     const state = compatible ? "ok"

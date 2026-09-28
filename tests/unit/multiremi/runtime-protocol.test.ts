@@ -11,21 +11,27 @@ describe("database-derived runtime protocol", () => {
   it("derives all four states and never exposes an ACP/agent failure as a CLI protocol failure", () => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({ id: "rt_protocol", name: "Protocol", provider: "claude", daemonId: "dmn_protocol", metadata: { cli_version: "0.2.82" } });
+    const batchedProtocol = () => store.listRuntimesForWorkspace("local").find(row => row.id === runtime.id)?.protocol;
     expect(store.getRuntime(runtime.id)?.protocol).toEqual({ version: 1, state: "rejected", min_version: DAEMON_MIN_CLI_VERSION, last_error: null });
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
     const cli = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: DAEMON_MIN_CLI_VERSION });
     expect(store.getRuntime(runtime.id)?.protocol?.state).toBe("upgrade_pending");
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
     store.reportRuntimeUpdateResult(runtime.id, cli.id, { status: "failed", error: "Permission denied" });
     const failed = store.getRuntime(runtime.id)!.protocol!;
     expect(failed.state).toBe("upgrade_failed");
+    expect(batchedProtocol()).toEqual(failed);
     expect(formatRuntimeProtocol(failed)).toBe("协议 v1 · 升级失败：Permission denied");
     const acp = store.createRuntimeUpdateRequest(runtime.id, { scope: "acp" });
     store.reportRuntimeUpdateResult(runtime.id, acp.id, { status: "failed", error: "ACP-only failure" });
     expect(store.getRuntime(runtime.id)?.protocol?.last_error).toBe("Permission denied");
     store.recordDaemonProtocol(runtime.id, "dmn_protocol", 2, DAEMON_MIN_CLI_VERSION);
     expect(store.getRuntime(runtime.id)?.protocol).toEqual({ version: 2, state: "ok", min_version: DAEMON_MIN_CLI_VERSION, last_error: null });
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
     // A rollback to an older binary must not inherit a healthy v2 state.
     store.updateRuntime(runtime.id, { metadata: { cli_version: "0.2.82" } });
     expect(store.getRuntime(runtime.id)?.protocol?.state).toBe("upgrade_failed");
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
   });
 
   it("does not write another daemon's runtime while persisting a hello", () => {
