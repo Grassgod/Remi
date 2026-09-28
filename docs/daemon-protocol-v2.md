@@ -407,6 +407,9 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 也不另建进程间通道。进程内的 hello、ack 和 drain 直接调用同一入口。
 状态机为 `pending → sent(seq) → acked(claimed) → result`；未 ack 前断连回到 pending，
 下次 `hello` 快照重推。
+`feishu.outbound` 在 ACK 前仅用现有列固定本轮 `claim_token` 和 presentation checkpoint，
+重连重推保持同一载荷；收到 ACK 才转为 `sending`、开始租约并增加领取次数。过期租约重投产生新 token，
+不增加投递单元或改变数据模型。
 升级成功请求重启时，先等同一 runtime 已接收的其他维护请求收尾，避免独立下行帧的
 并发处理把模型探测或技能导入中止；升级自身不参与这个等待。
 

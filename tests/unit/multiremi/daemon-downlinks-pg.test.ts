@@ -74,4 +74,47 @@ describe.skipIf(!adminUrl)("A-4 pending state machines on real PostgreSQL", () =
       } finally { await second.close(); }
     } finally { await first.close(); }
   });
+
+  it("feishu outbound: reconnect keeps the offered epoch, ACK claims once and result settles once", async () => {
+    const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 17).toString("base64");
+    try {
+      const rt = "rt_pg_downlink_feishu";
+      const agent = store.createAgent({ name: "PG concierge", provider: "codex", workspaceId: "local" });
+      store.registerRuntime({ id: rt, name: rt, provider: "codex", workspaceId: "local", daemonId: rt, ownerId: "local" });
+      store.heartbeatRuntime(rt, { claimPending: false, supportsFeishuBotConfig: true });
+      const config = store.upsertFeishuBotConfig("local", { agentId: agent.id, runtimeId: rt,
+        appId: "cli_pg_downlink", appSecretOp: "set", appSecret: "test-only-secret", domain: "feishu", enabled: true });
+      store.reportFeishuBotRuntimeStatus("local", rt, { appliedRevision: config.revision, state: "online" });
+      const submitted = store.submitFeishuBotMessage("local", rt, { revision: config.revision,
+        externalSessionKey: "oc_pg_downlink", externalMessageId: "om_pg_downlink", chatId: "oc_pg_downlink",
+        chatType: "p2p", text: "PG outbound", deliveryMode: "native_cot_v1" });
+      const read = (id: string) => db.query(`SELECT status, attempt_count, external_message_id
+        FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?`).get(id);
+      const first = await openRuntimeDownlinks(store, rt);
+      try {
+        const offer = first.frames.find(frame => frame.t === "feishu.outbound")!;
+        expect(offer.p).toMatchObject({ task_id: submitted.taskId, presentation: { version: "native_cot_v1", throughSeq: 0 } });
+        expect(read(offer.p.id)).toMatchObject({ status: "pending", attempt_count: 0 });
+        await first.close();
+        expect(read(offer.p.id)).toMatchObject({ status: "pending", attempt_count: 0 });
+        const second = await openRuntimeDownlinks(store, rt);
+        try {
+          const replay = second.frames.find(frame => frame.t === "feishu.outbound")!;
+          expect(replay.p).toEqual(offer.p);
+          await second.ack(); await second.ack();
+          expect(read(offer.p.id)).toMatchObject({ status: "sending", attempt_count: 1 });
+          const result = { claimToken: replay.p.claim_token, status: "sent" as const, externalMessageId: "om_pg_sent" };
+          expect(store.reportFeishuBotOutbound("local", rt, offer.p.id, result)).toBe(true);
+          const settled = read(offer.p.id);
+          expect(store.reportFeishuBotOutbound("local", rt, offer.p.id, result)).toBe(false);
+          expect(read(offer.p.id)).toEqual(settled);
+          expect(settled).toMatchObject({ status: "sent", attempt_count: 1, external_message_id: "om_pg_sent" });
+        } finally { await second.close(); }
+      } finally { await first.close(); }
+    } finally {
+      if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;
+    }
+  });
 });

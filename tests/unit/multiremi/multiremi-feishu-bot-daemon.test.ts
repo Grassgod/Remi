@@ -198,6 +198,7 @@ describe("Feishu bot control-plane delivery", () => {
       const replay = second.frames.find(frame => frame.t === "feishu.outbound")!;
       expect(replay.p).toMatchObject({ id: offer.p.id, task_id: submitted.taskId,
         body: offer.p.body, idempotency_key: offer.p.idempotency_key });
+      expect(replay.p).toEqual(offer.p);
       const ack = JSON.stringify({ v: 2, t: "ack", ack: replay.seq, p: {} });
       second.socket.send(ack); second.socket.send(ack);
       await waitFor(() => (read(offer.p.id) as { status: string }).status === "sending");

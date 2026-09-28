@@ -2075,12 +2075,25 @@ export class FeishuBotRepo {
           };
         }
       }
-      const claimToken = typeof downlink === "object" ? downlink.claimToken : createId("foc");
+      const claimToken = typeof downlink === "object" ? downlink.claimToken
+        : downlink === "peek" && row.status === "pending" && row.claim_token
+          ? String(row.claim_token) : createId("foc");
       const presentation = parseFeishuPresentation(parseJson(row.presentation_checkpoint, null))
         ?? (supportsNativeCot && row.task_id && !row.external_message_id
           ? { version: "native_cot_v1" as const, startedAt: now.getTime(), throughSeq: 0, interactions: {} } : null);
       const leasedUntil = new Date(now.getTime() + (supportsTaskStream ? 120_000 : 30_000)).toISOString();
-      const updated = downlink === "peek" ? { changes: 1 } : this.ctx.db.run(
+      // Freeze the offered epoch without claiming it. A reconnect must carry
+      // the same token/checkpoint until ACK; expired leases start a new epoch.
+      const updated = downlink === "peek" ? this.ctx.db.run(
+        `UPDATE multiremi_feishu_bot_outbound_deliveries
+         SET status = 'pending', claim_token = ?, leased_until = NULL,
+             mention_snapshot = COALESCE(mention_snapshot, ?), presentation_checkpoint = COALESCE(presentation_checkpoint, ?)
+         WHERE id = ? AND workspace_id = ?
+           AND ((status = 'pending' AND available_at <= ?)
+             OR (status = 'sending' AND leased_until IS NOT NULL AND leased_until <= ?))`,
+        [claimToken, mention ? toJson(mention) : null, presentation ? toJson(presentation) : null,
+          String(row.id), workspaceId, nowIsoValue, nowIsoValue],
+      ) : this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = 'sending', claim_token = ?, leased_until = ?,
              attempt_count = attempt_count + 1, updated_at = ?,
