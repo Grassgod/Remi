@@ -64,7 +64,7 @@ const mutations = [
 ];
 const table = (headers: string[], body: string[][]) => `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |\n${body.map((r) => `| ${r.join(" | ")} |`).join("\n")}`;
 const parts = [
-  ["MUL-395 S9-3b：分组首页前后对比", `before Web：${before.beforeHead}\nafter 产品实现：${validation.implementationHead}\n合入 main：${validation.mainHead}\nDraft PR：https://github.com/Grassgod/Remi/pull/331（依赖 PR #297；472 合入 main 前不合入）。`],
+  ["MUL-395 S9-3b：分组首页前后对比", `before Web：${before.beforeHead}\nafter 产品实现：${validation.implementationHead}\n合入 main：${validation.mainHead}\nDraft PR：https://github.com/Grassgod/Remi/pull/331（前置 PR #297 已合入 main；本 PR 保持 Draft）。`],
   ["实测口径", "同机 n37-066-008、Bun 1.3.14、Chromium 1440×900、同一进程内 SQLite fixture（5 条 issue；MUL-454 的 210 条评论副本）。before 是 git archive 的 472 head，工作区包链接指向 archive 自身。after 使用本单实现；前后 Web 顺序运行 Next dev --webpack。未访问生产。\n原 S1 CLI 每页 cold/warm 各 5 轮；My Issues 默认 assigned。另用相同 S1 recorder、selectors、测量层采集真实首行位置；该组显式固定 my scope=all，主列表延迟 300ms、延后请求延迟 900ms，与 472 的位置验证一致。cold 从文档原点、warm 从点击计时；warm 入口 issues←inbox，其他目标←issues，500ms 请求安静窗口/5s 上限，hover=150ms。\n位置指标是固定真实行到达最终 top 的首帧；观察首行后 3000ms，同时计算 S1 前 1500ms jumpPx。固定行必须存在、可见且未断连。数字为中位数和最近秩 p95（n=5 即最大值），全部采样保留。Next dev、合成延迟和共享机器负载下的数值不代表生产 p95。"],
   ["真实列表位置与请求", table(["页面", "模式", "n", "主列表+归档 HTTP", "首屏全部 API p50", "最终位置 ms p50", "最终位置 ms p95", "固定行 px max"], rows)],
   ["原 S1 CLI", table(["页面（my 默认 assigned）", "模式", "首屏全部 API p50", "ready ms p50", "ready ms p95", "S1 jumpPx max"], nativeRows)],

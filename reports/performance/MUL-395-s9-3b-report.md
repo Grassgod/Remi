@@ -2,8 +2,8 @@
 
 before Web：e95b7a2345393fe7f79f13dcca3bdd4f6c32abe5
 after 产品实现：8a48b0b59d32b4aa00ba3ed4a8efcd9a77531f48
-合入 main：a30a8817daf891aabbb56fc7f85dc5a5d39074eb
-Draft PR：https://github.com/Grassgod/Remi/pull/331（依赖 PR #297；472 合入 main 前不合入）。
+合入 main：5f696786d573986858914246f9f66fe0051b2e19
+Draft PR：https://github.com/Grassgod/Remi/pull/331（前置 PR #297 已合入 main；本 PR 保持 Draft）。
 
 ## 实测口径
 
@@ -67,9 +67,9 @@ my assigned/created/agents 各 1 次，all 按 assignee/creator/involves 三个�
 | 复现命令 | 结果 |
 | --- | --- |
 | bun run typecheck:frontend | 通过；main + 472 最后合并后的版本。 |
-| bun run test:frontend | 3631 pass / 18 skip / 0 fail；core 1109、views 2467、web 55。 |
+| bun run test:frontend | 3631 pass / 18 skip / 0 fail；core 1109、views 2467、web 55。main 5f696786 合并后前端文件没有差异。 |
 | bun run --cwd frontend/packages/core test issues/status-pages.test.ts | 等价、请求数、失效、404 与错误隔离守卫全部通过；定向四文件合计 72/72。 |
-| bun run tests/manual/mul395-s9-3b-backend.ts postgres tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts | 真实 PG：新路由、静态 metrics 标签、归档可选成本用例通过；连同合并后专项共 52 pass / 0 fail。 |
+| bun run tests/manual/mul395-s9-3b-backend.ts postgres tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts | 真实 PG：新路由、静态 metrics 标签、归档可选成本用例 46 pass / 0 fail；最后合并后的专项结果见交付评论。 |
 | bun run tests/manual/mul395-s9-3b-backend.ts sqlite tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts tests/unit/remi/cli-collaboration.test.ts | SQLite + CLI：85 pass / 8 PG 专项 skip / 0 fail。dbq 单个用例独立启动也通过，预热不再依赖前序。 |
 | bun test tests/arch/ --timeout 20000 | 108 pass / 0 fail，3898 次断言。 |
 | bunx tsc --noEmit | 通过；含新增复现脚本。 |
@@ -91,7 +91,7 @@ my assigned/created/agents 各 1 次，all 按 assignee/creator/involves 三个�
 
 ## 限制与复核事项
 
-这是本地性能与定向测试报告。顺序执行的 PG/SQLite 全量和最终提交 CI 的完整结果见 MUL-395 的 S9-3b 交付评论。测速对应 8a48b0b5；之后无冲突合入 main a30a8817，未改 issues/my-issues 前端，因此按续跑要求沿用这些配对采样。
+这是本地性能与定向测试报告。顺序执行的 PG/SQLite 全量和最终提交 CI 的完整结果见 MUL-395 的 S9-3b 交付评论。测速对应 8a48b0b5；之后先后无冲突合入 main a30a8817、5f696786，两次合并均未改变前端文件，因此按续跑要求沿用这些配对采样。PR #297 的 e95b7a23 已在本单接入，本次 main 合并没有引入新的 472 行为。MUL-471 的交叉在 issue 写入/行锁，分组读路径与 api/helpers/issues.ts 未改变。
 
 before 为 472 最终 head e95b7a23。前后 Next dev 都出现已有 use-kanban-drag.ts:121 的 Maximum update depth exceeded 告警；该 hook 不在本单改动内，真实行的 3 秒采样仍没有跳动或断连。合成 squad fixture 的 creator_id/leader_id=null 另触发 schema 告警。这些本地环境现象不代表生产页面。
 
@@ -99,7 +99,7 @@ before 为 472 最终 head e95b7a23。前后 Next dev 都出现已有 use-kanban
 
 472 的六场景是 issues/inbox/detail 的 cold/warm 各一轮；长样本是同一 fixture 中 MUL-454 的 210 条评论副本，cold/warm 各一轮。所有 after 固定行 px、S1 jumpPx 与断连帧都为 0。
 
-上一轮 PG 全量中已有 MUL-473 pending-tasks 的 1→200 Chat 夹具曾接近或超过 20s。该文件单跑通过 10/10，纯 472 e95b7a23 复现同一个 24.480s 超时；本轮在纯 main a30a8817、同一实例且本单全量并行的负载下，该用例通过（16.917s）。没有放宽断言、增加 timeout 或跳过用例。一次跨 main 合并的全量还读到 772/774 路由两版本；该次不作为最终验证，最终两套全量固定合并态顺序运行。
+上一轮记录纯 472 e95b7a23 的 MUL-473 pending-tasks 200 Chat 夹具超时 24.480s。本轮 head 57ac839a 的首次 PG 全量为 4011 pass / 1 timeout，该文件单跑 10/10；纯 main a30a8817 同实例/重叠负载下最慢 21.190s，但 Bun 判通过，不能称同样 timeout 已在 main 复现。同一 head 停止其他本任务 PG 探针后完整复跑 4012 pass / 0 fail（1347.78s）。随后因收到 main 5f696786 合入指令停止刚启动的 SQLite，全量重新固定在最新合并态顺序执行。所有断言与 timeout=20000 保持原样。
 
 按前置约定保留旧服务端 creator_id、involves_user_id、排序参数的既有语义；本单只合并往返和修复观测标签，不改变筛选结果。404 兼容模式仍需要旧请求数量，新 API 的请求数收益不适用于该模式。
 
