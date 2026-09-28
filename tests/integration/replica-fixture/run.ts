@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { launchBrowser } from "../../../frontend/scripts/perf/lib/harness";
 import { appendRows, ackFor, frameFor, newMockHub, patchFrameFor, patchRow, readAsset, seedLog, type MockHubState } from "./server";
 
 const REPO_ROOT = join(import.meta.dir, "../../..");
@@ -259,11 +260,16 @@ async function main(): Promise<void> {
     await new Promise<never>(() => {});
   }
 
-  const browser: Browser = await chromium.launch({
-    executablePath: resolveChromium(),
-    headless: !options.headed,
-    args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
-  });
+  // The repo's own launcher, so CI and a workstation resolve the same Chromium
+  // the Playwright install step put in `~/.cache/ms-playwright`. `--headed` is the
+  // one case it cannot serve, since it pins `headless: true`.
+  const browser: Browser = options.headed
+    ? await chromium.launch({
+        executablePath: resolveChromium(),
+        headless: false,
+        args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+      })
+    : await launchBrowser();
 
   try {
     const scopes: Array<{ key: string; opfs: "on" | "off" }> = [
@@ -637,12 +643,13 @@ async function waitForLeader(pages: Page[]): Promise<{ index: number }> {
   return { index };
 }
 
+/** Chromium for the `--headed` path; the headless path uses the repo's launcher. */
 function resolveChromium(): string | undefined {
   const root = join(process.env.HOME ?? "/root", ".cache", "ms-playwright");
   try {
     const candidates = readdirSync(root)
       .filter((name) => name.startsWith("chromium-") && !name.includes("headless"))
-      .sort()
+      .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }))
       .reverse();
     for (const name of candidates) {
       const candidate = join(root, name, "chrome-linux64", "chrome");
