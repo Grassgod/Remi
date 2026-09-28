@@ -11,7 +11,7 @@ export const WORKBENCH_VISIBLE_STATUSES = ["in_review", "blocked", "in_progress"
 interface InboxRoutingEntry {
   rule: "R1" | "R2" | "R3";
   route: RegisteredInboxRoute;
-  severity: "info" | "attention";
+  severity: "info" | "attention" | "action";
   why: string;
 }
 
@@ -105,6 +105,12 @@ export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
     route: INBOX_ROUTE_BY_TYPE.dependency_satisfied,
     severity: "info",
     why: "Every prerequisite finished but the owner is a human, so starting the issue is a decision waiting on that person.",
+  },
+  decision_requested: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.decision_requested,
+    severity: "action",
+    why: "An escalated issue decision requires a member answer.",
   },
 };
 

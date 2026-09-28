@@ -390,10 +390,40 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
 }
 
 export function canCurrentUserAccessAgent(c: Context, store: MultiremiStore, agent: MultiremiAgent): boolean {
-  if (agent.visibility !== "private") return true;
+  return agentVisibleToUser(agent, currentRequestUserId(c), (workspaceId) => currentWorkspaceRole(c, store, workspaceId));
+}
+
+/**
+ * Batched twin of {@link canCurrentUserAccessAgent} for list routes (MUL-473).
+ *
+ * The rule is identical — a private Agent is reachable by its owner and by
+ * workspace owners/admins — but the caller's role is resolved at most once per
+ * workspace instead of once per Agent. Without this a route that checks N
+ * private Agents issued N membership reads for one answer.
+ */
+export function canCurrentUserAccessAgentChecker(
+  c: Context,
+  store: MultiremiStore,
+): (agent: MultiremiAgent) => boolean {
   const userId = currentRequestUserId(c);
+  const rolesByWorkspace = new Map<string, string>();
+  return (agent) => agentVisibleToUser(agent, userId, (workspaceId) => {
+    const cached = rolesByWorkspace.get(workspaceId);
+    if (cached !== undefined) return cached;
+    const role = currentWorkspaceRole(c, store, workspaceId);
+    rolesByWorkspace.set(workspaceId, role);
+    return role;
+  });
+}
+
+function agentVisibleToUser(
+  agent: MultiremiAgent,
+  userId: string,
+  roleForWorkspace: (workspaceId: string) => string,
+): boolean {
+  if (agent.visibility !== "private") return true;
   if (agent.ownerId === userId) return true;
-  const role = currentWorkspaceRole(c, store, agent.workspaceId);
+  const role = roleForWorkspace(agent.workspaceId);
   return role === "owner" || role === "admin";
 }
 
@@ -737,6 +767,17 @@ function isFeishuBotTaskTransportRequest(c: Context): boolean {
     || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
 }
 
+/**
+ * MUL-407: the two verbs an Issue topic's host may use on another machine's
+ * task. Creating and expiring a human request are deliberately absent — the
+ * executing daemon stays the only authority for those.
+ */
+function isFeishuBotIssueTaskRequestTransport(c: Context): boolean {
+  const path = new URL(c.req.url).pathname;
+  return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+$/.test(path))
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+}
+
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
@@ -845,26 +886,37 @@ export function denyDaemonTokenTaskRuntimeIdentity(
 ): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
-  const task = store.getTask(taskId);
+  // MUL-474: identity only. This guard runs on every task-level poll, so reading
+  // the whole row made a 2.5 s `status` payload carry the task's `prompt`,
+  // `result` and `usage` columns across the bridge.
+  const task = store.getTaskIdentity(taskId);
   if (!task) return c.json({ error: "task not found" }, 404);
   const workspaceDenied = denyDaemonTokenWorkspace(c, task.workspaceId, options);
   if (workspaceDenied) return workspaceDenied;
-  const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
+  // Identity only: like `denyDaemonTokenRuntimeIdentity`, this guard compares daemon ids and
+  // hands the workspace to `denyDaemonTokenWorkspace`. The three derived reads `getRuntime`
+  // adds (usage scan, execution groups, model catalog) are not consulted here, and the guard
+  // runs on every task-level poll.
+  const runtime = task.runtimeId ? store.getRuntimeLite(task.runtimeId) : null;
   if (runtime) {
     const runtimeWorkspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
     if (runtimeWorkspaceDenied) return runtimeWorkspaceDenied;
   }
   const tokenDaemonId = cleanString(token.daemonId);
   const runtimeDaemonId = cleanString(runtime?.daemonId);
+  // The owner is allowlisted by identity alone, so it never pays for the Feishu exception
+  // probes below. This is a reordering of two branches that were already OR-ed: the set of
+  // (token, task) pairs that passes is unchanged, and a non-owner daemon still reaches both
+  // exception checks exactly as before.
+  if (tokenDaemonId && runtimeDaemonId && tokenDaemonId === runtimeDaemonId) return null;
   // Only transport read/answer routes qualify. Task execution mutations must
   // still belong to the claiming Runtime's daemon, even for the bot host.
   if (isFeishuBotTaskTransportRequest(c) && tokenDaemonId
     && store.canFeishuBotDaemonAccessTask(task.workspaceId, tokenDaemonId, task.id)) return null;
-  if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
-    if (options.hideForbiddenAsNotFound) return c.json({ error: "task not found" }, 404);
-    return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
-  }
-  return null;
+  if (isFeishuBotIssueTaskRequestTransport(c) && tokenDaemonId
+    && store.canFeishuBotDaemonAccessIssueTaskHumanRequest(task.workspaceId, tokenDaemonId, task.id)) return null;
+  if (options.hideForbiddenAsNotFound) return c.json({ error: "task not found" }, 404);
+  return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
 }
 
 export function denyDaemonTokenIssueWorkspace(

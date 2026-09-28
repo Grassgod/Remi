@@ -51,8 +51,16 @@ export function BatchActionToolbar({
 
   const handleBatchUpdate = async (updates: Partial<UpdateIssueRequest>) => {
     try {
-      await batchUpdate.mutateAsync({ ids, updates });
-      toast.success(t(($) => $.batch.update_success, { count }));
+      const result = await batchUpdate.mutateAsync({ ids, updates });
+      const waiting = result.skipped.filter((item) => item.code === "dependencies_unmet").length;
+      const other = result.skipped.length - waiting;
+      if (waiting > 0 && other === 0) {
+        toast.success(t(($) => $.batch.update_waiting_skipped, { updated: result.updated, skipped: waiting }));
+      } else if (other > 0) {
+        toast.warning(t(($) => $.batch.update_other_skipped, { updated: result.updated, skipped: result.skipped.length }));
+      } else {
+        toast.success(t(($) => $.batch.update_success, { count: result.updated }));
+      }
     } catch (err) {
       toast.error(
         err instanceof Error && err.message
@@ -173,4 +181,3 @@ export function BatchActionToolbar({
     </>
   );
 }
-

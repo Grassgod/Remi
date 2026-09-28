@@ -1096,6 +1096,17 @@ export class MultiremiDaemon {
     return (await this.client.getTaskHumanRequest(taskId, requestId))?.status === "pending";
   }
 
+  /** Cards this Runtime still owes click handlers for (MUL-407 restart recovery). */
+  listFeishuBotDecisionCards(): Promise<Array<{
+    requestId: string;
+    taskId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    return this.client.listFeishuBotDecisionCards(this.options.runtimeId!);
+  }
+
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
     return this.client.getTaskHumanRequest(taskId, requestId);
   }
@@ -3489,7 +3500,10 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer, taskPrivateTmp.path);
+      summary = await this.runAgent(
+        task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
+        progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
+      );
       if (!summary.completed) {
         const failureReason = summary.failureReason
           ?? classifyPoisonedOutput(summary.output)
@@ -3996,6 +4010,8 @@ export class MultiremiDaemon {
           const request = await this.client.createTaskHumanRequest(task.id, {
             kind: "permission",
             payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
+            // Publish the deadline so the topic can remind before it elapses.
+            timeoutMs: humanRequestTimeoutMs,
           });
           await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
             request_id: request.id,
@@ -4050,6 +4066,7 @@ export class MultiremiDaemon {
             questions,
             ...(context ? { context } : {}),
           },
+          timeoutMs: humanRequestTimeoutMs,
         });
         await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
           request_id: request.id,

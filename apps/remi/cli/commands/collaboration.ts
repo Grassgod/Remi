@@ -383,6 +383,40 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.workspace", ["issue", "workspace"], "Show issue worktree state", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/workspace`);
     }),
+    nativeSpec("issue.decision.request", ["issue", "decision", "request"], "Record a non-blocking decision request", "write", HUMAN_TASK, [refPositional("issue")], [
+      { name: "kind", type: "string", valueName: "kind", description: "permission|merge|production_change|question|criteria|other" },
+      { name: "title", type: "string", valueName: "title", description: "Decision title" },
+      { name: "body", type: "string", valueName: "text", description: "Decision context" },
+      { name: "body-stdin", type: "boolean", description: "Read decision context from stdin" },
+      { name: "option", type: "string", valueName: "choice", repeatable: true, description: "Available choice" },
+    ], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "decisions"), {
+        kind: requiredOption(invocation, "kind"), title: requiredOption(invocation, "title"),
+        body: invocation.options["body-stdin"] === true ? readFileSync(0, "utf8") : stringOption(invocation, "body"),
+        options: stringOptions(invocation, "option"),
+      });
+    }),
+    nativeSpec("issue.decision.list", ["issue", "decision", "list"], "List decisions and pending human requests", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
+      await getAndRender(invocation, issueSubpath(invocation, "decisions"));
+    }),
+    nativeSpec("issue.decision.answer", ["issue", "decision", "answer"], "Answer or revise a decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [
+      { name: "text", type: "string", valueName: "answer", description: "Answer text" },
+      { name: "option", type: "string", valueName: "choice", description: "Chosen option" },
+      { name: "reason", type: "string", valueName: "text", description: "Reason for the answer (required for agents)" },
+      { name: "overturn", type: "string", valueName: "text", description: "How a human can overturn it (required for agents)" },
+    ], async (invocation) => {
+      const answer = stringOption(invocation, "text") ?? stringOption(invocation, "option");
+      if (!answer) throw new CliError("usage", "--text or --option is required");
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/answer`, {
+        answer, reason: stringOption(invocation, "reason"), overturn: stringOption(invocation, "overturn"),
+      });
+    }),
+    nativeSpec("issue.decision.escalate", ["issue", "decision", "escalate"], "Hand a pending decision to a member", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/escalate`, {});
+    }),
+    nativeSpec("issue.decision.withdraw", ["issue", "decision", "withdraw"], "Withdraw an unanswered decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/withdraw`, {});
+    }),
     nativeSpec("issue.dependency.list", ["issue", "dependency", "list"], "List issue dependencies", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "dependencies"), ["dependencies"]);
     }),
@@ -399,6 +433,12 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.dependency.remove", ["issue", "dependency", "remove"], "Remove an issue dependency", "destructive", HUMAN_TASK, [refPositional("issue"), refPositional("dependency")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${issueSubpath(invocation, "dependencies")}/${encodePath(positional(invocation, 1, "dependency"))}`);
+    }),
+    nativeSpec("issue.done-grant.add", ["issue", "done-grant", "add"], "Authorize the owner agent to close a parent issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "parent-done-grant"));
+    }),
+    nativeSpec("issue.done-grant.remove", ["issue", "done-grant", "remove"], "Revoke the owner agent's parent closure grant", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "DELETE", issueSubpath(invocation, "parent-done-grant"));
     }),
     nativeSpec("issue.reaction.list", ["issue", "reaction", "list"], "List issue reactions", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "reactions"), ["reactions"]);
@@ -639,7 +679,21 @@ function chatCommandSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
     nativeSpec("chat.message.list", ["chat", "message", "list"], "List chat messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], queryOptions(invocation, { limit: integerOption(invocation, "limit") }));
+      const rawCursor = stringOption(invocation, "cursor");
+      let cursor: { created_at: string; id: string } | null = null;
+      if (rawCursor) {
+        try {
+          const parsed: unknown = JSON.parse(rawCursor);
+          if (isRecord(parsed) && typeof parsed.created_at === "string" && typeof parsed.id === "string"
+            && parsed.created_at && parsed.id) cursor = { created_at: parsed.created_at, id: parsed.id };
+        } catch { /* Report the same usage error as a malformed cursor object. */ }
+        if (!cursor) throw new CliError("usage", "--cursor must be the previous page's next_cursor JSON object");
+      }
+      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], {
+        limit: integerOption(invocation, "limit"),
+        before_created_at: cursor?.created_at,
+        before_id: cursor?.id,
+      });
     }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
@@ -784,6 +838,18 @@ function taskCommandSpecs(): CommandSpec[] {
       { name: "force-answer", type: "boolean", description: "Ask the agent to wrap up and deliver its best conclusion now" },
       { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
     ], async (invocation) => {
+      // MUL-468: `task steer <task>` is the only write path that is also a
+      // command prefix (`task steer list`). A bare invocation used to POST an
+      // empty steer; fail here instead, before any request leaves the CLI.
+      const hasSteerInput = ["content", "content-file", "content-stdin", "force-answer"]
+        .some((name) => invocation.options[name] !== undefined);
+      if (!hasSteerInput) {
+        throw new CliError(
+          "usage",
+          "remi task steer requires --content, --content-file, --content-stdin, or --force-answer; "
+            + "use remi task steer list <task> to read the directives already sent",
+        );
+      }
       await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, {
         content: await contentOption(invocation),
         ...(invocation.options["force-answer"] === true ? { force_answer: true } : {}),

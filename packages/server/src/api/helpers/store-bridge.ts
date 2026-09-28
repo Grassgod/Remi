@@ -21,6 +21,7 @@ import type {
   AssignIssueInput,
   CreateFeedbackInput,
   CreateRuntimeUpdateInput,
+  CreateTaskInput,
   MultiremiAgent,
   MultiremiIssue,
   MultiremiProject,
@@ -569,7 +570,13 @@ export function createOnboardingIssue(
 export function safeRerunIssue(
   store: MultiremiStore,
   issueId: string,
-  body: { agent_id?: string; agentId?: string; prompt?: string; parentTaskId?: string | null },
+  body: {
+    agent_id?: string;
+    agentId?: string;
+    prompt?: string;
+    parentTaskId?: string | null;
+    dependencyForce?: CreateTaskInput["dependencyForce"];
+  },
 ): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
@@ -588,6 +595,7 @@ export function safeRerunIssue(
       workspaceId: issue.workspaceId,
       prompt: body.prompt ?? issue.title,
       parentTaskId: body.parentTaskId ?? null,
+      dependencyForce: body.dependencyForce,
     });
     return { task };
   } catch (error) {

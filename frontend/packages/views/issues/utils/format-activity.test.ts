@@ -192,6 +192,15 @@ describe("formatActivity", () => {
     expect(
       formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
     ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "grant_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_grant_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "final_summary_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_final_summary_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_done_grant_created", { details: { agentId: "agt_owner" } }), t, () => "Owner"))
+      .toBe('activity.parent_done_grant_created {"agent":"Owner"}');
+    expect(formatActivity(activity("parent_done_grant_revoked"), t)).toBe("activity.parent_done_grant_revoked");
+    expect(formatActivity(activity("parent_done_grant_used", { details: { source: "scm_merge" } }), t))
+      .toBe('activity.parent_done_grant_used {"source":"activity.parent_done_grant_source_scm_merge"}');
     expect(
       formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
     ).toBe('activity.issue_status_forced {"status":"status.done"}');
@@ -261,6 +270,18 @@ describe("formatActivity", () => {
         t,
       ),
     ).toBe("activity.dispatch_skipped_no_runnable_agent");
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "member_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_member_assignee");
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "no_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_no_assignee");
     expect(
       formatActivity(
         activity("dispatch_skipped", { details: { reason: "assign_failed", error: "Squad is archived: sqd_1" } }),
@@ -343,8 +364,16 @@ describe("formatActivity — dependency activities", () => {
     expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
   });
 
-  it("renders a member forced start", () => {
+  it("renders each member force-start source", () => {
     expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "comment" } }), t))
+      .toBe("activity.dependency_force_started_comment");
+    expect(formatActivity(activity("dependency_force_started", {
+      details: { source: "mention", agent_id: "agt_qa" },
+    }), t, (_type, id) => id === "agt_qa" ? "QA" : id))
+      .toBe('activity.dependency_force_started_mention {"agent":"QA"}');
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "rerun" } }), t))
+      .toBe("activity.dependency_force_started_rerun");
   });
 
   it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {

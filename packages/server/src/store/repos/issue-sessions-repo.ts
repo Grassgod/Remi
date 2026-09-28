@@ -3,7 +3,8 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { resolveFollowDeltaRatio, resolveFollowTokenLimit, resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLogger } from "@shared/logger.js";
@@ -603,24 +604,61 @@ export class IssueSessionsRepo {
     })();
   }
 
+  /**
+   * MUL-409 (QA round 4, blocker 2): the participant, the agent lane and the
+   * round are one transaction.
+   *
+   * The participant row implies a lane (`addSessionParticipant` creates one for
+   * an agent), but the round can still be refused afterwards — the dependency
+   * gate answers 409 `dependencies_unmet` for a waiting issue, and any other
+   * failure in task creation throws. Without a shared transaction the refusal
+   * left the session mutated: `participants` gained the agent and `lanes` gained
+   * a row, so a rejected request changed what the next reader saw.
+   *
+   * Chosen over "check the gate under the same lock first": the gate is only one
+   * of the ways the task write can fail (agent archived mid-flight, workspace
+   * bound, trigger comment missing), and a pre-check that mirrors a funnel which
+   * already owns the decision would have to be kept in sync with it forever.
+   * One transaction makes every failure leave the session exactly as it was,
+   * whatever the cause.
+   */
   createSessionTask(sessionId: string, input: CreateSessionTaskInput): MultiremiTask {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
     const agentId = input.agentId ?? input.agent_id;
     if (!agentId) throw new Error("agent_id is required");
-    this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
-    return this.ctx.tasks().createTask({
-      agentId,
-      issueId: session.issueId,
-      issueSessionId: sessionId,
-      workspaceId: session.workspaceId,
-      priority: input.priority,
-      prompt: input.prompt,
-      assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
-      assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
-      assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
-      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
-    });
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    let task: MultiremiTask;
+    try {
+      task = this.ctx.db.transaction(() => {
+        this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
+        return this.ctx.tasks().createTaskWithinTransaction({
+          agentId,
+          issueId: session.issueId,
+          issueSessionId: sessionId,
+          workspaceId: session.workspaceId,
+          priority: input.priority,
+          prompt: input.prompt,
+          assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
+          assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
+          assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
+          parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        }, childStatusChanges, deferredEvents);
+      })();
+    } catch (err) {
+      // The transaction rolled back, so the participant and the lane it would
+      // have created are gone with the round. Only the pending in-memory
+      // collector and queue are discarded.
+      log.warn(
+        `session task rejected for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
+    this.ctx.notifyTaskEnqueued(task);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
+    return task;
   }
 
   publishSessionResult(sessionId: string, input: PublishSessionResultInput): MultiremiSessionResult {

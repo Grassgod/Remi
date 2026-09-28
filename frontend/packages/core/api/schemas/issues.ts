@@ -6,6 +6,15 @@ import type {
   ListIssuesResponse,
 } from "../../types";
 
+export const BatchUpdateIssuesResponseSchema = z.object({
+  updated: z.number().int().nonnegative(),
+  skipped: z.array(z.object({
+    issueId: z.string(),
+    error: z.string(),
+    code: z.string().nullable(),
+  })).default([]),
+});
+
 // Metadata is primitive-only by API/DB contract. Stay lenient on shape:
 // unknown keys land as `unknown` to a caller, but the field itself defaults
 // to {} so consumers never need to nil-guard `issue.metadata`.

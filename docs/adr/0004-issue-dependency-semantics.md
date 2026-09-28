@@ -52,13 +52,14 @@ squad rule about ordering was prose. The observable failures were:
      with nothing queued.
    - `updateIssueWithOutcome` — `backlog -> todo`/`in_progress` with an unmet
      prerequisite is a 409 `dependencies_unmet`. A member may override with
-     `force: true`: the status change commits, `dependency_force_started` is
-     recorded, the rows stay, and the store then dispatches through
-     `assignIssue` with the internal force option, so an agent- or squad-owned
-     issue really gets a round. A member-owned or unowned issue is a status
-     change only, because there is no agent to run it. A dispatch that cannot run
-     (archived owner, no runnable agent) is reported as `dispatch_skipped`
-     rather than rolled back, matching assign-on-update.
+     `force: true`: the status change, `dependency_force_started` and the
+     dispatch decision share the same transaction, and the dependency rows stay.
+     A runnable agent or squad gets one round and `issue_assigned` in that
+     transaction. A member-owned or unowned issue gets the requested status but
+     no round, and records `dispatch_skipped` in the same transaction because
+     there is no agent to run it. An archived owner or a squad with no runnable
+     agent follows the same status-plus-`dispatch_skipped` rule rather than
+     rolling the status back. There is no post-COMMIT call to `assignIssue`.
    - `POST /api/issues` with `blocked_by` — the issue row, its number, its
      dependency rows and the cycle/ancestor checks are **one transaction**, so a
      rejected prerequisite leaves nothing behind: no orphan issue and no
@@ -68,13 +69,23 @@ squad rule about ordering was prose. The observable failures were:
      this bridge. An issue with an unmet prerequisite parks at `backlog`
      whatever status was requested.
 
+   **The outermost owner holds the only transaction.** A flow that already owns
+   the transaction passes its required child-status collector and commit-event
+   queue into every `...WithinTransaction` writer; those writers never issue
+   their own `BEGIN` or `COMMIT`, and the owner replays and drains only after its
+   COMMIT (or drops both on rollback). Messaging follows the same rule:
+   direct, approved and proposal owners call the transaction-internal outcome
+   writer, while the standalone `recordOutcome` wrapper opens a transaction only
+   for independent callers. This is required because the PostgreSQL bridge has
+   no savepoints: an inner COMMIT would make the outer rollback ineffective.
+
    *Layer 2 — task creation (`createTaskWithinWorkspaceLock` in tasks-repo),
    the single funnel every task is born in:* creating the **first** task of a
-   waiting issue is refused with `IssueDependencyError("dependencies_unmet")`,
-   regardless of who is asking. Because the check sits at the funnel rather than
-   at each caller, a path that does not exist yet is covered too. The check runs
-   after the issue is resolved and before any `INSERT`, so a refusal leaves no
-   partial row.
+   waiting issue is normally refused with
+   `IssueDependencyError("dependencies_unmet")`. Because the check sits at the
+   funnel rather than at each caller, a path that does not exist yet is covered
+   too. The check runs after the issue is resolved and before any `INSERT`, so a
+   refusal leaves no partial row.
 
    *Structural exemptions (never identity-based, and never request-supplied).* A
    round that continues an existing conversation is not the issue's first
@@ -89,23 +100,35 @@ squad rule about ordering was prose. The observable failures were:
    and `delegatedByAgentId` in both spellings, and only server paths (retry,
    continuation, the E2 wake-up, the delegation return) set them. A caller that
    supplies any of them gets the ordinary gate behaviour: 409
-   `dependencies_unmet` and no round. The dispatch behaviour around these
-   exemptions is:
-   - a comment-driven dispatch on a waiting issue records the hold and does not
-     create a task — `dispatch_skipped` with `dependencies_unmet` for the
-     assignee auto-response, `comment_mention_skipped` with the same reason for
-     an agent mention — and **the comment itself is still persisted**;
+   `dependencies_unmet` and no round.
+
+   *Credential-verified member actions.* A human comment, human agent mention or
+   human rerun explicitly starts a waiting issue. The comment and rerun
+   boundaries derive the actor from the credential, never the request body, and
+   set the server-internal `dependencyForce` marker with source `comment`,
+   `mention` or `rerun`. Public task creation strips `dependencyForce` and
+   `dependency_force`, so callers cannot forge the marker. The funnel still
+   makes no identity decision: it consumes the trusted marker and, in its task
+   transaction, inserts the round, moves `backlog` to `todo`, and records one
+   `dependency_force_started` with the member, source, comment/task ids and
+   unmet prerequisites. The dispatched prompt warns that prerequisites remain
+   unfinished. A mention dispatches only the mentioned agent; when that agent is
+   not the issue owner, the activity records `assignee_dispatched: false`.
+
+   Agent-authored comments and mentions do not receive the marker and remain
+   held by the gate. Agent rerun, public task create and session task create also
+   remain held. The other automatic paths remain unchanged:
    - an Autopilot `trigger_issue` on a waiting issue settles its run as
      `skipped` with reason `dependencies_unmet` and creates no task;
-   - `POST /api/multiremi/tasks` and `POST /api/issues/:id/rerun` answer 409
-     `dependencies_unmet`, with a message telling the caller to force-start.
+   - agent rerun, `POST /api/multiremi/tasks`, and session task creation answer
+     409 `dependencies_unmet`.
 
-   **There is exactly one way across the dependency: a member's `force`.** It
-   works only through the audited status write — CLI
+   **The explicit status override remains a member's `force`.** It works through
+   the audited status write — CLI
    `remi issue update <A> --status todo --force`, or the web "强制开工" button —
    which moves the issue out of `backlog` and records `dependency_force_started`.
    Once the issue is no longer waiting, both layers treat it as an ordinary
-   running issue. There is no second override:
+   running issue. The other status/assignment surfaces do not become overrides:
    - the **assign route** does not accept one: `force` is a server-internal
      parameter (`AssignIssueOptions`, mirroring `UpdateIssueOptions`), never a
      field of the request-bound `AssignIssueInput`, so a request body that
@@ -116,14 +139,54 @@ squad rule about ordering was prose. The observable failures were:
      server-internal option the dependency gate never reads, so a waiting issue
      targeted by a batch keeps its status, gets no round, and is reported
      per-row as skipped with `dependencies_unmet`. Choosing this over dropping
-     batch `force` entirely keeps S1's documented behaviour intact while
-     satisfying the ruling's "exactly one entrance";
-   - a single forced start dispatches exactly once: the status write commits,
-     the store's `dispatchForcedStart` queues the round, and the route's
-     assign-on-update step is skipped for that request, so no round is created
-     and immediately cancelled.
-   An override therefore always leaves exactly one `dependency_force_started`
-   and exactly one task row.
+     batch `force` entirely keeps S1's documented behaviour intact;
+   - a single forced start makes exactly one dispatch decision in the status
+     transaction (see 3a): a runnable agent or squad gets `issue_assigned` and
+     one round; a member, an unowned issue, an archived agent or a squad with no
+     runnable agent gets `dispatch_skipped` and no round. The route does no
+     second assign-on-update step for that request.
+
+   **3a. The forced start is one transaction, and its audit names the record it
+   really produced.** `updateIssueWithOutcome` owns the transaction and calls the
+   transaction-internal status writer. Under the lock order used by
+   `createTaskWithinTransaction` (`multiremi_workspaces` row first, then the
+   Issue row), that writer records the status and force audit, makes the dispatch
+   decision and, for a runnable agent or squad, writes `issue_assigned` and
+   exactly one round. A member or an issue with no owner has no runnable agent:
+   it writes the requested status and exactly one `dispatch_skipped`, but no task.
+   An archived agent or a squad with no runnable agent is handled the same way.
+   The skip row is part of the status transaction, so rollback leaves neither;
+   an unexpected failure leaves the issue at `backlog` with no round and no
+   activity.
+
+   **A runnable agent or squad gets exactly one task row; every committed attempt
+   gets exactly one start-classification record.** Which start record the lock
+   chooses depends on the race, and all three are legitimate. `issue_assigned`
+   and `dispatch_skipped` describe dispatch and are not additional start
+   classifications:
+
+   | When the force request took the row lock | Start record |
+   | --- | --- |
+   | prerequisites still unmet | `dependency_force_started` |
+   | every prerequisite already `done` | the member's `issue_updated` (`backlog -> todo`), with no dependency start activity; dispatch is `issue_assigned` for a runnable agent/squad or `dispatch_skipped` otherwise |
+   | the automatic start won the row first | `dependency_auto_started` |
+
+   The middle row is the race ruling: a force request that finds the gate
+   already open crosses nothing, so it is an ordinary member start and must not
+   claim an override. Its `issue_updated` row is written in the same transaction
+   as the `backlog -> todo` status change, including when the owner is a member or
+   absent. Recording a `dependency_force_started` there would report an override
+   that never happened; writing the activity after COMMIT would recreate a crash
+   window in which the status survived with no start record. Keeping each of the
+   three records with the state change makes the invariant literal: never zero
+   start-classification records, never two.
+
+   Before the status override became transaction-owned, a PATCH force raced
+   through the post-COMMIT `assignIssue` path and could cancel a comment-driven
+   round that had just committed. The transaction-owned path no longer calls
+   `assignIssue`, so that cancellation window is absent on this baseline.
+   Concurrent human actions still remain independent requests and are not
+   coalesced by this decision.
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.
@@ -139,8 +202,10 @@ squad rule about ordering was prose. The observable failures were:
    claimed with a conditional `UPDATE ... WHERE status = 'backlog'`, and only
    the transaction whose update reports one changed row dispatches. The losers
    do nothing — no task, no second
-   `dependency_auto_started`. A member's forced start moves the row off `backlog`
-   first, so it wins the same race for the same reason.
+   `dependency_auto_started`. A member's forced start competes for the same row
+   and settles by the same rule (see 3a): whichever transaction takes the lock
+   first owns the single start record, and the other one either finds the row
+   already off `backlog` or loses the conditional `UPDATE`.
 
    The claim, the status write, the round and both audit rows (`issue_assigned`,
    `dependency_auto_started`) are a **single transaction**, taken after
@@ -198,8 +263,24 @@ squad rule about ordering was prose. The observable failures were:
    Structurally exempt tasks (retry, continuation, redispatch, delegation return
    and E2 parent wake-up) can still be created while the issue waits. Each such
    creation records `dependency_gate_exempted`; starting the task moves the
-   issue to `in_progress` under the existing rules. This does not override the
-   dependency: the only override remains a member's status PATCH with `force`.
+   issue to `in_progress` under the existing rules. These structural
+   continuations are separate from the explicit member actions above.
+
+   Two details the audit depends on, both pinned by cases:
+
+   - `previousTaskId` / `previous_task_id` name the round the exempt creation
+     actually continues. `continuedFromTaskId` wins over `parentTaskId`, because
+     a leader-token continuation carries both: the delegating leader's turn as
+     the parent, and the delegated round being continued. Reading the parent
+     first reported the leader.
+   - A refused session task leaves the session untouched. Creating a round for
+     an Issue Session also enrols the agent as a participant, which creates its
+     lane; the participant, the lane and the round share one transaction, so a
+     409 `dependencies_unmet` — or any other failure in task creation — leaves
+     `participants`, `lanes` and `tasks` exactly as they were. A pre-check of the
+     gate under the same lock was rejected instead: the gate is only one of the
+     ways that write can fail, and a mirror of a funnel that already owns the
+     decision would drift from it.
 6. **A failing prerequisite is a report, not an automatic cancel.** When B
    enters `cancelled` or `blocked`, each **waiting** dependent (the same
    `backlog` + unmet definition the gate uses) records

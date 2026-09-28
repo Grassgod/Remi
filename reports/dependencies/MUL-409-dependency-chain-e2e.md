@@ -47,7 +47,7 @@ MULTIREMI_TEST_POSTGRES_URL=postgres://<user>@127.0.0.1:5432/postgres \
 
 ## Result
 
-`PASS` — 74 steps, 0 failures, on PostgreSQL 18.4 (2026-09-27).
+`PASS` — 74 steps, 0 failures, on PostgreSQL 17.5 (2026-09-28).
 
 Fix round 4 added two assertions to the chain: each automatic start must publish
 `issue:updated` for the dependent with `status: todo` and `prev_status: backlog`
@@ -81,3 +81,26 @@ Defects this run has found and driven to a fix:
    the dependency gate. The public task route now strips those fields, and the
    batch routes move `force` into a server-internal option that only the
    parent-status guard reads.
+
+Fix round 5 (QA round 4) changed the forced start itself, and this report was
+re-run on the new head:
+
+7. A member forced start wrote the status in one transaction and dispatched in a
+   second, so a process that died in between left the issue at `todo` with no
+   round — and both the gate and the automatic start only scan `backlog`, so
+   nothing recovered it. The status write, `dependency_force_started`,
+   `issue_assigned` and the round are now one transaction, under the same lock
+   order task creation uses.
+8. A force request that took the row lock after the gate had already opened
+   still recorded an override it had not performed, and the route then
+   dispatched a second time. It is now an ordinary member start — the member's
+   own status change is the single start record — so every attempt leaves exactly
+   one round and exactly one of the three start records.
+9. Enrolling an agent into an Issue Session created its participant row and lane
+   before the round passed the dependency gate, so a refused session task left
+   the session mutated. The participant, the lane and the round now share one
+   transaction.
+10. A leader-token continuation recorded the delegating leader's task as the
+    round being continued, because `parentTaskId` was read before
+    `continuedFromTaskId`. The continuation now wins, so the exemption audit
+    names the round it really extends.

@@ -983,6 +983,7 @@ describe("SCM connection and canonical event store", () => {
     expect(held[0]?.data).toMatchObject({
       requested: "done",
       openChildren: 1,
+      reason: "children_open",
       source: "scm_merge",
       changeRequestNumber: 42,
       changeRequestUrl: "https://github.com/acme/widgets/pull/42",
@@ -1006,19 +1007,48 @@ describe("SCM connection and canonical event store", () => {
     expect(store.getIssue(parent.id)?.status).not.toBe("done");
   });
 
-  it("completes a parent once every child has finished, without an issue_status_forced row", () => {
+  it("holds a finished parent without an owner-agent grant or final summary", () => {
+    for (const grantEnabled of [false, true]) {
+      const { store, connection } = seedConnection();
+      store.updateWorkspace("local", {
+        settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
+      });
+      const owner = store.createAgent({ name: "SCM parent owner", provider: "codex" });
+      const parent = store.createIssue({
+        title: "Finished parent without summary", workspaceId: "local", status: "in_progress",
+        assigneeType: "agent", assigneeId: owner.id,
+      });
+      const child = store.createIssue({ title: "Finished child", parentIssueId: parent.id, status: "in_progress" });
+      store.updateIssue(child.id, { status: "done" });
+      if (grantEnabled) store.grantParentDone(parent.id, "local");
+      projectChangeRequest(store, connection.id, "42", { number: 42, title: `${parent.key} delivery`, state: "merged" });
+      recordChange(store, connection.id, { logicalKey: `change.merged:42:hold-${grantEnabled}` });
+      expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+      expect(store.listIssueActivity(parent.id).find((entry) => entry.type === "parent_status_held")?.data)
+        .toMatchObject({ reason: grantEnabled ? "final_summary_missing" : "grant_missing", source: "scm_merge" });
+      expect(db!.query("SELECT status FROM multiremi_scm_effects WHERE issue_id = ?").get(parent.id))
+        .toEqual({ status: "applied" });
+    }
+  });
+
+  it("completes a granted parent with a post-child summary, without an issue_status_forced row", () => {
     const { store, connection } = seedConnection();
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const parent = store.createIssue({ title: "Parent with finished children", workspaceId: "local" });
-    store.updateIssue(parent.id, { status: "in_progress" });
+    const owner = store.createAgent({ name: "SCM parent owner", provider: "codex" });
+    const parent = store.createIssue({
+      title: "Parent with finished children", workspaceId: "local", status: "in_progress",
+      assigneeType: "agent", assigneeId: owner.id,
+    });
     const child = store.createIssue({
       title: "Finished child",
       parentIssueId: parent.id,
       status: "in_progress",
     });
     store.updateIssue(child.id, { status: "done" });
+    store.grantParentDone(parent.id, "local");
+    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: owner.id });
 
     // `recordChange` addresses subject id "42" (the shared fixture), so this case
     // projects the same external id in its own store.
@@ -1039,6 +1069,8 @@ describe("SCM connection and canonical event store", () => {
       .toHaveLength(0);
     expect(store.listIssueActivity(parent.id).find((activity) => activity.type === "scm_merge_completed"))
       .toBeDefined();
+    expect(store.listIssueActivity(parent.id).find((activity) => activity.type === "parent_done_grant_used")?.data)
+      .toMatchObject({ source: "scm_merge", agentId: owner.id });
   });
 
   it("completes only the owning issue while preserving weak cross-reference links", () => {

@@ -200,7 +200,24 @@ export type CreateIssueCommentOptions =
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
-export type TaskMessagesListener = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }) => void;
+/**
+ * The Task fields one message batch's fan-out reads: routing (`workspaceId`,
+ * `agentId`), Chat scoping, and the wire payload's `issue_id` /
+ * `issue_session_id` / `chat_session_id`. MUL-474 narrowed this from the whole
+ * `MultiremiTask` so appending a message no longer has to load the prompt.
+ */
+export interface TaskMessageFanoutSubject {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  chatSessionId: string | null;
+  issueId: string | null;
+  issueSessionId: string | null;
+}
+
+export type TaskMessagesListener = (
+  event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] },
+) => void;
 export type WorkspaceEventListener = (event: {
   type: string;
   workspaceId: string;
@@ -222,6 +239,16 @@ export interface IssuesSurface {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
   }): MultiremiIssue;
+  /**
+   * MUL-400 E3: creation for a caller that already holds a transaction. The
+   * child-status collector and the commit-event queue are both required, with no
+   * defaults, so nothing this creation derives or queues can be dropped.
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -244,6 +271,50 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
+  /**
+   * MUL-400 S1c (QA round 1): the same write as {@link updateIssue} but owned by
+   * the caller's transaction. The status row, its audit activities and (for the
+   * SCM merge effect) the effect's own bookkeeping commit together; every
+   * outbound event goes on `deferredEvents` and only flushes after COMMIT.
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  };
+  /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
+  runIssueUpdatePostCommit(
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
+    input: UpdateIssueInput,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  hasChildIssues(issueId: string): boolean;
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: import("./repos/issues-repo.js").ParentDoneGrantRefusalReason | null;
+  };
+  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }): {
+    satisfied: boolean;
+    lastChildClosedAt: string | null;
+  };
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /**
@@ -258,6 +329,12 @@ export interface IssuesSurface {
   ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  /** MUL-458: caller owns the force-start task/status/activity transaction. */
+  recordDependencyForceStarted(
+    issueId: string,
+    input: import("./repos/issues-repo.js").DependencyForceStartedInput,
+    deferredEvents: CommitEventQueue,
+  ): void;
   /** MUL-400 E3: page data for the detail surface. */
   getIssueWaitingOn(issueId: string): MultiremiIssueWaitingOn;
   /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
@@ -306,6 +383,10 @@ export interface AgentsSurface {
   /** Every Agent row without Skills — capability decisions only. */
   listAgentsLite(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Reference resolution from Agent rows only — no Skills, no Skill files. */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Live Agent rows by id, without Skills or Skill files. */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[];
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
   createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill;
@@ -460,6 +541,14 @@ export interface TasksSurface {
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
+  /**
+   * MUL-474: identity/status columns only — no `prompt`, `result` or `usage`.
+   * The daemon identity guard and the task-level handlers read this instead of
+   * {@link getTask}; the row is cached for the rest of the request.
+   */
+  getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
+  /** MUL-474: the `status` route's fields, without the prompt column. */
+  getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -479,6 +568,8 @@ export interface TasksSurface {
   /** Full rows for the ids a page kept, in the caller's order. */
   hydrateTasksByIds(ids: readonly string[]): MultiremiTask[];
   listTasksForIssue(issueId: string): MultiremiTask[];
+  /** Read one human request without going through the facade (MUL-407). */
+  getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
   cancelTask(taskId: string): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
@@ -505,6 +596,15 @@ export interface ChatSurface {
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
+  /**
+   * The first in-flight task of every Chat the caller can list, in one statement
+   * (MUL-473). Ranked by the same expression {@link getPendingChatTask} uses per
+   * Session.
+   */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
+  ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
@@ -847,7 +947,7 @@ export class StoreContext {
     }
   }
 
-  notifyTaskMessages(task: MultiremiTask, messages: MultiremiTaskMessage[]): void {
+  notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
     if (messages.length === 0) return;
     for (const listener of [...this.taskMessagesListeners]) {
       try {
@@ -1080,8 +1180,16 @@ export class StoreContext {
     if (session?.withCode && session.codeRuntimeId) {
       return this.runtimes().getRuntime(session.codeRuntimeId)?.daemonId ?? session.codeRuntimeId;
     }
+    // A Project directory is only assigned to tasks that hold an Issue
+    // workspace — see the creation predicate in `tasks-repo.ts`:
+    // `holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"`.
+    // A discussion/side Task (holds_workspace = 0) deliberately does not
+    // inherit the directory, so treating it as a directory pin here would
+    // strand it on a machine Project device routing can refuse (MUL-449).
+    if (Number(taskRow.holds_workspace ?? 1) !== 1) return null;
     const issueId = cleanOptionalString(taskRow.issue_id);
     const issue = issueId ? this.issues().getIssue(issueId) : null;
+    if (issue?.issueKind === "intake") return null;
     const chatId = cleanOptionalString(taskRow.chat_session_id);
     const chat = chatId ? this.chat().getChatSession(chatId) : null;
     const projectId = issue?.projectId ?? chat?.projectId;
@@ -1301,7 +1409,11 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   return "updates";
 }
 
-export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiInboxItem {
+export function toInboxItem(
+  row: Row,
+  issue: MultiremiIssue | null,
+  parent: Pick<MultiremiIssue, "id" | "key" | "title"> | null = null,
+): MultiremiInboxItem {
   const workspaceId = String(row.workspace_id ?? "local");
   const issueId = nullableString(row.issue_id);
   const memberId = String(row.member_id);
@@ -1316,6 +1428,9 @@ export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiIn
     workspace_id: workspaceId,
     issueId,
     issue_id: issueId,
+    issue_parent_id: parent?.id ?? null,
+    issue_parent_key: parent?.key ?? null,
+    issue_parent_title: parent?.title ?? null,
     memberId,
     member_id: memberId,
     recipientType,

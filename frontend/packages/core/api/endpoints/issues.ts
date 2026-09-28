@@ -15,6 +15,7 @@ import type {
 import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse, parseWithFallback } from "../schema";
 import {
+  BatchUpdateIssuesResponseSchema,
   ChildIssuesResponseSchema,
   IssueDependenciesResponseSchema,
   IssueDependencyMutationSchema,
@@ -36,6 +37,7 @@ export class IssuesEndpoints {
   // Issues
   async listIssues(params?: ListIssuesParams): Promise<ListIssuesResponse> {
     const search = new URLSearchParams();
+    if (params?.top_level_only) search.set("top_level_only", "true");
     if (params?.limit) search.set("limit", String(params.limit));
     if (params?.offset) search.set("offset", String(params.offset));
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
@@ -64,6 +66,7 @@ export class IssuesEndpoints {
 
   async listGroupedIssues(params: ListGroupedIssuesParams): Promise<GroupedIssuesResponse> {
     const search = new URLSearchParams({ group_by: params.group_by });
+    if (params.top_level_only) search.set("top_level_only", "true");
     if (params.limit) search.set("limit", String(params.limit));
     if (params.offset) search.set("offset", String(params.offset));
     if (params.workspace_id) search.set("workspace_id", params.workspace_id);
@@ -240,7 +243,7 @@ export class IssuesEndpoints {
     });
   }
 
-  async getChildIssueProgress(): Promise<{ progress: { parent_issue_id: string; total: number; done: number }[] }> {
+  async getChildIssueProgress(): Promise<{ progress: { parentIssueId: string; total: number; done: number; cancelled: number; blocked: number; waiting: number; active: number }[] }> {
     return this.http.fetch("/api/issues/child-progress");
   }
 
@@ -248,11 +251,12 @@ export class IssuesEndpoints {
     await this.http.fetch(`/api/issues/${id}`, { method: "DELETE" });
   }
 
-  async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number }> {
-    return this.http.fetch("/api/issues/batch-update", {
+  async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number; skipped: Array<{ issueId: string; error: string; code: string | null }> }> {
+    const raw = await this.http.fetch<unknown>("/api/issues/batch-update", {
       method: "POST",
       body: JSON.stringify({ issue_ids: issueIds, updates }),
     });
+    return parseStrictResponse(raw, BatchUpdateIssuesResponseSchema, { endpoint: "POST /api/issues/batch-update" });
   }
 
   async batchDeleteIssues(issueIds: string[]): Promise<{ deleted: number }> {

@@ -61,7 +61,7 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 **慢请求日志**（阈值 `MULTIREMI_SLOW_REQUEST_MS`，默认 500 ms），每行一个 JSON 对象写到 **stdout**：
 
 ```json
-{"event":"api_slow_request","ts":"2026-09-24T11:14:49.392Z","method":"GET","route":"/health","status":200,"total_ms":1.3,"db_ms":0,"db_parse_ms":0,"db_queries":0,"db_bytes":0}
+{"event":"api_slow_request","ts":"2026-09-24T11:14:49.392Z","role":"all","method":"GET","route":"/health","status":200,"total_ms":1.3,"db_ms":0,"db_parse_ms":0,"db_queries":0,"db_bytes":0}
 ```
 
 不含 query、header、body、原始 path、user 或 token。这里用 `console.log(JSON.stringify(...))` 而不是 `createLogger`：后者的 INFO 才走 stdout（WARN/ERROR 走 stderr）、带人读前缀使一行不是一个 JSON 对象，且在 `initLogPersistence()` 之后每条都会 `appendFileSync`，等于在请求路径上做同步磁盘 IO。
@@ -69,13 +69,14 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 **每分钟汇总**（`api_minute_summary`，同样只写 stdout、不写 DB、不做同步 IO）：
 
 ```json
-{"event":"api_minute_summary","ts":"2026-09-24T11:14:54.369Z","window_ms":5001,"requests":3,"status_5xx":0,"slow":3,"dropped":0,"db_busy_pct":0,"db_queries":0,"event_loop_lag_max_ms":2.7,"routes":[{"method":"GET","route":"/health","count":1,"p50_ms":1.3,"p95_ms":1.3,"sum_ms":1.3}]}
+{"event":"api_minute_summary","ts":"2026-09-24T11:14:54.369Z","window_ms":5001,"requests":3,"status_5xx":0,"slow":3,"dropped":0,"db_busy_pct":0,"db_queries":0,"event_loop_lag_max_ms":2.7,"role":"all","routes":[{"method":"GET","route":"/health","count":1,"p50_ms":1.3,"p95_ms":1.3,"sum_ms":1.3}]}
 ```
 
 - 数据源是固定容量的内存环形缓冲区（typed array，route 字符串 intern 成整数 id）。写满后覆盖最旧样本并把次数记进 `dropped`，缓冲区不随流量增长。
 - `routes` 按 `sum_ms` 取前 N（默认 10）。分位数用最近秩法，与 [bench-task-list-pagination.ts](../../tests/manual/bench-task-list-pagination.ts) 和 API baseline 脚本一致，因此这些数字可以和既有报告对照。
 - `db_busy_pct` = 该窗口内**进程级** DB 阻塞时间 / 窗口时长。进程级计数包含没有请求上下文的调用，所以后台 job 的 DB 时间也算进去，这正是「DB 忙碌占比」需要的分母口径。
 - `event_loop_lag_max_ms` 用 250 ms 间隔的 `setInterval` 漂移测量并取窗口内最大值；同步 PG 桥阻塞主线程时会直接体现为晚 tick。
+- `role`（MUL-461）= 该进程的 API 角色，取值 `all` | `ui` | `runtime`，来自 `MULTIREMI_API_ROLE`（默认 `all`）。两类日志事件都带这个字段，所以两个容器共用一个日志流时仍能分开看：`jq 'select(.event=="api_minute_summary") | {role, ts, event_loop_lag_max_ms, db_busy_pct}'`。同一次拆进程另一条分进程依据是 MUL-405 加的 `pid`；两者互不替代（重建容器后 `pid` 会变，`role` 不会）。字段只描述本进程角色，不是请求属性。
 
 **PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有两条独立规则：
 
@@ -94,7 +95,7 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 
 **已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
 
 **观测与验证入口**：
 
@@ -166,12 +167,30 @@ bun run frontend/scripts/perf/page-speed.ts \
 | 加载方式 | 每轮一个全新 browser context，逐页 `page.goto` 整页加载；每轮第一页（issues）含 app shell 冷启动，同轮后续页面复用该 shell |
 | LCP | 由 `addInitScript` 里预装的 `PerformanceObserver` 采集（不在导航前注册就取不到条目） |
 | 字节 | `encodedBodySize`（压缩后）、`decodedBodySize`（解压后 JSON）、`transferSize`（含响应头） |
-| path 脱敏 | 去掉 query；ID 形状的段换成 `:id`；已知的 workspace id / slug / member id 按值掩码，否则 `local`、`remi` 这种没有形状特征的标识会漏出去 |
+| path 脱敏 | 去掉 query；ID 形状的段换成 `:id`；已知的 workspace id / slug / member id 按值掩码，否则 `local`、`remi` 这种没有形状特征的标识会漏出去。`<前缀>_` 规则接受后缀里的**字母、数字、下划线**（`iss_zerojump_short`、`iss_local_long` 这类手写 fixture id 与生成 id 归一方式一致）；下划线不是静态路由段的字符——`scripts/api-routes.golden.json` 的 307 个静态段无一含下划线，所以宽化后的规则不会吞掉真实路由 |
 | 环境参照 | 运行前后各采 7 次 `/api/config`，记中位耗时。生产是共享环境，复跑对比前先核对这个参照 |
 
 今天的生产基线是 [reports/performance/MUL-367-page-speed-baseline-2026-09-24.json](../../reports/performance/MUL-367-page-speed-baseline-2026-09-24.json)（原始数据）、同名 `.md`（表格）与同名 `.html`（自包含单文件，可直接挂到 Issue 评论）。运行机器、Chromium、API 版本与护栏自检结果都写在报告的 `meta` 里。**明天复跑必须在同一台机器上**，否则机器差异会混进前后对比。
 
 采集当天生产本身处于劣化状态：运行前后各 7 次 `/api/config` 的中位耗时是 1886 ms / 3735 ms（同一窗口里还混着 1.2–2.7 s 的样本，说明不是链路固定延迟，而是服务端在排队）。11 个页面里有 1 次 `issues` 加载在 60 s 就绪等待内没有满足口径，报告把它标出来且不计入中位数。因此这组数字是**劣化态记录**，既不能当稳态性能，也不适合直接拿来定优化目标。改报告格式时只能重新采集——MUL-384 重写后的脚本不再提供「只重渲染已有 JSON」的开关，JSON/MD/HTML 三份产物是一次运行一起写出的。
+
+### 已定口径（MUL-383 待决项 A1/A2/B4，2026-09-27）
+
+| 项 | 决定 | 落点 |
+| --- | --- | --- |
+| A1 入口页安静 | **默认开启**：warm 轮点击前等入口页 500 ms 内没有新的 `/api/**` 请求开始，上限 5 s，超时照点并记 `entrySettled=false`；同时记录点击时在途数 `entryInflightAtClick`。`--entry-quiet-ms` 保留，默认 500，传 0 关闭；上限是常量 `ENTRY_QUIET_CAP_MS` | `lib/options.ts`、`page-speed.ts`；`meta.entryQuietMs/CapMs` |
+| A2 09-27 基线 warm 行 | **作废**（时基错误），cold 行保留。不改原始报告文件；本 PR 合入后由 QA 低峰重跑 n=5。`--compare` 对 schema 2 的 warm 行**只警告、不配对**：`comparable: false`、数值全 null、表格显示「不可比（schema 2 warm 已作废）」 | 见下节「基线有效性」与「输出与复核方式」 |
+| A3 长样本 | 前后对比固定 MUL-70（`--issue-long` 默认值不变）；「长（≥200）」语义由 MUL-454（`iss_o2skonppbq2u`）承担，新增 `detail-xlong` 场景并把该单加进 running 目标的排除名单 | `lib/options.ts`、`page-speed.ts` |
+| B4 高峰验收窗口 | **只看 13–14 点**，不要求 20–21 点 | 本页与父单验收口径 |
+
+### 基线有效性
+
+2026-09-27 的低峰基线（`reports/performance/` 与 `.mul383-evidence/perf/MUL-383-baseline-offpeak-2026-09-27.json`，`schema: 2`）里 **15 行 warm 数据无效**：`readyMs`、首屏请求数与串行深度都从**入口页文档**开始累计，没有减点击时刻 `navStartMs`，量的是「从一个还在加载的页面切走」。**cold 行有效**，两边都以文档 origin 起算。原始 JSON/MD/HTML 保持原样不改写，读取时按 `meta.schema` 判断。修正后的口径从 `schema: 3` 开始，warm 数字由 QA 低峰重跑 n=5 产出。
+
+S9-0.1（2026-09-28）之前的两处同样按「旧报告照原样保留、读取时按版本判断」处理，**不升 `meta.schema`**：
+
+- **`dbq` 一栏不可用。** 采集器把浏览器解析过的 Server-Timing 拼回字符串时，对只有 `desc` 的指标也写上了浏览器合成的 `dur=0.0`，`dbq`/`dbb` 于是全部读成 0。**`total`/`dbms`/`dbp` 不受影响**（它们本来就走 `dur`）。S9-2 的验收看 `dbq`，所以该修正之前（含 2026-09-28 凌晨那份上线前参照 `cmt_wahkjyxosv33`）的报告里 `dbq`/`dbb` 一律当作缺失，不要与修正后的数字比较。
+- **`page-issues::warm` 一行不作数。** 它从 issues 列表进入再点侧栏的 issues 链接，是同页点击，量的是它已经打开的那一页。修正后该行改为从 inbox 进入；其余十个 `page-*::warm` 行入口不变，可继续配对。
 
 ## 内容到最终位置的口径（MUL-384 / MUL-383 S1）
 
@@ -208,9 +227,12 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | readyMs | 取 500 ms 安静窗口的**起点**，不是终点 |
 | 超时 | 单轮 20 s；超时轮记 `readyTimeout`，**不进任何分位数** |
 | 分位数 | 最近秩法，与 API baseline / `bench-task-list-pagination.ts` 一致 |
-| 冷启动 | `page.goto` 整页加载，全新 context |
-| 应用内切页 | 先 hover 150 ms，再真实 click；`navStart` 取**页面内记录的 click 时间戳**（避免 CDP 往返误差） |
-| 串行深度 | `wave = 1 + max(wave(p) \| p.responseEnd ≤ start + 8ms)`；`Server-Timing` 从 resource timing 同源读取 |
+| 冷启动 | `page.goto` 整页加载，全新 context；时基是文档 origin（`navStartMs = 0`） |
+| 应用内切页 | 先 hover 150 ms，再真实 click；`navStartMs` 取**页面内记录的 click 时间戳**（避免 CDP 往返误差）。warm 轮的帧、跳动、`Server-Timing` 与首屏集合**一律先减 `navStartMs`**，即全部从 click 起算 |
+| 入口页安静（**已定口径**，`--entry-quiet-ms`，默认 500 ms） | warm 轮在点中行出现之后再等「入口页 500 ms 内没有新的 `/api/**` 请求开始」，上限 5 s；超时照点并记 `entrySettled=false`，同时在途请求数记 `entryInflightAtClick`。`--entry-quiet-ms 0` 关闭（回到「行一出现就点」的旧行为）。依据：MUL-383 待决项 A1，2026-09-27 答复；`meta.entryQuietMs` / `meta.entryQuietCapMs` 记录本轮实际用的阈值与上限 |
+| 首屏集合 | `startMs ≥ navStartMs` 且不晚于就绪帧的 `/api/**` 请求；`apiCallsTotal`、chunks 共用同一下界，所以入口页的尾请求不计入目标页 |
+| 串行深度 | `wave = 1 + max(wave(p) \| p.responseEnd ≤ start + 8ms)`；`Server-Timing` 从 resource timing 同源读取。口径未变，只多存 `serialChain` 与逐请求 `wave/after` |
+| gap | `gapMs = 客户端 duration − Server-Timing total`，即请求在 handler 之外等待的部分（连接与排队）。服务端没有 `total` 时为 null |
 | 深链目标 | 冷启动与应用内切页用**同一条**首屏通知。候选从探测窗口（最多 `--inbox-probe-pages` 页 × `limit=100`）取，按 `issue_id` 归并（`?issue=` 命中的是该 issue 最新一条）；合格项必须非 ledger 类且同时有 `details.comment_id` 与 `details.issue_session_id`，其中当前没有 running task 的 issue 优先，其次按 API 顺序。选中的条目会被并入浏览器的第一页（见下节），所以四种场景测的都是「目标在首屏」。记 `{ issueId, issueIdentifier, inboxItemId, commentId, issueHasRunningTask, inboxApiPage, rowIndex, targetRead }`；都选不到则 `skipped: no-eligible-inbox-item`。`--inbox-item` 必须在探测窗口内，否则 `skipped: inbox-item-not-found-within-probe-depth` |
 | 深链 URL | `/{slug}/inbox?issue=<issueId>&session=<issue_session_id>`。只带 `issue_id` 的通知走 `?issue=`（`inboxItemSelectionKind`），`?item=` 只属于 ledger 类通知，而 ledger 渲染 `AutopilotRunReport` 不测 timeline |
 | 深链 warm | DOM 行序由 `inboxDomRowIndex`（`lib/selectors.ts`）给出：它 import `core/inbox/grouping.ts` 的 `deduplicateInboxItems → filterInboxItemsBySource(…, "all") → groupInboxItemsByDate`，取 `flatMap(g => g.entries)` 的下标。**API 数组下标不是 DOM 行号**：生产上首页 50 条经归并只剩 8 行，成功的 autopilot run 会合并成一行。**行号在点击前一刻重算**，且算在「真实第一页 + 注入目标」这份快照上——那才是浏览器渲染的列表。目标不在当前列表里时记 `skipped: warm-target-not-in-list`。点击后等 URL 的 `issue` 参数变成选中 issueId（`replace` 在 `startTransition` 里，异步提交，轮询上限 10s）并记 `urlCommitMs`；不匹配则立刻结束该轮并写 `error: deeplink warm: url issue=<实际值> expected <id>`。被点中行的文本记入 `clickedRowText`，用来核对点的就是目标 issue |
@@ -219,7 +241,11 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 
-参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_in41j1x1dq66`，MUL-67）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认在探测窗口内自动选取）、`--inbox-probe-pages`（默认 10）。`targetSelection` 取 `auto | pinned | none`。
+参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_in41j1x1dq66`，MUL-67）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70；**MUL-395 前后对比固定用这一条**）、`--issue-xlong`（默认 `iss_o2skonppbq2u`，MUL-454；≥200 条评论的 `detail-xlong`，传空串跳过该场景）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单，以及 MUL-454 `iss_o2skonppbq2u`；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认在探测窗口内自动选取）、`--inbox-probe-pages`（默认 10）、`--hover-lead-ms`（默认 150）、`--entry-quiet-ms`（默认 500，0 关闭）。`targetSelection` 取 `auto | pinned | none`。
+
+`detail-running` 的排除名单分两段：**叶子常量**（MUL-454 这条永不完成的夹具单，故意保持进行中且未指派，否则会被选成 running 目标）与**运行时拉取**的 MUL-383 子单（见 `lib/options.ts` 的 `EXCLUDED_RUNNING_ISSUE_IDS` / `EXCLUDED_RUNNING_ISSUE_PARENTS`）。
+
+**场景矩阵新增 `detail-xlong`（MUL-454，≥200 条评论）**，与 `detail-long` 并列而不是替换它：MUL-395 的前后对比基线锚在 MUL-70，改掉 `--issue-long` 会让所有历史配对失效。已有场景 key 一律不改，`--compare` 的配对依赖它。
 
 **测速数据**：cold 与 warm 用同一 fixture，且必须是**非 archived、非 cancelled** 的 issue，否则默认 `/issues` 列表不渲染 `ListRow`，warm 找不到入口。报告标注实际评论条数（按 timeline 里 `type === "comment"` 计数；`timelineEntries` 另记条目总数，两者不同）。warm 目标行不在首批渲染里时记 `skipped: warm-target-not-in-list`，不改走搜索或 archived 手风琴（那些不是 S3 的验收入口）。参考量级：short ≤ 20 条、long ≥ 41 条（把「首页 40 条 + has_more」的分页路径踩到）；MUL-249 之后打开路径成本与总条数基本无关，≥200 的口径由 S7 的 250 条 fixture 与 S6 深链覆盖。
 
@@ -267,13 +293,38 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 # 本地/生产只读基线（token 只从 MULTIREMI_QA_WEB_TOKEN 读）
 bun run frontend/scripts/perf/page-speed.ts   --base-url http://n37-117-209.byted.org --rounds 5   --window offpeak --out reports/performance --name MUL-383-baseline-offpeak-<日期>
 
-# 与另一份 JSON 对比：按 key + mode 配对
+# 与另一份 JSON 对比：按 key + mode 配对（warm 行另按 key::mode::path 比 path）
 bun run frontend/scripts/perf/page-speed.ts   --base-url http://n37-117-209.byted.org --rounds 5   --out reports/performance --name MUL-383-baseline-peak-<日期>   --compare reports/performance/MUL-383-baseline-offpeak-<日期>.json
 ```
 
 ### 输出与复核方式
 
-JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自包含**单文件：内联 CSS/数据，无外链样式表/脚本/字体，无 localStorage 与父 frame 依赖，可直接挂 Issue 评论渲染）。JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identifier` 不同、`targetSelection` 不同、`timelineRequests` 不同都会警告，但都不阻断配对。
+JSON 用 `schema: 3`（MUL-395 S9-0 起）。相对 schema 2 的字段变化：
+
+| 位置 | 字段 | 说明 |
+| --- | --- | --- |
+| `meta` | `schema: 3` | 时基与首屏集合口径变了，旧 warm 行不可直接对比 |
+| `meta` | `entryQuietMs` / `entryQuietCapMs` / `entryQuietNote` | 本轮用的入口页安静阈值与上限；关闭时为 `null` |
+| `meta` | `timeBase` | 冷/热各自的起算点（文档 origin / click） |
+| `rounds[]` | `navStartMs` / `clickT` | 该轮的时间原点；cold 为 `0` / `null`，warm 为页面内 click 时间戳 |
+| `rounds[]` | `entryReadyMs` / `entryInflightAtClick` / `entrySettled` | 入口页就绪耗时、点击时在途 `/api` 请求数、是否等到了安静窗口 |
+| `rounds[]` | `serialChain` | 产生 `serialDepth` 的那条链，最深在最后 |
+| `rounds[]` | `apiFirstScreenEntries[]` | 首屏逐请求：`{ path, method, wave, after, startMs, responseEndMs, durationMs, encodedBytes, serverTiming:{total,db,dbp,dbq,dbb}, gapMs }`。`startMs`/`responseEndMs` 是页面绝对时钟，减 `navStartMs` 即本轮相对时间；`after` 是同一张表里前驱的下标 |
+| `stats` | `apiByPath[]` | 场景级按 path 聚合：每轮次数、`total` p50/p95、`db` p95、`dbq` max、`dbb` max、`gap` p50 |
+
+`apiFirstScreen` 计数保留，与 `apiFirstScreenEntries.length` 应相等，可交叉核对。MD 与 HTML 每个场景多一张「首屏 API 表」（按 path 聚合），HTML 另把逐请求表按场景折叠；`--compare` 除原有的按 `key::mode` 配对表外，多一张按 `key::mode::path` 配对的差值表（只在单侧出现的 path 也列出，右列为空——「请求消失了」正是 S9-1 要证明的结果）。
+
+JSON 里的 `compare` 段带 `warnings`：`selectorMode` 不同、`target.identifier` 不同、`targetSelection` 不同、`timelineRequests` 不同都会警告，但都不阻断配对。
+
+**唯一阻断数字的是 warm 时基不匹配。** 基线 `meta.schema < 3` 时，它的 warm 行从入口页文档起算，而 schema 3 从 click 起算：`readyMs`、首屏数、串行深度、逐 path 的 `total`/`gap` 全都不是同一个量。这类配对：
+
+- `compare.rows[]` 里 `comparable: false`，`notComparableReason` 写明原因，**所有数值字段为 null**——不是「渲染时藏起来」，读 JSON 的下游同样拿不到可减的数；
+- `compare.pathRows[]` 里这些 `key::mode` 的每一行同样 `comparable: false`，**数值与 `n` 计数全为 null**——schema 2 的计数含入口页尾部请求（本轮下界正是把它去掉），半修正的数字不能与修正后的数字并排放；
+- MD/HTML 的表格里这类行显示 `不可比（schema 2 warm 已作废）`，**不出现任何数字或差值**；
+- 只保留一条「已作废、不可比」的警告，不再报选择器/目标之类的次级差异（无数字可解释）；
+- 只出现在新一侧的 warm 行（例如 schema 3 才有的 `detail-xlong`）同样 `comparable: false`：基线那一半仍是作废的时基，单独打印新数字会被读成「对比的后一半」。该行自己的数字在场景的 `rounds[]`/`stats` 里（同一轮 schema 3 运行），不受影响；cold 行不在此列。
+
+schema 2 的 **cold** 行两边都以文档 origin 起算，照常配对；两侧都是 schema 3 时 warm 行也照常配对。这条规则由单测固定，并用「临时恢复 warm 配对」的变异验证过会失败。
 
 基线产物放 `reports/performance/`，HTML 用 `remi comment add --attachment` 同时挂到本单和父单。
 
@@ -290,7 +341,7 @@ JSON 用 `schema: 2`，同时输出同名 `.md`（表格）与 `.html`（**自�
 
 ### 已知失败清单与判定规则
 
-main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
+曾经必然失败的行写在 [tests/integration/zero-jump-known-failures.json](../../tests/integration/zero-jump-known-failures.json)：**行 = `<场景 key>::<cold|warm>`**（沿用 `report.ts` 里 `--compare` 的配对键），每行显式列出它还被允许出现的违例类型（`jumps` / `anchor` / `skeleton` / `perf-state`）。判定是纯函数（[lib/zero-jump-verdict.ts](../../frontend/scripts/perf/lib/zero-jump-verdict.ts)），四条规则：
 
 1. 行不在清单，出现任何违例 → 失败。
 2. 行在清单，出现该行没列出的类型 → 失败（「已经过的部分」由此立刻受保护）。
@@ -303,6 +354,8 @@ main 上现在必然失败的行写在 [tests/integration/zero-jump-known-failur
 - 要**新增**行或类型，必须在同批提交里附上新的 strict 报告（`reports/performance/MUL-394-zero-jump-strict-main-<日期>.json`），并更新 `tests/unit/scripts/zero-jump-verdict.test.ts` 里引用的基线路径。否则棘轮会拦住它。
 
 「与当轮运行是否一致」由检查本体在每次 CI 运行时判定（规则 a–c，`judgeZeroJumpRun`）；单测只防清单超出基线，不重复前者。规则 3 只在默认模式生效——它就是「MUL-443 / MUL-393 修好之后顺手清掉自己那几行」的机制。
+
+**清单现在是空的**（MUL-390，2026-09-27）。`useAnchoredReveal` 接入详情页后，9 行在 strict 下全部 0 违例，于是按规则 3 删掉整份清单，删空的记录留在 `tests/integration/zero-jump-known-failures.json` 的 `empty` 字段里。此后任何一行出现任何违例都会按规则 1 直接让 job 变红；新增行必须同批附新的 strict 基线报告。`rows` 为空是清单的终态，`tests/unit/scripts/zero-jump-verdict.test.ts` 里对应两处「行数必须为正」的断言因此删除（MUL-390 执行方案 2/3 的 R1）。
 
 「localStorage 里有非默认侧栏布局」那一轮刻意用**独立的 `detail-long-sidebar::cold`**，不与 `detail-long` 共键：它触发的是另一条机制（[sidebar.tsx](../../frontend/packages/ui/components/ui/sidebar.tsx) 在 `useEffect` 里恢复宽度，首帧之后才改正文宽度），共键会让清单表达不了「长 issue 已修、侧栏轮还没修」。
 
@@ -318,7 +371,11 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 `--skip-build` 复用已有 `.next`；`--api-port` / `--web-port` 固定端口（注意上面的构建期烘焙）；`--out` 指定报告路径。报告是记录器 JSON，含每轮 `jumps` / `anchorRectAtReady` / `skeleton` 数与清单判定结论。
 
-**当前 main 的 strict 实测**（`4248ef07`，3 次/行）存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 个 `key::mode` 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「前」基线。
+**当前 strict 实测**（MUL-390 分支：`43d75571` + MUL-450 合入 main 后的 `3b2406e4`，3 次/行）存于 [reports/performance/MUL-390-zero-jump-strict-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-strict-2026-09-27.json)：9 个 `key::mode` 行、27 轮全部 `jumps=0`、anchor 完整可见、骨架 0、`data-perf-state=ready`，没有任何 `ready-forced`。该 JSON 同时是 MUL-443 / MUL-444 / MUL-393 前后对比的「后」基线；本单合入 main 后它即 main 的 strict 基线。（报告里的 `commit` 是记录它时分支的 head。）
+
+同一分支的默认（清单）模式在本地与 CI 各跑一次，都是 9 行 × 3 轮 0 违例：本地 [reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-local-2026-09-27.json)，CI 的 `frontend-zero-jump` job 产物 [reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json](../../reports/performance/MUL-390-zero-jump-default-ci-2026-09-27.json)。
+
+**前基线**（`4248ef07`）仍存于 [reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json](../../reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json)：9 行全部失败，其中 8 行只有 `perf-state`，`detail-deeplink::cold` 另有 `jumps`（每次 1 跳、内容位移 8359.8 px、滚动 2450 px）。
 
 ## 优化不能破坏的约束
 
@@ -356,6 +413,7 @@ bun run tests/integration/zero-jump-check.ts --only detail-long --rounds 1   # �
 
 ## 复现顺序与记录
 
+0. **高峰窗口（B4，2026-09-27 裁定）：只看北京时间 13–14 点这一个窗口**，不再要求 20–21 点；两个窗口的数字不可混在一张表里比较。低峰窗口沿用原定义。
 1. 记录 `git rev-parse HEAD`、`git status --short`、Bun/OS/CPU/内存、进程数量和数据库版本/位置。dirty 工作树另存差异摘要，不能只记 SHA。数据只用测试 fixture 或脱敏副本。
 2. 先复用 API baseline，不新造同类采集器。脚本覆盖固定的 `reports/performance/MUL-176-api-route-baseline.json`，renderer 覆盖同目录 HTML；每次运行后复制为带时间与 SHA 的独立产物，连同 console 输出和环境记录保存。
 3. API baseline 使用固定 `/tmp` 工作目录且会清理，顺序运行于支持 Bun 的隔离测试 checkout（优先 Linux/WSL），不与其他实例共用这些临时目录。保存输出中的实际 seed、状态码和 probe 数；脚本报错属于采集失败，不能当零延迟。
