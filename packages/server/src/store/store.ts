@@ -2045,6 +2045,22 @@ runMigrations(this.db);
     this.feishuBot.upsertRoundPushDeliveryWithinTransaction(task, body);
   }
 
+  materializeFeishuTaskDeliveries(taskId: string): void {
+    this.feishuBot.materializeTaskDeliveries(taskId);
+  }
+
+  claimFeishuBotOutbounds(workspaceId: string, runtimeId: string, now?: string | Date): MultiremiFeishuBotOutboundDelivery[] {
+    const deliveries: MultiremiFeishuBotOutboundDelivery[] = [];
+    for (let count = 0; count < 16; count++) {
+      const delivery = this.feishuBot.claimOutbound(workspaceId, runtimeId, now, true, true, true, true);
+      if (!delivery) break;
+      deliveries.push(delivery);
+      // E5 and pre-C5 deliveries retain their existing one-row heartbeat cadence.
+      if (!delivery.kind || delivery.kind.startsWith("decision_")) break;
+    }
+    return deliveries;
+  }
+
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -2052,8 +2068,9 @@ runMigrations(this.db);
     supportsTaskStream = false,
     supportsNativeCot = false,
     supportsAttachments = false,
+    supportsKinds = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
-    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments, supportsKinds);
   }
 
   getFeishuBotOutboundAttachment(
@@ -4754,6 +4771,7 @@ runMigrations(this.db);
 
   createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
     const request = this.tasks.createTaskHumanRequest(input);
+    this.feishuBot.materializeTaskDeliveries(input.taskId);
     const wakeTask = this.feishuBot.prepareHumanRequestPush(request);
     if (wakeTask) this.ctx.notifyTaskEnqueued(wakeTask);
     return request;
