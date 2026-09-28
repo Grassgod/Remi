@@ -14,7 +14,7 @@ export {
   setSchemaLogger,
 } from "./schema";
 export type { ParseOptions } from "./schema";
-export { DuplicateIssueErrorBodySchema } from "./schemas";
+export { DuplicateIssueErrorBodySchema, IssueStatusHeldErrorSchema } from "./schemas";
 export type { DuplicateIssueErrorBody } from "./schemas";
 export type {
   RelayConfigResponse,

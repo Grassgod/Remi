@@ -2,6 +2,7 @@ import { forwardRef, useImperativeHandle, useRef, useState, type ReactNode } fro
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Issue } from "@multiremi/core/types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../locales/en/common.json";
@@ -275,7 +276,8 @@ vi.mock("@multiremi/ui/components/ui/dropdown-menu", () => ({
 }));
 
 vi.mock("./issue-picker-modal", () => ({
-  IssuePickerModal: () => null,
+  IssuePickerModal: ({ open, title, onSelect }: { open: boolean; title: string; onSelect: (issue: Issue) => void }) =>
+    open ? <button type="button" onClick={() => onSelect({ id: "prereq-1", identifier: "TES-10", title: "Prerequisite" } as Issue)}>{title}: TES-10</button> : null,
 }));
 
 vi.mock("@multiremi/ui/components/ui/tooltip", () => ({
@@ -667,6 +669,29 @@ describe("CreateIssueModal", () => {
         parent_issue_identifier: "MUL-2534",
       }),
     );
+  });
+
+  it("submits a selected prerequisite with the new child in one create request", async () => {
+    const user = userEvent.setup();
+    renderModal(
+      <ManualCreatePanel
+        onClose={vi.fn()}
+        data={{ parent_issue_id: "parent-uuid-1", parent_issue_identifier: "TES-1" }}
+        isExpanded={false}
+        setIsExpanded={vi.fn()}
+        backlogHintIssueId={null}
+        setBacklogHintIssueId={vi.fn()}
+      />,
+    );
+    await user.type(screen.getByPlaceholderText("Issue title"), "Waiting child");
+    await user.click(screen.getByRole("button", { name: "Prerequisite" }));
+    await user.click(screen.getByRole("button", { name: "Prerequisite: TES-10" }));
+    expect(screen.getByText("After TES-10")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
+      parent_issue_id: "parent-uuid-1",
+      blocked_by: ["prereq-1"],
+    })));
   });
 
   // Start date is a low-frequency field — by default it lives behind the

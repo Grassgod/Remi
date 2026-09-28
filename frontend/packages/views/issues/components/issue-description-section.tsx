@@ -19,7 +19,6 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import {
-  childIssuesOptions,
   issueAttachmentsOptions,
   issueKeys,
 } from "@multiremi/core/issues/queries";
@@ -34,22 +33,16 @@ import {
 import { useT } from "../../i18n";
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { StatusIcon } from ".";
-import { ProgressRing } from "./progress-ring";
 
-/** "Sub-issue of TES-1 …" line with the parent's own completion progress. */
+/** "Sub-issue of TES-1 …" line within a reserved-height slot. */
 function ParentIssueLink({ parentIssue }: { parentIssue: Issue }) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
-  const wsId = useWorkspaceId();
-  // Parent's children — used to render the "x/y" progress next to the
-  // "Sub-issue of …" breadcrumb under the title.
-  const { data: siblings = [] } = useQuery(childIssuesOptions(wsId, parentIssue.id));
-  const done = siblings.filter((c) => c.status === "done").length;
 
   return (
     <AppLink
       href={paths.issueDetail(parentIssue.id)}
-      className="mt-2 inline-flex max-w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group/parent"
+      className="inline-flex h-6 max-w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group/parent"
     >
       <span className="font-medium shrink-0">{t(($) => $.detail.sub_issue_of)}</span>
       <StatusIcon status={parentIssue.status} className="h-3.5 w-3.5 shrink-0" />
@@ -57,14 +50,6 @@ function ParentIssueLink({ parentIssue }: { parentIssue: Issue }) {
       <span className="truncate group-hover/parent:text-foreground">
         {parentIssue.title}
       </span>
-      {siblings.length > 0 && (
-        <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 shrink-0">
-          <ProgressRing done={done} total={siblings.length} size={11} />
-          <span className="tabular-nums text-[10.5px] font-medium">
-            {done}/{siblings.length}
-          </span>
-        </span>
-      )}
     </AppLink>
   );
 }
@@ -205,7 +190,11 @@ export function IssueDescriptionSection({
         </Tooltip>
       </div>
 
-      {parentIssue && <ParentIssueLink parentIssue={parentIssue} />}
+      {issue.parent_issue_id && (
+        <div className="mt-2 h-6 min-w-0">
+          {parentIssue && <ParentIssueLink parentIssue={parentIssue} />}
+        </div>
+      )}
 
       <div {...descDropZoneProps} className="relative mt-5 rounded-lg">
         <ContentEditor

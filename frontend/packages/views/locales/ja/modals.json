@@ -113,6 +113,10 @@
     "toast_failed": "プロジェクトを作成できませんでした"
   },
   "create_issue": {
+    "add_prerequisite": "前提イシュー",
+    "prerequisite_chip": "{{identifier}} の後",
+    "remove_prerequisite": "前提 {{identifier}} を削除",
+    "prerequisite_picker_description": "前提イシューを検索",
     "sr_manual": "新規イシュー",
     "sr_agent": "イシューをクイック作成",
     "manual_breadcrumb": "手動で作成",

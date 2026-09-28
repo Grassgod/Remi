@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
 import type { UseIssueActionsResult } from "../actions";
 import type { IssueSessionSelection } from "../hooks/use-issue-session-selection";
+
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multiremi/core/issues/mutations", () => ({ useUpdateIssue: () => ({ mutateAsync: vi.fn(), isPending: false }) }));
 
 vi.mock("./issue-detail-header", () => ({
   IssueDetailHeader: ({
@@ -62,6 +66,7 @@ function renderMain(
   };
 
   const result = render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <IssueDetailMain
       issue={issue}
       issueId={issue.id}
@@ -77,10 +82,12 @@ function renderMain(
       members={[]}
       agents={[]}
       canModerateComments={false}
+      getActorName={(_type, id) => id}
       onShowKeyResults={vi.fn()}
       onScrollContainerRef={vi.fn()}
       scrollContainerEl={null}
-    />,
+    />
+    </QueryClientProvider>,
   );
 
   return { ...result, onToggleSessionSidebar };
