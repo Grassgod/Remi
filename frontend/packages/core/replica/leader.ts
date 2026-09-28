@@ -83,6 +83,8 @@ export class ReplicaLeader {
   private generation = 0;
   private epoch = 0;
   private clearing = false;
+  private writeCounter = 0;
+  private readonly writes = new Map<string, { sessionId: string; resolve: () => void }>();
   /**
    * Sessions with a read in flight.
    *
@@ -145,6 +147,7 @@ export class ReplicaLeader {
     this.owners.delete(sessionId);
     this.tokens.delete(sessionId);
     this.pendingOpens.delete(sessionId);
+    this.cancelWrites(sessionId);
     if (count === 1) this.options.subscription.unsubscribe(sessionId);
   }
 
@@ -165,6 +168,14 @@ export class ReplicaLeader {
   /** Fetch a window through the read route and store it (deep link / gap / SSR seed). */
   async loadWindow(sessionId: string, range: HubSeqRange): Promise<void> {
     await this.backfill(sessionId, range);
+  }
+
+  async queryWindow(sessionId: string, from: number, to: number): Promise<ReturnType<ReplicaLeader["window"]>> {
+    const cached = this.window(sessionId, from, to);
+    if (from > 0 && to < Number.MAX_SAFE_INTEGER && to >= from && cached.entries.length !== to - from + 1) {
+      await this.loadWindow(sessionId, { from, to });
+    }
+    return this.window(sessionId, from, to);
   }
 
   /**
@@ -235,6 +246,7 @@ export class ReplicaLeader {
     this.owners.clear();
     this.tokens.clear();
     this.pendingOpens.clear();
+    this.cancelWrites();
     for (const dispose of this.disposers) dispose();
     this.disposers.length = 0;
   }
@@ -293,6 +305,10 @@ export class ReplicaLeader {
           head: message.head,
           fresh: message.fresh,
         });
+        if (message.requestId) {
+          this.writes.get(message.requestId)?.resolve();
+          this.writes.delete(message.requestId);
+        }
         // A hole the batch exposed is filled before anything else: the next batch
         // would otherwise sit above it and the head would stop advancing.
         if (message.missing) await this.backfill(message.sessionId, message.missing);
@@ -311,6 +327,10 @@ export class ReplicaLeader {
         return;
       }
       case "error": {
+        if (message.requestId) {
+          this.writes.get(message.requestId)?.resolve();
+          this.writes.delete(message.requestId);
+        }
         // Reported, never swallowed: a replica that silently stops writing looks
         // exactly like a stream that stopped sending.
         this.options.onDegraded?.(`worker ${message.request ?? "request"}: ${message.message}`);
@@ -361,6 +381,7 @@ export class ReplicaLeader {
     this.owners.clear();
     this.tokens.clear();
     this.pendingOpens.clear();
+    this.cancelWrites();
     this.options.view.dropAll();
   }
 
@@ -387,12 +408,22 @@ export class ReplicaLeader {
           flight.current = flight.ranges.shift()!;
           const entries = await this.options.readRange(sessionId, flight.current);
           if (!this.isCurrent(sessionId, token)) return;
-          this.post({ type: "writeWindow", sessionId, entries, range: flight.current });
+          const requestId = `${this.options.tabId}:write:${++this.writeCounter}`;
+          const written = new Promise<void>((resolve) => { this.writes.set(requestId, { sessionId, resolve }); });
+          this.post({ type: "writeWindow", sessionId, entries, range: flight.current, requestId });
+          await written;
         }
       } finally {
         if (this.inFlight.get(sessionId) === flight) this.inFlight.delete(sessionId);
       }
     })();
     return flight.done;
+  }
+
+  private cancelWrites(sessionId?: string): void {
+    for (const [id, write] of this.writes) {
+      if (sessionId !== undefined && write.sessionId !== sessionId) continue;
+      write.resolve(); this.writes.delete(id);
+    }
   }
 }

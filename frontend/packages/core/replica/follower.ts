@@ -51,7 +51,7 @@ export interface ReplicaFollowerOptions {
  */
 export class ReplicaFollower implements SessionReplicaPort {
   private readonly requested = new Set<string>();
-  private readonly pending = new Map<string, { sessionId: string; from: number; to: number }>();
+  private readonly pending = new Map<string, { sessionId: string; from: number; to: number; resolve: () => void }>();
   private requestCounter = 0;
   private readonly closed = new Set<string>();
   private disposed = false;
@@ -90,12 +90,23 @@ export class ReplicaFollower implements SessionReplicaPort {
   }
 
   /** Ask the leader for a window (a deep link, or the tail the list needs). */
-  request(sessionId: string, range?: { from: number; to: number }): void {
-    if (this.disposed || this.closed.has(sessionId)) return;
+  request(sessionId: string, range?: { from: number; to: number }): Promise<void> {
+    if (this.disposed || this.closed.has(sessionId)) return Promise.resolve();
+    const superseded: Array<() => void> = [];
+    for (const [id, pending] of this.pending) {
+      if (pending.sessionId !== sessionId) continue;
+      superseded.push(pending.resolve);
+      this.pending.delete(id);
+    }
     const resolved = range ?? this.options.defaultRange?.() ?? { from: 0, to: Number.MAX_SAFE_INTEGER };
     const requestId = this.nextRequestId();
-    this.pending.set(requestId, { sessionId, from: resolved.from, to: resolved.to });
+    const result = new Promise<void>((resolve) => {
+      this.pending.set(requestId, { sessionId, from: resolved.from, to: resolved.to,
+        resolve: () => { resolve(); for (const done of superseded) done(); },
+      });
+    });
     this.options.requestWindow({ requestId, sessionId, from: resolved.from, to: resolved.to });
+    return result;
   }
 
   /** Leave the session; the leader drops the subscription when the last tab does. */
@@ -108,11 +119,13 @@ export class ReplicaFollower implements SessionReplicaPort {
 
   /** Role changes invalidate follower requests before the Worker can publish. */
   suspend(): void {
+    for (const pending of this.pending.values()) pending.resolve();
     this.pending.clear();
     this.requested.clear();
   }
 
   invalidate(): void {
+    for (const pending of this.pending.values()) pending.resolve();
     this.pending.clear();
     for (const sessionId of this.requested) this.closed.add(sessionId);
     this.requested.clear();
@@ -127,7 +140,7 @@ export class ReplicaFollower implements SessionReplicaPort {
 
   private cancelPending(sessionId: string): void {
     for (const [id, pending] of this.pending) {
-      if (pending.sessionId === sessionId) this.pending.delete(id);
+      if (pending.sessionId === sessionId) { pending.resolve(); this.pending.delete(id); }
     }
   }
 
@@ -156,6 +169,7 @@ export class ReplicaFollower implements SessionReplicaPort {
           fresh: message.snapshot.fresh,
           ready: message.snapshot.ready,
         });
+        pending.resolve();
         return;
       }
       case "replica:appended": {

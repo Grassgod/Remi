@@ -227,14 +227,16 @@ class ReplicaFacade implements BrowserReplica {
         return;
       }
       case "replica:query": {
-        const view = leader.leader.window(message.sessionId, message.from, message.to);
-        this.broadcast({
+        void leader.leader.queryWindow(message.sessionId, message.from, message.to).then((view) => {
+          if (this.disposed || this.leader !== leader) return;
+          this.broadcast({
           type: "replica:window",
           requestId: message.requestId,
           sessionId: message.sessionId,
           entries: view.entries,
           snapshot: { head: view.head, fresh: view.fresh, ready: view.ready },
-        });
+          });
+        }).catch((error: unknown) => this.options.onDegraded?.(`replica window: ${String(error)}`));
         return;
       }
       default:
@@ -325,7 +327,7 @@ class ReplicaFacade implements BrowserReplica {
       await this.leader.leader.loadWindow(sessionId, range);
       return;
     }
-    this.follower.request(sessionId, range);
+    await this.follower.request(sessionId, range);
   }
 
   frames(sessionId: string, frames: readonly HubFrame[]): void {
@@ -531,7 +533,7 @@ function createWorkerBridge(options: BrowserReplicaOptions, env: BrowserReplicaE
   return {
     postMessage: (message) => {
       for (const response of handleInline(engine, options, message)) {
-        for (const listener of [...listeners]) listener({ ...response, token: message.token, epoch: message.epoch });
+        for (const listener of [...listeners]) listener({ ...response, token: message.token, epoch: message.epoch, requestId: message.requestId });
       }
     },
     onMessage: (listener) => {

@@ -24,6 +24,20 @@ function leaderHarness() {
 }
 
 describe("page and subscription lifetimes", () => {
+  test("a window read completes after the worker has published the write", async () => {
+    const h = leaderHarness(); h.leader.open("session");
+    h.leader.handleWorkerMessage(h.opened(h.requests.at(-1)!));
+    let completed = false;
+    const loading = h.leader.loadWindow("session", { from: 8, to: 9 }).then(() => { completed = true; });
+    for (let n = 0; n < 8; n++) await Promise.resolve();
+    expect(completed).toBe(false);
+    const write = h.requests.find(request => request.type === "writeWindow")!;
+    h.leader.handleWorkerMessage({ ...write, type: "appended", sessionId: "session", entries: [],
+      range: { from: 8, to: 9 }, head: 0, fresh: false, missing: null });
+    await loading;
+    expect(completed).toBe(true);
+  });
+
   test("clear cancels worker replies and follower window replies from the previous database", () => {
     const h = leaderHarness(); h.leader.open("session");
     const request = h.requests.at(-1)!;
