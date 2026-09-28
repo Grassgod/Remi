@@ -19,7 +19,10 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 function appWith(hub: unknown) {
-  return createMultiremiApp({ store: createStore(), hub: hub as never, realtimeState: { enabled: true, connections: 0 } });
+  return createMultiremiApp({
+    store: createStore(), hub: hub as never, realtimeState: { enabled: true, connections: 0 },
+    apiRoleConfiguration: { role: "all", configured: false },
+  });
 }
 
 describe("hub health payloads", () => {
