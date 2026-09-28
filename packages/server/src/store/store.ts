@@ -844,7 +844,7 @@ runMigrations(this.db);
     return this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1528,9 +1528,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -4831,6 +4832,10 @@ runMigrations(this.db);
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
     return this.tasks.createTaskSteerMessage(input);
+  }
+
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
   }
 
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {

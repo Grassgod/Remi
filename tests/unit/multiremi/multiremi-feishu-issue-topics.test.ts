@@ -89,6 +89,54 @@ function prepareReport(store: MultiremiStore) {
 
 describe("Feishu Issue topics", () => {
   for (const rollback of [false, true]) {
+    it(`MUL-465 existing round wake: ${rollback ? "rolls back without publishing" : "publishes Chat before terminal events after commit"} on SQLite`, () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const wake = prepareReport(store);
+      const issue = store.getIssue(wake.issueId!)!;
+      db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE issue_id = ? AND chat_session_id IS NULL", [issue.id]);
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
+      db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
+      const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent(event => {
+        events.push({ type: event.type, inTransaction: db!.inTransaction });
+      });
+      const database = db!;
+      const originalRun = database.run;
+      let injected = false;
+      if (rollback) database.run = function run(sql, ...params) {
+        const result = originalRun.call(this, sql, ...params);
+        if (sql.includes("INSERT INTO multiremi_feishu_bot_round_pushes")) {
+          injected = true;
+          throw new Error("MUL-465 SQLite round rollback injection");
+        }
+        return result;
+      };
+      try {
+        const complete = () => store.completeTask(leader.id, { output: "Next round result" });
+        if (rollback) expect(complete).toThrow("MUL-465 SQLite round rollback injection");
+        else expect(complete().status).toBe("completed");
+      } finally {
+        database.run = originalRun;
+        unsubscribe();
+      }
+      if (rollback) {
+        expect(injected).toBe(true);
+        expect(store.getTask(leader.id)!.status).toBe("running");
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
+        expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
+        expect(events).toEqual([]);
+      } else {
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+        expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
+        expect(events[0].type).toBe("chat:message");
+        expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  for (const rollback of [false, true]) {
     it(`publishes group Issue creation ${rollback ? "never on rollback" : "after commit"}`, () => {
       const { store, revision } = scaffold();
       configureTopics(store);
