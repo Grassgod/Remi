@@ -331,7 +331,7 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
 
 describe("MUL-367 request metrics — environment switches", () => {
   it("defaults to enabled with a 500 ms threshold and a one-minute summary", () => {
-    expect(resolveRequestMetricsOptions({})).toEqual({
+    expect(resolveRequestMetricsOptions("all", {})).toEqual({
       enabled: true,
       slowRequestMs: 500,
       summaryIntervalMs: 60_000,
@@ -343,11 +343,11 @@ describe("MUL-367 request metrics — environment switches", () => {
 
   it("treats 0/false/off as off and ignores unparsable numbers", () => {
     for (const off of ["0", "false", "FALSE", "off", " off "]) {
-      expect(resolveRequestMetricsOptions({ MULTIREMI_REQUEST_METRICS: off }).enabled, off).toBe(false);
+      expect(resolveRequestMetricsOptions("all", { MULTIREMI_REQUEST_METRICS: off }).enabled, off).toBe(false);
     }
-    expect(resolveRequestMetricsOptions({ MULTIREMI_REQUEST_METRICS: "1" }).enabled).toBe(true);
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_REQUEST_METRICS: "1" }).enabled).toBe(true);
 
-    const invalid = resolveRequestMetricsOptions({
+    const invalid = resolveRequestMetricsOptions("all", {
       MULTIREMI_SLOW_REQUEST_MS: "not-a-number",
       MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "0",
     });
@@ -356,8 +356,8 @@ describe("MUL-367 request metrics — environment switches", () => {
   });
 
   it("accepts an explicit 0 threshold so every request can be logged", () => {
-    expect(resolveRequestMetricsOptions({ MULTIREMI_SLOW_REQUEST_MS: "0" }).slowRequestMs).toBe(0);
-    expect(resolveRequestMetricsOptions({ MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "5000" }).summaryIntervalMs)
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_SLOW_REQUEST_MS: "0" }).slowRequestMs).toBe(0);
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "5000" }).summaryIntervalMs)
       .toBe(5000);
   });
 });

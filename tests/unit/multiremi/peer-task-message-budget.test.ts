@@ -21,7 +21,7 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 describe("MUL-474 peer task-message wire", () => {
-  for (const path of ["local", "full", "degraded"] as const) {
+  for (const path of ["local", "full", "degraded", "reference"] as const) {
     it(`${path} emits the unchanged workspace, denied-recipient and Chat golden bytes`, async () => {
       const restoreClock = installDeterministicFanoutClock();
       const db = new Database(":memory:");
@@ -51,16 +51,21 @@ describe("MUL-474 peer task-message wire", () => {
                 v: 1, origin: "fake-peer", kind: "task_messages",
                 payload: path === "full"
                   ? { task, task_id: task.id, messages }
-                  : { task_id: task.id, degraded: true, messages },
+                  : path === "degraded"
+                    ? { task_id: task.id, degraded: true, messages }
+                    : { task_id: task.id, degraded: true, seq_start: messages[0]!.seq, seq_end: messages.at(-1)!.seq },
               });
             }
-            if (path === "degraded") {
+            if (path === "degraded" || path === "reference") {
               const reads = queries.filter((sql) => /FROM multiremi_tasks WHERE id =/i.test(sql));
               expect(reads).toHaveLength(1);
               const columns = reads[0]!.match(/SELECT\s+(.*?)\s+FROM/i)![1]!.split(",");
               expect(columns).toHaveLength(6);
               expect(columns.join(",")).not.toContain("*");
               expect(columns.join(",")).not.toContain("prompt");
+              if (path === "reference") {
+                expect(queries.filter((sql) => /FROM multiremi_task_messages WHERE task_id =/i.test(sql))).toHaveLength(1);
+              }
             }
           } finally {
             fanout.close();

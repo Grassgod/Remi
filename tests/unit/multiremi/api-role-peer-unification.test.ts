@@ -17,7 +17,7 @@
  * guard refuses browser paths while the fanout still delivers to the browser
  * registry — a and b below catch it.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
@@ -28,6 +28,25 @@ import {
 } from "../../../packages/server/src/api/realtime-fanout.js";
 import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
+import * as apiRoleConfig from "@multiremi/config/api-role.js";
+import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+
+it("resolves the role once during a real server start and retains the unconfigured default", async () => {
+  delete process.env.MULTIREMI_API_ROLE;
+  delete process.env.MULTIREMI_PEER_URL;
+  expect(resolveStartupApiRole({})).toEqual({ role: "all", configured: false });
+  expect(resolveStartupApiRole({ MULTIREMI_API_ROLE: "all" })).toEqual({ role: "all", configured: true });
+  const resolver = spyOn(apiRoleConfig, "resolveApiRole");
+  const { store, db } = memoryStore();
+  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
+  try {
+    expect(resolver).toHaveBeenCalledTimes(1);
+    const base = `http://127.0.0.1:${server.port}`;
+    expect(await (await fetch(`${base}/readyz`)).text()).toBe('{"ok":true}');
+    expect(await (await fetch(`${base}/health/realtime`)).text()).toBe('{"connections":0,"enabled":true,"transport":"websocket"}');
+    expect(resolver).toHaveBeenCalledTimes(1);
+  } finally { server.stop(true); db.close(); resolver.mockRestore(); }
+});
 
 const ROLE_ENV = "MULTIREMI_API_ROLE";
 const savedRole = process.env[ROLE_ENV];

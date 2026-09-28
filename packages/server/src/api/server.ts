@@ -64,6 +64,7 @@ import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
 import {
   evaluateStartupEnv,
+  resolveStartupApiRole,
   normalizeDaemonDirectBaseUrl,
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
@@ -130,11 +131,10 @@ import {
 } from "../observability/request-metrics.js";
 import {
   API_ROLE_HEADER,
-  isApiRoleConfigured,
   isMisdirectedPath,
   misdirectedResponse,
-  resolveApiRole,
   type ApiRole,
+  type ApiRoleConfiguration,
 } from "../config/api-role.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
@@ -253,11 +253,13 @@ export interface MultiremiApiOptions {
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
   /**
-   * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
+   * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
    * exists so a test (and `startMultiremiServer`) can pin the role without env.
    */
   apiRole?: ApiRole;
+  /** Resolved once at startup, including whether the default was configured. */
+  apiRoleConfiguration?: ApiRoleConfiguration;
   /**
    * MUL-462: peer channel for the split API. Undefined builds one from
    * `MULTIREMI_PEER_URL`; null explicitly disables it.
@@ -309,17 +311,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-461: the process's ONE effective role. The guard middleware, the health
   // payloads, the realtime fanout and the metrics lines all read this value, so
   // nothing downstream can disagree with it.
-  const effectiveApiRole = options.apiRole ?? resolveApiRole();
+  const roleConfiguration = options.apiRoleConfiguration ?? resolveStartupApiRole(process.env, options.apiRole);
+  const effectiveApiRole = roleConfiguration.role;
   // With the knob unset (and no injected role) the process IS main: one role, no
   // routing decision to report. The health payloads only grow `role` once a role
   // was actually configured, which is what keeps `snapshot-api-routes.ts --check`
   // byte-identical to main for the default deployment (MUL-461 acceptance ①).
-  const apiRoleConfigured = options.apiRole !== undefined || isApiRoleConfigured();
+  const apiRoleConfigured = roleConfiguration.configured;
   // The metrics role is stamped LAST, and from `effectiveApiRole`: an injected
   // `requestMetrics` object is a transport/tuning override, never a statement
   // about which role this process runs as.
   const requestMetricsOptions: RequestMetricsOptions = {
-    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions(effectiveApiRole)),
     role: effectiveApiRole,
   };
   // MUL-462: a configured peer URL is the split switch — it is what turns this
@@ -796,12 +799,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ...(options.authToken !== undefined
       ? { MULTIREMI_TOKEN: options.authToken ?? undefined }
       : {}),
-    ...(options.apiRole !== undefined ? { MULTIREMI_API_ROLE: options.apiRole } : {}),
     ...(options.daemonDirectBaseUrl !== undefined
       ? { MULTIREMI_DAEMON_DIRECT_BASE_URL: options.daemonDirectBaseUrl ?? undefined }
       : {}),
   };
-  const startupConfig = evaluateStartupEnv(startupEnv);
+  const roleConfiguration = options.apiRoleConfiguration ?? resolveStartupApiRole(startupEnv, options.apiRole);
+  const startupConfig = evaluateStartupEnv(startupEnv, roleConfiguration);
   if (startupConfig.missingRequired.length > 0) {
     const message = `Missing required production environment variables: ${startupConfig.missingRequired.join(", ")}`;
     log.error(`[startup-env] ${message}`);
@@ -833,7 +836,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // Same trailing stamp as `createMultiremiApp`: an injected `requestMetrics`
   // tunes transport and thresholds, and never decides which role this process is.
   const requestMetricsOptions = {
-    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions(effectiveApiRole)),
     role: effectiveApiRole,
   };
   const messaging = backgroundJobs
@@ -874,8 +877,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // unconfigured deployment keeps the single-process wiring byte for byte.
   // `options.peerChannel` is the injection point the two-server tests use.
   // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
-  // no sender, no subscriber, and the routes answer 503 instead of pretending to
-  // accept an event nobody can receive.
+  // no sender, no subscriber, and the routes uniformly answer 401.
   const peerUrl = resolvePeerUrl();
   const peerSecret = options.peerSecret === undefined
     ? resolvePeerSecret()
@@ -884,12 +886,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
   // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
-  // resolved once above from `options.apiRole ?? resolveApiRole()`). Resolving it
+  // resolved once by startup-env, including an injected role). Resolving it
   // again here from env would disagree with an injected `apiRole`: a process
   // pinned to `runtime` for a test would refuse browser paths while still fanning
   // out browser frames, or the reverse.
   const app = createMultiremiApp({
     ...options,
+    apiRoleConfiguration: roleConfiguration,
     store,
     scheduler,
     realtimeState,

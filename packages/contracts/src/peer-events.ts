@@ -11,11 +11,9 @@
  * receiver may branch on before it trusts the rest, and `origin` exists so a
  * process can drop a message it somehow receives back from itself.
  *
- * `payload` is the raw event as the store produced it (the `MultiremiTask`
- * object, the messages array, the workspace-event envelope). Ordering is the
- * sender's job — batches go out one at a time on a single serial chain — so
- * nothing here carries a sequence number. There is no persistence or replay:
- * browsers refetch on reconnect and daemons keep polling.
+ * Task messages carry a six-field routing subject or a persisted seq reference;
+ * other event kinds retain their store shape. Ordered, numbered batches retry
+ * identical bytes and receivers deduplicate within their process lifetime.
  */
 
 import type {
@@ -66,7 +64,7 @@ export interface PeerWorkspaceEvent {
  * `MultiremiTask.prompt` is capped at 2 MiB, so a queued task can exceed the
  * 1 MiB event budget without any client misbehaving. The receiver shares the
  * database with the sender, so it rebuilds the frame from `task_id` and gets the
- * same row. `task_messages` never needs this: it is split per message instead.
+ * same row. Task-message references instead read a narrow subject and a seq range.
  */
 export interface PeerTaskReference {
   task_id: string;
@@ -97,6 +95,14 @@ export interface PeerTaskMessagesPayload {
   messages: MultiremiTaskMessage[];
 }
 
+/** Inclusive persisted message range; no task body or message content crosses the wire. */
+export interface PeerTaskMessagesReferencePayload {
+  task_id: string;
+  degraded: true;
+  seq_start: number;
+  seq_end: number;
+}
+
 export interface PeerWorkspaceEventPayload {
   event: PeerWorkspaceEvent;
 }
@@ -105,7 +111,7 @@ export interface PeerWorkspaceEventPayload {
 export type PeerEventPayload = {
   task_enqueued: PeerTaskEnqueuedPayload;
   task_event: PeerTaskEventPayload;
-  task_messages: PeerTaskMessagesPayload;
+  task_messages: PeerTaskMessagesPayload | PeerTaskMessagesReferencePayload;
   workspace_event: PeerWorkspaceEventPayload;
 };
 
@@ -210,9 +216,9 @@ export interface PeerHealth {
   failed?: number;
   /** Bytes currently held by the send queue. Excludes `inflight_bytes`. */
   queued_bytes?: number;
-  /** Events in the frozen retry slot (0, or the size of one batch). */
+  /** Events in the active/frozen slot (0, or the size of one batch). */
   inflight?: number;
-  /** Bytes held by the frozen retry slot. */
+  /** Actual POST body bytes held by the active/frozen slot. */
   inflight_bytes?: number;
   rtt_p95_ms?: number;
 }
@@ -227,6 +233,13 @@ export function parsePeerEventEnvelope(value: unknown): PeerEventEnvelope | null
     return null;
   }
   if (typeof record.payload !== "object" || record.payload === null) return null;
+  const payload = record.payload as Record<string, unknown>;
+  if (record.kind === "task_messages" && ("seq_start" in payload || "seq_end" in payload)) {
+    if (typeof payload.task_id !== "string" || !payload.task_id || payload.degraded !== true
+      || !Number.isSafeInteger(payload.seq_start) || !Number.isSafeInteger(payload.seq_end)
+      || (payload.seq_start as number) < 1 || (payload.seq_end as number) < (payload.seq_start as number)
+      || "task" in payload || "messages" in payload) return null;
+  }
   return record as unknown as PeerEventEnvelope;
 }
 

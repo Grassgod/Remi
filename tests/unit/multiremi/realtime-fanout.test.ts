@@ -171,7 +171,7 @@ describe("realtime fanout — role routing", () => {
         v: 1,
         origin: "process-runtime",
         kind: "task_messages",
-        payload: { task: store.getTask(task.id)!, messages },
+        payload: { task: store.getTask(task.id)!, task_id: task.id, messages },
       });
       expect(daemonFrames).toHaveLength(0);
       expect(JSON.parse(browserFrames[0]!)).toMatchObject({ type: "task:message", payload: { seq: 1 } });

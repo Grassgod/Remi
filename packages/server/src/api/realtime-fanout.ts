@@ -158,8 +158,13 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
         return;
       }
       case "task_messages": {
-        const task = envelope.payload.task ?? store.getTaskIdentity(envelope.payload.task_id, "fanout");
-        if (task) deliverTaskMessages({ task, messages: envelope.payload.messages });
+        const task = ("task" in envelope.payload ? envelope.payload.task : null)
+          ?? store.getTaskIdentity(envelope.payload.task_id, "fanout");
+        if (!task) return;
+        const messages = "seq_start" in envelope.payload
+          ? store.listTaskMessages(envelope.payload.task_id, envelope.payload.seq_start - 1, envelope.payload.seq_end)
+          : envelope.payload.messages;
+        deliverTaskMessages({ task, messages });
         return;
       }
       case "workspace_event":

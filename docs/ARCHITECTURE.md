@@ -34,6 +34,7 @@ summary: 从 CLI、Web 和飞书入口追踪到 API、存储与 Agent 执行，�
 对外形状集中到 [wire](../packages/server/src/api/wire)；事件经 [realtime](../packages/server/src/api/realtime.ts) 到前端缓存。
 store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/realtime-fanout.ts) 统一订阅，按进程角色投本进程的浏览器或 daemon 注册表；
 两个 API 进程之间用 [peer channel](../packages/server/src/api/peer/peer-channel.ts)（`POST /internal/peer/events`）互转，`MULTIREMI_PEER_URL` 不设即完全关闭。
+协议、消息引用、字节预算与角色解析链见 [Realtime peer channel](dev/realtime-peer.md)。
 
 **任务执行**：issue/chat/autopilot 产生 task → [任务存储](../packages/server/src/store/repos/tasks-repo.ts) →
 [daemon client](../packages/server/src/worker/client.ts) / [worker loop](../packages/server/src/worker/daemon.ts) 领取 →

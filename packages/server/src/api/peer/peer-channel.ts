@@ -88,30 +88,15 @@ export const PEER_MIN_BACKOFF_MS = 1_000;
 export const PEER_MAX_BACKOFF_MS = 10_000;
 export const PEER_QUEUE_LIMIT = 10_000;
 /**
- * Byte budget for the send queue, measured over the *backlog*.
- *
- * The distinction is load-bearing. One legal store write can be larger than the
- * budget by itself: the daemon may append 256 messages of 256 KiB in a single
- * call, which is ~64 MiB of events, and the contract says a legal report arrives
- * complete and in `seq` order. Cutting that burst apart would break the very
- * ordering the channel exists to preserve.
- *
- * So both caps are enforced per produce call, against everything queued *before*
- * that call: the backlog is evicted oldest-first until it fits, and the call that
- * triggered the eviction is then admitted whole. The invariants are:
- *
- *   - any single legal produce call is delivered complete, in order;
- *   - a peer that stays down cannot accumulate backlog — each new call first
- *     evicts the backlog down to the caps;
- *   - the queue never exceeds `cap + one produce burst`, rather than growing with
- *     however many writes happen to land in the same tick.
- *
- * The frozen retry slot is outside all of this: it holds at most one batch and is
- * never evicted, because evicting it would either lose delivered events or let a
- * reused batch number hide new ones. Peak memory is therefore
- * `queue cap + one produce burst + one inflight batch`.
+ * Backlog budget before admitting a produce call. Full persisted messages can
+ * become seq references before oldest-first eviction. Admission measures every
+ * serialized envelope, including replacements, and is capped at 64 MiB by code.
+ * One active/frozen POST is outside the queue and capped at 1 MiB, giving
+ * queued_bytes + inflight_bytes <= 32 MiB + 64 MiB + 1 MiB.
  */
 export const PEER_MAX_QUEUE_BYTES = 32 * 1_048_576;
+/** Actual serialized admission per produce call, including reference envelopes. */
+export const PEER_MAX_BURST_BYTES = 64 * 1_048_576;
 
 /**
  * The outbound envelope's own weight, measured on a real envelope with an empty
@@ -133,15 +118,15 @@ export interface PeerChannelStats {
   queued: number;
   /** Serialized bytes still waiting to be sent. Excludes `inflight_bytes`. */
   queued_bytes: number;
-  /** Events in the frozen retry slot (0 or the size of one batch). */
+  /** Events in the active/frozen slot (0 or the size of one batch). */
   inflight: number;
-  /** Serialized bytes held by the frozen retry slot. */
+  /** Actual POST body bytes held by the active/frozen slot. */
   inflight_bytes: number;
   /** Events successfully POSTed to the peer. */
   sent: number;
   /** Successful POSTs. */
   batches: number;
-  /** Events discarded by queue overflow or by a single-event size limit. */
+  /** Backlog evictions and unacknowledged events stranded at close; excludes oversize. */
   dropped: number;
   /** Events discarded because one event alone exceeded the event budget. */
   oversize_dropped: number;
@@ -233,6 +218,15 @@ interface QueuedPeerEvent {
   /** Pre-serialized payload: batching a batch never re-encodes the events. */
   json: string;
   bytes: number;
+  /** A content-free replacement for persisted messages, prepared before admission. */
+  reference?: SerializedPeerEvent;
+}
+
+interface SerializedPeerEvent {
+  json: string;
+  bytes: number;
+  reference?: SerializedPeerEvent;
+  degraded?: boolean;
 }
 
 const RTT_SAMPLE_LIMIT = 256;
@@ -307,7 +301,7 @@ class HttpPeerChannel implements PeerChannel {
   private scheduled = false;
   private flushing = false;
   /**
-   * The batch that failed to POST, frozen exactly as it was sent: same events,
+   * The active POST or retry batch, frozen exactly as it was sent: same events,
    * same serialized body, same `batch_seq`. A retry re-sends this and nothing
    * else, which is what keeps the receiver's "same epoch + same number = already
    * handled" dedupe sound. At most one batch exists here at a time, and no queue
@@ -334,13 +328,13 @@ class HttpPeerChannel implements PeerChannel {
     this.secret = options.secret?.trim() ?? "";
     this.origin = options.origin?.trim() || randomUUID();
     this.maxBatchEvents = Math.max(1, Math.trunc(options.maxBatchEvents ?? PEER_MAX_BATCH_EVENTS));
-    this.maxBatchBytes = Math.max(64, Math.trunc(options.maxBatchBytes ?? PEER_MAX_BATCH_BYTES));
-    this.maxEventBytes = Math.max(16, Math.trunc(options.maxEventBytes ?? PEER_MAX_EVENT_BYTES));
+    this.maxBatchBytes = Math.min(PEER_MAX_BATCH_BYTES, Math.max(64, Math.trunc(options.maxBatchBytes ?? PEER_MAX_BATCH_BYTES)));
+    this.maxEventBytes = Math.min(PEER_MAX_EVENT_BYTES, Math.max(16, Math.trunc(options.maxEventBytes ?? PEER_MAX_EVENT_BYTES)));
     this.requestTimeoutMs = Math.max(1, Math.trunc(options.requestTimeoutMs ?? PEER_REQUEST_TIMEOUT_MS));
     this.minBackoffMs = Math.max(1, Math.trunc(options.minBackoffMs ?? PEER_MIN_BACKOFF_MS));
     this.maxBackoffMs = Math.max(this.minBackoffMs, Math.trunc(options.maxBackoffMs ?? PEER_MAX_BACKOFF_MS));
     this.queueLimit = Math.max(1, Math.trunc(options.queueLimit ?? PEER_QUEUE_LIMIT));
-    this.maxQueueBytes = Math.max(this.maxBatchBytes, Math.trunc(options.maxQueueBytes ?? PEER_MAX_QUEUE_BYTES));
+    this.maxQueueBytes = Math.min(PEER_MAX_QUEUE_BYTES, Math.max(this.maxBatchBytes, Math.trunc(options.maxQueueBytes ?? PEER_MAX_QUEUE_BYTES)));
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
     this.onOversizeDrop = options.onOversizeDrop ?? ((info) => {
       // Never the payload: the size is the interesting part, the body is not.
@@ -379,30 +373,64 @@ class HttpPeerChannel implements PeerChannel {
     // Split before serializing: a `task_messages` append can carry a quarter
     // megabyte per message and 256 of them at once, and stringify of the whole
     // thing would block this process for tens of milliseconds.
-    const events: Array<{ json: string; bytes: number }> = [];
+    const events: SerializedPeerEvent[] = [];
+    let burstBytes = 0;
     for (const part of splitRealtimePayload(kind, payload)) {
-      const event = this.buildRealtimeEvent(kind, part);
-      if (event) events.push(event);
+      let event = this.buildRealtimeEvent(kind, part);
+      if (!event) continue;
+      if (burstBytes + event.bytes > PEER_MAX_BURST_BYTES && event.reference) {
+        event = event.reference;
+      }
+      // References consume real bytes too. Free room by replacing preceding
+      // full messages if the remaining space is smaller than this reference.
+      for (let index = events.length - 1; burstBytes + event.bytes > PEER_MAX_BURST_BYTES && index >= 0; index--) {
+        const previous = events[index]!;
+        if (!previous.reference) continue;
+        events[index] = previous.reference;
+        burstBytes -= previous.bytes - previous.reference.bytes;
+      }
+      const previous = events.at(-1);
+      const merged = previous?.degraded && event.degraded
+        ? this.mergeMessageReferences(kind, previous, event)
+        : null;
+      if (merged) {
+        events[events.length - 1] = merged;
+        burstBytes += merged.bytes - previous!.bytes;
+      } else {
+        events.push(event);
+        burstBytes += event.bytes;
+      }
     }
     this.enqueueBurst(PEER_REALTIME_TOPIC, events);
+  }
+
+  private mergeMessageReferences(kind: PeerEventKind, left: SerializedPeerEvent, right: SerializedPeerEvent): SerializedPeerEvent | null {
+    if (kind !== "task_messages") return null;
+    const a = JSON.parse(left.json).payload;
+    const b = JSON.parse(right.json).payload;
+    if (a.task_id !== b.task_id || !Number.isSafeInteger(a.seq_end) || a.seq_end + 1 !== b.seq_start) return null;
+    const merged = this.trySerialize(kind, { task_id: a.task_id, degraded: true, seq_start: a.seq_start, seq_end: b.seq_end });
+    return merged ? { ...merged, degraded: true } : null;
   }
 
   /**
    * Serialize one realtime event, degrading it to a task reference when it does
    * not fit. Returns null when even the degraded form cannot be sent.
    */
-  private buildRealtimeEvent(kind: PeerEventKind, payload: Record<string, unknown>): { json: string; bytes: number } | null {
+  private buildRealtimeEvent(kind: PeerEventKind, payload: Record<string, unknown>): SerializedPeerEvent | null {
+    const referencePayload = messageReferencePayload(kind, payload);
+    const serializedReference = referencePayload ? this.trySerialize(kind, referencePayload) : null;
+    const reference = serializedReference ? { ...serializedReference, degraded: true } : undefined;
     const full = this.trySerialize(kind, payload);
-    if (full) return full;
+    if (full) return { ...full, reference, degraded: payload.degraded === true };
     const degraded = degradeRealtimePayload(kind, payload);
     if (degraded) {
       const slim = this.trySerialize(kind, degraded);
       if (slim) {
-        this.degraded += 1;
-        recordPeerDegraded();
-        return slim;
+        return { ...slim, reference, degraded: true };
       }
     }
+    if (reference) return reference;
     this.dropOversize(PEER_REALTIME_TOPIC, kind, this.measure(kind, payload));
     return null;
   }
@@ -440,12 +468,25 @@ class HttpPeerChannel implements PeerChannel {
    * never trimmed, which is what keeps a legal multi-message report whole while
    * still bounding what a slow peer can accumulate. See PEER_MAX_QUEUE_BYTES.
    */
-  private enqueueBurst(topic: string, parts: ReadonlyArray<{ json: string; bytes: number }>): void {
+  private enqueueBurst(topic: string, parts: ReadonlyArray<SerializedPeerEvent>): void {
     if (parts.length === 0) return;
     this.trimOverflow();
+    let admittedBytes = 0;
     for (const part of parts) {
-      this.queue.push({ topic, json: part.json, bytes: part.bytes });
+      // Also enforce the bound at admission, so no payload shape can bypass it.
+      // If metadata alone fills a burst, the excess is normal bounded backlog.
+      if (admittedBytes + part.bytes > PEER_MAX_BURST_BYTES) {
+        this.droppableCount = this.queue.length;
+        this.trimOverflow();
+        admittedBytes = 0;
+      }
+      this.queue.push({ topic, ...part });
       this.queuedBytes += part.bytes;
+      admittedBytes += part.bytes;
+      if (part.degraded) {
+        this.degraded += 1;
+        recordPeerDegraded();
+      }
     }
     // Everything now queued is backlog for the next produce call.
     this.droppableCount = this.queue.length;
@@ -655,7 +696,6 @@ class HttpPeerChannel implements PeerChannel {
         let batch: QueuedPeerEvent[];
         let body: string;
         let batchSeq: number;
-        let frozen: boolean;
 
         if (this.inflight) {
           // Retry path: the same events, the same number, byte-for-byte the same
@@ -664,31 +704,30 @@ class HttpPeerChannel implements PeerChannel {
           // shrink one — either would make the receiver answer `duplicate` for
           // events it never delivered.
           ({ seq: batchSeq, batch, body } = this.inflight);
-          frozen = true;
         } else {
           batchSeq = this.nextBatchSeq;
           const taken = this.takeBatch(batchSeq);
           if (!taken) continue;
           ({ batch, body } = taken);
-          frozen = false;
+          // Track the initial attempt too: close can strand it before the first
+          // failure, and live byte accounting must include a pending POST.
+          this.inflight = { seq: batchSeq, batch, body };
         }
 
         const startedAt = performance.now();
         try {
           await this.post(body);
         } catch {
-          // Freeze this batch — or keep the already frozen one — and back off.
-          // It stays outside the queue, so no cap can evict it while the peer is
-          // unreachable.
-          if (!frozen) {
-            this.inflight = { seq: batchSeq, batch, body };
-          }
+          // Keep the already frozen body and back off. close() may have cleared
+          // the slot during this await; a late failure must never recreate it.
           this.failed += 1;
           this.consecutiveFailures += 1;
           recordPeerFailure();
           this.scheduleRetry();
           return;
         }
+
+        if (this.closed) return;
 
         // Acknowledged: retire the slot (if any) and advance the number only
         // now, so a retry can never be followed by a reuse of its number.
@@ -716,6 +755,17 @@ class HttpPeerChannel implements PeerChannel {
    * PEER_MAX_QUEUE_BYTES).
    */
   private trimOverflow(): void {
+    // Persisted messages can shed content without losing delivery. Convert the
+    // oldest full events first; only backlog that still exceeds the caps drops.
+    for (let index = 0; this.queuedBytes > this.maxQueueBytes && index < this.droppableCount; index++) {
+      const event = this.queue[index]!;
+      if (!event.reference) continue;
+      const reference = event.reference;
+      this.queue[index] = { topic: event.topic, ...reference };
+      this.queuedBytes -= event.bytes - reference.bytes;
+      this.degraded += 1;
+      recordPeerDegraded();
+    }
     while (this.droppableCount > 0
       && (this.queue.length > this.queueLimit || this.queuedBytes > this.maxQueueBytes)) {
       const evicted = this.queue.shift();
@@ -841,6 +891,16 @@ export function degradeRealtimePayload(
     default:
       return null;
   }
+}
+
+function messageReferencePayload(kind: PeerEventKind, payload: Record<string, unknown>): Record<string, unknown> | null {
+  if (kind !== "task_messages") return null;
+  const taskId = taskIdOf(payload);
+  const messages = payload.messages;
+  if (!taskId || !Array.isArray(messages) || messages.length !== 1) return null;
+  const seq = messages[0]?.seq;
+  if (!Number.isSafeInteger(seq) || seq < 1) return null;
+  return { task_id: taskId, degraded: true, seq_start: seq, seq_end: seq };
 }
 
 function taskIdOf(payload: Record<string, unknown>): string | null {

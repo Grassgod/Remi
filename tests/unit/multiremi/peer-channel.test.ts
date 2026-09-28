@@ -369,8 +369,10 @@ describe("peer channel — sending", () => {
     const burstBytes = 256 * 256 * 1024;
     // One in-flight batch may already be out of the queue, so allow that slack.
     expect(peakBytes).toBeLessThanOrEqual(PEER_MAX_QUEUE_BYTES + burstBytes + PEER_MAX_BATCH_BYTES);
-    // And the eviction really happened: without it this would hold ~12 bursts.
-    expect(channel.stats().dropped).toBeGreaterThan(0);
+    // Persisted messages retain delivery via references when the byte budget
+    // binds; count-cap evictions are covered separately above.
+    expect(channel.stats().degraded).toBeGreaterThan(0);
+    expect(channel.stats().oversize_dropped).toBe(0);
   }, 60_000);
 
   it("does not block the caller and reports the failure once the peer is back", async () => {
@@ -606,9 +608,12 @@ describe("peer channel — size limits (QA item 7)", () => {
     for (const post of peer.posts) {
       expect(Buffer.byteLength(post.body, "utf8")).toBeLessThanOrEqual(PEER_MAX_BATCH_BYTES);
     }
-    const seqs = peer.payloads().map((event: any) => event.payload.messages[0].seq);
+    const seqs = peer.payloads().flatMap((event: any) => event.payload.messages
+      ? event.payload.messages.map((message: any) => message.seq)
+      : Array.from({ length: event.payload.seq_end - event.payload.seq_start + 1 }, (_, index) => event.payload.seq_start + index));
     expect(seqs).toEqual(Array.from({ length: 256 }, (_, index) => index + 1));
-    expect(channel.stats()).toMatchObject({ sent: 256, dropped: 0, oversize_dropped: 0, degraded: 0 });
+    expect(channel.stats()).toMatchObject({ sent: 256, dropped: 0, oversize_dropped: 0 });
+    expect(channel.stats().degraded).toBeGreaterThan(0);
 
     // Receiver side: parse the body the sender produced, then validate and
     // deliver it, which is the work one inbound batch costs.
@@ -694,7 +699,7 @@ describe("peer channel — size limits (QA item 7)", () => {
     expect(channel.stats()).toMatchObject({ degraded: 1, oversize_dropped: 0, dropped: 0 });
   });
 
-  it("drops an event whose own message alone cannot fit, and counts it", async () => {
+  it("references an event whose persisted message content cannot fit, without dropping it", async () => {
     const warnings: Array<{ kind: string | null; bytes: number }> = [];
     const peer = fakePeer();
     channel = createPeerChannel({
@@ -706,20 +711,19 @@ describe("peer channel — size limits (QA item 7)", () => {
       onOversizeDrop: (info) => warnings.push({ kind: info.kind, bytes: info.bytes }),
     });
 
-    // The store caps a message at 256 KiB; this payload is over the channel's own
-    // budget even after the task header and split, so it cannot be delivered.
+    // Content over the per-event budget is delivered through a persisted seq
+    // reference, including when JSON escaping alone made it too large.
     channel.forwardRealtime("task_messages", {
       task: TASK,
       task_id: TASK.id,
       messages: [message(1, 200 * 1024)],
     });
-    await waitFor(() => channel!.stats().oversize_dropped === 1, "the oversize drop");
+    await waitForBatches(1);
 
-    expect(peer.posts).toHaveLength(0);
-    expect(channel.stats()).toMatchObject({ sent: 0, degraded: 0, dropped: 0, oversize_dropped: 1 });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]!.kind).toBe("task_messages");
-    expect(warnings[0]!.bytes).toBeGreaterThan(200 * 1024);
+    expect(peer.posts).toHaveLength(1);
+    expect((peer.payloads()[0] as any).payload).toEqual({ task_id: TASK.id, degraded: true, seq_start: 1, seq_end: 1 });
+    expect(channel.stats()).toMatchObject({ sent: 1, degraded: 1, dropped: 0, oversize_dropped: 0 });
+    expect(warnings).toHaveLength(0);
   });
 });
 
@@ -1120,6 +1124,22 @@ describe("peer channel — frozen retry slot (QA round 2)", () => {
     expect(channel.stats().dropped).toBe(4 - channel.stats().queued - channel.stats().inflight);
     expect(peerMetricsSnapshot().dropped).toBe(channel.stats().dropped);
     expect(peerMetricsSnapshot().oversize_dropped).toBe(1);
+  });
+
+  it("does not rebuild a frozen slot when the first POST fails after close", async () => {
+    let failPost!: (reason: Error) => void;
+    let started = false;
+    channel = createPeerChannel({ url: "http://fake-peer", fetchImpl: async () => {
+      started = true;
+      return new Promise<Response>((_resolve, reject) => { failPost = reject; });
+    } });
+    channel.publish("hub", { i: 1 });
+    await waitFor(() => started, "the pending initial POST");
+    channel.close();
+    failPost(new Error("fake closed transport"));
+    await waitFor(() => channel!.stats().failed === 1, "the failure after close");
+    expect(channel.stats()).toMatchObject({ enabled: false, dropped: 1, queued: 0, queued_bytes: 0, inflight: 0, inflight_bytes: 0 });
+    expect(peerMetricsSnapshot().dropped).toBe(1);
   });
 
   it("counts the frozen slot as dropped when the channel closes before its retry", async () => {

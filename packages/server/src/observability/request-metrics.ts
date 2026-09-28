@@ -32,7 +32,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, MiddlewareHandler } from "hono";
-import { resolveApiRole, type ApiRole } from "../config/api-role.js";
+import type { ApiRole } from "../config/api-role.js";
 
 /**
  * Per-request accumulator. One instance per request, never shared.
@@ -667,6 +667,7 @@ function envNumber(value: string | undefined, fallback: number, minimum: number)
  * metrics on, 500 ms slow-request threshold, one summary per minute.
  */
 export function resolveRequestMetricsOptions(
+  role: ApiRole,
   env: Record<string, string | undefined> = process.env,
 ): RequestMetricsOptions {
   return {
@@ -679,7 +680,7 @@ export function resolveRequestMetricsOptions(
     ),
     summaryTopRoutes: envNumber(env.MULTIREMI_METRICS_SUMMARY_TOP_N, DEFAULT_SUMMARY_TOP_ROUTES, 0),
     bufferCapacity: envNumber(env.MULTIREMI_METRICS_BUFFER_SIZE, DEFAULT_BUFFER_CAPACITY, 1),
-    role: resolveApiRole(env),
+    role,
   };
 }
 

@@ -3279,12 +3279,12 @@ export class TasksRepo {
     return changed;
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number): MultiremiTaskMessage[] {
     const since = sinceSeq == null ? null : Math.floor(Number(sinceSeq));
     const rows = since != null && Number.isFinite(since)
       ? this.ctx.db.query(
-        "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ? ORDER BY seq ASC",
-      ).all(taskId, since) as Row[]
+        `SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ?${throughSeq === undefined ? "" : " AND seq <= ?"} ORDER BY seq ASC`,
+      ).all(...(throughSeq === undefined ? [taskId, since] : [taskId, since, throughSeq])) as Row[]
       : this.ctx.db.query(
         "SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC",
       ).all(taskId) as Row[];
