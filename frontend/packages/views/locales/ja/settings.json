@@ -583,6 +583,10 @@
     "confirm": "確認"
   },
   "modelGateway": {
+    "context_title": "1M コンテキスト",
+    "context_label": "{{model}} の 1M コンテキスト",
+    "context_warning": "Claude Code は 1M 対応を検証しません。有効にする前にモデルの対応をご確認ください。",
+    "context_save_failed": "コンテキストウィンドウを保存できませんでした。",
     "description": "すべてのエージェントタスクに適用するワークスペースゲートウェイポリシーです。daemon は隔離された Provider Home に非機密設定を再構築し、Token は子プロセス環境にのみ注入します。",
     "discovery_title": "モデルを自動検出",
     "discovery_desc": "ゲートウェイの /v1/models と /models を照会し、エージェント作成のドロップダウンに実際のモデルを表示します。両エンジンに適用。",
