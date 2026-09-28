@@ -360,6 +360,10 @@ export interface AgentsSurface {
   /** Every Agent row without Skills — capability decisions only. */
   listAgentsLite(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Reference resolution from Agent rows only — no Skills, no Skill files. */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Live Agent rows by id, without Skills or Skill files. */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[];
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
   createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill;
@@ -561,6 +565,15 @@ export interface ChatSurface {
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
+  /**
+   * The first in-flight task of every Chat the caller can list, in one statement
+   * (MUL-473). Ranked by the same expression {@link getPendingChatTask} uses per
+   * Session.
+   */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
+  ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;

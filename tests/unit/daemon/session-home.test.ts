@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import {
   cleanupTemporaryTaskProviderHome,
   cleanupTaskPrivateTempDirectory,
@@ -377,6 +378,36 @@ describe("Issue Session provider home", () => {
     expect(taskConfig).toContain('model = "gpt-test"');
     expect(taskConfig).not.toContain("must-never-enter-task-home");
     expect(existsSync(join(resolved.home, "auth.json"))).toBe(false);
+  });
+
+  it("enables Codex Default-mode request_user_input in every generated home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-session-home-"));
+    const baseHome = join(root, "base");
+    roots.push(root);
+    mkdirSync(baseHome, { recursive: true });
+    writeFileSync(join(baseHome, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "oauth-secret" },
+    }), { mode: 0o600 });
+    writeFileSync(join(baseHome, "config.toml"), 'model = "gpt-test"\n');
+
+    // Plain Issue Session lane.
+    const native = resolveIssueSessionProviderHome(task("codex"), join(root, "MUL-1"), join(root, "workspaces"))!;
+    await prepareIssueSessionProviderHome(native, { baseCodexHome: baseHome, linkCodexAuth: false });
+    const nativeConfig = parseToml(readFileSync(join(native.home, "config.toml"), "utf8")) as Record<string, any>;
+    expect(nativeConfig.features.default_mode_request_user_input).toBe(true);
+
+    // Side conversation lane: reconcile also appends its developer_instructions,
+    // which must not displace the features table.
+    const side = resolveIssueSessionProviderHome(task("codex"), join(root, "MUL-2"), join(root, "workspaces"))!;
+    await prepareIssueSessionProviderHome(side, {
+      baseCodexHome: baseHome,
+      linkCodexAuth: false,
+      sideConversation: true,
+    });
+    const sideConfig = parseToml(readFileSync(join(side.home, "config.toml"), "utf8")) as Record<string, any>;
+    expect(sideConfig.features.default_mode_request_user_input).toBe(true);
+    expect(sideConfig.developer_instructions).toContain("Sub-agents are off-limits");
   });
 
   it("copies only whitelisted Claude execution settings", async () => {
