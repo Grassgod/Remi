@@ -816,38 +816,41 @@ export class MessagingRepo {
   }
 
   recordOutcome(input: RecordMessageOutcomeInput): MessageOutcome {
-    return this.ctx.db.transaction(() => {
-      const message = this.getMessage(input.connectionId, input.externalMessageId);
-      if (!message || message.workspaceId !== input.workspaceId) throw new Error("Message not found");
-      const id = createId("mout");
-      this.ctx.db.run(
-        `INSERT INTO multiremi_message_outcomes (
-          id, workspace_id, connection_id, external_message_id, outcome_kind, ref, reason,
-          task_id, proposal_payload, proposal_status, sequence, created_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          (SELECT COALESCE(MAX(sequence), 0) + 1 FROM multiremi_message_outcomes
-           WHERE connection_id = ? AND external_message_id = ?),
-          ?
-        )`,
-        [
-          id,
-          input.workspaceId,
-          input.connectionId,
-          input.externalMessageId,
-          input.outcomeKind,
-          input.ref ?? null,
-          input.reason ?? null,
-          input.taskId ?? null,
-          toJson(input.proposalPayload ?? {}),
-          input.proposalStatus ?? "not_applicable",
-          input.connectionId,
-          input.externalMessageId,
-          input.createdAt ?? nowIso(),
-        ],
-      );
-      return this.getOutcome(id)!;
-    })();
+    return this.ctx.db.transaction(() => this.recordOutcomeWithinTransaction(input))();
+  }
+
+  /** Records an outcome inside a transaction owned by the caller. */
+  recordOutcomeWithinTransaction(input: RecordMessageOutcomeInput): MessageOutcome {
+    const message = this.getMessage(input.connectionId, input.externalMessageId);
+    if (!message || message.workspaceId !== input.workspaceId) throw new Error("Message not found");
+    const id = createId("mout");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_message_outcomes (
+        id, workspace_id, connection_id, external_message_id, outcome_kind, ref, reason,
+        task_id, proposal_payload, proposal_status, sequence, created_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        (SELECT COALESCE(MAX(sequence), 0) + 1 FROM multiremi_message_outcomes
+         WHERE connection_id = ? AND external_message_id = ?),
+        ?
+      )`,
+      [
+        id,
+        input.workspaceId,
+        input.connectionId,
+        input.externalMessageId,
+        input.outcomeKind,
+        input.ref ?? null,
+        input.reason ?? null,
+        input.taskId ?? null,
+        toJson(input.proposalPayload ?? {}),
+        input.proposalStatus ?? "not_applicable",
+        input.connectionId,
+        input.externalMessageId,
+        input.createdAt ?? nowIso(),
+      ],
+    );
+    return this.getOutcome(id)!;
   }
 
   /**

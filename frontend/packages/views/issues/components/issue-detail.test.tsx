@@ -12,6 +12,7 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockNavigationReplace = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const mockWorkspaceMembers = vi.hoisted(() => ({ query: vi.fn() }));
 const timelinePageControl = vi.hoisted(() => ({
   hasMore: false,
   olderEntries: [] as TimelineEntry[],
@@ -66,7 +67,7 @@ vi.mock("@multiremi/core/workspace/hooks", () => ({
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "members"],
-    queryFn: () => Promise.resolve([{ user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" }]),
+    queryFn: mockWorkspaceMembers.query,
   }),
   agentListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "agents"],
@@ -265,6 +266,11 @@ const mockApiObj = vi.hoisted(() => ({
   }),
   listTaskMessages: vi.fn().mockResolvedValue([]),
   listChildIssues: vi.fn().mockResolvedValue({ issues: [] }),
+  listIssueDecisions: vi.fn().mockResolvedValue({
+    waiting_on_human: [],
+    owner_and_answered: { pending: [], answered: [] },
+    count: 0,
+  }),
   listGeneratedIssues: vi.fn().mockResolvedValue({ issues: [] }),
   listIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
   uploadFile: vi.fn(),
@@ -614,6 +620,9 @@ describe("IssueDetail (shared)", () => {
     mockViewport.isMobile = false;
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
+    mockWorkspaceMembers.query.mockResolvedValue([
+      { user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" },
+    ]);
     mockApiObj.listIssueSessions.mockResolvedValue([{
       id: "session-main",
       issue_id: mockIssue.id,
@@ -635,6 +644,11 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
     mockApiObj.listChildIssues.mockResolvedValue({ issues: [] });
+    mockApiObj.listIssueDecisions.mockResolvedValue({
+      waiting_on_human: [],
+      owner_and_answered: { pending: [], answered: [] },
+      count: 0,
+    });
     mockApiObj.listGeneratedIssues.mockResolvedValue({ issues: [] });
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
@@ -656,6 +670,31 @@ describe("IssueDetail (shared)", () => {
     expect(
       screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
     ).toBe(true);
+  });
+
+  it("keeps the detail skeleton until member and child gates resolve", async () => {
+    let resolveMembers!: (members: Array<{ user_id: string; name: string; email: string; role: string }>) => void;
+    let resolveChildren!: (value: { issues: Issue[] }) => void;
+    mockWorkspaceMembers.query.mockReturnValue(new Promise((resolve) => {
+      resolveMembers = resolve;
+    }));
+    mockApiObj.listChildIssues.mockReturnValue(new Promise((resolve) => {
+      resolveChildren = resolve;
+    }));
+
+    renderIssueDetail();
+    await waitFor(() => expect(mockApiObj.listChildIssues).toHaveBeenCalledWith("issue-1"));
+    expect(screen.queryByDisplayValue("Implement authentication")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveMembers([{ user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" }]);
+    });
+    expect(screen.queryByDisplayValue("Implement authentication")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveChildren({ issues: [] });
+    });
+    expect(await screen.findByDisplayValue("Implement authentication")).toBeInTheDocument();
   });
 
   it("renders issue title and description after loading", async () => {
@@ -1598,7 +1637,7 @@ describe("IssueDetail (shared)", () => {
     expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe("issue-key-results");
   });
 
-  it("gives sub-issue selection localized, design-system checkboxes", async () => {
+  it("keeps the child list in the sidebar and out of the document scroll region", async () => {
     const child: Issue = {
       ...mockIssue,
       id: "issue-2",
@@ -1612,19 +1651,10 @@ describe("IssueDetail (shared)", () => {
     useIssueSelectionStore.getState().clear();
     renderIssueDetail();
 
-    // aria-labels route through t(), so a zh/ja/ko user doesn't get English
-    // accessible names, and both controls are the shadcn Checkbox.
-    const rowBox = await screen.findByRole("checkbox", { name: "Select TES-2" });
-    expect(screen.getByLabelText("Select all sub-issues")).toBeInTheDocument();
-    expect(rowBox).toHaveAttribute("data-slot", "checkbox");
-    expect(rowBox).toHaveAttribute("aria-checked", "false");
-
-    fireEvent.click(rowBox);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("checkbox", { name: "Select TES-2" }),
-      ).toHaveAttribute("aria-checked", "true");
-    });
+    const childLink = (await screen.findByText("Add refresh tokens")).closest("a");
+    expect(childLink).toHaveAttribute("href", "/test/issues/issue-2");
+    expect(childLink!.closest("[data-tab-scroll-root]")).toBeNull();
+    expect(screen.getByText("0/1")).toBeInTheDocument();
     useIssueSelectionStore.getState().clear();
   });
 
@@ -2571,6 +2601,26 @@ describe("IssueDetail (shared)", () => {
         expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
       });
 
+      expect(mockApiObj.listIssues).not.toHaveBeenCalled();
+    });
+
+    it("does not let a list row suppress the authoritative detail request", async () => {
+      const queryClient = createTestQueryClient();
+      queryClient.setQueryData(["issues", "ws-1", "list", {}], {
+        byStatus: {
+          in_progress: { issues: [mockIssue], total: 1 },
+        },
+      });
+
+      render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <QueryClientProvider client={queryClient}>
+            <IssueDetail issueId="issue-1" />
+          </QueryClientProvider>
+        </I18nProvider>,
+      );
+
+      await waitFor(() => expect(mockApiObj.getIssue).toHaveBeenCalledWith("issue-1"));
       expect(mockApiObj.listIssues).not.toHaveBeenCalled();
     });
 

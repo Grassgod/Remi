@@ -8,6 +8,15 @@ import {
 } from "./view-store";
 
 describe("issue view store persistence", () => {
+  it("defaults old snapshots to hidden sub-issues and persists explicit toggles", () => {
+    const store = createStore<IssueViewState>()(viewStoreSlice);
+    const current = store.getState();
+    expect(mergeViewStatePersisted({ viewMode: "list" }, current).showSubIssues).toBe(false);
+    store.getState().toggleShowSubIssues();
+    expect(viewStorePersistOptions("test").partialize(store.getState())).toHaveProperty("showSubIssues", true);
+    expect(mergeViewStatePersisted({ showSubIssues: true }, current).showSubIssues).toBe(true);
+  });
+
   it("keeps the archived pseudo-column hidden across persisted snapshots", () => {
     const store = createStore<IssueViewState>()(viewStoreSlice);
     store.getState().showArchivedColumn();

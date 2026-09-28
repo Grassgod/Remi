@@ -41,7 +41,8 @@ export function inboxItemSelectionKey(item: InboxItem): string {
 // render a self-contained detail too — both must select by inbox-row id so the
 // URL never claims an inbox id is an issue id.
 export function inboxItemSelectionKind(item: InboxItem): InboxItemSelectionKind {
-  return isInboxLedgerType(item.type) || !item.issue_id ? "item" : "issue";
+  return isInboxLedgerType(item.type) || item.type === "child_issue_terminal"
+    || item.type === "decision_requested" || !item.issue_id ? "item" : "issue";
 }
 
 /**
@@ -117,7 +118,7 @@ export function groupInboxItemsByDate(items: InboxItem[], now = new Date()): Inb
     .map((key) => ({
       key,
       items: grouped[key],
-      entries: mergeAutopilotRuns(grouped[key]),
+      entries: mergeParentNotifications(mergeAutopilotRuns(grouped[key])),
     }))
     .filter((group) => group.items.length > 0);
 }
@@ -138,10 +139,47 @@ export function countUnreadInboxItems(items: InboxItem[], now = new Date()): num
 }
 
 export function countAttentionUnreadInboxItems(items: InboxItem[]): number {
-  return deduplicateInboxItems(items).filter((item) =>
-    !item.read
-    && (item.severity === "attention" || item.severity === "action_required")
-  ).length;
+  return groupInboxItemsByDate(deduplicateInboxItems(items))
+    .flatMap((group) => group.entries)
+    .filter((entry) => entry.items.some((item) => !item.read
+      && (item.severity === "attention" || item.severity === "action_required")))
+    .length;
+}
+
+function inboxPriority(item: InboxItem): number {
+  const outcome = (item.details as Record<string, unknown> | null)?.outcome;
+  if (item.type === "child_issue_terminal" && outcome === "failed") return 0;
+  if (item.type === "child_issue_terminal" && outcome === "blocked") return 1;
+  if (item.type === "decision_requested") return 2;
+  return 3;
+}
+
+function mergeParentNotifications(entries: InboxDisplayEntry[]): InboxDisplayEntry[] {
+  const byParent = new Map<string, InboxDisplayEntry>();
+  const merged: InboxDisplayEntry[] = [];
+  for (const entry of entries) {
+    const item = entry.item;
+    const parentId = isInboxLedgerType(item.type) ? null : item.issue_parent_id ?? item.issue_id;
+    if (!parentId) {
+      merged.push(entry);
+      continue;
+    }
+    const existing = byParent.get(parentId);
+    if (existing) {
+      existing.items.push(...entry.items);
+    } else {
+      const group = { item, items: [...entry.items] };
+      byParent.set(parentId, group);
+      merged.push(group);
+    }
+  }
+  for (const entry of merged) {
+    entry.items.sort((a, b) => inboxPriority(a) - inboxPriority(b)
+      || Date.parse(b.created_at) - Date.parse(a.created_at));
+    entry.item = entry.items[0]!;
+  }
+  return merged.sort((a, b) => inboxPriority(a.item) - inboxPriority(b.item)
+    || Date.parse(b.item.created_at) - Date.parse(a.item.created_at));
 }
 
 function startOfDay(date: Date): Date {

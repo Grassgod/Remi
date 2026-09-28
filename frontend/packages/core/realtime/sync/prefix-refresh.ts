@@ -209,6 +209,10 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
 
   return {
     onAny: (msg) => {
+      if (msg.type === "agent:archived" || msg.type === "agent:restored") {
+        const wsId = getCurrentWsId();
+        if (wsId) void qc.invalidateQueries({ queryKey: issueKeys.detailAll(wsId) });
+      }
       if (SPECIFIC_EVENTS.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
@@ -233,6 +237,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
 const SPECIFIC_EVENTS = new Set([
   "workspace:updated",
   "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed", "inbox:new",
+  "decision:created", "decision:updated",
   "comment:created", "comment:updated", "comment:deleted",
   "comment:resolved", "comment:unresolved",
   "activity:created",

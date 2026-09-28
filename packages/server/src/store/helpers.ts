@@ -67,6 +67,23 @@ export function cleanOptionalString(value: unknown): string | null {
   return trimmed || null;
 }
 
+/**
+ * MUL-456 fix round 1: read a server-owned nullable field that has historical
+ * camelCase and snake_case spellings.
+ *
+ * A *present* camelCase key is authoritative — including when its value is
+ * `null`; the snake_case alias is only consulted when the camelCase key is
+ * absent. The old `camel ?? snake` chain let a body-supplied `parent_task_id`
+ * win exactly when the server deliberately stamped `null`, which is how a
+ * member credential could plant the `parent_task_id` that D4 reads as "this
+ * task was created by the delegating run".
+ */
+export function resolveCamelOrSnakeString(input: object, camel: string, snake: string): string | null {
+  const fields = input as Record<string, unknown>;
+  const value = Object.hasOwn(fields, camel) ? fields[camel] : fields[snake];
+  return cleanOptionalString(value);
+}
+
 export function normalizeOptionalTimezone(value: unknown): string | null {
   const timezone = String(value ?? "").trim();
   if (!timezone) return null;

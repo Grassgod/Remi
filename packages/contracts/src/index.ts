@@ -9,3 +9,4 @@ export * from "./messaging.js";
 export * from "./wiki-links.js";
 export * from "./model-thinking.js";
 export * from "./codex-model-catalog.js";
+export type { TaskMessageFanoutSubject } from "./task-message-fanout.js";

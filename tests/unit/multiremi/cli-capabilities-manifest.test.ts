@@ -168,16 +168,20 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 677,
+      mapped: 678,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
       // MUL-438 adds the browser trace socket (`GET /api/trace/ws`), exempt under
       // the existing `websocket_transport` rule: a long-lived stream is not a CLI
       // command surface.
-      exempt: 93,
+      //
+      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
+      // channel), also exempt under `daemon_internal_protocol`: machine-to-server
+      // traffic between two API processes with no user-facing command.
+      exempt: 97,
       missing: 0,
-      total: 770,
+      total: 775,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
