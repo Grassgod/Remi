@@ -74,7 +74,11 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     for (let index = 0; index < 2; index++) {
       await waitFor(() => lost.size === index + 1 && h!.client.connectionState() === "disconnected", "tail committed without ACK", 5_000);
       expect(h.store.getTask(taskId)?.status).toBe("completed");
-      await h.reconnect();
+      const previousSockets = h.sockets.length;
+      h.clock.advance(1_000);
+      // The next lost ACK can disconnect immediately after welcome, before a state poll sees connected.
+      await waitFor(() => h!.sockets.length > previousSockets
+        && h!.sockets.at(-1)!.frames.some((frame) => frame.t === "welcome"), "tail replay welcome");
     }
     await waitFor(() => progressEffects > 0 && ((h!.daemon as any).ensureOutbox() as MultiremiTaskReportOutbox).stats().pending === 0,
       "both replayed tails to drain", 5_000);
@@ -83,6 +87,8 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     expect(completeEffects).toBe(1);
     expect(h.store.getTask(taskId)).toMatchObject({ status: "completed", result: "fixture", progressSummary: "final display summary" });
     expect(h.store.getIssueWorkspace(issue.id)).toMatchObject({ status: "ready", lastTaskId: taskId });
+    expect(h.client.connectionState()).toBe("connected");
+    await h.settleHeartbeat();
     const frames = h.ledger.filter((entry) => entry.partition === taskId);
     const afterComplete = frames.slice(frames.findIndex((entry) => entry.type === "task.complete") + 1);
     expect(afterComplete.length).toBe(4);
