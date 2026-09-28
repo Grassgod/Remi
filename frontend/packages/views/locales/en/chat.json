@@ -175,5 +175,15 @@
     "fixed_hint": "The project is fixed when the chat is created. Start a new chat to use a different project.",
     "load_failed": "Could not load projects. Try again.",
     "unavailable": "Linked project unavailable"
+  },
+  "session_log": {
+    "copy_code": "Copy code",
+    "copied": "Copied",
+    "new_messages_one": "{{count}} new message",
+    "new_messages_other": "{{count}} new messages",
+    "new_messages_overflow": "99+ new messages",
+    "new_messages_jump": "Jump to the newest message",
+    "load_failed": "Could not load the session log",
+    "empty": "No messages yet"
   }
 }

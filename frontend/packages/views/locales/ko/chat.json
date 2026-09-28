@@ -175,5 +175,14 @@
     "fixed_hint": "프로젝트는 채팅을 만들 때 확정됩니다. 다른 프로젝트를 사용하려면 새 채팅을 만드세요.",
     "load_failed": "프로젝트를 불러오지 못했습니다. 다시 시도하세요.",
     "unavailable": "연결된 프로젝트를 사용할 수 없습니다"
+  },
+  "session_log": {
+    "copy_code": "코드 복사",
+    "copied": "복사됨",
+    "new_messages_other": "새 메시지 {{count}}개",
+    "new_messages_overflow": "새 메시지 99+개",
+    "new_messages_jump": "최신 메시지로 이동",
+    "load_failed": "세션 로그를 불러오지 못했습니다",
+    "empty": "아직 메시지가 없습니다"
   }
 }
