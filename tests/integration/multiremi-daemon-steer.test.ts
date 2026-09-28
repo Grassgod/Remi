@@ -273,6 +273,10 @@ describe("Bun Multiremi daemon steering", () => {
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${proxy.port}`,
+        protocolClientOptions: { connect: (url, init) => {
+          const upstream = new URL(url); upstream.port = String(server.port);
+          return new WebSocket(upstream, init as never);
+        } },
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
         runtimeName: "duppoll-runtime",

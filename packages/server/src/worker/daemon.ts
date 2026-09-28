@@ -1487,6 +1487,7 @@ export class MultiremiDaemon {
   }
 
   private async registerCurrentRuntime(): Promise<string> {
+    const previousRuntimeId = this.options.runtimeId;
     if (!this.explicitRuntimeId) {
       const response = await this.client.registerDaemonRuntime({
         workspaceId: this.options.workspaceId ?? "local",
@@ -1517,6 +1518,7 @@ export class MultiremiDaemon {
       this.runtimeRegistrationGeneration++;
       this.clearDesiredAgentPlugins();
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+      if (previousRuntimeId && previousRuntimeId !== this.options.runtimeId) this.protocolClient.runtimesChanged();
       this.startReportReplay();
       return this.options.runtimeId;
     }
@@ -1525,6 +1527,7 @@ export class MultiremiDaemon {
     this.runtimeRegistrationGeneration++;
     this.clearDesiredAgentPlugins();
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+    if (previousRuntimeId && previousRuntimeId !== this.options.runtimeId) this.protocolClient.runtimesChanged();
     this.startReportReplay();
     return this.options.runtimeId;
   }
@@ -1716,7 +1719,6 @@ export class MultiremiDaemon {
       } catch (error) {
         log.warn(`Recover orphans after runtime_gone failed for ${newRuntimeId}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      this.protocolClient?.runtimesChanged();
       return true;
     } finally {
       this.runtimeGoneInflight.delete(runtimeId);
