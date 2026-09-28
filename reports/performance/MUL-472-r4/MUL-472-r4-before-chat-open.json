@@ -1,0 +1,50 @@
+{
+  "phase": "before",
+  "main": "b95dd2fa5e301588ba1e04aa9bacc370240d664c",
+  "clickMs": 2697.099998474121,
+  "firstVisibleMs": null,
+  "requests": [
+    {
+      "path": "/api/chat/pending-tasks",
+      "t": 2134.2999992370605,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -562.7999992370605
+    },
+    {
+      "path": "/api/chat/sessions?status=all",
+      "t": 2341,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -356.0999984741211
+    },
+    {
+      "path": "/api/chat/sessions/cs_fixture/messages/page?limit=50",
+      "t": 2344,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -353.0999984741211
+    },
+    {
+      "path": "/api/chat/sessions/cs_fixture/pending-task",
+      "t": 2346.400001525879,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -350.6999969482422
+    },
+    {
+      "path": "/api/tasks/tsk_chat_fixture/messages",
+      "t": 2482,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -215.0999984741211
+    },
+    {
+      "path": "/api/tasks/tsk_chat_fixture/human-requests",
+      "t": 2484.599998474121,
+      "route": "/local/issues",
+      "method": "GET",
+      "afterClickMs": -212.5
+    }
+  ]
+}

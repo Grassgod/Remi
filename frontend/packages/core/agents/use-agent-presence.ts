@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { agentListOptions } from "../workspace/queries";
+import { useAfterFirstScreen } from "../platform/use-after-first-screen";
 import { runtimeListOptions } from "../runtimes/queries";
 import { agentTaskSnapshotOptions } from "./queries";
 import {
@@ -47,21 +48,35 @@ function usePresenceTick(): number {
  * Single-agent consumers should keep using `useAgentPresenceDetail`; this
  * hook is for surfaces that already have a list of agents in hand.
  */
-export function useWorkspacePresenceMap(wsId: string | undefined): {
+export function useWorkspacePresenceMap(
+  wsId: string | undefined,
+  /**
+   * MUL-472 b: `false` defers the workspace task snapshot. Every avatar in the
+   * tree reaches this hook, so an ungated subscription here is what kept
+   * `/api/agent-task-snapshot` in the first wave after the pages themselves were
+   * gated (QA probe: 660 ms / 1187 ms early).
+   *
+   * Defaults to the page gate; pass `true` only for a surface that must have
+   * presence on its first paint.
+   */
+  snapshotEnabled?: boolean,
+): {
   byAgent: Map<string, AgentPresenceDetail>;
   loading: boolean;
 } {
+  const gateOpen = useAfterFirstScreen();
+  const snapshotGated = snapshotEnabled ?? gateOpen;
   const { data: agents, isPending: agentsPending, isError: agentsErr } = useQuery({
     ...agentListOptions(wsId ?? ""),
-    enabled: !!wsId,
+    enabled: !!wsId && snapshotGated,
   });
   const { data: runtimes, isPending: runtimesPending, isError: runtimesErr } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
   const { data: snapshot, isPending: snapshotPending, isError: snapshotErr } = useQuery({
-    ...agentTaskSnapshotOptions(wsId ?? ""),
-    enabled: !!wsId,
+    ...agentTaskSnapshotOptions(wsId ?? "", { enabled: snapshotGated }),
+    enabled: !!wsId && snapshotGated,
   });
   const tick = usePresenceTick();
 
@@ -120,18 +135,22 @@ const MISSING_AGENT_DETAIL: AgentPresenceDetail = {
 export function useAgentPresenceDetail(
   wsId: string | undefined,
   agentId: string | undefined,
+  /** MUL-472 b: see {@link useWorkspacePresenceMap}. */
+  snapshotEnabled?: boolean,
 ): AgentPresenceDetail | "loading" {
+  const gateOpen = useAfterFirstScreen();
+  const snapshotGated = snapshotEnabled ?? gateOpen;
   const { data: agents, isError: agentsErr } = useQuery({
     ...agentListOptions(wsId ?? ""),
-    enabled: !!wsId,
+    enabled: !!wsId && snapshotGated,
   });
   const { data: runtimes, isError: runtimesErr } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
   const { data: snapshot, isError: snapshotErr } = useQuery({
-    ...agentTaskSnapshotOptions(wsId ?? ""),
-    enabled: !!wsId,
+    ...agentTaskSnapshotOptions(wsId ?? "", { enabled: snapshotGated }),
+    enabled: !!wsId && snapshotGated,
   });
   const tick = usePresenceTick();
 

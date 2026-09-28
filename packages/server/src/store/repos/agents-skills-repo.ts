@@ -91,27 +91,29 @@ export class AgentsSkillsRepo {
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
+    return this.ctx.db.transaction(() => this.updateAgentWithinTransaction(id, input))();
+  }
+
+  /** Caller owns the transaction, including any role-dependent token revocations. */
+  updateAgentWithinTransaction(id: string, input: UpdateAgentInput): MultiremiAgent {
     const initial = this.getAgent(id);
     if (!initial) throw new Error(`Agent not found: ${id}`);
     const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
       ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
       : initial.workspaceId;
     const workspaceIds = [...new Set([initial.workspaceId, requestedWorkspaceId])].sort();
-    const transaction = this.ctx.db.transaction(() => {
-      for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
-      this.lockAgentRow(id);
-      const current = this.getAgent(id);
-      if (!current) throw new Error(`Agent not found: ${id}`);
-      const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
-        ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
-        : current.workspaceId;
-      if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
-        throw new Error("Agent workspace changed concurrently; retry the update");
-      }
-      return this.updateAgentWithinPluginLock(id, input);
-    });
-    return transaction();
+    for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+    this.lockAgentRow(id);
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+      ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
+      : current.workspaceId;
+    if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
+      throw new Error("Agent workspace changed concurrently; retry the update");
+    }
+    return this.updateAgentWithinPluginLock(id, input);
   }
 
   setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {

@@ -39,6 +39,7 @@ import {
 import { useNavigation } from "../../navigation";
 import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { canEditSkill } from "../hooks/use-can-edit-skill";
 import { readOrigin } from "../lib/origin";
 import { CreateSkillDialog } from "./create-skill-dialog";
@@ -185,7 +186,15 @@ export default function SkillsPage() {
     isLoading,
     error: listError,
     refetch: refetchList,
+    status: skillsStatus,
+    isPlaceholderData: skillsIsPlaceholderData,
   } = useQuery(skillListOptions(wsId));
+  // MUL-472 item 5: mark the list container as this page's measured viewport and
+  // publish whether the rows came from this round's own response.
+  const perfMarker = useListPerfMarker({
+    status: skillsStatus,
+    isPlaceholderData: skillsIsPlaceholderData,
+  });
   const { data: agents = [], error: agentsError } = useQuery(
     agentListOptions(wsId),
   );
@@ -295,7 +304,7 @@ export default function SkillsPage() {
   // --- Loading ---
   if (isLoading) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
         <PageHeaderBar totalCount={0} onCreate={() => openCreate()} onRuntimeImport={() => openCreate("runtime")} />
         <div className="flex flex-1 min-h-0 flex-col gap-4 p-3 sm:p-6">
           <div className="space-y-3 pl-4">
@@ -324,7 +333,7 @@ export default function SkillsPage() {
   // --- List request error ---
   if (listError) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
         <PageHeaderBar totalCount={0} onCreate={() => openCreate()} onRuntimeImport={() => openCreate("runtime")} />
         <EmptyState
           variant="status"
@@ -358,7 +367,7 @@ export default function SkillsPage() {
     !!agentsError || !!membersError || !!runtimesError;
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeaderBar
         totalCount={totalCount}
         onCreate={() => openCreate()}

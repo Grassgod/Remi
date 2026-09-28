@@ -919,6 +919,37 @@ export function denyDaemonTokenTaskRuntimeIdentity(
   return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
 }
 
+/**
+ * MUL-412: the bot host may read and answer decisions on an Issue whose topic it
+ * hosts. Same layout as {@link isFeishuBotIssueTaskRequestTransport} — only the
+ * two verbs a card click needs, so creating, escalating and withdrawing stay
+ * with the executing side / the human surfaces.
+ */
+function isFeishuBotIssueDecisionTransport(c: Context): boolean {
+  const path = new URL(c.req.url).pathname;
+  return (c.req.method === "GET" && /^\/api\/daemon\/issues\/[^/]+\/decisions\/[^/]+$/.test(path))
+    || (c.req.method === "POST" && /^\/api\/daemon\/issues\/[^/]+\/decisions\/[^/]+\/answer$/.test(path));
+}
+
+export function denyDaemonTokenIssueDecisionAccess(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
+  const issue = store.getIssue(issueId);
+  if (!issue) return c.json({ error: "issue not found" }, 404);
+  const workspaceDenied = denyDaemonTokenWorkspace(c, issue.workspaceId, options);
+  if (workspaceDenied) return workspaceDenied;
+  const tokenDaemonId = cleanString(token.daemonId);
+  if (isFeishuBotIssueDecisionTransport(c) && tokenDaemonId
+    && store.canFeishuBotDaemonAccessIssueDecision(issue.workspaceId, tokenDaemonId, issue.id)) return null;
+  if (options.hideForbiddenAsNotFound) return c.json({ error: "not found" }, 404);
+  return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+}
+
 export function denyDaemonTokenIssueWorkspace(
   c: Context,
   store: MultiremiStore,

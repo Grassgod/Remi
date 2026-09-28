@@ -21,8 +21,21 @@ const state = vi.hoisted(() => ({
   issuesError: false,
   issuesErrorValue: null as unknown,
   members: [] as unknown[],
+  agentRunningFilter: false,
+  snapshotPending: false,
+  snapshot: [] as unknown[],
+  gateOpen: false,
 }));
 
+beforeEach(() => {
+  state.agentRunningFilter = false;
+  state.snapshotPending = false;
+  state.snapshot = [];
+  state.gateOpen = false;
+  pinObserver.mockClear();
+});
+
+const pinObserver = vi.hoisted(() => vi.fn());
 const refetchIssues = vi.hoisted(() => vi.fn());
 const updateProject = vi.hoisted(() => vi.fn());
 const updateProjectAsync = vi.hoisted(() => vi.fn());
@@ -30,7 +43,7 @@ const archiveProject = vi.hoisted(() => vi.fn());
 const restoreProject = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options?: { queryKey?: readonly unknown[] }) => {
+  useQuery: (options?: { queryKey?: readonly unknown[]; enabled?: boolean }) => {
     const key = Array.isArray(options?.queryKey) ? options.queryKey[0] : null;
     switch (key) {
       case "project":
@@ -45,10 +58,20 @@ vi.mock("@tanstack/react-query", () => ({
         };
       case "members":
         return { data: state.members };
+      case "snapshot":
+        return { data: state.snapshot, isPending: state.snapshotPending };
+      case "pins":
+        pinObserver(options?.enabled);
+        return { data: undefined };
       default:
         return { data: undefined };
     }
   },
+}));
+
+vi.mock("@multiremi/core/platform/use-after-first-screen", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/platform/use-after-first-screen")>(),
+  useAfterFirstScreen: () => state.gateOpen,
 }));
 
 vi.mock("@multiremi/core/projects/queries", () => ({
@@ -137,7 +160,7 @@ vi.mock("@multiremi/core/issues/stores/view-store-context", () => ({
       includeNoAssignee: false,
       creatorFilters: [],
       labelFilters: [],
-      agentRunningFilter: false,
+      agentRunningFilter: state.agentRunningFilter,
     }),
 }));
 
@@ -275,7 +298,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
 function renderDetail(
   props: { contentTab?: "issues" | "wiki"; wikiSlug?: string } = {},
 ) {
-  render(
+  return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <ProjectDetail projectId="proj-1" {...props} />
     </I18nProvider>,
@@ -295,6 +318,18 @@ describe("ProjectDetail issues surface", () => {
     updateProject.mockClear();
     updateProjectAsync.mockReset();
     updateProjectAsync.mockResolvedValue(undefined);
+  });
+
+  it("defers the project toolbar pin observer until the page gate opens", () => {
+    const view = renderDetail();
+    expect(pinObserver).toHaveBeenLastCalledWith(false);
+    state.gateOpen = true;
+    view.rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ProjectDetail projectId="proj-1" />
+      </I18nProvider>,
+    );
+    expect(pinObserver).toHaveBeenLastCalledWith(true);
   });
 
   it("shows a skeleton while the issue query is loading, not the empty-project CTA", () => {
@@ -322,6 +357,20 @@ describe("ProjectDetail issues surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(refetchIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the snapshot before showing the running-agent filtered rows", () => {
+    state.agentRunningFilter = true;
+    state.snapshotPending = true;
+    state.issues = [{ id: "issue-filtered", status: "todo" }];
+    renderDetail();
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("list-view")).not.toBeInTheDocument();
+    cleanup();
+    state.snapshotPending = false;
+    state.snapshot = [{ status: "running", issue_id: "issue-filtered" }];
+    renderDetail();
+    expect(screen.getByTestId("list-view")).toHaveTextContent("1");
   });
 
   it("falls back to the generic hint when the error carries no message", () => {
