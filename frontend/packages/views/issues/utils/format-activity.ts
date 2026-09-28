@@ -147,8 +147,24 @@ export function formatActivity(
     case "child_status_parent_coalesced":
       return t(($) => $.activity.child_status_parent_coalesced);
     case "parent_status_held":
-      return t(($) => $.activity.parent_status_held, {
+      return t(($) => details.reason === "grant_missing"
+        ? $.activity.parent_status_held_grant_missing
+        : details.reason === "final_summary_missing"
+          ? $.activity.parent_status_held_final_summary_missing
+          : $.activity.parent_status_held, {
         status: statusLabel(details.requested ?? details.status ?? "?", t),
+      });
+    case "parent_done_grant_created":
+      return t(($) => $.activity.parent_done_grant_created, {
+        agent: details.agentId && resolveActorName ? resolveActorName("agent", details.agentId) : details.agentId ?? "?",
+      });
+    case "parent_done_grant_revoked":
+      return t(($) => $.activity.parent_done_grant_revoked);
+    case "parent_done_grant_used":
+      return t(($) => $.activity.parent_done_grant_used, {
+        source: details.source === "scm_merge"
+          ? t(($) => $.activity.parent_done_grant_source_scm_merge)
+          : t(($) => $.activity.parent_done_grant_source_api),
       });
     case "parent_status_derived":
       return t(($) => $.activity.parent_status_derived);
@@ -201,6 +217,12 @@ export function formatActivity(
     case "dispatch_skipped": {
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
+      }
+      if (details.reason === "member_assignee") {
+        return t(($) => $.activity.dispatch_skipped_member_assignee);
+      }
+      if (details.reason === "no_assignee") {
+        return t(($) => $.activity.dispatch_skipped_no_assignee);
       }
       // MUL-400 E3: the dependency hold has its own copy instead of showing the
       // raw reason string.

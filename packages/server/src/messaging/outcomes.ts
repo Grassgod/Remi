@@ -82,7 +82,7 @@ export const MESSAGING_INBOX_TYPES: readonly string[] = [
  * Restating the severity here would let the two drift, and the table is the
  * side that other subsystems and the frontend already agree on.
  */
-function inboxSeverity(type: string): "info" | "attention" {
+function inboxSeverity(type: string): "info" | "attention" | "action" {
   const registered = INBOX_ROUTING[type];
   if (!registered) throw new Error(`Unregistered inbox type: ${type}`);
   return registered.severity;
@@ -264,7 +264,7 @@ export class MessagingOutcomeService {
       const taskId = cleanText(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -315,7 +315,7 @@ export class MessagingOutcomeService {
         throw new MessagingOutcomeError("Inbox recipient is unavailable");
       }
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -382,7 +382,7 @@ export class MessagingOutcomeService {
       });
       if (this.ctx.isNotificationMuted(input.workspaceId, recipient, inboxType)) return muted();
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -470,7 +470,7 @@ export class MessagingOutcomeService {
         .listOutcomes(ref.connectionId, ref.externalMessageId)
         .find((entry) => entry.outcomeKind === "dismissed" && entry.reason === "proposal_rejected");
       const createdAt = nowIso();
-      const outcome = existing ?? this.repo.recordOutcome({
+      const outcome = existing ?? this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -533,7 +533,7 @@ export class MessagingOutcomeService {
       createdBy: input.createdBy,
     }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
-    const outcome = this.repo.recordOutcome({
+    const outcome = this.repo.recordOutcomeWithinTransaction({
       workspaceId: input.workspaceId,
       connectionId: ref.connectionId,
       externalMessageId: ref.externalMessageId,
@@ -552,7 +552,7 @@ export class MessagingOutcomeService {
     message: StoredCanonicalMessage,
   ): MessageOutcomeResult {
     const createdAt = nowIso();
-    const outcome = this.repo.recordOutcome({
+    const outcome = this.repo.recordOutcomeWithinTransaction({
       workspaceId,
       connectionId: ref.connectionId,
       externalMessageId: ref.externalMessageId,
