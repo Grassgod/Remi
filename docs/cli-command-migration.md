@@ -1,5 +1,17 @@
 # CLI command migration
 
+`remi issue decision request <source-issue> --kind <kind> --title <title>
+[--body-stdin] [--option <choice>...]` records a non-blocking decision on the
+source issue's parent (or on the source issue itself when it has no parent).
+The requesting task can end its current round after the command returns. The
+parent owner agent answers with `remi issue decision answer <parent> <decision>
+--text <answer> --reason <why> --overturn <how>`, or hands it to a member with
+`remi issue decision escalate <parent> <decision>`. Members can answer or revise
+any decision. `remi issue decision list <parent>` shows the waiting-on-human and
+owner/answered groups; `remi issue decision withdraw <parent> <decision>` removes
+an unanswered request. The answer record ID must be cited as `decision:<id>` in
+subsequent work.
+
 This document is the user-facing migration contract for the Registry-based Remi CLI.
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
@@ -382,6 +394,41 @@ API changes:
 - CLI context no longer includes `current.chat.issue_id` or `current.bound_issue`.
 - Internal daemon task wire removes `chat_bootstrap_transcript`; cold conversation
   history continues through the existing session projection.
+
+## Autopilot run must not read as a query (MUL-468)
+
+`remi autopilot run <autopilot>` shares its prefix with the read-only
+`remi autopilot run list <autopilot>` and `remi autopilot run get <autopilot>
+<run>`. In the parent help the `run` line borrowed the description of its first
+child ("List autopilot runs including queued schedule targets"), so the trigger
+command read as a query. On 2026-09-27 that misfire launched six unrequested
+autopilot runs and published an unintended release; a second operator read it the
+same way later that day.
+
+Starting one run now has its own verb, matching the UI label:
+
+- `remi autopilot run-now <autopilot>` — POST a run now, the same action as
+  "立即运行 / Run now". `--data '{"trigger_id":"..."}'` selects the schedule
+  trigger to start.
+- `remi autopilot run <autopilot>` — rejects the invocation with a usage error and
+  names the three correct commands. It sends no request at all, not even the
+  autopilot name lookup.
+- `remi autopilot run list|get` — unchanged read-only queries.
+
+**This rename intentionally ships without a compatibility alias.** The repository
+rule that deprecated command paths stay executable for one release assumes the old
+path was a working spelling of the intent. Here the old spelling is exactly the
+hazard: an alias would keep turning a read into a manual run on every Runtime that
+has not upgraded yet, which is how this incident happened twice. The path is
+therefore removed outright and replaced by the guard above, so an un-upgraded CLI
+is the only way to still reach the old behavior.
+
+The same audit found `remi task steer <task>` (write) sharing a prefix with
+`remi task steer list <task>` (read). A bare steer with no `--content`,
+`--content-file`, `--content-stdin`, or `--force-answer` would POST an empty
+directive that the server rejects with 400; the CLI now fails locally before
+sending anything. A Registry constraint test keeps any command that has
+subcommands read-only, with `task.steer` the only registered exception.
 
 ## Deprecated aliases
 

@@ -39,8 +39,12 @@ import {
   cleanString,
   commentCompatibilityResponse,
   currentTaskAccessToken,
+  authenticatedRequestUserId,
+  currentRequestUserId,
   currentAccessToken,
+  currentWorkspaceMember,
   hasRequestField,
+  isAnonymousCompatibilityRequest,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
   issueCommentListErrorResponse,
@@ -48,6 +52,7 @@ import {
   issueCompatibilityResponse,
   issueDependencyCompatibilityResponse,
   issueDependencyErrorResponse,
+  denyTaskIdentityIssueForce,
   issueDetailCompatibilityResponse,
   issueErrorResponse,
   issueQuickCreateCompatibilityInput,
@@ -62,6 +67,12 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedAssignFields,
+  stripServerOwnedIssueCreateFields,
+  stripServerOwnedIssueSourceFields,
+  stripServerOwnedQuickCreateFields,
+  stripServerOwnedIssueUpdateFields,
+  stripServerOwnedSessionTaskFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -73,6 +84,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -83,6 +95,8 @@ import type {
   CreateIssueDependencyInput,
   CreateIssueSessionInput,
   CreateIssueWithTaskInput,
+  CreateIssueDecisionInput,
+  IssueDecisionActor,
   CreateMultiremiReactionInput,
   CreateSessionTaskInput,
   ListIssuesInput,
@@ -102,6 +116,20 @@ import {
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type { RouterDeps } from "./deps.js";
+import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+
+function decisionActor(c: Context, store: MultiremiStore, workspaceId: string): IssueDecisionActor | null {
+  const token = currentTaskAccessToken(c);
+  if (token) return token.agentId && token.taskId
+    ? { type: "agent", id: token.agentId, taskId: token.taskId } : null;
+  const member = currentWorkspaceMember(c, store, workspaceId);
+  return member ? { type: "member", id: member.id, taskId: null } : null;
+}
+
+function decisionError(c: Context, error: unknown): Response {
+  if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
+  throw error;
+}
 
 // Check trusted caller lineage before an Issue mutation can cancel existing
 // work, change assignment, or create a new Issue and then dispatch an agent.
@@ -592,22 +620,46 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
+    // MUL-400 E1: batch update is the third status writer, so it takes the same
+    // member-only rule for `force` as the two PATCH routes.
+    const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+    if (forceDenied) return forceDenied;
     const denied = issueBatchUpdateAccess(c, body) ?? validateBatchWorkspaceBinding(c, body);
     if (denied) return denied;
+    // The batch writer needs the same attribution the PATCH routes stamp, or
+    // guards that branch on `actorType` (A4) silently do not apply.
+    const { actorType, actorId } = issueMutationActor(c);
     return c.json(store.batchUpdateIssues({
       ...body,
-      updates: body.updates ? { ...body.updates, parentTaskId: currentTaskParentId(c) } : body.updates,
+      updates: body.updates
+        ? {
+          ...stripServerOwnedIssueUpdateFields(body.updates),
+          actorType,
+          actorId,
+          parentTaskId: currentTaskParentId(c),
+        }
+        : body.updates,
     }));
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
+      const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
+      if (forceDenied) return forceDenied;
       const denied = issueBatchUpdateAccess(c, input) ?? validateBatchWorkspaceBinding(c, input);
       if (denied) return denied;
+      const { actorType, actorId } = issueMutationActor(c);
       const result = store.batchUpdateIssues({
         ...input,
-        updates: input.updates ? { ...input.updates, parentTaskId: currentTaskParentId(c) } : input.updates,
+        updates: input.updates
+          ? {
+            ...stripServerOwnedIssueUpdateFields(input.updates),
+            actorType,
+            actorId,
+            parentTaskId: currentTaskParentId(c),
+          }
+          : input.updates,
       });
       return c.json({ updated: result.updated });
     } catch (err) {
@@ -655,8 +707,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
+    // MUL-448 B3: a credentialed request cannot pick the lineage that decides
+    // whether this create is served from the generated-issue cache. Anonymous
+    // compatibility mode keeps the historical body pass-through.
+    const sourceStripped = isAnonymousCompatibilityRequest(c)
+      ? body
+      : stripServerOwnedIssueSourceFields(body);
+    // MUL-448 B4: the body's `created_by` is dropped, but this route does not
+    // stamp the caller either - main records no creator here, and creator
+    // ownership feeds share management and automatic subscription.
     const issue = store.createIssue({
-      ...body,
+      ...stripServerOwnedIssueCreateFields(sourceStripped),
       workspaceId,
       assigneeType: null,
       assignee_type: null,
@@ -778,7 +839,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    const result = safeQuickCreateIssue(store, { ...body, workspaceId });
+    // MUL-448 B4: the body's requester is dropped and no credentialed requester
+    // is stamped on, so this route records no creator exactly as main does.
+    const result = safeQuickCreateIssue(store, {
+      ...stripServerOwnedQuickCreateFields(body),
+      workspaceId,
+    });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
       taskId: result.task.id,
@@ -795,7 +861,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<QuickCreateIssueInput>(c);
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
-    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
+    const input = {
+      ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
+      workspaceId,
+    };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");
@@ -823,7 +892,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
     return c.json({
-      issue: { ...issue, tasks },
+      // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
+      // detail surfaces can show "N sub-issues" without the MUL-385 cost.
+      issue: { ...issue, tasks, child_count: issue.childProgress.total,
+        parent_done_grant: store.issueParentDoneGrantView(issue),
+        pending_decision_count: store.countPendingIssueDecisions(issue.id) },
       children: issue.children,
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
@@ -841,7 +914,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     // `issueFromParam` returns a hydrated issue: its labels are already loaded.
-    return c.json(issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }));
+    return c.json({
+      ...issueDetailCompatibilityResponse(store, issue, { labelsAlreadyHydrated: true }),
+      pending_decision_count: store.countPendingIssueDecisions(issue.id),
+    });
   });
   app.get("/api/issues/:id/workspace", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -993,12 +1069,30 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (!issue) return c.json({ error: "issue not found" }, 404);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
       if (denied) return denied;
+      // MUL-448 B2: the evaluator is the credential, never the request body.
+      //
+      // `recordSquadLeaderEvaluation` falls back to the squad's leader agent when
+      // no actor is given, so a member PAT posting `actor_id=<leader>` (or
+      // nothing at all) was recorded as `agent/leader` with a 201. Only a task
+      // token may name the evaluating agent; a credentialed non-task request has
+      // no agent identity at all and is rejected here, before any write. The
+      // header/body fallbacks remain for the anonymous compatibility mode, where
+      // they are the historical behaviour.
       const taskToken = currentTaskAccessToken(c);
+      const anonymousCompat = isAnonymousCompatibilityRequest(c);
+      // Anonymous compatibility mode keeps main's behaviour exactly, including
+      // the store's "no actor given -> the squad leader" default. A credentialed
+      // request that is not a task token has no agent identity to evaluate with.
+      if (!taskToken?.agentId && !anonymousCompat) {
+        return c.json({ error: "only the squad leader agent can record evaluations" }, 403);
+      }
       const activity = store.recordSquadLeaderEvaluation(issue.id, {
         outcome: body.outcome ?? "",
         reason: body.reason ?? null,
-        taskId: taskToken?.taskId ?? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null,
-        actorId: taskToken?.agentId ?? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null,
+        taskId: taskToken?.taskId
+          ?? (anonymousCompat ? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null : null),
+        actorId: taskToken?.agentId
+          ?? (anonymousCompat ? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null : null),
       });
       return c.json({
         ...activity,
@@ -1033,6 +1127,69 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       issues: children.map((child) => issueCompatibilityResponse(child)),
       total: children.length,
     });
+  });
+  app.get("/api/issues/:id/decisions", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    return c.json(store.listIssueDecisions(issue.id));
+  });
+  app.post("/api/issues/:id/decisions", async (c) => {
+    const source = issueFromParam(store, c, "id", "compat");
+    if (!source) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, source.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, source.workspaceId);
+    if (!actor) return c.json({ error: "member or issue task credential required" }, 403);
+    const body = await readJsonStrict<CreateIssueDecisionInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const input: CreateIssueDecisionInput = {
+        kind: body.kind, title: body.title, body: body.body,
+        options: body.options,
+      };
+      return c.json({ decision: store.createIssueDecision(source.id, input, actor) }, 201);
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/answer", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or parent owner task credential required" }, 403);
+    const body = await readJsonStrict<Record<string, unknown>>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json({ decision: store.answerIssueDecision(issue.id, c.req.param("decisionId"), {
+        answer: String(body.answer ?? body.text ?? ""),
+        reason: String(body.reason ?? ""),
+        overturn: String(body.overturn ?? body.how_to_overturn ?? ""),
+      }, actor) });
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/escalate", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or parent owner task credential required" }, 403);
+    try {
+      return c.json({ decision: store.escalateIssueDecision(issue.id, c.req.param("decisionId"), actor) });
+    } catch (error) { return decisionError(c, error); }
+  });
+  app.post("/api/issues/:id/decisions/:decisionId/withdraw", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c, store, issue.workspaceId);
+    if (!actor) return c.json({ error: "member or requesting task credential required" }, 403);
+    try {
+      return c.json({ decision: store.withdrawIssueDecision(issue.id, c.req.param("decisionId"), actor) });
+    } catch (error) { return decisionError(c, error); }
   });
   app.get("/api/multiremi/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c);
@@ -1099,14 +1256,54 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
+  for (const prefix of ["/api/issues/:id", "/api/multiremi/issues/:id"]) {
+    app.post(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can authorize parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      try {
+        const updated = store.grantParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+        return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+      } catch (error) {
+        if (error instanceof ParentDoneGrantOwnerError) return c.json({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    });
+    app.delete(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can revoke parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      const updated = store.revokeParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+      return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+    });
+  }
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
+    // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
+    // any other validation so the guard cannot be bypassed by an agent.
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
-    const input = { ...body, actorType, actorId, parentTaskId: currentTaskParentId(c) };
+    // S1: drop both spellings of the fields the server owns before stamping, so
+    // a body cannot smuggle `parent_task_id` / `actor_type` past the `??` reads.
+    const input = {
+      ...stripServerOwnedIssueUpdateFields(body),
+      actorType,
+      actorId,
+      parentTaskId: currentTaskParentId(c),
+    };
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
@@ -1122,9 +1319,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const forceDenied = denyTaskIdentityIssueForce(c, body);
+    if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);
     const input = {
-      ...issueUpdateCompatibilityInput(body),
+      ...stripServerOwnedIssueUpdateFields(issueUpdateCompatibilityInput(body)),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
@@ -1233,8 +1432,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;
     const { actorType, actorId } = issueMutationActivity(c);
+    // MUL-448: strip both lineage spellings before stamping, so a member body
+    // cannot supply the parent task that the credential did not.
     const result = safeAssignIssue(store, issue.id, {
-      ...body,
+      ...stripServerOwnedAssignFields(body),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
@@ -1435,7 +1636,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const creator = issueSubscriberCaller(c);
     try {
       const task = store.createSessionTask(session.id, {
-        ...body,
+        ...stripServerOwnedSessionTaskFields(body),
         // Non-null past the `if (!agent) return 404` guard above; cleanString's
         // null just has to become the `agentId?: string` field's undefined.
         agentId: agentId ?? undefined,

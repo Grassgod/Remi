@@ -1,0 +1,19 @@
+{
+  "note": "main 上已知的零跳动违例，按 <场景 key>::<cold|warm> 记录。本文件由 --strict 在未修复代码上的实测结果生成（见 tests/integration/zero-jump-check.ts），不靠猜测。每行只允许收紧：修好一个类型就删掉它，类型删空就删掉整行。",
+  "generatedFrom": {
+    "check": "tests/integration/zero-jump-check.ts",
+    "mode": "--strict",
+    "rounds": 3,
+    "commit": "4248ef0767c687116beac08e1fae55033f580ac1",
+    "report": "reports/performance/MUL-394-zero-jump-strict-main-2026-09-26.json",
+    "generatedAt": "2026-09-26",
+    "summary": "9 个 key::mode 行全部失败，与清单一一对应：8 行只有 perf-state，detail-deeplink::cold 另有 jumps（跳动 1 次）。"
+  },
+  "empty": {
+    "since": "2026-09-27",
+    "issue": "MUL-390",
+    "reason": "MUL-390 在详情页接入 useAnchoredReveal：写入 data-perf-state、隐藏到目标定位完成，并在其分支的 strict 实测里把 9 行全部跑到 0 违例，因此按规则 3 删掉整份清单。证据：reports/performance/MUL-390-zero-jump-strict-2026-09-27.json。",
+    "ratchet": "清单对冻结基线单向收紧；删除整份清单是它的终态。此后任何新增违例都按规则 1 直接失败，新增行必须同批附新的 strict 基线报告。"
+  },
+  "rows": []
+}

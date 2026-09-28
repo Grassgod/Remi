@@ -11,7 +11,7 @@ export const WORKBENCH_VISIBLE_STATUSES = ["in_review", "blocked", "in_progress"
 interface InboxRoutingEntry {
   rule: "R1" | "R2" | "R3";
   route: RegisteredInboxRoute;
-  severity: "info" | "attention";
+  severity: "info" | "attention" | "action";
   why: string;
 }
 
@@ -87,6 +87,18 @@ export const INBOX_ROUTING: Record<string, InboxRoutingEntry> = {
     route: INBOX_ROUTE_BY_TYPE.organizer_action,
     severity: "attention",
     why: "A supervisor disposed of another member's task under delegated authority; the audit trail must reach the owner even though its disclosure comment is agent-authored and therefore never routes on its own.",
+  },
+  child_issue_terminal: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.child_issue_terminal,
+    severity: "info",
+    why: "MUL-400 E2: a child issue that finished, failed or got blocked is a personal action for the parent owner; failed/blocked callers pass warning explicitly.",
+  },
+  decision_requested: {
+    rule: "R1",
+    route: INBOX_ROUTE_BY_TYPE.decision_requested,
+    severity: "action",
+    why: "An escalated issue decision requires a member answer.",
   },
 };
 

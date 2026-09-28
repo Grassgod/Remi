@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { KnowledgeSubmissionListItem } from "../../types";
 import {
   KnowledgeRunDetailSchema,
   ListKnowledgeRunsResponseSchema,
@@ -31,8 +32,36 @@ describe("knowledge response schemas", () => {
       source_issue: null,
       author_agent: null,
       source_task: null,
-      body: "",
+      // The list contract has `body_excerpt` in place of `body`/`patch`
+      // (MUL-386 C.2); a missing excerpt degrades to an empty string.
+      body_excerpt: "",
     });
+  });
+
+  it("keeps the list preview excerpt when the server sends one", () => {
+    const parsed = ListKnowledgeSubmissionsResponseSchema.parse({
+      submissions: [{ ...submission, body_excerpt: "first line of the raw body" }],
+    });
+    expect(parsed.submissions[0]!.body_excerpt).toBe("first line of the raw body");
+  });
+
+  it("parses a list row without requiring body or patch", () => {
+    // The contract is that a list row is complete *without* `body`/`patch`: the
+    // server stops reading those columns (MUL-386 C.2) and the client type
+    // (`KnowledgeSubmissionListItem`) has no field for them, so validation must
+    // not depend on either being present.
+    //
+    // The schema stays `.loose()` on purpose — the repo relies on that for
+    // forward compatibility — so this asserts the required shape rather than the
+    // absence of unknown keys.
+    const parsed = ListKnowledgeSubmissionsResponseSchema.parse({
+      submissions: [{ ...submission, body_excerpt: "preview" }],
+    });
+    const row = parsed.submissions[0]!;
+    expect(row.body_excerpt).toBe("preview");
+    // Type-level: only the list-item fields are reachable through the parsed type.
+    const listItem: KnowledgeSubmissionListItem = row;
+    expect(listItem.id).toBe("ksub_1");
   });
 
   it("accepts the first-phase flat run list and degrades missing relationships to empty arrays", () => {

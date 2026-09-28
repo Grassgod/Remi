@@ -55,6 +55,7 @@ const server = startMultiremiServer({
     summaryIntervalMs: SUMMARY_INTERVAL_MS,
     summaryTopRoutes: 10,
     bufferCapacity: 1024,
+    role: "all",
   },
 });
 
