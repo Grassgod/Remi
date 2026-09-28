@@ -841,7 +841,7 @@ export class FeishuBotRepo {
           chat_id: chatId,
           thread_id: cleanOptionalString(input.threadId) ?? externalMessageId,
         }],
-      }, submitEvents);
+      }, submitChanges, submitEvents);
       const duplicate = this.ctx.db.query(
         `SELECT d.task_id, b.chat_session_id, b.agent_id, a.name AS agent_name, t.status
            FROM multiremi_feishu_bot_deliveries d
