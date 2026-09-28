@@ -368,7 +368,6 @@ export function SharedTask({
             <div className="mb-1 text-[11px] uppercase text-muted-foreground">{event.type}</div>
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-xs">
               {messageText(traceEventToMessage(event))}
-              {event.truncated && `\n${t(($) => $.share.trace_truncated, { bytes: event.original_bytes })}`}
             </pre>
           </div>
         ))}

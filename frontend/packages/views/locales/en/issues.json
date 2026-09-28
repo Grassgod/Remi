@@ -366,7 +366,6 @@
     "unavailable_description": "The link may have expired or sharing may have been stopped.",
     "trace_loading": "Loading trace…",
     "trace_failed": "Could not load the trace. Close and reopen to retry.",
-    "trace_truncated": "(Content truncated; originally {{bytes}} bytes)",
     "trace_unreachable": "daemon {{name}} is currently offline",
     "trace_lost": "Lost when the daemon was retired",
     "trace_backfilling": "Archive backfill in progress",

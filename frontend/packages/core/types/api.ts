@@ -280,7 +280,7 @@ export interface SharedIssueBundle {
 }
 
 export interface SharedTaskTracePage {
-  events: Array<Record<string, unknown> & { seq: number; type: string; ts: string; truncated?: true; original_bytes?: number; truncated_fields?: string[] }>;
+  events: Array<Record<string, unknown> & { seq: number; type: string; ts: string }>;
   next_after_seq: number;
   head: number;
   eof: boolean;
