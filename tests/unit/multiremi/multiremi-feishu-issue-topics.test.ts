@@ -99,8 +99,10 @@ describe("Feishu Issue topics", () => {
       const leader = store.createSessionTask(session.id, { agentId: wake.agentId, prompt: "Next round" });
       db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [leader.id]);
       const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const chatActorIds: Array<string | null | undefined> = [];
       const unsubscribe = store.onWorkspaceEvent(event => {
         events.push({ type: event.type, inTransaction: db!.inTransaction });
+        if (event.type === "chat:message") chatActorIds.push(event.actorId);
       });
       const database = db!;
       const originalRun = database.run;
@@ -130,6 +132,7 @@ describe("Feishu Issue topics", () => {
       } else {
         expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
         expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
+        expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
         expect(events[0].type).toBe("chat:message");
         expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
       }

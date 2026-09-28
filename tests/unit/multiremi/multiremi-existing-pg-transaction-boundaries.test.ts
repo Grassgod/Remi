@@ -227,10 +227,10 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
   it("reuses a round wake task under the outer workspace lock in one transaction", () => {
     const { wake, leader, workspaceId } = roundFixture();
     const workspaceLocks: boolean[] = [];
-    const events: Array<{ type: string; inTransaction: boolean; payload: Record<string, unknown> }> = [];
+    const events: Array<{ type: string; inTransaction: boolean; actorId: string | null | undefined; payload: Record<string, unknown> }> = [];
     const unsubscribe = store.onWorkspaceEvent(event => {
       if (event.workspaceId === workspaceId) {
-        events.push({ type: event.type, inTransaction: db.inTransaction, payload: event.payload });
+        events.push({ type: event.type, inTransaction: db.inTransaction, actorId: event.actorId, payload: event.payload });
       }
     });
     const originalRun = db.run;
@@ -255,6 +255,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     const chatEvents = events.filter(event => event.type === "chat:message");
     expect(chatEvents).toHaveLength(1);
     expect(chatEvents[0].inTransaction).toBe(false);
+    expect(chatEvents[0].actorId).toBe(store.getChatSession(wake.chatSessionId!)!.creatorId);
     expect(events[0]).toBe(chatEvents[0]);
     expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
     expect(chatEvents[0].payload).toMatchObject({

@@ -375,9 +375,10 @@ export class AgentIssueUpdatesRepo {
       created_at: result.message.createdAt,
     };
     if (events) {
+      // Match emitChatEvent's fallback for a null actor id.
       events.push({
         type: "chat:message", workspaceId: result.session.workspaceId,
-        chatSessionId: result.session.id, actorType: "system", actorId: null,
+        chatSessionId: result.session.id, actorType: "system", actorId: result.session.creatorId,
         payload: { chat_session_id: result.session.id, ...payload },
       });
     } else {
