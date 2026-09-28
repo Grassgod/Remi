@@ -812,8 +812,9 @@ export class MultiremiDaemon {
   private readonly protocolClient: DaemonProtocolClient;
   private readonly protocolLane: DaemonProtocolLane;
   private readonly taskDownlinks: DaemonTaskDownlinks;
+  private readonly drainRuntimeDownlinks: () => Promise<void>;
   private readonly authorityProbeDelaysMs: number[];
-  /** The plugin fallback remains until MUL-419 moves it to RPC/push. */
+  /** Ten-minute RPC fallback for incomplete plugin revision definitions. */
   private nextPluginDesiredAt = 0;
   private pluginLocalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private onceTaskAccepted = false;
@@ -1052,7 +1053,7 @@ export class MultiremiDaemon {
       ...options.protocolClientOptions,
     });
     this.taskDownlinks = new DaemonTaskDownlinks(this.protocolClient, () => this.options.runtimeId ?? undefined);
-    registerDaemonRuntimeDownlinks(this.protocolClient, () => this.options.runtimeId,
+    this.drainRuntimeDownlinks = registerDaemonRuntimeDownlinks(this.protocolClient, () => this.options.runtimeId,
       (rt, input) => this.handleHeartbeatAck(rt, input), (rt, revision) => this.reconcileRuntimeAgentPlugins(rt, revision));
     this.protocolLane = {
       runtime: () => this.options.runtimeId && !this.stopped ? {
@@ -1673,7 +1674,7 @@ export class MultiremiDaemon {
         status: "completed",
         output: output || (scope === "acp" ? "ACP bridge updated" : scope === "agent" ? "Agent updated" : `Updated to ${targetVersion}`),
       });
-      this.requestRestartAfterUpdate();
+      await this.requestRestartAfterUpdate();
     } catch (err) {
       this.releaseUpdateClaimPause(scope);
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
@@ -3092,7 +3093,8 @@ export class MultiremiDaemon {
     this.wakeClaim();
   }
 
-  private requestRestartAfterUpdate(): void {
+  private async requestRestartAfterUpdate(): Promise<void> {
+    await this.drainRuntimeDownlinks();
     this.requestRestart();
   }
 

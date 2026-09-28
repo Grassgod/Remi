@@ -14,7 +14,8 @@ const pendingFields = {
 
 export function registerDaemonRuntimeDownlinks(client: DaemonProtocolClient, runtimeId: () => string | null,
   apply: (rt: string, input: MultiremiDaemonHeartbeatConfigAck) => Promise<unknown>,
-  desired: (rt: string, revision: string) => Promise<void>): void {
+  desired: (rt: string, revision: string) => Promise<void>): () => Promise<void> {
+  const maintenance = new Set<Promise<unknown>>();
   for (const [type, field] of Object.entries(pendingFields)) client.registerFrameHandler(type, async frame => {
     if (!frame.rt || frame.rt !== runtimeId() || typeof frame.payload.id !== "string") return;
     const key = `${frame.rt}:${frame.payload.id}${type === "feishu.outbound" ? `:${frame.payload.claim_token}` : ""}`;
@@ -22,7 +23,9 @@ export function registerDaemonRuntimeDownlinks(client: DaemonProtocolClient, run
     try {
       // Ack precedes result reports, including the temporary HTTP reporters.
       client.send({ t: "ack", p: {} });
-      await apply(frame.rt, normalizeDaemonRuntimeInput(frame.rt, { [field]: frame.payload }));
+      const run = apply(frame.rt, normalizeDaemonRuntimeInput(frame.rt, { [field]: frame.payload }));
+      if (type !== "runtime.update") maintenance.add(run);
+      try { await run; } finally { maintenance.delete(run); }
     } catch (error) { client.dedupe.release(type, key); throw error; }
   });
   const configs = {
@@ -40,4 +43,7 @@ export function registerDaemonRuntimeDownlinks(client: DaemonProtocolClient, run
   client.registerFrameHandler("plugin.desired_revision", async frame => {
     if (frame.rt && frame.rt === runtimeId() && typeof frame.payload.revision === "string") await desired(frame.rt, frame.payload.revision);
   });
+  // An update must not abort maintenance accepted alongside it; exclude the
+  // update itself so its restart can wait without waiting on its own handler.
+  return async () => { await Promise.allSettled([...maintenance]); };
 }

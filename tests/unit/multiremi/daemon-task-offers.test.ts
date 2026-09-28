@@ -86,11 +86,14 @@ describe("A-3 task offers", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const h = fixture(async task => { calls++; await gate; return { id: task.id }; });
     await h.hello(); h.task();
-    for (let i = 0; i < 20; i++) h.offers.kick(h.runtimeIds[0]);
-    await Bun.sleep(0);
-    expect(calls).toBe(1);
-    release(); await h.layer.drain();
-    expect(calls).toBe(1); expect(h.offered()).toHaveLength(1);
+    const claim = spyOn(h.store, "claimTask");
+    try {
+      for (let i = 0; i < 20; i++) h.offers.kick(h.runtimeIds[0]);
+      await Bun.sleep(0);
+      expect(calls).toBe(1); expect(claim).toHaveBeenCalledTimes(1);
+      release(); await h.layer.drain();
+      expect(calls).toBe(1); expect(h.offered()).toHaveLength(1);
+    } finally { release(); await h.layer.drain(); claim.mockRestore(); }
   });
 
   it("requeues a failed preparation and does not leave the runtime waiting for an unsent offer", async () => {

@@ -220,14 +220,14 @@ function createLoopDaemon(options: {
     handleHeartbeatAck(rt: string, input: Record<string, unknown>): Promise<boolean>;
     reconcileRuntimeAgentPlugins(rt: string, revision: string): Promise<void>;
   };
-  registerDaemonRuntimeDownlinks(protocolClient, () => "rt_cadence", (rt, ack) => input.handleHeartbeatAck(rt, ack as unknown as Record<string, unknown>),
+  const drainRuntimeDownlinks = registerDaemonRuntimeDownlinks(protocolClient, () => "rt_cadence", (rt, ack) => input.handleHeartbeatAck(rt, ack as unknown as Record<string, unknown>),
     (rt, revision) => input.reconcileRuntimeAgentPlugins(rt, revision));
   const lane: DaemonProtocolLane = {
     runtime: () => ({ runtime_id: "rt_cadence", provider: "claude", max_concurrency: 1, active_task_ids: [] }),
     heartbeat: () => ({ active_task_count: 0 }), onHeartbeatAck: async () => {},
     probeUpgrade: async () => {}, onTerminal: async () => {}, onStateChange: () => taskDownlinks.connectionChanged(),
   };
-  Object.assign(daemon, { protocolClient, protocolLane: lane, taskDownlinks });
+  Object.assign(daemon, { protocolClient, protocolLane: lane, taskDownlinks, drainRuntimeDownlinks });
   protocolClient.addLane(lane); protocolClient.startLane(lane);
   probe.push = async (type, payload) => { await flushMicrotasks(); push(type, payload); await protocolClient.drain(); };
 
