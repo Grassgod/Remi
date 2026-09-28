@@ -434,6 +434,7 @@
   },
   "activity": {
     "expand_earlier": "展开更早 {{count}} 条",
+    "expand_newer": "展开更新 {{count}} 条",
     "remaining_earlier": "还有 {{count}} 条更早",
     "created": "创建了这个 issue",
     "self_assigned": "把这个 issue 分配给了自己",

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
+import { api } from "@multiremi/core/api";
 import { defaultStorage } from "@multiremi/core/platform";
 import { ChevronLeft } from "lucide-react";
 import { useNavigation } from "../../navigation";
@@ -90,11 +91,37 @@ export function IssueDetail({
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const resolveDeepLinkSession = Boolean(highlightCommentId && !initialIssueSessionId
+    && initialLog?.targetCommentId !== highlightCommentId);
   const sessions = useIssueSessionSelection(
     id,
     initialIssueSessionId,
     onIssueSessionChange,
+    resolveDeepLinkSession,
   );
+  const [locatedSession, setLocatedSession] = useState<{ issueId: string; commentId: string; sessionId: string } | null>(null);
+  const matchedSession = resolveDeepLinkSession && locatedSession?.issueId === id
+    && locatedSession.commentId === highlightCommentId ? locatedSession.sessionId : null;
+  useEffect(() => {
+    if (!resolveDeepLinkSession || !highlightCommentId || sessions.list.length === 0 || matchedSession !== null) return;
+    let active = true;
+    void Promise.all(sessions.list.map(async session => {
+      try {
+        const location = await api.locateSessionLogEntry(session.id, highlightCommentId);
+        return location.id === highlightCommentId ? session.id : null;
+      } catch { return null; }
+    })).then(ids => {
+      if (!active) return;
+      const sessionId = ids.find((value): value is string => value !== null) ?? "";
+      setLocatedSession({ issueId: id, commentId: highlightCommentId, sessionId });
+      if (sessionId) sessions.select(sessionId);
+    });
+    return () => { active = false; };
+  }, [id, highlightCommentId, matchedSession, resolveDeepLinkSession, sessions.list, sessions.select]);
+  const activitySessions = resolveDeepLinkSession
+    ? { ...sessions, activeId: matchedSession ?? "", active: sessions.list.find(s => s.id === matchedSession) ?? null,
+        pending: matchedSession === null || sessions.pending }
+    : sessions;
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
   // rendering doesn't have to re-derive it for every row.
@@ -326,7 +353,7 @@ export function IssueDetail({
       isMobile={isMobile}
       sessionSidebarOpen={visibleSessionSidebarOpen}
       onToggleSessionSidebar={handleToggleSessionSidebar}
-      sessions={sessions}
+      sessions={activitySessions}
       members={members}
       agents={agents}
       currentUserId={user?.id}

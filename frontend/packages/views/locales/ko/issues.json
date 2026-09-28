@@ -436,6 +436,7 @@
   },
   "activity": {
     "expand_earlier": "이전 {{count}}개 펼치기",
+    "expand_newer": "새로운 {{count}}개 펼치기",
     "remaining_earlier": "이전 항목 {{count}}개",
     "created": "이 이슈를 만들었습니다",
     "self_assigned": "이 이슈를 본인에게 할당했습니다",

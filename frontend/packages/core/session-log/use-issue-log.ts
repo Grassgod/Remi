@@ -9,7 +9,7 @@ import { useWS } from "../realtime";
 import { useReplicaEnv } from "../platform/replica-env";
 import { IssueLogReplica } from "./issue-log";
 
-export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap) {
+export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string) {
   const replica = useMemo(() => new IssueLogReplica(sessionId, initial), [sessionId, initial]);
   const snapshot = useSyncExternalStore(
     listener => replica.subscribe(sessionId, listener),
@@ -25,9 +25,12 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap) {
     if (!sessionId) return;
     let active = true;
     setError(false);
-    if (!initial || initial.sessionId !== sessionId) void replica.loadTail().catch(() => { if (active) setError(true); });
+    if (!replica.hasWindowFor(commentId)) {
+      const load = commentId ? replica.loadAround(commentId) : replica.loadTail();
+      void load.catch(() => { if (active) setError(true); });
+    }
     return () => { active = false; };
-  }, [replica, sessionId, initial]);
+  }, [replica, sessionId, initial, commentId]);
 
   useEffect(() => {
     if (!sessionId || !userId || !workspaceId || !ws) return;
@@ -40,13 +43,13 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap) {
         const subscription = ws.subscribeStream("log", id, {
           onFrames: frames => replica.frames(id, frames),
           onAck: ack => replica.ack(id, ack),
-          onGap: () => { void replica.loadTail().catch(() => setError(true)); },
+          onGap: () => { void replica.refreshVisible().catch(() => setError(true)); },
         }, { fromSeq });
         if (subscription) subscriptions.set(id, subscription);
       },
       unsubscribe: id => { subscriptions.get(id)?.unsubscribe(); subscriptions.delete(id); },
     }).then(cleanup => { if (active) disconnect = cleanup; else cleanup(); }).catch(() => { if (active) setError(true); });
-    const offReconnect = ws.onReconnect(() => { void replica.loadTail().catch(() => setError(true)); });
+    const offReconnect = ws.onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
     return () => { active = false; offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
   }, [replica, sessionId, userId, workspaceId, ws, env]);
   return { replica, snapshot, error };

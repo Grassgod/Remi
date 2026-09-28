@@ -49,9 +49,10 @@ interface TaskState {
 interface AgentLiveCardProps {
   issueId: string;
   issueSessionId?: string;
+  onInitialReconcile?: () => void;
 }
 
-export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
+export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: AgentLiveCardProps) {
   const qc = useQueryClient();
   const { t } = useT("issues");
   const { getActorName } = useActorName();
@@ -128,6 +129,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
         }
         return next;
       });
+      onInitialReconcile?.();
 
       // Drop bookkeeping for tasks that vanished, so a future re-dispatch
       // of the same id (very rare, but possible) re-hydrates cleanly.
@@ -169,8 +171,8 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
           console.error(e);
         });
       }
-    }).catch(console.error);
-  }, [issueId, issueSessionId, qc]);
+    }).catch(error => { console.error(error); onInitialReconcile?.(); });
+  }, [issueId, issueSessionId, onInitialReconcile, qc]);
 
   // Initial fetch on mount / issueId change.
   useEffect(() => {

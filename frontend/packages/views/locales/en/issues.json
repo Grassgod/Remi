@@ -436,6 +436,7 @@
   },
   "activity": {
     "expand_earlier": "Load {{count}} earlier entries",
+    "expand_newer": "Load {{count}} newer entries",
     "remaining_earlier": "{{count}} earlier entries",
     "created": "created this issue",
     "self_assigned": "self-assigned this issue",

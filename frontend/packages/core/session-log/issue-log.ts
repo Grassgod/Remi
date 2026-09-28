@@ -14,11 +14,15 @@ export class IssueLogReplica extends ReplicaView {
   private disconnected = false;
   private from = 0;
   private to = Number.MAX_SAFE_INTEGER;
+  private targetCommentId: string | null = null;
   private knownWindows: Array<{ range: HubSeqRange; entries: SessionLogRow[] }> = [];
 
   constructor(readonly sessionId: string, initial?: IssueLogBootstrap) {
     super();
-    if (initial?.sessionId === sessionId) this.accept(initial.window, initial.head);
+    if (initial?.sessionId === sessionId) {
+      this.targetCommentId = initial.targetCommentId ?? null;
+      this.accept(initial.window, initial.head);
+    }
   }
 
   accept(window: SessionLogWindow, head: SessionLogRow | null = this.headRow): void {
@@ -45,8 +49,34 @@ export class IssueLogReplica extends ReplicaView {
       api.getSessionLog(this.sessionId, { anchor: 0, before: 1 }),
     ]);
     if (this.disconnected) return;
+    this.targetCommentId = null;
     this.accept(window, head.entries.find(e => e.seq === 0) ?? null);
     await this.persist(window);
+  }
+
+  hasWindowFor(commentId?: string): boolean {
+    return this.window !== null && this.targetCommentId === (commentId ?? null);
+  }
+
+  async loadAround(commentId: string, preserveWindow = false): Promise<void> {
+    this.targetCommentId = commentId;
+    if (!preserveWindow) {
+      this.window = null;
+      this.setWindow(this.sessionId, [], { fresh: false, ready: false });
+    }
+    const location = await api.locateSessionLogEntry(this.sessionId, commentId);
+    const [window, head] = await Promise.all([
+      api.getSessionLog(this.sessionId, { anchor: location.seq, before: 15, after: 15 }),
+      api.getSessionLog(this.sessionId, { anchor: 0, before: 1 }),
+    ]);
+    if (this.disconnected || this.targetCommentId !== commentId) return;
+    this.accept(window, head.entries.find(e => e.seq === 0) ?? null);
+    await this.persist(window);
+  }
+
+  async refreshVisible(): Promise<void> {
+    if (this.targetCommentId) await this.loadAround(this.targetCommentId, true);
+    else await this.loadTail();
   }
 
   async earlier(): Promise<void> {
@@ -58,6 +88,16 @@ export class IssueLogReplica extends ReplicaView {
       has_more_before: older.has_more_before, before_visible_count: older.before_visible_count,
       before_visible_count_capped: older.before_visible_count_capped });
     await this.persist(older);
+  }
+
+  async newer(): Promise<void> {
+    const last = this.window?.entries.at(-1)?.seq;
+    if (last === undefined) return;
+    const newer = await api.getSessionLog(this.sessionId, { anchor: last, after: 30 });
+    if (this.disconnected || !this.window) return;
+    this.accept({ ...this.window, entries: mergeRows(this.window.entries, newer.entries),
+      head_seq: newer.head_seq, log_version: newer.log_version, has_more_after: newer.has_more_after });
+    await this.persist(newer);
   }
 
   async refreshHead(): Promise<void> {
@@ -76,7 +116,7 @@ export class IssueLogReplica extends ReplicaView {
       const snapshot = browser.port.getSnapshot(this.sessionId);
       const visible = this.getSnapshot(this.sessionId);
       // The C7 cache can answer before it has imported the SSR window.
-      if (!snapshot.ready) return;
+      if (!snapshot.ready || !this.window) return;
       const current = snapshot.entries.map(e => SessionLogEntrySchema.safeParse(e))
         .filter(p => p.success).map(p => p.data!);
       const held = current.find(e => e.seq === 0);

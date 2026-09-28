@@ -152,6 +152,22 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("holds the first visible frame until content above the anchor is ready", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1)], ready: true, fresh: true },
+    });
+    const view = renderList(replica, { contentReady: false });
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("pending");
+    expect(view.content.style.visibility).toBe("hidden");
+
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} contentReady />);
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(view.content.style.visibility).toBe("");
+    view.restore();
+  });
+
   it("renders pre-rendered HTML with the measurement contract attributes", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1), entry(2)] },

@@ -6,12 +6,13 @@ import IssuePageClient from "../../../../../features/issues/issue-page-client";
 
 export default async function IssueDetailPage({ params, searchParams }: {
   params: Promise<{ workspaceSlug: string; id: string }>;
-  searchParams: Promise<{ session?: string | string[] }>;
+  searchParams: Promise<{ session?: string | string[]; comment?: string | string[] }>;
 }) {
   const { workspaceSlug, id } = await params;
   const query = await searchParams;
   const sessionId = typeof query.session === "string" ? query.session : undefined;
-  const initial = await readIssueLogBootstrap(workspaceSlug, id, sessionId);
+  const commentId = typeof query.comment === "string" ? query.comment : undefined;
+  const initial = await readIssueLogBootstrap(workspaceSlug, id, sessionId, commentId);
   const queries = new QueryClient();
   if (initial) {
     queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, id), initial.issue);
@@ -23,7 +24,8 @@ export default async function IssueDetailPage({ params, searchParams }: {
   }
   return (
     <HydrationBoundary state={dehydrate(queries)}>
-      <IssuePageClient issueId={id} initialIssueSessionId={sessionId ?? initial?.log.sessionId} initialLog={initial?.log} initialData={initial ?? undefined} />
+      <IssuePageClient issueId={id} initialIssueSessionId={sessionId ?? initial?.log.sessionId} highlightCommentId={commentId}
+        initialLog={initial?.log} initialData={initial ?? undefined} />
     </HydrationBoundary>
   );
 }

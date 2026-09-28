@@ -15,11 +15,13 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 export default function IssueDetailPage({
   issueId: id,
   initialIssueSessionId,
+  highlightCommentId,
   initialLog,
   initialData,
 }: {
   issueId: string;
   initialIssueSessionId?: string;
+  highlightCommentId?: string;
   initialLog?: IssueLogBootstrap;
   initialData?: { issue: Issue; parentIssue: Issue | null; sessions: IssueSession[]; members: MemberWithUser[]; children: Issue[]; tasks: AgentTask[] };
 }) {
@@ -38,14 +40,15 @@ export default function IssueDetailPage({
     }
   }
   const handleIssueSessionChange = useCallback(
-    (sessionId: string) => navigation.replace(paths.issueSession(id, sessionId)),
-    [id, navigation, paths],
+    (sessionId: string) => navigation.replace(`${paths.issueSession(id, sessionId)}${highlightCommentId ? `&comment=${encodeURIComponent(highlightCommentId)}` : ""}`),
+    [id, navigation, paths, highlightCommentId],
   );
   return (
     <ErrorBoundary resetKeys={[id]}>
       <IssueDetail
         issueId={id}
         initialLog={initialLog}
+        highlightCommentId={highlightCommentId}
         initialIssueSessionId={initialIssueSessionId}
         onIssueSessionChange={handleIssueSessionChange}
       />

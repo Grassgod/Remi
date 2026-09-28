@@ -82,8 +82,11 @@ export interface SessionLogListProps {
   perfScroll?: "session-log" | "issue-detail";
   latestAnchor?: "latest-message" | "latest-comment";
   initialPositioned?: boolean;
+  /** Additional content above the anchor must settle before the list reveals. */
+  contentReady?: boolean;
   afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
   footer?: React.ReactNode;
+  onReturnToLatest?: () => void;
   onScrollRoot?: (el: HTMLDivElement | null) => void;
 }
 
@@ -136,8 +139,10 @@ export function SessionLogList({
   perfScroll = "session-log",
   latestAnchor = "latest-message",
   initialPositioned = false,
+  contentReady = true,
   afterEntry,
   footer,
+  onReturnToLatest,
   onScrollRoot,
 }: SessionLogListProps): React.ReactElement {
   const { t } = useT("chat");
@@ -184,6 +189,13 @@ export function SessionLogList({
   }, [snapshot.entries]);
 
   const anchorId = anchor.kind === "element" ? anchor.id : null;
+  const [highlighted, setHighlighted] = useState(Boolean(anchorId));
+  useEffect(() => {
+    setHighlighted(Boolean(anchorId));
+    if (!anchorId) return;
+    const timeout = setTimeout(() => setHighlighted(false), 2500);
+    return () => clearTimeout(timeout);
+  }, [anchorId]);
   const latestEntry = latestAnchor === "latest-comment"
     ? entries.findLast(entry => entry.kind === "message")
     : entries.at(-1);
@@ -192,7 +204,7 @@ export function SessionLogList({
     scrollEl,
     contentEl,
     resetKey: resetKey ?? `${sessionId}:${anchorId ?? "bottom"}`,
-    dataReady: snapshot.ready,
+    dataReady: snapshot.ready && contentReady,
     anchor,
     // Trivially true: the flat list has no virtualizer whose measurement window
     // has to close before the anchor position is final (plan 3/6 §3).
@@ -302,8 +314,9 @@ export function SessionLogList({
   });
 
   const handleReturn = useCallback(() => {
+    if (onReturnToLatest) { onReturnToLatest(); return; }
     stick.returnToBottom();
-  }, [stick]);
+  }, [stick, onReturnToLatest]);
 
   return (
     <div className={`relative min-h-0 flex-1 ${className ?? ""}`}>
@@ -314,6 +327,7 @@ export function SessionLogList({
         data-session-log-scroll=""
         data-ssr-initial={initialPositioned ? "" : undefined}
         data-ssr-expected={initialPositioned ? entries.length : undefined}
+        data-ssr-anchor-id={initialPositioned ? anchorId ?? undefined : undefined}
         data-session-log-degraded={degradedCount}
         data-perf-scroll={perfScroll}
         data-perf-state={initialPositioned ? "pending" : undefined}
@@ -351,7 +365,7 @@ export function SessionLogList({
                 {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
                 {...(isLatest && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": latestAnchor } : null)}
                 style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
-                className="pb-3"
+                className={`pb-3 transition-colors duration-500 ${highlighted && anchorId === `comment-${entry.id}` ? "bg-warning/10" : ""}`}
               >
                 {renderEntry
                   ? renderEntry({ entry, reservedHeight })
@@ -368,6 +382,7 @@ export function SessionLogList({
             );
           })}
           {footer}
+          {anchorId && <div aria-hidden="true" className="h-[50vh]" />}
         </div>
       </div>
       {newMessageCount > 0 && stick.state === "released" && (

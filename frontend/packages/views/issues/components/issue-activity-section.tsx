@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import type { Agent, Attachment, IssueSession, MemberWithUser, TimelineEntry } from "@multiremi/core/types";
 import { useCreateComment, useUpdateComment, useDeleteComment, useResolveComment, useToggleCommentReaction } from "@multiremi/core/issues/comment-mutations";
@@ -60,10 +60,14 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
 }
 
 export function IssueActivitySection({ issueId, projectId, members, agents, onShowKeyResults, currentUserId, canModerateComments, activeIssueSessionId: sessionId,
-  activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, initialLog, onScrollRoot,
+  activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
-  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog);
+  const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
+  const [tasksReadySessionId, setTasksReadySessionId] = useState("");
+  const onTasksReady = useCallback(() => setTasksReadySessionId(sessionId), [sessionId]);
+  useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
+  const { replica, snapshot, error } = useIssueLog(sessionId, initialLog, activeCommentId ?? undefined);
   const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
   const [paging, setPaging] = useState(false);
   const resolved = useResolvedThreads();
@@ -72,7 +76,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   const remove = useDeleteComment(issueId, sessionId);
   const resolve = useResolveComment(issueId, sessionId);
   const reaction = useToggleCommentReaction(issueId, sessionId);
-  const refresh = useCallback(() => { void replica.loadTail().catch(() => {}); }, [replica]);
+  const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
   const onLegacyUpdate = useCallback((payload: unknown) => {
     const p = payload as { issue_id?: string; comment?: { issue_id?: string; issue_session_id?: string } };
     if ((p.issue_id ?? p.comment?.issue_id) === issueId && (!p.comment?.issue_session_id || p.comment.issue_session_id === sessionId)) refresh();
@@ -85,7 +89,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   useWSEvent("reaction:added", onLegacyUpdate);
   useWSEvent("reaction:removed", onLegacyUpdate);
   const run = async (action: () => Promise<unknown>) => {
-    try { await action(); await replica.loadTail(); }
+    try { await action(); await replica.refreshVisible(); }
     catch (error) { toast.error(error instanceof Error ? error.message : t($ => $.comment.update_failed)); throw error; }
   };
   const earlier = async () => {
@@ -93,11 +97,26 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
     try { await replica.earlier(); } catch { toast.error(t($ => $.comment.update_failed)); }
     finally { setPaging(false); }
   };
+  const newer = async () => {
+    setPaging(true);
+    try { await replica.newer(); } catch { toast.error(t($ => $.comment.update_failed)); }
+    finally { setPaging(false); }
+  };
+  const returnLatest = async () => {
+    setPaging(true);
+    try { await replica.loadTail(); setActiveCommentId(null); }
+    catch { toast.error(t($ => $.comment.update_failed)); }
+    finally { setPaging(false); }
+  };
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
-  return <SessionLogList key={sessionId} sessionId={sessionId} replica={replica}
+  return <SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
     perfScroll="issue-detail" latestAnchor="latest-comment"
-    initialPositioned={initialLog?.sessionId === sessionId} onScrollRoot={onScrollRoot}
+    contentReady={initialLog?.sessionId === sessionId || tasksReadySessionId === sessionId}
+    anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
+    onReturnToLatest={activeCommentId ? () => void returnLatest() : undefined}
+    initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
+    onScrollRoot={onScrollRoot}
     afterEntry={entry => entry.seq === 0 ? <>
       {replica.window?.has_more_before && <button type="button" data-log-earlier disabled={paging} className="mt-3 h-8 text-xs text-muted-foreground hover:text-foreground" onClick={() => void earlier()}>
         {replica.window.before_visible_count === undefined
@@ -109,7 +128,8 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
         <IssueSubscribersControl issueId={issueId} currentUserId={currentUserId} members={members} agents={agents} />
       </div>
       <LocalDirectoryHint projectId={projectId} />
-      <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId} />
+      <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
+        onInitialReconcile={onTasksReady} />
       <IssueResultActivityLines issueId={issueId} onShowResults={onShowKeyResults} />
     </> : null}
     renderEntry={({ entry }) => {
@@ -134,6 +154,14 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
         onToggleReaction={(id, emoji) => run(() => reaction.mutateAsync({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentUserId) }))} />;
     }}
     footer={<>
+      {activeCommentId && <div className="flex h-8 items-center gap-4 text-xs">
+        {replica.window?.has_more_after && <button type="button" data-log-newer disabled={paging} className="text-muted-foreground hover:text-foreground" onClick={() => void newer()}>
+          {t($ => $.activity.expand_newer, { count: 30 })}
+        </button>}
+        <button type="button" data-log-return-latest disabled={paging} className="text-muted-foreground hover:text-foreground" onClick={() => void returnLatest()}>
+          {t($ => $.activity.jump_to_latest)}
+        </button>
+      </div>}
       <SessionAgentStreamRow issueId={issueId} issueSessionId={sessionId} />
       <div className="mt-4 min-h-32"><CommentInput key={`${issueId}:${sessionId}`} issueId={issueId} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
         placeholder={activeIssueSession ? t($ => $.comment.comment_in_session_placeholder, { session: getSessionDisplayName(t, activeIssueSession) }) : undefined}

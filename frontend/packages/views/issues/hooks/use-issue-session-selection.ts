@@ -25,6 +25,7 @@ export function useIssueSessionSelection(
   issueId: string,
   initialIssueSessionId?: string,
   onSelectionChange?: (sessionId: string) => void,
+  deferDefaultNavigation = false,
 ): IssueSessionSelection {
   const sessionsQuery = useQuery(issueSessionsOptions(issueId));
   // Stable reference: `?? []` inline would hand children a fresh array on
@@ -42,9 +43,9 @@ export function useIssueSessionSelection(
   useEffect(() => {
     if (activeId && activeId !== selectedId) {
       setSelectedId(activeId);
-      onSelectionChange?.(activeId);
+      if (!deferDefaultNavigation) onSelectionChange?.(activeId);
     }
-  }, [activeId, onSelectionChange, selectedId]);
+  }, [activeId, deferDefaultNavigation, onSelectionChange, selectedId]);
   useEffect(() => {
     setSelectedId(initialIssueSessionId ?? "");
   }, [issueId, initialIssueSessionId]);

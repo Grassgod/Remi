@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionLogEntrySchema, type SessionLogWindow } from "../api/schemas/session-log";
-const mocks = vi.hoisted(() => ({ read: vi.fn() }));
-vi.mock("../api", () => ({ api: { getSessionLog: mocks.read } }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), locate: vi.fn() }));
+vi.mock("../api", () => ({ api: { getSessionLog: mocks.read, locateSessionLogEntry: mocks.locate } }));
 import { IssueLogReplica } from "./issue-log";
 
 const row = (seq: number, kind = "message") => SessionLogEntrySchema.parse({ session_id: "s", id: `r${seq}`, seq, kind,
@@ -27,5 +27,29 @@ describe("Issue log presentation over C7", () => {
     expect(entries).toHaveLength(300); expect(entries[0]?.seq).toBe(0);
     expect(entries.some(e => e.kind.startsWith("thread_"))).toBe(false);
     expect(entries.at(-1)?.kind).toBe("follow_frozen");
+  });
+  it("locates a deep-link window, extends both sparse ends, then returns to the tail", async () => {
+    mocks.read.mockReset(); mocks.locate.mockReset();
+    mocks.locate.mockResolvedValue({ id: "r40", seq: 40, head_seq: 81 });
+    mocks.read.mockImplementation(async (_sessionId: string, params: { anchor?: number; before?: number; after?: number }) => {
+      if (params.anchor === 0) return windowOf([row(0, "head")]);
+      if (params.anchor === 40) return { ...windowOf([row(39), row(40), row(41)]), has_more_after: true };
+      if (params.anchor === 38) return { ...windowOf([row(37), row(38)]), has_more_after: true };
+      if (params.anchor === 41) return { ...windowOf([row(42), row(43)]), has_more_after: true };
+      return windowOf();
+    });
+    const replica = new IssueLogReplica("s");
+    await replica.loadAround("r40");
+    expect(mocks.locate).toHaveBeenCalledWith("s", "r40");
+    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 40, before: 15, after: 15 });
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 39, 40, 41]);
+    await replica.earlier();
+    await replica.newer();
+    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 38, before: 30 });
+    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 41, after: 30 });
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 37, 38, 39, 40, 41, 42, 43]);
+    await replica.loadTail();
+    expect(replica.hasWindowFor()).toBe(true);
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 80, 81]);
   });
 });

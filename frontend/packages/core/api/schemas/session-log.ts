@@ -28,4 +28,5 @@ export interface IssueLogBootstrap {
   sessionId: string;
   window: SessionLogWindow;
   head: SessionLogRow | null;
+  targetCommentId?: string;
 }

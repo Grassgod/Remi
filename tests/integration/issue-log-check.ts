@@ -13,7 +13,8 @@ import { BodyHtmlBackfillTask } from "../../packages/server/src/render/body-html
 
 const root = resolve(import.meta.dir, "../..");
 const webDir = join(root, "frontend/apps/web");
-const out = join(root, `reports/performance/MUL-444-step1${process.argv.includes("--dev") ? "-dev" : ""}`);
+const step2 = process.argv.includes("--step2");
+const out = join(root, `reports/performance/MUL-444-step${step2 ? 2 : 1}${process.argv.includes("--dev") ? "-dev" : ""}`);
 mkdirSync(out, { recursive: true });
 const results: Array<Record<string, unknown>> = [];
 const check = (name: string, ok: boolean, detail: Record<string, unknown> = {}) => {
@@ -45,6 +46,12 @@ const resolved = store.createIssueComment(fixture.longIssueId, {
   issueSessionId: fixture.longDefaultSessionId, body: "Resolved row source", authorType: "member", authorId: fixture.userId,
 });
 store.resolveIssueComment(resolved.id, { actorType: "member", actorId: fixture.userId });
+const otherSessionComment = store.createIssueComment(fixture.longIssueId, {
+  issueSessionId: fixture.longSessionIds[1]!, body: "Deep link in another session", authorType: "member", authorId: fixture.userId,
+});
+const commentLinkId = store.listConversationLogShown(fixture.longDefaultSessionId)
+  .filter(entry => entry.kind === "message")[40]?.id;
+if (!commentLinkId) throw new Error("Deep-link fixture needs a middle comment");
 const credential = (await store.createAccessToken({ name: "MUL-444 local fixture", type: "pat", purpose: "session",
   workspaceId: fixture.workspaceId, userId: fixture.userId, expiresInDays: 1 })).token;
 const apiPort = port(18400);
@@ -78,6 +85,9 @@ const xss = [
 const profile: PerfProfileConfig = { name: "contract", scrollRoot: '[data-perf-scroll="issue-detail"]', items: "[data-perf-item]",
   skeleton: '[data-slot="skeleton"]', anchors: [{ name: "latest-comment", selector: '[data-perf-anchor="latest-comment"]', pick: "first", visibility: "contained" }],
   rule: { kind: "anchor", anchors: ["latest-comment"] } };
+const deepProfile: PerfProfileConfig = { ...profile,
+  anchors: [{ name: "target-comment", selector: '[data-perf-anchor="target-comment"]', pick: "first", visibility: "contained" }],
+  rule: { kind: "anchor", anchors: ["target-comment"] } };
 async function ready(page: Page, timeout = 30_000) {
   await page.waitForSelector('[data-session-log-scroll][data-perf-state="ready"]', { timeout });
   await page.waitForFunction(() => !document.querySelector('[data-session-log-scroll] [data-slot="skeleton"]'));
@@ -147,6 +157,68 @@ try {
     console.log(`Dev warm SSR rows: ${count}`);
   }
   browser = await launchBrowser();
+  if (step2) for (let round = 1; round <= 3; round++) {
+    const context = await mktContext(browser, credential, [], origin);
+    await context.addCookies([{ name: "multimira_auth", value: credential, url: origin, httpOnly: true, sameSite: "Strict" }]);
+    await installRecorderOnContext(context, { profiles: [deepProfile] });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    const response = await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.longIssueId}?comment=${commentLinkId}`,
+      { waitUntil: "domcontentloaded" });
+    await ready(page);
+    const recorded = await readRecorder(page);
+    if (!recorded) throw new Error("Deep-link recorder missing");
+    const first = computeFirstRealMs(recorded.frames, "contract");
+    const jumps = computeJumps(recorded.frames.filter(frame => first !== null && frame.t >= first), { profile: "contract", fromMs: first });
+    const target = page.locator(`[data-perf-key="${commentLinkId}"]`);
+    const position = await page.evaluate((id) => {
+      const root = document.querySelector<HTMLElement>('[data-session-log-scroll]')!;
+      const row = document.querySelector<HTMLElement>(`[data-perf-key="${id}"]`)!;
+      const rootBox = root.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      return { delta: (rowBox.top + rowBox.bottom - rootBox.top - rootBox.bottom) / 2,
+        rowHeight: rowBox.height, state: root.dataset.stickState, positioned: root.dataset.ssrPositioned,
+        rows: root.querySelectorAll('[data-perf-item]').length };
+    }, commentLinkId);
+    writeFileSync(join(out, `comment-link-${round}.frames.json`), JSON.stringify(recorded));
+    await page.screenshot({ path: join(out, `comment-link-${round}.png`) });
+    check(`comment-link #${round} SSR target centered with no jump`, response?.ok() === true && first !== null
+      && jumps.jumpCount === 0 && Math.abs(position.delta) <= position.rowHeight
+      && position.state === "released" && position.positioned === "1" && position.rows >= 29 && position.rows <= 31,
+      { jumps: jumps.jumpCount, position, errors });
+    check(`comment-link #${round} target highlighted without resize`, await target.evaluate(row => row.className.includes("bg-warning/10")));
+    const initialHeight = await target.evaluate(row => row.getBoundingClientRect().height);
+    await page.waitForTimeout(2700);
+    check(`comment-link #${round} highlight fades after 2.5s at fixed height`, !(await target.evaluate(row => row.className.includes("bg-warning/10")))
+      && await target.evaluate(row => row.getBoundingClientRect().height) === initialHeight);
+    if (round === 1) {
+      const controls = { earlier: await page.locator("[data-log-earlier]").count(), newer: await page.locator("[data-log-newer]").count(),
+        latest: await page.locator("[data-log-return-latest]").count() };
+      check("deep window has both paging ends and return", controls.earlier === 1 && controls.newer === 1 && controls.latest === 1, controls);
+      await page.locator("[data-log-earlier]").click();
+      await page.waitForFunction(() => document.querySelectorAll('[data-perf-item]').length > 31);
+      await page.locator("[data-log-newer]").click();
+      await page.locator("[data-log-return-latest]").click();
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-session-log-scroll]')?.dataset.stickState === "pinned");
+      check("return latest loads tail and pins", await page.locator('[data-perf-anchor="latest-comment"]').count() === 1);
+    }
+    check(`comment-link #${round} no browser errors or cookie leak`, errors.length === 0 && !(await page.content()).includes(credential));
+    await context.close();
+  }
+  if (step2) {
+    const context = await mktContext(browser, credential, [], origin);
+    const page = await context.newPage();
+    const response = await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.longIssueId}?comment=${otherSessionComment.id}`,
+      { waitUntil: "domcontentloaded" });
+    await page.locator(`[data-perf-anchor="target-comment"][data-perf-key="${otherSessionComment.id}"]`).waitFor();
+    await ready(page);
+    check("no-cookie SSR shell locates comment in non-default session with client Bearer", response?.ok() === true
+      && await page.locator('[data-session-log-scroll][data-stick-state="released"]').count() === 1
+      && !(await page.content()).includes(credential));
+    await context.close();
+  }
+  if (!step2) {
   for (const entry of ["cold", "navigation"]) for (let round = 1; round <= 3; round++) {
     if (process.argv.includes("--one-cold") && (entry !== "cold" || round !== 1)) continue;
     mode = "ok";
@@ -271,12 +343,13 @@ try {
     check(`${failure} Bearer client fills list`, await page.locator('[data-perf-item="message"]').count() > 0);
     await context.close();
   }
+  }
   check("Cookie absent from local service logs", !logs.includes(credential));
 } catch (error) {
   console.error(error instanceof Error ? error.message.replaceAll(credential, "[redacted]") : "Failed");
   process.exitCode = 1;
 } finally {
-  writeFileSync(join(out, "report.json"), JSON.stringify({ step: 1, results }, null, 2));
+  writeFileSync(join(out, "report.json"), JSON.stringify({ step: step2 ? 2 : 1, results }, null, 2));
   writeFileSync(join(out, "services.log"), logs.replaceAll(credential, "[redacted]"));
   await browser?.close(); web?.kill(); server.stop(true); proxy.stop(true); db.close();
   process.exit(process.exitCode ?? 0);
