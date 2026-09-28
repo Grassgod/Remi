@@ -1194,6 +1194,16 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     browserWebSockets,
     jitterMs: options.jitterMs,
   });
+  // The pool this function built is this function's to close. A caller-supplied
+  // reader owns its own pool (see `readPool` in the options), and closing the
+  // server must not reach into it.
+  const closeOwnedReadPool = (): void => {
+    if (!ownedReadPool) return;
+    void ownedReadPool.close().catch(() => {
+      // Shutdown is best-effort: the process is going away and the store's own
+      // handle is closed by its owner.
+    });
+  };
   const stopServer = server.stop.bind(server);
   controlPlaneSshMesh?.start();
   server.stop = (closeActiveConnections?: boolean) => {
@@ -1211,6 +1221,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     issueTitleScheduler?.stop();
     store.stopNotificationDeliverySweeper();
     bodyHtmlBackfill?.stop();
+    closeOwnedReadPool();
     return stopServer(closeActiveConnections);
   };
   return serverWithResync;

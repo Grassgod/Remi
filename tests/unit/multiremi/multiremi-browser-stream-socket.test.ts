@@ -150,6 +150,36 @@ describe("MUL-438 browser stream endpoints", () => {
     }
   });
 
+  it("closes the read pool it built, and leaves an injected one alone", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    // The process under test builds no pool in `NODE_ENV=test` (the auth checks
+    // use the store's synchronous handles, because a suite seeds an in-memory
+    // database), so the injection is the only path worth pinning here: a caller
+    // that hands the server an authenticator owns that authenticator's resources.
+    let closed = 0;
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      port: 0,
+      hostname: "127.0.0.1",
+      authToken: null,
+      streamAuth: {
+        backend: "sqlite",
+        async logFacts() { return { ok: true, facts: null }; },
+        async traceFacts() { return { ok: true, facts: null }; },
+      },
+      readPool: {
+        postgres: false,
+        async query() { return []; },
+        async queryOne() { return null; },
+        async close() { closed += 1; },
+      },
+    });
+    server.stop(true);
+    expect(closed).toBe(0);
+  });
+
   it("broadcasts resync to the sockets this process holds", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
