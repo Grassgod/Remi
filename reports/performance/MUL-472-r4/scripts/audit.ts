@@ -173,6 +173,7 @@ function classification(row: Row): { category: string; reason: string } {
   if (row.file.endsWith("session-agent-stream-row.tsx")) return { category: "不门控（详情主体）", reason: "详情会话中的执行行；任务进度是主体输入，degraded header 必须继续刷新。" };
   if (row.owner === "TranscriptButton" || row.owner === "openPicker") return { category: "不等首屏 gate（交互）", reason: "用户展开 transcript 或父单选择器后才启用/执行。" };
   if (row.owner === "useWorkspaceAgentAvailability") return { category: "可见性门控", reason: "唯一实际调用方 ChatWindow 传入 chatVisible；agents 与 members 两个 observer 都使用该 enabled。" };
+  if (row.owner === "WorkLocationPicker") return { category: "调用实例门控", reason: "ChatWindow 中的隐藏选择器传 projectsEnabled=chatVisible；其他可见主体选择器默认 true，保留立即查询。" };
   if (row.keys.some(key => ["members", "projectList"].includes(key))) return row.owner === "ChatWindow"
     ? { category: "可见性门控", reason: "隐藏聊天的提及候选数据，只在 chatVisible 时订阅；同 key 的主体和权限 observer 见其余行。" }
     : { category: "不门控（主体 / 权限 / 交互）", reason: "项目主体列表、成员权限或已打开控件依赖；保留原 enabled，不能被隐藏聊天的延后策略限制。原表达式逐行列出。" };

@@ -2706,10 +2706,10 @@
     },
     {
       "file": "frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx",
-      "line": 31,
+      "line": 33,
       "operation": "useQuery",
       "owner": "WorkLocationPicker",
-      "expression": "useQuery({ ...projectListOptions(wsId), enabled: Boolean(wsId) && includeProjects })",
+      "expression": "useQuery({ ...projectListOptions(wsId), enabled: projectsEnabled && Boolean(wsId) && includeProjects })",
       "keyShapes": [
         [
           "projects",
@@ -2720,8 +2720,8 @@
       "keys": [
         "projectList"
       ],
-      "category": "不门控（主体 / 权限 / 交互）",
-      "reason": "项目主体列表、成员权限或已打开控件依赖；保留原 enabled，不能被隐藏聊天的延后策略限制。原表达式逐行列出。"
+      "category": "调用实例门控",
+      "reason": "ChatWindow 中的隐藏选择器传 projectsEnabled=chatVisible；其他可见主体选择器默认 true，保留立即查询。"
     },
     {
       "file": "frontend/packages/views/runtimes/components/runtimes-page.tsx",
@@ -7305,7 +7305,7 @@
     },
     {
       "file": "frontend/packages/views/chat/components/chat-window.tsx",
-      "line": 750,
+      "line": 751,
       "operation": "refetchMessages",
       "owner": "ChatWindow",
       "expression": "refetchMessages()",
@@ -7316,7 +7316,7 @@
     },
     {
       "file": "frontend/packages/views/chat/components/chat-window.tsx",
-      "line": 767,
+      "line": 768,
       "operation": "fetchOlderMessages",
       "owner": "ChatWindow",
       "expression": "fetchOlderMessages()",
@@ -7327,7 +7327,7 @@
     },
     {
       "file": "frontend/packages/views/chat/components/chat-window.tsx",
-      "line": 892,
+      "line": 893,
       "operation": "refetchSessions",
       "owner": "ChatWindow",
       "expression": "refetchSessions()",
@@ -13341,7 +13341,7 @@
     },
     {
       "file": "frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx",
-      "line": 30,
+      "line": 32,
       "operation": "useQuery",
       "owner": "WorkLocationPicker",
       "expression": "useQuery(runtimeWorkspacesOptions(wsId))",
@@ -13355,10 +13355,10 @@
     },
     {
       "file": "frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx",
-      "line": 31,
+      "line": 33,
       "operation": "useQuery",
       "owner": "WorkLocationPicker",
-      "expression": "useQuery({ ...projectListOptions(wsId), enabled: Boolean(wsId) && includeProjects })",
+      "expression": "useQuery({ ...projectListOptions(wsId), enabled: projectsEnabled && Boolean(wsId) && includeProjects })",
       "keyShapes": [
         [
           "projects",
@@ -13372,7 +13372,7 @@
     },
     {
       "file": "frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx",
-      "line": 32,
+      "line": 34,
       "operation": "useQuery",
       "owner": "WorkLocationPicker",
       "expression": "useQuery(runtimeListOptions(wsId))",
