@@ -196,10 +196,16 @@ delivery in the batch: a rejection there stranded the whole queue, so it tolerat
 exactly `IssueTopicConfigError` — the old row goes out as plain text with no `@`,
 and the next row still ships. Any other failure still propagates.
 
-One reader stays strict on purpose and is outside this change: the
-inbound-message path (`submitMessage`). It is `origin/main` behavior, and a config
-that reaches it has already been rejected at save time; the queue is where the
-outage actually showed up.
+Inbound messages (`submitMessage`) also use the lenient reader. Invalid stored
+notification settings produce a warning containing only the workspace ID; they
+do not block message acceptance or automatic Issue creation when `enabled` and
+`chatId` match. Invalid `projectIds` are treated as no project selection.
+The settings GET returns HTTP 200 with the recovered `config` and an optional
+`invalid: { code, message }` containing static validation details. Valid configs
+keep the previous response shape. The settings page shows the validation reason
+and asks the user to correct and save the configuration. PUT reads the previous
+config leniently but still validates the new config strictly: replacing an invalid
+recipient is allowed, while retaining an invalid `person` target returns HTTP 400.
 
 An expired request is never an approval: the terminal card reads
 「已超时，未回答」and the task takes the existing cancel path. The decision lanes
