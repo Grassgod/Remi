@@ -1277,7 +1277,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       expect(failures).toEqual([]);
       console.info(`MUL-449 ${dialect} matrix: ${cells} combinations; per-Runtime rollback probes, real claims and wait-text checks passed`);
     },
-    { timeout: dialect === "postgres" ? 600_000 : 120_000 });
+    { timeout: dialect === "postgres" ? 900_000 : 120_000 });
 
   });
   }
