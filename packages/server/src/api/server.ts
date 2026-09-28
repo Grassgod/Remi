@@ -811,6 +811,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   registerTaskRoutes(app, deps);
 
+  // Removed v1 daemon routes reach this fallback; live routes keep their handlers.
+  app.all("/api/daemon/*", c => c.json({
+    code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN,
+  }, 426));
+
   return app;
 }
 

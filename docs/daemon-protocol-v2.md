@@ -691,6 +691,10 @@ server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
 - claim 路由永远返回 `{task: null}`；
 - 其余 v1 路由返回 426 `{code: "daemon_protocol_upgrade_required", min_version}`。
 
+已删除的 `/api/daemon/*` 路由由最后注册的统一 fallback 返回 426，`min_version` 为协议版本 `2`。
+现存按需 HTTP 路由、心跳升级通道和 `update/:id/result` 继续由原 handler 处理；鉴权与角色 guard
+仍在 fallback 之前。回归用固定 main 路由快照与当前快照的差集覆盖删除项，不逐条补兼容路由。
+
 v1 daemon 因此拿不到任何任务，但会走它自己的 `handleRuntimeUpdate` 升级并重启。**这不是兼容方案**：
 v1 在 v2 服务端上一件活都干不了，保留的唯一能力是「把自己换成 v2」。
 
