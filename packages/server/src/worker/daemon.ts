@@ -3503,6 +3503,7 @@ export class MultiremiDaemon {
       summary = await this.runAgent(
         task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
         progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
+        relay?.one_million_models ?? [],
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -4207,6 +4208,7 @@ export class MultiremiDaemon {
     providerEnv?: Record<string, string>,
     progressSummarizer?: TaskProgressSummarizer | null,
     privateTmpDirectory?: string,
+    claudeOneMillionModels: readonly string[] = [],
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4291,6 +4293,7 @@ export class MultiremiDaemon {
       executable: config.executable,
       args: config.customArgs,
       model: task.claudeProfile?.model ?? config.model,
+      claudeOneMillionModels,
       ...(task.claudeProfile ? { claudeSettings: { model: task.claudeProfile.model, env: runtimeClaudeProfileRouting(task.claudeProfile) } } : {}),
       allowedTools: config.allowedTools,
       cwd: config.cwd,
