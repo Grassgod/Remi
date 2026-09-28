@@ -2207,6 +2207,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       delegation_id TEXT,
       delegated_by_agent_id TEXT,
       delegation_return_task_id TEXT,
+      delegated_from_issue_session_id TEXT,
+      delegation_skip_reason TEXT,
+      wake_source TEXT,
       assignment_event_id TEXT,
       assignment_source_event_id TEXT,
       projection_from_seq INTEGER,
@@ -2892,11 +2895,26 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_tasks", "delegation_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegated_by_agent_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_return_task_id TEXT");
+  // MUL-400 E2b: where a cross-issue delegation returns (the delegator's Issue
+  // Session at dispatch time) and why a task-token dispatch was not recorded as
+  // a delegation. Both are add-only: existing rows read NULL, which keeps the
+  // legacy "return to the task's own Session" behaviour for old tasks.
+  addColumnIfMissing(db, "multiremi_tasks", "delegated_from_issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "delegation_skip_reason TEXT");
+  // MUL-400 E2b ruling: server-owned marker for notification rounds the server
+  // generated itself (E2 child-status rounds). NULL means "not a server wake
+  // round", so D4's manual-wakeup lookup can exclude it without trusting any
+  // request-body field. Add-only: existing rows read NULL.
+  addColumnIfMissing(db, "multiremi_tasks", "wake_source TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation_return_pending
     ON multiremi_tasks(issue_session_id, delegated_by_agent_id, delegation_return_task_id, status)`);
+  // MUL-400 E2b: the drain now selects by the return Session, which is not the
+  // task's own Session for a cross-issue delegation.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation_return_target
+    ON multiremi_tasks(delegated_from_issue_session_id, delegated_by_agent_id, delegation_return_task_id, status)`);
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");

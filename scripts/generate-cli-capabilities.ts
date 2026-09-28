@@ -180,6 +180,7 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues": "issue.list",
     "POST /api/multiremi/issues": "issue.create",
     "GET /api/issues/grouped": "issue.grouped",
+    "GET /api/issues/status-pages": "issue.status-pages",
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
