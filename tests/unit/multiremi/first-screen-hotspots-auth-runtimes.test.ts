@@ -204,6 +204,10 @@ describe("MUL-473 runtimes list", () => {
 
   it("does not read the other workspaces' runtimes or their models", async () => {
     const harness = await seedRuntimes();
+    // Compare equally warm authentication; main throttles its first-use stamp.
+    const warmup = await harness.app.request("/api/runtimes", { headers: harness.headers });
+    expect(warmup.status).toBe(200);
+    await warmup.arrayBuffer();
     harness.probe.reset();
     const response = await harness.app.request("/api/runtimes", { headers: harness.headers });
     expect(response.status).toBe(200);

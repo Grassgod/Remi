@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createPr2Harness } from "../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
 
-// Run this identical harness on main@7bd32800 and the PR branch, with the
+// Run this identical harness on main@58bf5cc0 and the PR branch, with the
 // hermetic preload. Explicit PG configuration is required to work.
 const warmups = Number(process.env.MUL473_WARMUPS ?? 5);
 const samples = Number(process.env.MUL473_SAMPLES ?? 20);

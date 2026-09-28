@@ -16,46 +16,46 @@
     {
       "label": "inbox summary",
       "status": 200,
-      "dbq": 7,
+      "dbq": 6,
       "dbBytes": 10084,
       "responseBytes": 28,
       "responseSha256": "bf2c08fcbe24e8e1167d00db486cce838032835eb8ae9139f10b6ae3056c8dae",
-      "dbMs": 4.761164000000463,
-      "p50Ms": 6.030710999999428,
-      "p95Ms": 8.333019000000604
+      "dbMs": 3.4220930000019507,
+      "p50Ms": 4.058461999999963,
+      "p95Ms": 6.61605099999997
     },
     {
       "label": "attachment cold",
       "status": 200,
-      "dbq": 4,
+      "dbq": 3,
       "dbBytes": 1566,
       "responseBytes": 262144,
       "responseSha256": "3637bbb97e98d009f2be4d0d4a50e73431d6b07b3ede39829e09bbf566a972a0",
-      "dbMs": 2.6105990000005477,
-      "p50Ms": 3.8151590000006763,
-      "p95Ms": 5.848167000000103
+      "dbMs": 1.208781999999701,
+      "p50Ms": 2.152832999999191,
+      "p95Ms": 4.493115000000216
     },
     {
       "label": "attachment conditional",
       "status": 304,
-      "dbq": 4,
+      "dbq": 3,
       "dbBytes": 1566,
       "responseBytes": 0,
       "responseSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "dbMs": 2.168205000000853,
-      "p50Ms": 2.8036959999999453,
-      "p95Ms": 4.300690000000031
+      "dbMs": 1.1187950000003184,
+      "p50Ms": 1.5949540000001434,
+      "p95Ms": 3.464042000000518
     },
     {
       "label": "runtimes",
       "status": 200,
-      "dbq": 7,
+      "dbq": 6,
       "dbBytes": 27728,
       "responseBytes": 9875,
-      "responseSha256": "03438133b0edb461cab529d4e5a9ce1ec92205bf981963bbd04547089e5d0e2f",
-      "dbMs": 4.36041699999987,
-      "p50Ms": 5.308289000000514,
-      "p95Ms": 7.8941359999998895
+      "responseSha256": "2c21a78a8be3b5bd547410d3874dabcefad535bb6d2750e1de45767e57f9010b",
+      "dbMs": 3.6249039999984234,
+      "p50Ms": 4.417349000000286,
+      "p95Ms": 6.374648999999408
     }
   ]
 }

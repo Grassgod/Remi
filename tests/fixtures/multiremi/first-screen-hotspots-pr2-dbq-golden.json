@@ -7,8 +7,8 @@
     "foreignRuntimes": 1,
     "routes": {
       "/api/inbox/summary": 7,
-      "/api/attachments/:id/content": 4,
-      "/api/runtimes": 7
+      "/api/attachments/:id/content": 3,
+      "/api/runtimes": 6
     }
   },
   {
@@ -19,8 +19,8 @@
     "foreignRuntimes": 30,
     "routes": {
       "/api/inbox/summary": 7,
-      "/api/attachments/:id/content": 4,
-      "/api/runtimes": 7
+      "/api/attachments/:id/content": 3,
+      "/api/runtimes": 6
     }
   },
   {
@@ -31,8 +31,8 @@
     "foreignRuntimes": 100,
     "routes": {
       "/api/inbox/summary": 7,
-      "/api/attachments/:id/content": 4,
-      "/api/runtimes": 7
+      "/api/attachments/:id/content": 3,
+      "/api/runtimes": 6
     }
   }
 ]
