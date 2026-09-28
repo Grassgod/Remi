@@ -13,6 +13,10 @@ fallback. Steps 2 and 3 are not implemented. Independent strict QA is pending.
   batched runtime list and MUL-421's protocol projection, without raising the
   existing query-count budgets. The wire golden adds only prerequisite protocol
   fields; replica fixture changes correct types, not QA assertions.
+- The result-comment regression fixture uses the existing v2 `reportFrame`
+  dispatch instead of the HTTP start/complete routes removed by MUL-421. Its
+  runtime metadata now advertises the real daemon's parallel execution
+  capability. Result, prompt, snapshot and SELECT-count assertions are unchanged.
 
 ## Acceptance Mapping
 
@@ -48,6 +52,11 @@ bun test tests/integration/daemon-protocol-v2/upgrade-channel.test.ts \
 Other successful local checks: `bunx tsc --noEmit`, `npm run docs:test`
 (13 tests), `npm run docs:check`, API snapshot check, and CLI capability checker
 (678 mapped / 70 exempt / 0 missing / 748 routes).
+
+`bun test tests/unit/multiremi/multiremi-delegation-result-comment-once.test.ts`
+completed with **12 pass, 0 fail, 12 existing Postgres skips**. The local host has
+no Postgres server or Docker; the corresponding Postgres cases must run in CI.
+See `delegation-fixture-tests.log`.
 
 The broader prerequisite regression also completed with **1129 pass, 0 fail**:
 
