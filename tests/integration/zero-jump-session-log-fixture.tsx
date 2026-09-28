@@ -146,6 +146,8 @@ interface FixtureControl {
   setWidthBetweenFrames(px: number): Promise<void>;
   /** The positive control: scroll the list by a known amount, between two frames. */
   scrollByBetweenFrames(deltaPx: number): Promise<void>;
+  /** Replace one row's body with a `body_html: null` variant (degraded_render). */
+  degradeRowBetweenFrames(seq: number): Promise<void>;
   /** Snapshot the facts a scenario asserts on. */
   state(): FixtureState;
 }
@@ -163,6 +165,8 @@ export interface FixtureState {
   clientHeight: number;
   clientWidth: number;
   newMessages: string | null;
+  /** Rows that fell back to the client renderer (`degraded_render`). */
+  degraded: number;
   /**
    * Distance from the end of the content, in pixels. The scenarios perturbs the
    * list while it is released, so this value is how the driver proves the state
@@ -223,6 +227,15 @@ createRoot(host).render(
       replica={replica}
       resetKey={`fixture:${SESSION_ID}`}
       testIdPrefix="fixture-session-log"
+      // The degrade path's client renderer. Kept deliberately crude: the point of
+      // the scenario is that a row without `body_html` renders *something* of
+      // roughly the same height without moving the reader, not that this fallback
+      // is pretty.
+      renderFallback={(item) => (
+        <p data-fixture-degraded="" style={{ margin: 0 }}>
+          {item.body_md}
+        </p>
+      )}
     />
   </I18nProvider>,
 );
@@ -294,6 +307,14 @@ window.__mul443SessionLog = {
     if (!root) return;
     root.scrollTop = Math.max(0, root.scrollTop - deltaPx);
   }),
+  degradeRowBetweenFrames: (seq: number) => inFrame(() => {
+    const current = replica.getSnapshot(SESSION_ID);
+    const target = current.entries.find((item) => item.seq === seq);
+    if (!target) return;
+    // A new revision whose HTML is missing is what the backfill window looks
+    // like: the row has to fall back to the client renderer without moving.
+    replica.append(SESSION_ID, [{ ...target, revision: target.revision + 1, body_html: null }]);
+  }),
   state: () => {
     const snapshot = replica.getSnapshot(SESSION_ID);
     const root = document.querySelector("[data-session-log-scroll]") as HTMLElement | null;
@@ -311,6 +332,7 @@ window.__mul443SessionLog = {
       clientWidth: root?.clientWidth ?? 0,
       newMessages: chip?.textContent?.trim() ?? null,
       bottomDistance: root ? root.scrollHeight - root.scrollTop - root.clientHeight : 0,
+      degraded: Number(root?.getAttribute("data-session-log-degraded") ?? "0"),
     };
   },
 };

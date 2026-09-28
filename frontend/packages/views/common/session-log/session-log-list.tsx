@@ -65,6 +65,13 @@ export interface SessionLogListProps {
    * re-parses markdown itself.
    */
   renderFallback?: (entry: SessionLogEntry) => React.ReactNode;
+  /**
+   * Called once per row that had to render on the client because `body_html` was
+   * missing — the `degraded_render` count from plan 3/6 §3. The list also
+   * publishes its own running total on the scroll root as
+   * `data-session-log-degraded`, so a probe can read it without a consumer.
+   */
+  onDegradedRender?: (entry: SessionLogEntry) => void;
   /** Rendered per row instead of the default `EntryHtml`. */
   renderEntry?: (args: SessionLogListRenderArgs) => React.ReactNode;
   /** What to render before the replica answers at all. */
@@ -115,6 +122,7 @@ export function SessionLogList({
   anchor = { kind: "bottom" },
   resetKey,
   renderFallback,
+  onDegradedRender,
   renderEntry,
   renderPending,
   className,
@@ -123,6 +131,21 @@ export function SessionLogList({
   const { t } = useT("chat");
 
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  /**
+   * Degraded rows (`body_html` missing, so the row rendered on the client).
+   *
+   * Counted in state rather than written to the DOM imperatively: React
+   * re-applies a declarative attribute on every render, so a ref-counted
+   * attribute would be reset to its initial value by the next render — the same
+   * trap `EntryHtml` documents for `dangerouslySetInnerHTML`. The cost is one
+   * re-render per batch of degraded rows, and updates from effects in the same
+   * commit are batched, so a window of them costs one.
+   */
+  const [degradedCount, setDegradedCount] = useState(0);
+  const reportDegraded = useCallback((entry: SessionLogEntry) => {
+    setDegradedCount((count) => count + 1);
+    onDegradedRender?.(entry);
+  }, [onDegradedRender]);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
   const [widthPx, setWidthPx] = useState(0);
   const elementRefs = useRef(new Map<number, HTMLElement>());
@@ -270,6 +293,7 @@ export function SessionLogList({
       <div
         ref={setScrollEl}
         data-session-log-scroll=""
+        data-session-log-degraded={degradedCount}
         data-perf-scroll="session-log"
         className="relative h-full overflow-y-auto"
       >
@@ -311,6 +335,7 @@ export function SessionLogList({
                     <EntryHtml
                       html={entry.body_html}
                       markdown={entry.body_md}
+                      onDegradedRender={() => reportDegraded(entry)}
                       fallback={renderFallback ? renderFallback(entry) : null}
                     />
                   )}

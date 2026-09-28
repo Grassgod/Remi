@@ -85,7 +85,12 @@ const PROFILE: PerfProfileConfig = {
   rule: { kind: "anchor", anchors: ["latest-message"] },
 };
 
-type ScenarioKey = "append-20" | "row-height-change" | "width-change" | "positive-control";
+type ScenarioKey =
+  | "append-20"
+  | "row-height-change"
+  | "width-change"
+  | "degraded-render"
+  | "positive-control";
 
 interface Scenario {
   key: ScenarioKey;
@@ -117,6 +122,12 @@ interface Scenario {
    * Scenario perturbations must not move the reader; the control must.
    */
   expectScrollDeltaPx?: number;
+  /**
+   * Degraded-render count the perturbation should raise. The degraded row is
+   * below the viewport, so the content height need not change and
+   * `scrollHeight` is not a usable "did it apply" signal for it.
+   */
+  expectDegradedCount?: number;
 }
 
 const SCENARIOS: Scenario[] = [
@@ -181,6 +192,30 @@ const SCENARIOS: Scenario[] = [
     },
     expectRowsAdded: null,
     expectWidth: 640,
+  },
+  {
+    key: "degraded-render",
+    what: "a row's body_html disappears (backfill window), so it renders on the client",
+    /**
+     * The plan's `degraded_render` path. The row that degrades is below the
+     * reader, and the assertion is the pair again: the row really did fall back
+     * (the fixture's own counter goes up) and the reader did not move.
+     */
+    reader: "released",
+    perturb: async (page) => {
+      const before = await page.evaluate(() => window.__mul443SessionLog!.state().degraded);
+      // The last row: below the reader's viewport at the 300px release offset,
+      // so its fallback cannot move what they are looking at.
+      await page.evaluate((seq: number) => window.__mul443SessionLog!.degradeRowBetweenFrames(seq), 60);
+      await page.waitForFunction(
+        (expected: number) => window.__mul443SessionLog!.state().degraded > expected,
+        before,
+        { timeout: 5_000 },
+      );
+    },
+    expectRowsAdded: null,
+    expectWidth: null,
+    expectDegradedCount: 1,
   },
 ];
 
@@ -249,6 +284,8 @@ interface FixtureState {
   clientHeight: number;
   clientWidth: number;
   newMessages: string | null;
+  /** Rows that fell back to the client renderer (`degraded_render`). */
+  degraded: number;
   /**
    * Distance from the end of the content, in pixels. The scenarios park the
    * reader in the released state, so this is how the driver proves the state it
@@ -271,6 +308,7 @@ declare global {
       setWidthBetweenFrames(px: number): Promise<void>;
       /** The positive control: a deliberate scroll, which must register as a jump. */
       scrollByBetweenFrames(deltaPx: number): Promise<void>;
+      degradeRowBetweenFrames(seq: number): Promise<void>;
     };
   }
 }
@@ -477,6 +515,7 @@ const EMPTY_STATE: FixtureState = {
   clientHeight: 0,
   clientWidth: 0,
   newMessages: null,
+  degraded: 0,
   bottomDistance: 0,
 };
 
@@ -627,7 +666,9 @@ async function runRound(input: {
         ? Math.round(after.width) === scenario.expectWidth
         : scenario.expectScrollDeltaPx !== undefined
           ? Math.abs(scrollMovedPx - scenario.expectScrollDeltaPx) <= 1
-          : after.scrollHeight !== settled.scrollHeight;
+          : scenario.expectDegradedCount !== undefined
+            ? after.degraded - settled.degraded === scenario.expectDegradedCount
+            : after.scrollHeight !== settled.scrollHeight;
     if (!result.perturbationApplied) {
       result.error = result.error ?? "the scenario's perturbation did not take effect";
     }
@@ -718,7 +759,8 @@ async function main(): Promise<void> {
         rounds.push(result);
         const verdict = result.error
           ? `ERROR ${result.error}`
-          : `jumps=${result.jumpCount} px=${result.jumpPx} state=${result.perfState} fresh=${result.perfFresh}`;
+          : `jumps=${result.jumpCount} px=${result.jumpPx} state=${result.perfState} fresh=${result.perfFresh}`
+            + ` grow=${result.contentGrowthPx} degraded=${result.after.degraded}`;
         log(`  ${scenario.key} #${round}: ${verdict}`);
       }
     }

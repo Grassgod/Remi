@@ -183,17 +183,25 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
-  it("falls back to the client renderer when body_html is empty", () => {
+  it("falls back to the client renderer when body_html is empty, and counts it", () => {
     const replica = new MemorySessionReplica({
-      [SESSION]: { entries: [entry(1, { body_html: null })] },
+      [SESSION]: {
+        entries: [entry(1, { body_html: null }), entry(2, { body_html: null }), entry(3)],
+      },
     });
+    const degraded: number[] = [];
     const view = renderList(replica, {
       renderFallback: (item) => <span data-testid="degraded">{item.body_md}</span>,
+      onDegradedRender: (item: SessionLogEntry) => degraded.push(item.seq),
     });
     reveal();
 
-    expect(view.getAllByTestId("degraded")).toHaveLength(1);
-    expect(view.container.querySelector("[data-entry-html]")).toBeNull();
+    expect(view.getAllByTestId("degraded")).toHaveLength(2);
+    expect(degraded).toEqual([1, 2]);
+    // The rendered row still takes the pre-rendered path.
+    expect(view.container.querySelectorAll("[data-entry-html]")).toHaveLength(1);
+    // And the running count is readable from the DOM, for the probe.
+    expect(view.root.getAttribute("data-session-log-degraded")).toBe("2");
     view.restore();
   });
 
