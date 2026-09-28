@@ -380,8 +380,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
-    expect(refused, routeCountHint("runtime")).toBe(691);
-    expect(refused + 2, routeCountHint("runtime")).toBe(693);
+    // MUL-395: /api/issues/status-pages is browser/CLI traffic, outside the
+    // runtime allowlist. UI serves it; runtime refuses this one new route.
+    expect(refused, routeCountHint("runtime")).toBe(692);
+    expect(refused + 2, routeCountHint("runtime")).toBe(694);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

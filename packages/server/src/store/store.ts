@@ -3263,6 +3263,10 @@ runMigrations(this.db);
     return this.issues.countIssues(input);
   }
 
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false) {
+    return this.issues.listIssueStatusPages(input, includeArchivedTotal);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     return this.issues.listGroupedIssues(input);
   }
