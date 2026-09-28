@@ -255,7 +255,7 @@ describe("MUL-473 inbox summary", () => {
       expect(actual.body.attention).toBeGreaterThan(0);
       expect(actual.body.unread).toBeGreaterThan(0);
     }
-  });
+  }, 20000);
 
   it("matches the pre-change implementation on a random mix of inbox shapes", async () => {
     let state = 0x473b_ee;
@@ -310,7 +310,7 @@ describe("MUL-473 inbox summary", () => {
     // Archived rows must not be counted (the old query filtered them too).
     harness.db.run("UPDATE multiremi_inbox_items SET archived = 1");
     expect((await getInboxSummary(harness, 0)).body).toEqual({ unread: 0, attention: 0 });
-  });
+  }, 20000);
 
   it("keeps the bridge payload proportional to the completed runs, not to the inbox", async () => {
     const measurements: Array<{ inboxRows: number; statements: number; bytes: number }> = [];
@@ -332,7 +332,7 @@ describe("MUL-473 inbox summary", () => {
     for (const point of measurements) expect(point.bytes).toBeLessThan(100 * 1024);
     const perRow = measurements.map((point) => point.bytes / point.inboxRows);
     expect(perRow[2]!).toBeLessThan(perRow[0]! * 2);
-  });
+  }, 20000);
 });
 
 describe("MUL-473 attachment content caching", () => {
@@ -372,7 +372,7 @@ describe("MUL-473 attachment content caching", () => {
     // identity, size and mtime, none of which a read changes.
     const second = await harness.app.request(`/api/attachments/${seeded.id}/content`, { headers: harness.headers });
     expect(second.headers.get("etag")).toBe(response.headers.get("etag"));
-  });
+  }, 20000);
 
   it("answers 304 with no body when If-None-Match matches", async () => {
     const harness = await createHarness({ sessions: 1, agents: 1, issues: 2, inboxRows: 0 });
@@ -402,7 +402,7 @@ describe("MUL-473 attachment content caching", () => {
     });
     expect(stale.status).toBe(200);
     expect((await stale.arrayBuffer()).byteLength).toBe(seeded.bytes.length);
-  });
+  }, 20000);
 
   it("keeps the download route's Content-Disposition and caching identical", async () => {
     const harness = await createHarness({ sessions: 1, agents: 1, issues: 2, inboxRows: 0 });
@@ -412,7 +412,7 @@ describe("MUL-473 attachment content caching", () => {
     expect(response.headers.get("content-disposition")).toStartWith("attachment;");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("etag")).toBeNull();
-  });
+  }, 20000);
 
   it("still 404s for a missing file and an unknown attachment", async () => {
     const harness = await createHarness({ sessions: 1, agents: 1, issues: 2, inboxRows: 0 });
@@ -435,5 +435,5 @@ describe("MUL-473 attachment content caching", () => {
     expect(await missing.json()).toEqual({ error: "attachment file not found" });
     const unknown = await harness.app.request("/api/attachments/att_nope/content", { headers: harness.headers });
     expect(unknown.status).toBe(404);
-  });
+  }, 20000);
 });

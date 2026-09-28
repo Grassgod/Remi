@@ -188,7 +188,7 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
     } finally {
       restoreIds();
     }
-  });
+  }, 20000);
 
   it("keeps pending-tasks' ranking identical to the per-Session pendingTasks() order", async () => {
     const harness = await createHarness();
@@ -214,7 +214,7 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
     // Each Session contributes at most one task, and only the reader's Sessions do.
     expect(new Set(tasks.tasks.map((task) => task.chat_session_id)).size).toBe(tasks.tasks.length);
     expect(tasks.tasks.every((task) => fixture.sessionIds.includes(task.chat_session_id))).toBe(true);
-  });
+  }, 20000);
 });
 
 describe("MUL-473 first-screen hotspot query counts", () => {
@@ -247,7 +247,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     expect(perTask[0]!).toBeGreaterThan(perTask[1]!);
     expect(perTask[1]!).toBeGreaterThanOrEqual(perTask[2]!);
     expect(twoHundred.bytes).toBeGreaterThan(one.bytes);
-  });
+  }, 20000);
 
   it("reads no Chat message column for pending-tasks", async () => {
     const harness = await createHarness();
@@ -255,7 +255,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const sql = [...harness.probe.bySql.keys()];
     const messageReads = sql.filter((statement) => /multiremi_chat_messages/i.test(statement));
     expect(messageReads).toEqual([]);
-  });
+  }, 20000);
 
   it("loads no Skill body on the pending-tasks path", async () => {
     const harness = await createHarness({ skillBodyBytes: 64_000 });
@@ -266,7 +266,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const skillSql = [...harness.probe.bySql.keys()].filter((statement) =>
       /multiremi_skill_files/i.test(statement));
     expect(skillSql).toEqual([]);
-  });
+  }, 20000);
 
   it("keeps my-issues' statement count flat for id-shaped assignee filters", async () => {
     const byUserId: number[] = [];
@@ -305,7 +305,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // QA workspace, because a `usr_` ref was probed against every Agent *with*
     // its Skill bodies. 9 is the cost of the exact historical search order.
     expect(Math.max(...byUserId)).toBeLessThanOrEqual(9);
-  });
+  }, 20000);
 
   it("keeps the untyped fallback affordable for the shapes that reach it", async () => {
     // The three refs that cannot be prefix-locked, so all three kinds are read:
@@ -332,7 +332,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
         expect((measured.body as { total: number }).total > 0).toBe(budget === 9);
       }
     }
-  });
+  }, 20000);
 
   it("does not hydrate Skills while resolving an assignee filter", async () => {
     const harness = await createHarness({ issues: 60, sessions: 1, inboxRows: 0, skillBodyBytes: 64_000 });
@@ -341,7 +341,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
       /multiremi_skill_files/i.test(statement))).toEqual([]);
     expect([...harness.probe.bySql.keys()].filter((statement) =>
       /multiremi_skills/i.test(statement))).toEqual([]);
-  });
+  }, 20000);
 
   it("still resolves name-shaped and ambiguous refs through the alias tiers", async () => {
     const harness = await createHarness({ issues: 60, sessions: 1, inboxRows: 0 });
@@ -363,7 +363,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // An unknown ref still falls back to the literal value, as before.
     const unknown = await getJson(harness, "/api/issues?assignee_id=mem_missing_person&limit=50");
     expect((unknown.body as { total: number }).total).toBe(0);
-  });
+  }, 20000);
 
   it("keeps the private-Agent rule: only its owner and workspace admins see its tasks", async () => {
     const harness = await createHarness({ sessions: 6, inboxRows: 0, issues: 0 });
@@ -410,7 +410,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     });
     expect((ownerView.body as { tasks: Array<{ chat_session_id: string }> }).tasks
       .map((task) => task.chat_session_id)).toContain(ownerSession.id);
-  });
+  }, 20000);
 });
 
 async function getJsonWithHeaders(

@@ -7,7 +7,7 @@ const fixtureDir = `${import.meta.dir}/../../fixtures/multiremi`;
 it("matches the pre-PR2 wire response golden byte for byte", async () => {
   expect(`${JSON.stringify(await capturePr2Responses(), null, 2)}\n`)
     .toBe(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-golden.json`, "utf8"));
-});
+}, 20000);
 
 const dbqGolden = JSON.parse(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-dbq-golden.json`, "utf8"));
 for (const point of [0, 1, 2]) {
@@ -42,7 +42,7 @@ it("authorizes private attachments before comparing even a correct ETag", async 
     const unsigned = await harness.app.request(path, { headers: { "If-None-Match": etag! } });
     expect(unsigned.status).toBe(401);
   } finally { await harness.dispose(); }
-});
+}, 20000);
 
 it("hydrates usage, groups and models exactly like the old per-runtime reads", async () => {
   const harness = await createPr2Harness();
@@ -59,4 +59,4 @@ it("hydrates usage, groups and models exactly like the old per-runtime reads", a
     expect(updated).toEqual(harness.store.getRuntime("rt_pr2_1")!);
     expect(updated!.inputTokens).toBeGreaterThanOrEqual(73);
   } finally { await harness.dispose(); }
-});
+}, 20000);

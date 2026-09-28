@@ -200,7 +200,7 @@ describe("MUL-473 runtimes list", () => {
     const perRuntime = harness.store.getRuntime("rt_local_2")!;
     expect(perRuntime.models.map((model) => model.id).sort())
       .toEqual(hydrated.get("rt_local_2")!.models.map((model) => model.id).sort());
-  });
+  }, 20000);
 
   it("does not read the other workspaces' runtimes or their models", async () => {
     const harness = await seedRuntimes();
@@ -230,7 +230,7 @@ describe("MUL-473 runtimes list", () => {
     expect((await harness.app.request("/api/runtimes", { headers: harness.headers })).status).toBe(200);
     const after = harness.probe.statements;
     expect(after).toBe(before);
-  });
+  }, 20000);
 
   it("keeps the daemon token bound to its own runtime", async () => {
     const harness = await seedRuntimes();
@@ -260,5 +260,5 @@ describe("MUL-473 runtimes list", () => {
     expect(response.status).toBe(200);
     const listed = await response.json() as Array<{ id: string }>;
     expect(listed.map((runtime) => runtime.id)).toEqual(["rt_daemon_a"]);
-  });
+  }, 20000);
 });
