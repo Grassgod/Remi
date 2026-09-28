@@ -3,10 +3,9 @@
  *
  * The session tests cover the state machine against a fake socket. What only a
  * real socket can show is the wiring: that the upgrade distinguishes a v2 socket
- * from the v1 wake-up path, that the URL marker and the credential both work,
+ * from a rejected v1 URL, that the URL marker and the credential both work,
  * that `hello` really reaches the transport over the wire, that the server's
- * accepted limits are the A-0 constants, and that v1 keeps working unchanged
- * (A-1's explicit coexistence rule).
+ * accepted limits are the A-0 constants. A-2 removes A-1's v1 coexistence path.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api.js";
@@ -121,31 +120,25 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
     }
   });
 
-  it("accepts a v2 socket with no URL marker when a daemon credential is presented", async () => {
+  it("requires the protocol URL marker even with a valid daemon credential", async () => {
     const { store, token } = await daemonFixture();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${server.port}/api/daemon/ws`,
-      { headers: { Authorization: `Bearer ${token.token}` } } as never,
-    );
     try {
-      await waitWebSocketOpen(socket);
-      socket.send(helloFrame());
-      expect(await nextWebSocketMessage(socket)).toMatchObject({ t: "welcome" });
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws`, {
+        headers: { Upgrade: "websocket", Connection: "Upgrade", Authorization: `Bearer ${token.token}` },
+      });
+      expect(response.status).toBe(426);
+      expect(await response.json()).toMatchObject({ code: "daemon_protocol_upgrade_required", min_version: 2 });
     } finally {
-      socket.close();
       server.stop(true);
     }
   });
 
-  it("accepts a marker-less v2 socket on the deployment master credential", async () => {
-    // The master credential is the historical daemon credential and the protocol
-    // document's §1.1 URL carries no marker, so a v2 daemon that authenticates
-    // this way must not be turned away as a malformed v1 upgrade.
+  it("accepts a marked v2 socket on the deployment master credential", async () => {
     const { store } = await daemonFixture();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
     const socket = new WebSocket(
-      `ws://127.0.0.1:${server.port}/api/daemon/ws`,
+      `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
       { headers: { Authorization: "Bearer root-secret" } } as never,
     );
     try {
@@ -158,42 +151,29 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
     }
   });
 
-  it("keeps the v1 wake-up path byte-identical for a socket that names its runtimes", async () => {
+  it("rejects the removed v1 per-runtime wake-up URL with an upgrade response", async () => {
     const { store, token } = await daemonFixture();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_v2`,
-      { headers: { Authorization: `Bearer ${token.token}` } } as never,
-    );
     try {
-      await waitWebSocketOpen(socket);
-      // v1 still receives `ready`, not `welcome`: A-2 deletes this branch.
-      //
-      // Asserted field for field (not with `toMatchObject`) so an accidental extra
-      // key or a changed value in the v1 frame fails here instead of reaching the
-      // fleet. This is the only place the v1 shape is pinned by content.
-      expect(await nextWebSocketMessage(socket)).toEqual({
-        type: "ready",
-        transport: "websocket",
-        runtime_id: "rt_v2",
-        runtime_ids: ["rt_v2"],
-        connected_at: expect.any(String),
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_v2`, {
+        headers: { Upgrade: "websocket", Connection: "Upgrade", Authorization: `Bearer ${token.token}` },
       });
+      expect(response.status).toBe(426);
+      expect(await response.json()).toMatchObject({ code: "daemon_protocol_upgrade_required", min_version: 2 });
     } finally {
-      socket.close();
       server.stop(true);
     }
   });
 
-  it("still answers a marker-less, credential-less upgrade with the v1 400", async () => {
+  it("answers a marker-less, credential-less upgrade with 426", async () => {
     const { store } = await daemonFixture();
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: "root-secret" });
     try {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws`, {
         headers: { Upgrade: "websocket", Connection: "Upgrade" },
       });
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "runtime_ids required" });
+      expect(response.status).toBe(426);
+      expect(await response.json()).toMatchObject({ code: "daemon_protocol_upgrade_required", min_version: 2 });
     } finally {
       server.stop(true);
     }

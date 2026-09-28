@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 
 for (const provider of ["codex", "claude"] as const) {
   it(`discovers custom ${provider} models, caches refreshes and executes the selected model`, async () => {
@@ -48,9 +49,11 @@ for (const provider of ["codex", "claude"] as const) {
     let reports = 0;
     const updateModels = store.updateRuntimeModels.bind(store);
     store.updateRuntimeModels = (...args) => { reports++; return updateModels(...args); };
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token, daemonId: "catalog-daemon", runtimeId: runtime.id,
       runtimeName: "Catalog", provider, workspaceId: "local", daemonPort: 0, pollIntervalMs: 20, gcEnabled: false,
+      protocolClientOptions: { clock: protocolClock },
       workspacesRoot: join(root, "workspaces"), repoCacheRoot: join(root, "cache"),
       inProcessRuntimeModelDiscoveryEnabled: true, runtimeModelRefreshIntervalMs: 60_000,
       providerFactory: options => ({
@@ -74,6 +77,8 @@ for (const provider of ["codex", "claude"] as const) {
         },
       }),
     });
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const run = daemon.start();
     const waitFor = async (predicate: () => boolean) => {
       const deadline = Date.now() + 10_000;
@@ -81,12 +86,16 @@ for (const provider of ["codex", "claude"] as const) {
     };
     try {
       await waitFor(() => store.listRuntimeModels(runtime.id).some(model => model.id === "sol"));
+      await waitFor(() => daemon.daemonProtocolClient().connectionState() === "connected" && daemon.daemonProtocolClient().diagnostics().pending_rpcs === 0);
+      protocolClock.advance(15_000);
       await Bun.sleep(150);
       expect(probes).toBe(1);
       expect(reports).toBe(1);
       expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual(["astra", "sol"]);
       expect(store.listRuntimeModels(runtime.id).find(model => model.id === "sol")?.thinking?.supportedLevels).toEqual([{ value: "high", label: "High" }]);
       const refreshed = store.createRuntimeModelListRequest(runtime.id);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, refreshed.id)?.status === "completed");
       expect(store.getRuntimeModelListRequest(runtime.id, refreshed.id)?.models.map(model => model.id)).toEqual(["astra", "sol"]);
       expect(probes).toBe(2);
@@ -100,6 +109,8 @@ for (const provider of ["codex", "claude"] as const) {
       failProbe = true;
       revokeThinking = true;
       const capabilityRefresh = store.createRuntimeModelListRequest(runtime.id);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, capabilityRefresh.id)?.status === "completed");
       const retained = store.getRuntimeModelListRequest(runtime.id, capabilityRefresh.id)!.models;
       expect(retained.map(model => model.id)).toEqual(["astra", "sol"]);
@@ -107,6 +118,8 @@ for (const provider of ["codex", "claude"] as const) {
       expect(store.listRuntimeModels(runtime.id).find(model => model.id === "sol")?.thinking).toBeUndefined();
       failAcp = true;
       const refresh = store.createRuntimeModelListRequest(runtime.id);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.getRuntimeModelListRequest(runtime.id, refresh.id)?.status === "failed");
       expect(store.getRuntimeModelListRequest(runtime.id, refresh.id)?.error).toContain("HTTP 503");
       expect(store.listRuntimeModels(runtime.id).map(model => model.id)).toEqual(["astra", "sol"]);

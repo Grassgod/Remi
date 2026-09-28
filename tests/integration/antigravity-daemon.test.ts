@@ -6,7 +6,7 @@ import * as os from "node:os";
 import { join, resolve } from "node:path";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { isolateProcessTmp, PrivateTmpIsolationUnavailableError } from "@acp/index.js";
 
 it("runs native Antigravity through API, daemon, Chat resume and an Issue in a retained directory", async () => {
