@@ -10,7 +10,8 @@ import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useScmSettings } from "@multiremi/core/scm";
-import { useAuthStore } from "@multiremi/core/auth";
+import { useSSRUser } from "@multiremi/core/platform/ssr-workspace";
+import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -19,10 +20,8 @@ import {
   childIssuesOptions,
   findCachedIssue,
   issueDetailOptions,
-  issueTimelinePrimerOptions,
   issueUsageOptions,
 } from "@multiremi/core/issues/queries";
-import { seedIssueTimelinePage } from "@multiremi/core/issues/timeline-cache";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { issueLabelsOptions } from "@multiremi/core/labels";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
@@ -45,6 +44,7 @@ import { useT } from "../../i18n";
 
 interface IssueDetailProps {
   issueId: string;
+  initialLog?: IssueLogBootstrap;
   onDelete?: () => void;
   /** Called after the issue is marked as done via the toolbar button. */
   onDone?: () => void;
@@ -69,6 +69,7 @@ interface IssueDetailProps {
  */
 export function IssueDetail({
   issueId,
+  initialLog,
   onDelete,
   onDone,
   defaultSidebarOpen = true,
@@ -80,29 +81,11 @@ export function IssueDetail({
   const { t } = useT("issues");
   const id = issueId;
   const router = useNavigation();
-  const user = useAuthStore((s) => s.user);
+  const { user } = useSSRUser();
   const paths = useWorkspacePaths();
 
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const timelinePrimerStartRef = useRef({ issueId: id, startedAt: Date.now() });
-  if (timelinePrimerStartRef.current.issueId !== id) {
-    timelinePrimerStartRef.current = { issueId: id, startedAt: Date.now() };
-  }
-  const timelinePrimer = useQuery({
-    ...issueTimelinePrimerOptions(id),
-    enabled: !initialIssueSessionId,
-  });
-  useEffect(() => {
-    if (timelinePrimer.data) {
-      seedIssueTimelinePage(
-        queryClient,
-        id,
-        timelinePrimer.data,
-        timelinePrimerStartRef.current.startedAt,
-      );
-    }
-  }, [id, queryClient, timelinePrimer.data]);
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -348,6 +331,7 @@ export function IssueDetail({
       canModerateComments={canModerateComments}
       getActorName={getActorName}
       highlightCommentId={highlightCommentId}
+      initialLog={initialLog}
       onShowKeyResults={handleShowKeyResults}
       onScrollContainerRef={setScrollContainerEl}
       scrollContainerEl={scrollContainerEl}

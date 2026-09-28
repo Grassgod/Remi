@@ -15,13 +15,8 @@
  *    positioned or a fixed-height slot; a preview therefore never resizes the
  *    row it lives in, however slowly Mermaid or the iframe resolves.
  *
- * The body is assigned through the ref rather than through
- * `dangerouslySetInnerHTML`, and that is deliberate: React re-applies
- * `dangerouslySetInnerHTML` on every re-render of this component (React 19
- * restores the markup, discarding any node a layout effect added inside it).
- * Mounting the preview portals is exactly such a re-render, so rendering the
- * HTML declaratively would erase the enhancement as soon as it appeared. React
- * therefore owns only the host element, and this component owns its children.
+ * SSR emits the sanitized markup. The memoized host stays identical when
+ * preview portals mount, so React does not replace enhanced children.
  *
  * `body_html` empty is the degrade path the plan names (`degraded_render`): the
  * row reports it through `onDegradedRender` and renders `fallback`, which the
@@ -153,6 +148,13 @@ export function EntryHtml({
     [slots],
   );
 
+  // Keep the host element stable when portals mount. SSR and hydration render
+  // the same sanitized markup, while enhancements retain ownership afterwards.
+  const host = useMemo(() => (
+    <div ref={hostRef} className={`rich-text-editor readonly text-sm ${className ?? ""}`} data-entry-html=""
+      dangerouslySetInnerHTML={{ __html: html ?? "" }} />
+  ), [html, className]);
+
   if (degraded) return <>{fallback}</>;
 
   return (
@@ -160,7 +162,7 @@ export function EntryHtml({
       {/* React owns this element only; its children are mounted by the layout
           effect above, which is what keeps the enhancement from being discarded
           on the re-render that mounting the portals causes. */}
-      <div ref={hostRef} className={className} data-entry-html="" />
+      {host}
       {portals}
     </>
   );

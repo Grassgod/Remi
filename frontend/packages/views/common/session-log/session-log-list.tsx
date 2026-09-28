@@ -23,7 +23,7 @@
  * renders what their state says.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 import { ArrowDown } from "lucide-react";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
@@ -79,6 +79,10 @@ export interface SessionLogListProps {
   className?: string;
   /** Element carrying the scroll root's data attributes, for tests and probes. */
   testIdPrefix?: string;
+  initialPositioned?: boolean;
+  afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
+  footer?: React.ReactNode;
+  onScrollRoot?: (el: HTMLDivElement | null) => void;
 }
 
 /**
@@ -127,8 +131,13 @@ export function SessionLogList({
   renderPending,
   className,
   testIdPrefix = "session-log",
+  initialPositioned = false,
+  afterEntry,
+  footer,
+  onScrollRoot,
 }: SessionLogListProps): React.ReactElement {
   const { t } = useT("chat");
+  const scrollId = useId();
 
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   /**
@@ -184,6 +193,7 @@ export function SessionLogList({
     // Only the replica's own verdict: a list that happened to hold every row it
     // was given is not the same claim as "this equals the server's head".
     fresh: snapshot.fresh,
+    initialPositioned,
   });
 
   const stick = useStickToBottom({
@@ -291,17 +301,22 @@ export function SessionLogList({
   return (
     <div className={`relative min-h-0 flex-1 ${className ?? ""}`}>
       <div
-        ref={setScrollEl}
+        id={scrollId}
+        ref={useCallback((el: HTMLDivElement | null) => { setScrollEl(el); onScrollRoot?.(el); }, [onScrollRoot])}
+        data-tab-scroll-root=""
         data-session-log-scroll=""
         data-session-log-degraded={degradedCount}
         data-perf-scroll="session-log"
+        data-perf-state={initialPositioned ? "ready" : undefined}
+        data-perf-fresh={snapshot.fresh ? "1" : "0"}
+        data-stick-state={stick.state}
         className="relative h-full overflow-y-auto"
       >
         {/* The reveal hook hides this subtree until its gates hold, so the first
             frame that shows content is already at its final position. It keeps
             `visibility: hidden` rather than unmounting because the hook measures
             real heights to know where "final" is. */}
-        <div ref={setContentEl} className="relative mx-auto w-full max-w-4xl px-4 py-6">
+        <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className="relative mx-auto w-full max-w-4xl px-4 py-6">
           {reveal.state === "pending" && (
             <div
               data-slot="skeleton"
@@ -325,7 +340,7 @@ export function SessionLogList({
                 data-perf-item="message"
                 data-perf-key={entry.id}
                 {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
-                {...(isLast ? { "data-perf-anchor": "latest-message" } : null)}
+                {...(isLast && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": "latest-message" } : null)}
                 style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
                 className="pb-3"
               >
@@ -339,11 +354,16 @@ export function SessionLogList({
                       fallback={renderFallback ? renderFallback(entry) : null}
                     />
                   )}
+                {afterEntry?.(entry)}
               </div>
             );
           })}
+          {footer}
         </div>
       </div>
+      {initialPositioned && <script dangerouslySetInnerHTML={{ __html:
+        `(()=>{const e=document.getElementById(${JSON.stringify(scrollId)});if(!e)return;const c=e.firstElementChild;e.scrollTop=e.scrollHeight;const r=e.getBoundingClientRect();const images=[...e.querySelectorAll('img')].filter(i=>!i.complete&&i.getBoundingClientRect().bottom>r.top&&i.getBoundingClientRect().top<r.bottom);const waits=images.map(i=>new Promise(resolve=>{i.addEventListener('load',resolve,{once:true});i.addEventListener('error',resolve,{once:true});}));Promise.race([Promise.all(waits),new Promise(resolve=>setTimeout(resolve,600))]).then(()=>requestAnimationFrame(()=>{e.scrollTop=e.scrollHeight;requestAnimationFrame(()=>{e.scrollTop=e.scrollHeight;c.style.visibility='';e.dataset.ssrPositioned='1';});}));})();`
+      }} />}
       {newMessageCount > 0 && stick.state === "released" && (
         <NewMessagesChip count={newMessageCount} onReturn={handleReturn} label={newMessagesLabel} />
       )}

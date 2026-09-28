@@ -44,7 +44,7 @@ vi.mock("./issue-sub-issues-section", () => ({
 vi.mock("./issue-activity-section", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./issue-activity-section")>()),
   // The section is a stub here; its layout is exercised in `issue-detail.test`.
-  IssueActivitySection: () => null,
+  IssueActivitySection: () => <div data-tab-scroll-root />,
 }));
 
 import { IssueDetailMain } from "./issue-detail-main";

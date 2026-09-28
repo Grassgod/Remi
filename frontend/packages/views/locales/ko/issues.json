@@ -435,6 +435,8 @@
     "loading": "불러오는 중..."
   },
   "activity": {
+    "expand_earlier": "이전 {{count}}개 펼치기",
+    "remaining_earlier": "이전 항목 {{count}}개",
     "created": "이 이슈를 만들었습니다",
     "self_assigned": "이 이슈를 본인에게 할당했습니다",
     "assigned_to": "{{name}}님에게 할당했습니다",

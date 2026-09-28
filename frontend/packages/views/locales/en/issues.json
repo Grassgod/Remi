@@ -435,6 +435,8 @@
     "loading": "Loading..."
   },
   "activity": {
+    "expand_earlier": "Load {{count}} earlier entries",
+    "remaining_earlier": "{{count}} earlier entries",
     "created": "created this issue",
     "self_assigned": "self-assigned this issue",
     "assigned_to": "assigned to {{name}}",
