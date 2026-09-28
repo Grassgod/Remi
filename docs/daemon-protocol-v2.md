@@ -24,6 +24,9 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 | `packages/server/src/worker/trace-store.ts` | `TraceStore` 接口 + 内存实现 | A-0 接口，B3 文件版 |
 | `packages/server/src/api/trace/trace-sink.ts` | `TraceSink` 接口 + 内存实现 | A-0 接口，C 的 Hub 实现 |
 | `packages/server/src/api/trace/daemon-trace-reader.ts` | `DaemonTraceReader` 接口 + 内存假实现 | A-0 接口，A-6 真实现 |
+| `packages/server/src/api/daemon-protocol/` | 服务端握手、注册表、hb、ack 与 RPC 分发 | A-1 落地 |
+| `packages/server/src/worker/daemon-protocol-client.ts` | 进程级 socket、定时器、RPC、去重接口与升级等待 | A-2 接线，业务泵待 A-3 至 A-6 |
+| `tests/integration/daemon-protocol-v2/` | 真实 daemon/API/SQLite 与断线、重启、服务端入站 ledger | A-2 脚手架 |
 
 ## 1. 连接与帧
 
@@ -31,7 +34,7 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 
 daemon 以 Bearer daemon token 连接 `GET /api/daemon/ws`，**每个 daemon 进程一条 socket**，
 由 `hello` 帧列出本进程的全部 runtime。服务端按 runtime 逐个复核归属、workspace 与成员资格，
-与今天的 `authorizeDaemonWebSocketRequest` 同一套判定。
+与 HTTP daemon 身份、workspace 和成员鉴权同一套判定。
 
 **URL 形状：v2 客户端必须带 `?protocol=2`。**
 
@@ -45,14 +48,11 @@ v1 客户端把 runtime 写在查询串里（`?runtime_ids=<id>`），v2 客户�
 
 | 请求 | 判定 |
 |---|---|
-| 带 `runtime_id` / `runtime_ids` / `runtimeId` | v1，走既有路径（本单不改它的行为） |
-| 不带上述参数、带 `?protocol=2` | v2 |
-| 不带上述参数、带 daemon token 或部署 master 凭据，且无标记 | v2（本单过渡期兼容，见下） |
-| 都不带 | 400 `runtime_ids required`（与今天一致） |
+| 带 `?protocol=2` | v2；runtime 列表只读 `hello` |
+| 无标记、旧 runtime 参数或其他 protocol 版本 | HTTP 426 `{ code: "daemon_protocol_upgrade_required", min_version: 2 }` |
 
-`?protocol=2` 是**规范要求的形状**，A-2 的客户端按它实现；不带标记的那一行只是 A-1 与 v1 并存
-期间的过渡兼容，A-2 删除 v1 路径时，连同 `hasRuntimeParameters` / `requestsDaemonProtocolV2` /
-`isV2Upgrade` 这三个判定函数一起删除，此后只有 `?protocol=2` 一条路。
+`?protocol=2` 是**规范要求的形状**。A-2 已删除 A-1 与 v1 并存时的无标记兼容，以及
+`hasRuntimeParameters` / `requestsDaemonProtocolV2` / `isV2Upgrade`，只保留有标记的路径。
 
 选单 socket 而不是每 runtime 一条，因为升级、drain 与 CLI 更新锁（`MultiremiCliUpdateCoordinator`）
 都是进程级动作：两条 socket 会让同一台机器的两个 lane 看到顺序不一致的指令，也会让 `seq`
@@ -205,7 +205,11 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 | 401 `unauthorized`，或 403 `daemon_owner_membership_required` | 4401 | 停止重连 |
 | 403 `daemon_token_required` / `daemon_identity_forbidden` | 4403 | 停止重连 |
 | 410 `daemon_retired` | 4410 | 停止重连 |
-| 其他（网络错误、5xx） | — | 走退避重连 |
+| 426 | 4426 | 进入 `upgrade_wait` |
+| 其他（400、404、421、429、5xx、网络错误） | — | 走退避重连 |
+
+只有 401、403、410 调用 A-1 的 `daemonAuthorizationCloseCode`。该函数对其余状态默认返回
+4403，不能用来判断网络或服务错误。421 包括 daemon 地址误配到 UI 进程的情况。
 
 **默认是「重连」，只有上面那四个是终态**（`DAEMON_TERMINAL_CLOSE_CODES`，
 判定函数 `daemonCloseCodeIsRetryable`）。这个方向是刻意的：断网与被杀时 daemon 实际拿到的就是
@@ -229,7 +233,9 @@ A-2 照字面实现就会永不重连，那台机器只能靠 SSH 救回来。�
 把 runtime 级事实当 daemon 级处理是不行的：4403/4410 是终态，会让同一台机器上其它正常 runtime
 一起永久断供；换成 4001 则 daemon 退避重连后又遇到同一个 runtime，形成循环。daemon 收到
 `runtime_gone` 后按既有路径重新注册（`worker/daemon.ts` 的 `handleHeartbeatAck` 分支），
-再回收孤儿任务；怎么接上归 A-2，A-1 只负责把这个信号原样送到。
+再回收孤儿任务。A-2 重新注册后关闭旧 socket，再以全部最新 runtime ID 建新连接、重发 `hello`；
+不在同一条连接上重复 `hello` 或扩展 runtime 列表。注册表的 unavailable 列表固定，原持有者
+断开也不会自动取得该 runtime，因此 ID 即使不变也必须建立新会话。
 
 4426 虽然也在终态列表里，但它不是死路：`daemonCloseCodeRequiresUpgrade(code)` 单独把它标出来，
 A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外三个终态码没有这样的后续动作。

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { parseDaemonWebSocketHeartbeat } from "@multiremi/api/realtime.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -246,11 +245,8 @@ describe("Runtime skill directories", () => {
     }
   });
 
-  it("recognizes the capability on both websocket heartbeat forms and the legacy HTTP heartbeat", async () => {
+  it("recognizes the capability on the legacy HTTP heartbeat", async () => {
     const { store, runtime, post } = fixture();
-    expect(parseDaemonWebSocketHeartbeat({ runtime_id: runtime.id, supports_skill_directory: true }).supportsSkillDirectory).toBe(true);
-    expect(parseDaemonWebSocketHeartbeat({ payload: { runtime_id: runtime.id, supports_skill_directory: true } }).supportsSkillDirectory).toBe(true);
-    expect(parseDaemonWebSocketHeartbeat({ runtime_id: runtime.id }).supportsSkillDirectory).toBe(false);
     const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: "/custom/skills" });
     const response = await (await post(`/api/multiremi/runtimes/${runtime.id}/heartbeat?supports_skill_directory=true`)).json();
     expect(response.pending_local_skills).toEqual({ id: scan.id, root: "/custom/skills" });

@@ -42,11 +42,11 @@ import {
 } from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
-  DaemonWakeupSocket,
-  type DaemonWakeupConnect,
-  type DaemonWakeupStatus,
-  type DaemonWakeupTransport,
-} from "./daemon-websocket.js";
+  DaemonProtocolClient,
+  type DaemonProtocolClientOptions,
+  type DaemonProtocolLane,
+} from "./daemon-protocol-client.js";
+import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -369,9 +369,7 @@ export async function installCodexPluginReadinessHome(
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
 const TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
-const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
 /** The Feishu concierge host is the only Runtime whose ack latency users feel. */
-const CONCIERGE_HEARTBEAT_INTERVAL_MS = 3_000;
 const DEFAULT_CLAIM_IDLE_BASE_MS = 3_000;
 const DEFAULT_CLAIM_IDLE_MAX_MS = 30_000;
 const DEFAULT_PLUGIN_DESIRED_REFRESH_MS = 30_000;
@@ -500,18 +498,14 @@ export interface MultiremiDaemonOptions {
   taskDrainTimeoutMs?: number;
   /** Maximum startup wait for persisted reports before the daemon becomes ready. */
   outboxStartupFlushTimeoutMs?: number;
-  /** Between heartbeats; the Feishu concierge host overrides this with a shorter cadence. */
-  heartbeatIntervalMs?: number;
   /** Ceiling for the idle claim backoff. */
   claimIdleMaxMs?: number;
   /** Fallback desired-state refresh for servers that do not report a revision. */
   pluginDesiredRefreshMs?: number;
-  /** Wake-up channel for `daemon:task_available`; disabled when false. */
-  taskWakeupEnabled?: boolean;
-  /** Injectable wake-up transport for tests. */
-  taskWakeup?: DaemonWakeupTransport;
-  /** Injectable socket factory for the wake-up channel. */
-  taskWakeupConnect?: DaemonWakeupConnect;
+  /** Shared by every provider lane in one supervisor process. */
+  protocolClient?: DaemonProtocolClient;
+  /** Injectable transport and clock for connection-layer tests. */
+  protocolClientOptions?: Partial<DaemonProtocolClientOptions>;
   /** Injectable probe schedule for terminal-authority tests. */
   authorityProbeDelaysMs?: number[];
 }
@@ -645,7 +639,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runWorkspaceGcPass" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "heartbeatIntervalMs" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "taskWakeupEnabled" | "taskWakeup" | "taskWakeupConnect" | "authorityProbeDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "gcRequireArchive" | "gitWorktreeInspector" | "sessionArchiveMaxSourceBytes" | "sessionArchiveUploadBaseUrl" | "sessionArchiveProxyMaxBytes" | "sessionArchiveDirectProbeTtlMs" | "sessionArchiveDirectProbeTimeoutMs" | "sessionArchiveUploadTimeoutMs" | "sessionArchiveFailureReportTimeoutMs" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runWorkspaceGcPass" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -662,13 +656,9 @@ export class MultiremiDaemon {
     gcRequireArchive: boolean;
     sessionArchiveMaxSourceBytes: number;
     pluginCacheRoot: string;
-    taskWakeup: DaemonWakeupTransport | null;
-    taskWakeupConnect: DaemonWakeupConnect | undefined;
     authorityProbeDelaysMs: number[];
-    heartbeatIntervalMs: number | null;
     claimIdleMaxMs: number;
     pluginDesiredRefreshMs: number;
-    taskWakeupEnabled: boolean;
   };
   private providerFactory: MultiremiDaemonProviderFactory;
   private updateRunner: MultiremiDaemonUpdateRunner;
@@ -815,13 +805,12 @@ export class MultiremiDaemon {
   private agentPluginReconcileAbort: AbortController | null = null;
   /** Wake-up handle for the claim timer installed by the poll loop. */
   private waitWake: (() => void) | null = null;
-  private taskWakeup: DaemonWakeupTransport | null = null;
+  private readonly protocolClient: DaemonProtocolClient;
+  private readonly protocolLane: DaemonProtocolLane;
   private readonly authorityProbeDelaysMs: number[];
-  /** Heartbeat/claim/desired cadences, split so an idle lane cannot slow the others. */
-  private nextHeartbeatAt = 0;
+  /** The plugin fallback remains until MUL-419 moves it to RPC/push. */
+  private nextPluginDesiredAt = 0;
   private nextClaimAt = 0;
-  /** Interval applied by the last cadence refresh, to detect a lane change. */
-  private appliedHeartbeatIntervalMs = 0;
   private claimIdleMs: number;
   private readonly claimIdleBaseMs: number;
   private lastDesired: { revision: string; artifacts: AgentPluginArtifactSpec[] } | null = null;
@@ -922,14 +911,6 @@ export class MultiremiDaemon {
       pluginCacheRoot: options.pluginCacheRoot
         ?? process.env.MULTIREMI_PLUGIN_CACHE_ROOT
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
-      // An explicit `pollIntervalMs` predates the split cadence and was the only
-      // loop timer (tests and embedded harnesses use it to stay fast). Honour it
-      // for both lanes; production leaves it unset and gets the slower defaults.
-      heartbeatIntervalMs: normalizeOptionalInterval(
-        options.heartbeatIntervalMs
-          ?? optionalNumberEnv(process.env.MULTIREMI_HEARTBEAT_INTERVAL_MS)
-          ?? options.pollIntervalMs,
-      ),
       claimIdleMaxMs: Math.max(
         DEFAULT_CLAIM_IDLE_BASE_MS,
         options.claimIdleMaxMs
@@ -942,9 +923,6 @@ export class MultiremiDaemon {
         options.pluginDesiredRefreshMs
           ?? numberEnv(process.env.MULTIREMI_PLUGIN_DESIRED_REFRESH_MS, DEFAULT_PLUGIN_DESIRED_REFRESH_MS),
       ),
-      taskWakeupEnabled: options.taskWakeupEnabled ?? true,
-      taskWakeup: options.taskWakeup ?? null,
-      taskWakeupConnect: options.taskWakeupConnect,
       authorityProbeDelaysMs: [],
       runtimeModelRetryBaseMs,
       runtimeModelRetryMaxMs,
@@ -982,7 +960,6 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    this.taskWakeup = options.taskWakeup ?? null;
     // Idle claims back off from the same legacy cadence when a caller pinned one.
     this.claimIdleBaseMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_CLAIM_IDLE_BASE_MS);
     this.claimIdleMs = this.claimIdleBaseMs;
@@ -1062,6 +1039,53 @@ export class MultiremiDaemon {
         await this.client.reportRuntimeAgentPluginState(runtimeId, report.versionId, report.input);
       },
     });
+    this.protocolClient = options.protocolClient ?? new DaemonProtocolClient({
+      serverUrl: this.options.serverUrl,
+      token: this.options.token,
+      daemonId: this.options.daemonId ?? this.options.runtimeName,
+      cliVersion: multiremiVersion,
+      launchedBy: this.options.launchedBy,
+      log,
+      ...options.protocolClientOptions,
+    });
+    this.protocolLane = {
+      runtime: () => this.options.runtimeId && !this.stopped ? {
+        runtime_id: this.options.runtimeId,
+        provider: this.options.provider,
+        max_concurrency: this.options.maxConcurrency,
+        active_task_ids: [...this.activeTaskIds],
+      } : null,
+      heartbeat: () => ({
+        active_task_count: this.activeTaskCount,
+        outbox: { pending: this.outboxStats()?.pending ?? 0, unacked: 0 },
+        drain_ack_generation: this.appliedDrainGeneration,
+      }),
+      onHeartbeatAck: async ack => {
+        if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;
+        await this.handleHeartbeatAck(ack.runtime_id, ack);
+        this.wakeClaim();
+      },
+      probeUpgrade: async () => {
+        if (this.stopped || !this.options.runtimeId) return;
+        try {
+          const ack = await this.client.heartbeatRuntime(
+            this.options.runtimeId, this.sshMeshManager.getHeartbeatStatus(),
+            { ackGeneration: this.appliedDrainGeneration, activeTaskCount: this.activeTaskCount },
+            false, false, this.pollAbort.signal,
+          );
+          if (ack.pending_update) await this.handleRuntimeUpdate(this.options.runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");
+        } catch (error) {
+          if (isTerminalDaemonAuthorityError(error)) await this.stopAfterTerminalAuthority();
+        }
+      },
+      onTerminal: async code => {
+        if (this.stopped) return;
+        log.error(`daemon protocol authority rejected (close ${code}); entering cleanup-only mode`);
+        await this.stopAfterTerminalAuthority();
+      },
+      onStateChange: () => this.wakeClaim(),
+    };
+    this.protocolClient.addLane(this.protocolLane);
   }
 
   async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
@@ -1204,9 +1228,6 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupAttempts = 0;
     this.restartRequestedFlag = false;
     this.workspaceOwnershipLost = false;
-    // A reused instance (tests, an embedded harness) must not inherit the pause
-    // a previous terminal-authority failure left on the wake-up channel.
-    this.taskWakeup?.setAuthoritySuspended(false);
     this.onReadyChange(false);
     this.assertWorkspaceRootOwner();
     const outbox = this.ensureOutbox();
@@ -1242,8 +1263,8 @@ export class MultiremiDaemon {
         await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
       }
 
-      if (!this.options.once) this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId!);
-      this.nextHeartbeatAt = Date.now();
+      this.protocolClient?.startLane(this.protocolLane);
+      this.nextPluginDesiredAt = Date.now();
       this.nextClaimAt = Date.now();
       while (!this.stopped) {
         try {
@@ -1252,55 +1273,22 @@ export class MultiremiDaemon {
             await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
             continue;
           }
-          // The concierge can be assigned or released at any time, so pick up a
-          // new cadence before testing the deadline.
-          this.refreshHeartbeatCadence();
-          if (this.options.once || Date.now() >= this.nextHeartbeatAt) {
-            const heartbeatIntervalMs = this.heartbeatIntervalMs();
-            this.appliedHeartbeatIntervalMs = heartbeatIntervalMs;
-            this.nextHeartbeatAt = Date.now() + heartbeatIntervalMs;
-            const ack = await this.client.heartbeatRuntime(
-              this.options.runtimeId!,
-              this.sshMeshManager.getHeartbeatStatus(),
-              {
-                ackGeneration: this.appliedDrainGeneration,
-                activeTaskCount: this.activeTaskCount,
-              },
-              this.botMenuPublisher !== null,
-              this.feishuConcierge !== null,
-              this.pollAbort.signal,
-            );
-            const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
-            if (!skipClaim && !this.stopped) {
-              await this.reconcileRuntimeAgentPlugins(
-                this.options.runtimeId!,
-                ack.agent_plugins?.revision ?? null,
-                { force: this.options.once },
-              );
-            }
-            if (this.stopped) break;
-            if (skipClaim) {
-              // The Runtime vanished and could not be replaced yet, so there is
-              // nothing safe to claim. Push the claim deadline out before
-              // sleeping, or an already-due deadline would spin the loop.
-              if (this.options.once) return;
-              this.deferClaimLane();
-              await this.waitForNextTick();
-              continue;
-            }
+          if (Date.now() >= this.nextPluginDesiredAt) {
+            this.nextPluginDesiredAt = Date.now() + this.options.pluginDesiredRefreshMs;
+            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: this.options.once });
           }
 
           if (this.options.once) {
             // One-shot mode (tests, single runs) stays strictly serial:
             // claim one task, run it to completion, return.
-            if (this.claimsPaused || this.serverDrainActive) return;
+            if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) return;
             const task = await this.claimTask(this.options.runtimeId!);
             if (!task) return;
             await this.handleTask(task);
             return;
           }
 
-          if (this.claimsPaused || this.serverDrainActive) {
+          if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) {
             // A sibling can pause claims while it installs the shared CLI, or
             // the platform can be draining. Keep this lane ready and
             // heartbeating so a failed install can release the pause; only a
@@ -1327,10 +1315,10 @@ export class MultiremiDaemon {
           }
           if (this.stopped) break;
           if (this.options.once) throw err;
-          // A failed heartbeat/claim also delays the next attempt so a hard
+          // A failed claim or Plugin refresh delays the next attempt so a hard
           // outage cannot turn the poll loop into a tight retry spin.
-          const retryMs = Math.max(this.options.pollIntervalMs, this.heartbeatIntervalMs());
-          this.nextHeartbeatAt = Date.now() + retryMs;
+          const retryMs = Math.max(this.options.pollIntervalMs, DAEMON_HEARTBEAT_INTERVAL_MS);
+          this.nextPluginDesiredAt = Date.now() + retryMs;
           this.nextClaimAt = Date.now() + retryMs;
           log.warn(`daemon poll loop error, retrying in ${retryMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await this.waitForNextTick();
@@ -1355,6 +1343,7 @@ export class MultiremiDaemon {
       }
       throw error;
     } finally {
+      this.protocolClient?.stopLane(this.protocolLane);
       this.ready = false;
       this.onReadyChange(false);
       // Stop scheduling new sweeps before draining tasks. An existing sweep
@@ -1370,6 +1359,7 @@ export class MultiremiDaemon {
       for (const run of this.feishuOutboundRuns.values()) run.abort.abort();
       await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
+      await this.protocolClient?.drain();
       this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
       // Undelivered rows stay on disk and replay on the next start(). close()
@@ -1385,66 +1375,12 @@ export class MultiremiDaemon {
     }
   }
 
-  /**
-   * Heartbeat cadence. Only the Runtime the control plane actually assigned the
-   * concierge to runs the fast loop, because its ack is the only delivery path
-   * for proactive Feishu replies.
-   *
-   * Being *able* to host the bot is not the same thing: every long-running
-   * daemon is offered the host so the control plane may hand the bot to any of
-   * them, and treating that as "hosting" pinned the whole fleet to 3s.
-   * `this.options.heartbeatIntervalMs` (the MULTIREMI_HEARTBEAT_INTERVAL_MS
-   * override and the legacy pollIntervalMs) therefore applies to the normal
-   * cadence only — the assigned Runtime stays at 3s.
-   */
-  private heartbeatIntervalMs(): number {
-    if (this.conciergeIsAssigned()) return CONCIERGE_HEARTBEAT_INTERVAL_MS;
-    return this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  }
 
-  /**
-   * Whether the control plane currently has the concierge running here.
-   *
-   * `starting` and `failed` also count as assigned: both follow a directive that
-   * picked this Runtime, and the failed retry ladder depends on the fast
-   * heartbeat to re-read that directive. Only `stopped` means it is not ours.
-   */
-  private conciergeIsAssigned(): boolean {
-    return (this.feishuConcierge?.snapshot().state ?? "stopped") !== "stopped";
-  }
-
-  /**
-   * Re-apply the heartbeat interval after the assignment can have changed.
-   *
-   * Shortening it has to take effect within the new interval rather than after
-   * the remainder of the old one: a Runtime that just received the bot cannot
-   * sit out a pending 10s wait before its first 3s heartbeat. Lengthening it
-   * only affects the deadline the next heartbeat sets, which is what a handover
-   * away wants — losing the bot never provokes an extra heartbeat.
-   */
-  private refreshHeartbeatCadence(): void {
-    const interval = this.heartbeatIntervalMs();
-    if (interval === this.appliedHeartbeatIntervalMs) return;
-    const previous = this.appliedHeartbeatIntervalMs;
-    this.appliedHeartbeatIntervalMs = interval;
-    if (previous === 0 || interval >= previous) return;
-    this.nextHeartbeatAt = Math.min(this.nextHeartbeatAt, Date.now() + interval);
-    // The poll sleep is waiting on the old, longer deadline; wake it so it can
-    // recompute against the new one.
-    this.wakeClaim();
-  }
-
-  /**
-   * Sleep until the earlier of the next heartbeat and the next claim.
-   *
-   * Returns early when {@link wakeClaim} fires — either a `daemon:task_available`
-   * frame or a local reset event — so an idle backoff never delays a queued task.
-   */
+  /** Claim polling and the temporary plugin fallback own this sleep. */
   private async waitForNextTick(): Promise<void> {
     if (this.stopped) return;
-    const now = Date.now();
-    const delayMs = Math.max(0, Math.min(this.nextHeartbeatAt, this.nextClaimAt) - now);
-    await new Promise<void>((resolveWait) => {
+    const delayMs = Math.max(0, Math.min(this.nextPluginDesiredAt, this.nextClaimAt) - Date.now());
+    await new Promise<void>(resolveWait => {
       let settled = false;
       const finish = () => {
         if (settled) return;
@@ -1464,26 +1400,6 @@ export class MultiremiDaemon {
     this.waitWake?.();
   }
 
-  private ensureTaskWakeup(): DaemonWakeupTransport | null {
-    // `--once` runs claim a single task and return, so a wake-up channel would
-    // outlive the loop that consumes it. Also keeps single-run harnesses from
-    // dialing a socket merely to register.
-    if (this.options.once) return null;
-    if (this.taskWakeup || !this.options.taskWakeupEnabled) return this.taskWakeup;
-    this.taskWakeup = new DaemonWakeupSocket({
-      serverUrl: this.options.serverUrl,
-      token: this.options.token,
-      onTaskAvailable: () => {
-        // Queued work may have appeared: drop the idle backoff and interrupt the
-        // pending sleep instead of waiting out the remainder of the interval.
-        this.resetClaimBackoff();
-        this.wakeClaim();
-      },
-      ...(this.options.taskWakeupConnect ? { connect: this.options.taskWakeupConnect } : {}),
-      log: { info: (message) => log.info(message), warn: (message) => log.warn(message) },
-    });
-    return this.taskWakeup;
-  }
 
   /** Reset the idle claim backoff; every event that can add queued work calls this. */
   private resetClaimBackoff(): void {
@@ -1502,10 +1418,7 @@ export class MultiremiDaemon {
     // Wake for the next heartbeat rather than a short poll: while claims are
     // suppressed there is nothing to do in between, and the heartbeat is what
     // can lift the suppression (a drain directive or a released update pause).
-    this.nextClaimAt = Math.max(
-      this.nextHeartbeatAt,
-      Date.now() + this.options.pollIntervalMs,
-    );
+    this.nextClaimAt = Date.now() + DAEMON_HEARTBEAT_INTERVAL_MS;
   }
 
   /**
@@ -1520,41 +1433,8 @@ export class MultiremiDaemon {
     if (this.activeTaskCount < previous) this.resetClaimBackoff();
   }
 
-  /** Local `/health` view of the wake-up channel, so operators can see a blocked WS. */
-  taskWakeupStatus(): DaemonWakeupStatus | null {
-    return this.taskWakeup?.status() ?? null;
-  }
-
-  /**
-   * `claim_wake_ws` block of the daemon status JSON.
-   *
-   * A disconnected wake-up channel is not a failure — claims still happen on the
-   * idle backoff — but it raises task-start latency to the backoff ceiling, so it
-   * has to be visible without reading logs.
-   */
-  private claimWakeWsStatus(): Record<string, unknown> {
-    const status = this.taskWakeup?.status();
-    if (!status) {
-      return {
-        state: "disabled",
-        connected: false,
-        connected_since: null,
-        last_error: null,
-        reconnect_attempts: 0,
-        next_reconnect_at: null,
-        suspended: false,
-      };
-    }
-    return {
-      state: status.state,
-      connected: status.connected,
-      connected_since: status.connected_since,
-      last_error: status.last_error,
-      reconnect_attempts: status.reconnect_attempts,
-      next_reconnect_at: status.next_reconnect_at,
-      suspended: status.suspended,
-    };
-  }
+  /** The process connection is shared by every co-resident provider. */
+  daemonProtocolClient(): DaemonProtocolClient { return this.protocolClient; }
 
   /**
    * Bounded claim pump: keep claiming while there is spare capacity and run each
@@ -1564,8 +1444,8 @@ export class MultiremiDaemon {
    * handleTask, so the loop sees it grow.
    *
    * An empty claim backs the next attempt off exponentially up to
-   * `MULTIREMI_CLAIM_IDLE_MAX_MS`; claiming one task resets it, and the
-   * `daemon:task_available` socket wake-up short-circuits the wait entirely.
+   * `MULTIREMI_CLAIM_IDLE_MAX_MS`; claiming one task resets it.
+   * The temporary HTTP claim fallback remains until MUL-419 wires offers.
    */
   private async runClaimPump(): Promise<void> {
     let claimed = false;
@@ -1574,6 +1454,8 @@ export class MultiremiDaemon {
       && !this.stopped
       && !this.claimsPaused
       && !this.serverDrainActive
+      && !this.runtimeGoneInflight.size
+      && this.protocolClient?.allowsClaims() !== false
       && this.supervisorReady()
     ) {
       const task = await this.claimTask(this.options.runtimeId!);
@@ -1627,27 +1509,13 @@ export class MultiremiDaemon {
       this.applyWorkspaceRegistrationState(response);
       this.runtimeRegistrationGeneration++;
       this.clearDesiredAgentPlugins();
-      this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId);
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
-    if (this.botMenuPublisher || this.feishuConcierge || (this.options.provider === "codex" || this.options.provider === "claude")) {
-      const ack = await this.client.heartbeatRuntime(
-        this.options.runtimeId,
-        undefined,
-        undefined,
-        this.botMenuPublisher !== null,
-        this.feishuConcierge !== null,
-      );
-      // A heartbeat also claims maintenance requests; process the entire ack
-      // so fetching the initial provider config cannot strand those requests.
-      await this.handleHeartbeatAck(this.options.runtimeId, ack);
-    }
     this.runtimeRegistrationGeneration++;
     this.clearDesiredAgentPlugins();
-    this.ensureTaskWakeup()?.setRuntimeId(this.options.runtimeId);
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
     return this.options.runtimeId;
   }
@@ -1816,6 +1684,7 @@ export class MultiremiDaemon {
       } catch (error) {
         log.warn(`Recover orphans after runtime_gone failed for ${newRuntimeId}: ${error instanceof Error ? error.message : String(error)}`);
       }
+      this.protocolClient?.runtimesChanged();
       return true;
     } finally {
       this.runtimeGoneInflight.delete(runtimeId);
@@ -2010,11 +1879,6 @@ export class MultiremiDaemon {
       .then(() => supervisor.apply(directive))
       .catch((error) => {
         log.warn(`Feishu concierge reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
-      })
-      .finally(() => {
-        // Applying a directive is what moves this Runtime into or out of the
-        // concierge lane, so the heartbeat cadence has to follow it.
-        this.refreshHeartbeatCadence();
       });
   }
 
@@ -2577,7 +2441,7 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupRetryWake?.();
     this.authorityProbeWake?.();
     this.waitWake?.();
-    this.taskWakeup?.close();
+    this.protocolClient?.stopLane(this.protocolLane);
     this.agentPluginReconcileAbort?.abort(this.pollAbort.signal.reason);
     this.cancelRuntimeModelRefresh();
     // Release any handleTask waiting on report delivery; undelivered rows are
@@ -2610,10 +2474,10 @@ export class MultiremiDaemon {
     this.claimsPaused = true;
     this.ready = false;
     this.terminalAuthorityMode = true;
-    // The control plane refuses this credential, so it refuses the wake-up
+    // The control plane refuses this credential, so it refuses the protocol
     // handshake too. Reconnecting every 30s until the probe restores us would
     // add noise to the outage without delivering a single frame.
-    this.taskWakeup?.setAuthoritySuspended(true);
+    this.protocolClient?.suspendAuthority();
     this.stopGcLoop();
     for (const abort of this.activeTaskAborts) abort.abort();
     this.agentPluginReconcileAbort?.abort();
@@ -3272,6 +3136,7 @@ export class MultiremiDaemon {
     if (this.restartRequestedFlag) return;
     this.claimsPaused = false;
     this.resetClaimBackoff();
+    this.wakeClaim();
   }
 
   private requestRestartAfterUpdate(): void {
@@ -4719,8 +4584,8 @@ export class MultiremiDaemon {
         attempts: this.authorityProbeAttempts,
         next_probe_at: this.authorityProbeNextAt,
       },
-      claim_wake_ws: this.claimWakeWsStatus(),
-      heartbeat_interval_ms: this.heartbeatIntervalMs(),
+      protocol: this.protocolClient?.health(),
+      heartbeat_interval_ms: DAEMON_HEARTBEAT_INTERVAL_MS,
       // Null when no poll loop has started yet (health is served from startup).
       claim_idle_next_at: this.nextClaimAt > 0 ? new Date(this.nextClaimAt).toISOString() : null,
       pid: process.pid,
@@ -5007,10 +4872,6 @@ function numberEnv(value: string | undefined, fallback: number): number {
 function optionalNumberEnv(value: string | undefined): number | null {
   const parsed = value ? parseInt(value, 10) : NaN;
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function normalizeOptionalInterval(value: number | null | undefined): number | null {
-  return value === null || value === undefined ? null : Math.max(1, value);
 }
 
 /**

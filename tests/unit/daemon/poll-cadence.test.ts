@@ -1,11 +1,4 @@
 import { afterEach, describe, expect, it, jest } from "bun:test";
-import {
-  DaemonWakeupSocket,
-  daemonWakeupUrl,
-  type DaemonWakeupSocketLike,
-  type DaemonWakeupStatus,
-  type DaemonWakeupTransport,
-} from "../../../packages/server/src/worker/daemon-websocket.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { FeishuBotRuntimeState } from "@multiremi/contracts/types.js";
 
@@ -36,10 +29,7 @@ function createLoopDaemon(options: {
   claims?: (state: { heartbeats: number; claims: number; desiredGets: number }) => unknown;
   once?: boolean;
   client?: Record<string, unknown>;
-  taskWakeup?: DaemonWakeupTransport | null;
-  taskWakeupConnect?: (url: string, init: { headers: Record<string, string> }) => DaemonWakeupSocketLike;
   pluginDesiredRefreshMs?: number;
-  heartbeatIntervalMs?: number | null;
   /**
    * The concierge supervisor. `hostAttached` is what `setFeishuConciergeHost()`
    * installs (every long-running daemon gets one); `state` is what the control
@@ -84,6 +74,7 @@ function createLoopDaemon(options: {
     restartRequestedFlag: false,
     workspaceOwnershipLost: false,
     runtimeRegistrationGeneration: 0,
+    runtimeGoneInflight: new Set<string>(),
     runtimeModelRefreshTask: null,
     runtimeModelListRequests: new Map(),
     runtimeModelRetryWake: null,
@@ -102,21 +93,21 @@ function createLoopDaemon(options: {
     lastDesiredRefreshAt: 0,
     lastDesired: null,
     // `once` runs stay on the legacy single-timer behavior.
-    nextHeartbeatAt: 0,
+    nextPluginDesiredAt: 0,
     nextClaimAt: 0,
     waitWake: null,
-    taskWakeup: options.taskWakeup ?? null,
+    protocolClient: {
+      startLane: () => {}, stopLane: () => {}, drain: async () => {},
+      allowsClaims: () => true,
+    },
     outboxPath: ":memory:",
     options: {
       once: options.once ?? false,
       pollIntervalMs: 20,
       maxConcurrency: 1,
       runtimeId: "rt_cadence",
-      heartbeatIntervalMs: options.heartbeatIntervalMs ?? null,
       claimIdleMaxMs: 30_000,
       pluginDesiredRefreshMs: options.pluginDesiredRefreshMs ?? 30_000,
-      taskWakeupEnabled: options.taskWakeupConnect !== undefined || options.taskWakeup !== undefined,
-      taskWakeupConnect: options.taskWakeupConnect,
       serverUrl: "http://127.0.0.1:1",
       token: "daemon-token",
       taskDrainTimeoutMs: 50,
@@ -249,216 +240,27 @@ function conciergeStub(state: { state: FeishuBotRuntimeState } | null | undefine
   return { snapshot: () => ({ state: state.state, appliedRevision: 0, botName: null }) };
 }
 
-/** The interval the daemon would use for the next heartbeat right now. */
-function heartbeatIntervalOf(probe: LoopProbe): number {
-  return (probe.daemon as unknown as { heartbeatIntervalMs(): number }).heartbeatIntervalMs();
-}
-
 function track(probe: LoopProbe): LoopProbe {
   running.push(probe.stop);
   return probe;
 }
 
 describe("daemon poll cadence", () => {
-  it("skips the desired GET while the ack revision is unchanged", async () => {
+  it("keeps HTTP heartbeat out of the main loop while plugin fallback remains", async () => {
     jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-    }));
-
+    const probe = track(createLoopDaemon());
     await flushMicrotasks();
-    await advance(60_000);
-
-    expect(probe.heartbeats).toBeGreaterThanOrEqual(5);
-    // One GET for the first heartbeat; the rest reuse the cached revision.
-    expect(probe.desiredGets).toBe(1);
-    // The local reconcile still runs every heartbeat so retry deadlines land.
-    expect(probe.reconciles).toBeGreaterThanOrEqual(probe.heartbeats);
+    await advance(180_000);
+    expect(probe.heartbeats).toBe(0);
+    expect(probe.desiredGets).toBeGreaterThanOrEqual(6);
+    expect(probe.desiredGets).toBeLessThanOrEqual(7);
   });
 
-  it("re-fetches desired state and drops the report baseline after a re-registration", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-    }));
-    const internal = probe.daemon as unknown as {
-      lastDesired: unknown;
-      desiredFetchedAt: number;
-      lastDesiredRefreshAt: number;
-      agentPluginReconciler: { clearReportedStates(): void };
-      clearDesiredAgentPlugins(): void;
-    };
-
-    await flushMicrotasks();
-    await advance(30_000);
-    expect(probe.desiredGets).toBe(1);
-    expect(internal.lastDesired).not.toBeNull();
-
-    // A replacement Runtime is a new identity: neither the cached desired set
-    // nor the report dedupe baseline may be carried across it, or the daemon
-    // could skip a fetch the new Runtime actually needs.
-    let cleared = 0;
-    const originalClear = internal.agentPluginReconciler.clearReportedStates.bind(internal.agentPluginReconciler);
-    internal.agentPluginReconciler.clearReportedStates = () => { cleared++; originalClear(); };
-
-    internal.clearDesiredAgentPlugins();
-    expect(internal.lastDesired).toBeNull();
-    expect(internal.desiredFetchedAt).toBe(0);
-    expect(internal.lastDesiredRefreshAt).toBe(0);
-    expect(cleared).toBe(1);
-
-    // The next heartbeat therefore fetches again even though the revision text
-    // is unchanged, and the reconcile baseline was reset with it.
-    await advance(30_000);
-    expect(probe.desiredGets).toBe(2);
-  }, 20_000);
-
-  it("re-fetches desired state when the ack revision moves", async () => {
-    jest.useFakeTimers();
-    let revision = "rev-1";
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision } }),
-      desired: () => ({ runtime_id: "rt_cadence", revision, plugins: [] }),
-    }));
-
-    await flushMicrotasks();
-    await advance(30_000);
-    const initialGets = probe.desiredGets;
-    expect(initialGets).toBe(1);
-
-    revision = "rev-2";
-    await advance(30_000);
-    expect(probe.desiredGets).toBe(initialGets + 1);
-  });
-
-  it("keeps an old server on the fallback refresh and always refreshes every 10 minutes", async () => {
-    jest.useFakeTimers();
-    // No `agent_plugins` in the ack: a server from before PR-1.
-    const probe = track(createLoopDaemon({
-      ack: () => ({}),
-      pluginDesiredRefreshMs: 30_000,
-    }));
-
-    await flushMicrotasks();
-    // Five 30s windows: roughly one fallback GET per window (the boundary can
-    // land on either side), never one per heartbeat.
-    await advance(150_000);
-    expect(probe.desiredGets).toBeGreaterThanOrEqual(4);
-    expect(probe.desiredGets).toBeLessThanOrEqual(6);
-    expect(probe.heartbeats).toBe(16);
-    expect(probe.desiredGets).toBeLessThan(probe.heartbeats);
-  });
-
-  it("forces a refresh even when a matching revision never moves", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-    }));
-
-    await flushMicrotasks();
-    await advance(60_000);
-    expect(probe.desiredGets).toBe(1);
-
-    // The 10-minute bound exists for revision definitions that miss a field, so
-    // a matching revision must not suppress it. 8 more minutes: still cached.
-    await advance(8 * 60_000);
-    expect(probe.desiredGets).toBe(1);
-
-    await advance(2 * 60_000 + 30_000);
-    expect(probe.desiredGets).toBe(2);
-  });
-
-  /**
-   * Every long-running daemon is *offered* the concierge host so the control
-   * plane may hand it the bot, but only the assigned Runtime may run the fast
-   * heartbeat. Reading "has a host" as "is hosting" pinned the whole fleet to 3s.
-   */
-  it("keeps a candidate-but-unassigned host on the 10s heartbeat", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      concierge: { state: "stopped" },
-    }));
-
-    await flushMicrotasks();
-    expect(heartbeatIntervalOf(probe)).toBe(10_000);
-    await advance(60_000);
-    // The immediate first heartbeat plus one per 10s window.
-    expect(probe.heartbeats).toBe(7);
-  });
-
-  it("moves an assigned, running host to the 3s heartbeat", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      concierge: { state: "online" },
-    }));
-
-    await flushMicrotasks();
-    expect(heartbeatIntervalOf(probe)).toBe(3_000);
-    await advance(60_000);
-    // 3s cadence plus the immediate first heartbeat in the same window.
-    expect(probe.heartbeats).toBe(21);
-  });
-
-  it("returns to the 10s heartbeat after the concierge is stopped or handed over", async () => {
-    jest.useFakeTimers();
-    const concierge = { state: "online" as FeishuBotRuntimeState };
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      concierge,
-    }));
-
-    await flushMicrotasks();
-    expect(heartbeatIntervalOf(probe)).toBe(3_000);
-    await advance(30_000);
-    expect(probe.heartbeats).toBeGreaterThanOrEqual(10);
-
-    // The handover target reports `stopped`; this Runtime must drop back to the
-    // slow lane instead of keeping the fleet-wide 3s cadence alive.
-    concierge.state = "stopped";
-    (probe.daemon as unknown as { refreshHeartbeatCadence(): void }).refreshHeartbeatCadence();
-    expect(heartbeatIntervalOf(probe)).toBe(10_000);
-
-    const before = probe.heartbeats;
-    await advance(30_000);
-    // ~3 heartbeats in 30s at 10s, not the 10 the fast lane would have sent.
-    expect(probe.heartbeats - before).toBeLessThanOrEqual(4);
-  });
-
-  it("shortens the pending wait when the concierge is assigned, and honours the env override", async () => {
-    jest.useFakeTimers();
-    const concierge = { state: "stopped" as FeishuBotRuntimeState };
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      concierge,
-      heartbeatIntervalMs: 4_000,
-    }));
-    const internal = probe.daemon as unknown as {
-      nextHeartbeatAt: number;
-      appliedHeartbeatIntervalMs: number;
-      refreshHeartbeatCadence(): void;
-    };
-
-    await flushMicrotasks();
-    // The override replaces the *normal* cadence, and the concierge is not
-    // assigned yet, so this is what the daemon runs on.
-    expect(heartbeatIntervalOf(probe)).toBe(4_000);
-
-    // Assignment must not wait out the remainder of the old interval: with 3s
-    // applied the next heartbeat is due within 3s of now, not up to 4s.
-    await advance(1_000);
-    concierge.state = "starting";
-    internal.refreshHeartbeatCadence();
-    expect(internal.appliedHeartbeatIntervalMs).toBe(3_000);
-    expect(internal.nextHeartbeatAt - Date.now()).toBeLessThanOrEqual(3_000);
-
-    // The assigned host keeps 3s: MULTIREMI_HEARTBEAT_INTERVAL_MS covers the
-    // normal cadence only, so a privileged 3s lane cannot be widened by it.
-    await advance(30_000);
-    const before = probe.heartbeats;
-    await advance(30_000);
-    expect(probe.heartbeats - before).toBeGreaterThanOrEqual(9);
+  it("keeps once mode serial without an HTTP heartbeat", async () => {
+    const probe = track(createLoopDaemon({ once: true }));
+    await probe.run;
+    expect(probe.claims).toBe(1);
+    expect(probe.heartbeats).toBe(0);
   });
 
   it("backs idle claims off 3s -> 30s and caps there", async () => {
@@ -560,50 +362,6 @@ describe("daemon poll cadence", () => {
     expect(probe.claimIdleLadder.at(-1)).toBe(30_000);
   }, 20_000);
 
-  it("resets the idle backoff when a daemon:task_available frame arrives", async () => {
-    jest.useFakeTimers();
-    const listeners = new Map<string, (event: unknown) => void>();
-    const connects: Array<{ url: string; headers: Record<string, string> }> = [];
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      taskWakeupConnect: (url, init) => {
-        connects.push({ url, headers: init.headers });
-        return {
-          send: () => {},
-          close: () => {},
-          addEventListener: (type, listener) => { listeners.set(type, listener); },
-        };
-      },
-    }));
-
-    await flushMicrotasks();
-    // The loop opens the real wake-up socket for the registered Runtime.
-    expect(connects).toHaveLength(1);
-    expect(connects[0]!.url).toContain("/api/daemon/ws?runtime_ids=rt_cadence");
-    expect(connects[0]!.headers.Authorization).toBe("Bearer daemon-token");
-    listeners.get("open")!({});
-
-    // Back off to the 30s cap so the reset is unambiguous.
-    await advance(5);
-    for (let round = 0; round < 6; round++) await advanceToNextClaim(probe);
-    const internal = probe.daemon as unknown as { claimIdleMs: number };
-    expect(internal.claimIdleMs).toBe(30_000);
-
-    const claimsBefore = probe.claimTimes.length;
-    const queuedAt = Date.now();
-    listeners.get("message")!({
-      data: JSON.stringify({ type: "daemon:task_available", payload: { runtime_id: "rt_cadence", task_id: "tsk_1" } }),
-    });
-    await flushMicrotasks();
-    // The frame interrupts the pending sleep: the claim runs now rather than
-    // waiting out the remaining ~30s of backoff.
-    await advance(20);
-    expect(probe.claimTimes.length).toBe(claimsBefore + 1);
-    expect(probe.claimTimes.at(-1)! - queuedAt).toBeLessThanOrEqual(1000);
-    // And that claim waited the base interval, i.e. the ladder restarted.
-    expect(probe.claimIdleLadder.at(-1)).toBe(3000);
-  }, 20_000);
-
   it("resets the idle backoff when a slot frees, drain clears, or claims resume", async () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon({
@@ -643,295 +401,4 @@ describe("daemon poll cadence", () => {
     }).handleHeartbeatAck("rt_cadence", { status: "ok", drain: { mode: "normal", generation: 2 } });
     expect(internal.claimIdleMs).toBe(3000);
   }, 20_000);
-});
-
-describe("daemon wake-up channel", () => {
-  it("builds the websocket URL from the HTTP control-plane origin", () => {
-    expect(daemonWakeupUrl("http://127.0.0.1:6120", "rt_1")).toBe(
-      "ws://127.0.0.1:6120/api/daemon/ws?runtime_ids=rt_1",
-    );
-    expect(daemonWakeupUrl("https://remi.example/base/", "rt_2")).toBe(
-      "wss://remi.example/base/api/daemon/ws?runtime_ids=rt_2",
-    );
-  });
-
-  it("sends the daemon token as an Authorization header and wakes on task frames", async () => {
-    const opened: Array<{ url: string; headers: Record<string, string> }> = [];
-    const listeners = new Map<string, (event: unknown) => void>();
-    const socket: DaemonWakeupSocketLike = {
-      send: () => {},
-      close: () => {},
-      addEventListener: (type, listener) => { listeners.set(type, listener); },
-    };
-    const wakes: number[] = [];
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "https://remi.example",
-      token: "daemon-secret",
-      onTaskAvailable: () => wakes.push(Date.now()),
-      connect: (url, init) => {
-        opened.push({ url, headers: init.headers });
-        return socket;
-      },
-      pingIntervalMs: 30_000,
-      reconnectBaseMs: 1000,
-      reconnectMaxMs: 30_000,
-    });
-    transport.setRuntimeId("rt_1");
-    listeners.get("open")!({});
-    expect(opened[0]!.url).toBe("wss://remi.example/api/daemon/ws?runtime_ids=rt_1");
-    expect(opened[0]!.headers.Authorization).toBe("Bearer daemon-secret");
-    expect(transport.status()).toMatchObject({ state: "connected", connected: true });
-
-    listeners.get("message")!({ data: JSON.stringify({ type: "ready", runtime_id: "rt_1" }) });
-    expect(wakes).toHaveLength(0);
-    listeners.get("message")!({ data: JSON.stringify({ type: "daemon:task_available", payload: { task_id: "tsk_1" } }) });
-    expect(wakes).toHaveLength(1);
-    // Frames the daemon does not own must not wake the claim lane.
-    listeners.get("message")!({ data: JSON.stringify({ type: "pong" }) });
-    expect(wakes).toHaveLength(1);
-    transport.close();
-  });
-
-  it("reports a disconnected state with a reconnect deadline and warning when the socket fails", async () => {
-    const warnings: string[] = [];
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "https://remi.example",
-      token: "daemon-secret",
-      onTaskAvailable: () => { throw new Error("must not fire"); },
-      connect: () => { throw new Error("Expected 101 status code"); },
-      log: { info: () => {}, warn: (message) => warnings.push(message) },
-      reconnectBaseMs: 1000,
-      reconnectMaxMs: 30_000,
-    });
-    transport.setRuntimeId("rt_1");
-    expect(transport.status()).toMatchObject({
-      state: "disconnected",
-      connected: false,
-      last_error: "Expected 101 status code",
-      reconnect_attempts: 1,
-    });
-    expect(transport.status().next_reconnect_at).not.toBeNull();
-    expect(warnings[0]).toContain("claims degrade to polling with up to 30s latency");
-    transport.close();
-    expect(transport.status()).toMatchObject({ state: "disabled", connected: false });
-  });
-
-  it("keeps the claim backoff running when the wake-up channel is unavailable", async () => {
-    jest.useFakeTimers();
-    // A real socket that cannot connect: the frame the control plane publishes
-    // never arrives, so only the backoff can deliver the queued task.
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "http://127.0.0.1:1",
-      token: "daemon-token",
-      onTaskAvailable: () => { throw new Error("no frame can arrive on a dead socket"); },
-      connect: () => { throw new Error("Expected 101 status code"); },
-      log: { info: () => {}, warn: () => {} },
-      reconnectBaseMs: 1000,
-      reconnectMaxMs: 30_000,
-    });
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      taskWakeup: transport,
-    }));
-
-    await flushMicrotasks();
-    expect(transport.status().state).toBe("disconnected");
-    await advance(10 * 60_000);
-
-    // Polling is unaffected: claims still happen on the backoff schedule.
-    expect(probe.claims).toBeGreaterThanOrEqual(5);
-    expect(probe.heartbeats).toBeGreaterThanOrEqual(20);
-
-    const health = (probe.daemon as unknown as { handleHealthRequest(request: Request): Response })
-      .handleHealthRequest(new Request("http://127.0.0.1/health"));
-    const body = await health.json() as Record<string, unknown>;
-    // A blocked Upgrade path must be visible in the status JSON, including the
-    // reconnect deadline, so nobody has to guess why claims are up to 30s late.
-    expect(body.claim_wake_ws).toMatchObject({
-      state: "disconnected",
-      connected: false,
-      last_error: "Expected 101 status code",
-    });
-    expect(Number((body.claim_wake_ws as { reconnect_attempts: number }).reconnect_attempts))
-      .toBeGreaterThanOrEqual(1);
-    expect((body.claim_wake_ws as { next_reconnect_at: string | null }).next_reconnect_at).not.toBeNull();
-  }, 20_000);
-
-  it("keeps once mode strictly serial", async () => {
-    jest.useFakeTimers();
-    let connects = 0;
-    const probe = track(createLoopDaemon({
-      once: true,
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      client: { handleTask: async () => {} },
-      taskWakeupConnect: () => {
-        connects++;
-        return { send: () => {}, close: () => {}, addEventListener: () => {} };
-      },
-    }));
-    (probe.daemon as unknown as { handleTask: () => Promise<void> }).handleTask = async () => {};
-
-    await flushMicrotasks();
-    await probe.run;
-    // One heartbeat, one claim, then return — no backoff and no idle loop.
-    expect(probe.heartbeats).toBe(1);
-    expect(probe.claims).toBe(1);
-    // A one-shot run never dials the wake-up socket.
-    expect(connects).toBe(0);
-    expect(probe.daemon.taskWakeupStatus()).toBeNull();
-  });
-
-  it("reports connecting, not connected, until the handshake completes", () => {
-    const listeners = new Map<string, (event: unknown) => void>();
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "https://remi.example",
-      token: "daemon-secret",
-      onTaskAvailable: () => {},
-      connect: () => ({
-        send: () => {},
-        close: () => {},
-        addEventListener: (type, listener) => { listeners.set(type, listener); },
-      }),
-      log: { info: () => {}, warn: () => {} },
-    });
-
-    transport.setRuntimeId("rt_1");
-    // A socket object exists, but nothing has been accepted yet: reporting
-    // `connected` here would hide exactly the stalled handshake this status
-    // exists to expose.
-    expect(transport.status()).toMatchObject({ state: "connecting", connected: false });
-    listeners.get("open")!({});
-    expect(transport.status()).toMatchObject({ state: "connected", connected: true });
-    transport.close();
-  });
-
-  it("stops reconnecting while authority is revoked and resumes once it is restored", () => {
-    jest.useFakeTimers();
-    const sockets: Array<Map<string, (event: unknown) => void>> = [];
-    let connects = 0;
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "https://remi.example",
-      token: "daemon-secret",
-      onTaskAvailable: () => {},
-      connect: () => {
-        connects++;
-        const listeners = new Map<string, (event: unknown) => void>();
-        sockets.push(listeners);
-        return {
-          send: () => {},
-          close: () => {},
-          addEventListener: (type, listener) => { listeners.set(type, listener); },
-        };
-      },
-      log: { info: () => {}, warn: () => {} },
-      reconnectBaseMs: 1000,
-      reconnectMaxMs: 30_000,
-      random: () => 0.5,
-    });
-    transport.setRuntimeId("rt_1");
-    expect(connects).toBe(1);
-
-    // A terminal authority failure refuses the credential, so the handshake is
-    // refused too; retrying every 30s would only add noise to the outage.
-    transport.setAuthoritySuspended(true);
-    expect(transport.status()).toMatchObject({ state: "disconnected", connected: false, suspended: true });
-    jest.advanceTimersByTime(10 * 60_000);
-    expect(connects).toBe(1);
-
-    // The probe restored the credential: reconnect immediately rather than
-    // waiting out a backoff earned by the revoked one.
-    transport.setAuthoritySuspended(false);
-    expect(connects).toBe(2);
-    expect(transport.status()).toMatchObject({ suspended: false, state: "connecting" });
-    transport.close();
-  });
-
-  it("ignores a superseded socket's close so a new runtime id cannot leak a reconnect", () => {
-    jest.useFakeTimers();
-    const sockets: Array<{ listeners: Map<string, (event: unknown) => void>; closes: number }> = [];
-    let connects = 0;
-    const transport = new DaemonWakeupSocket({
-      serverUrl: "https://remi.example",
-      token: "daemon-secret",
-      onTaskAvailable: () => {},
-      connect: () => {
-        connects++;
-        const listeners = new Map<string, (event: unknown) => void>();
-        const record = { listeners, closes: 0 };
-        sockets.push(record);
-        return {
-          send: () => {},
-          close: () => { record.closes++; },
-          addEventListener: (type, listener) => { listeners.set(type, listener); },
-        };
-      },
-      log: { info: () => {}, warn: () => {} },
-      reconnectBaseMs: 1000,
-      reconnectMaxMs: 30_000,
-      random: () => 0.5,
-    });
-
-    transport.setRuntimeId("rt_1");
-    sockets[0]!.listeners.get("open")!({});
-    expect(transport.status()).toMatchObject({ state: "connected" });
-
-    // Re-registration replaces the Runtime, so the old subscription is torn
-    // down and a fresh socket dialed with the new id.
-    transport.setRuntimeId("rt_2");
-    expect(connects).toBe(2);
-    expect(sockets[0]!.closes).toBe(1);
-    expect(transport.status()).toMatchObject({ state: "connecting", runtime_id: "rt_2" });
-
-    // The replaced socket reports its close after the swap. It must not be
-    // mistaken for the current one: doing so would overwrite the live socket's
-    // state and schedule a reconnect that nothing ever tracks.
-    sockets[0]!.listeners.get("close")!({});
-    expect(transport.status()).toMatchObject({
-      state: "connecting",
-      runtime_id: "rt_2",
-      reconnect_attempts: 0,
-    });
-    jest.advanceTimersByTime(60_000);
-    expect(connects).toBe(2);
-
-    // The replacement still becomes healthy.
-    sockets[1]!.listeners.get("open")!({});
-    expect(transport.status()).toMatchObject({ state: "connected", connected: true });
-    transport.close();
-  });
-
-  it("spreads reconnects with jitter without exceeding the ceiling", () => {
-    jest.useFakeTimers();
-    const delaysFor = (random: number): number[] => {
-      const seen: number[] = [];
-      const transport = new DaemonWakeupSocket({
-        serverUrl: "https://remi.example",
-        token: "daemon-secret",
-        onTaskAvailable: () => {},
-        connect: () => { throw new Error("Expected 101 status code"); },
-        log: { info: () => {}, warn: () => {} },
-        reconnectBaseMs: 1000,
-        reconnectMaxMs: 30_000,
-        random: () => random,
-      });
-      transport.setRuntimeId(`rt_${random}`);
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const at = transport.status().next_reconnect_at;
-        seen.push(new Date(at!).getTime() - Date.now());
-        jest.advanceTimersByTime(30_000);
-      }
-      transport.close();
-      return seen;
-    };
-
-    const low = delaysFor(0);
-    const high = delaysFor(1);
-    // Same ladder, different wall-clock schedule: the point of the jitter.
-    expect(low[0]).not.toBe(high[0]);
-    // Never above the ceiling, and never a zero-delay hot retry loop.
-    for (const delay of [...low, ...high]) {
-      expect(delay).toBeGreaterThan(0);
-      expect(delay).toBeLessThanOrEqual(30_000);
-    }
-  });
 });
