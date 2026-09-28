@@ -34,7 +34,7 @@ function entry(seq: number, overrides: Partial<SessionLogEntry> = {}): SessionLo
 /** Geometry for the list's own scroll root, which jsdom reports as 0x0. */
 function installGeometry(root: HTMLElement, content: HTMLElement): () => void {
   let scrollTop = 0;
-  let scrollHeight = 1000;
+  const scrollHeight = 1000;
   const clientHeight = 400;
   Object.defineProperty(root, "scrollHeight", { configurable: true, get: () => scrollHeight });
   Object.defineProperty(root, "clientHeight", { configurable: true, get: () => clientHeight });
