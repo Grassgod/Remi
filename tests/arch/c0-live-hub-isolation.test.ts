@@ -77,6 +77,10 @@ function hasLiveHubValueImport(src: string): boolean {
           || clause.namedBindings.elements.length === 0
           || clause.namedBindings.elements.some((element) => !element.isTypeOnly);
       }
+    } else if (ts.isExportDeclaration(node) && isLiveHub(node.moduleSpecifier) && !node.isTypeOnly) {
+      const clause = node.exportClause;
+      found = !clause || ts.isNamespaceExport(clause) || clause.elements.length === 0
+        || clause.elements.some(element => !element.isTypeOnly);
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       found = !node.isTypeOnly && isLiveHub(node.moduleReference.expression);
     } else if (ts.isCallExpression(node)) {
@@ -104,6 +108,15 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
     ['const hub = require("@multiremi/contracts/live-hub");', true],
     ['import hub = require("@multiremi/contracts/live-hub");', true],
     ['type Frame = import("@multiremi/contracts/live-hub").HubFrame;', false],
+    ['export { parseHubStreamKey as qaR1Parse } from "@multiremi/contracts/live-hub";', true],
+    ['export { type HubFrame, parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['export * from "@multiremi/contracts/live-hub";', true],
+    ['export * as hub from "@multiremi/contracts/live-hub.js";', true],
+    ['export {} from "@multiremi/contracts/live-hub";', true],
+    ['export type { HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['export { type HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['export type * from "@multiremi/contracts/live-hub";', false],
+    ['export type * as hub from "@multiremi/contracts/live-hub";', false],
   ])("classifies each individual contract import: %s", (source, expected) => {
     expect(hasLiveHubValueImport(source)).toBe(expected);
   });
