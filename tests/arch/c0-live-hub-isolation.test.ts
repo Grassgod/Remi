@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import ts from "typescript";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
@@ -17,10 +17,20 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 /**
  * Every module C0 adds, and whether runtime code may import it yet.
  *
- * MUL-438 (C3) wired the live-hub seam: the browser socket subscribes through
- * `LiveHub`, and `server.ts` builds the hub over the transport adapter, so those
- * three modules (`contracts/live-hub`, `api/hub/live-hub`, `api/hub/hub-transport`)
- * are reachable from the request path now.
+ * C1 (MUL-436) and C3 (MUL-438) wire these three modules. What "wired" means
+ * is deliberately narrow: imported by runtime code **outside** the hub package,
+ * which is the fact that decides whether the hub can be reached at all.
+ *
+ * - `contracts/live-hub` — wired: `api/server.ts` reads the role types and
+ *   `api/hub/hub-core.ts` the frame contract, and the subpath export is the only
+ *   way in.
+ * - `api/hub/live-hub` — wired: `api/server.ts` imports the `LiveHub` interface.
+ * - `api/hub/hub-transport` — wired: `api/server.ts` constructs the local adapter
+ *   (and `hub-role-guard.ts` is the process-level consumer). Step 3 adds the peer
+ *   adapter behind the same interface; that is a new implementation, not a new
+ *   reason for this entry to exist.
+ * - `api/hub/upstream-contracts` — still false: B0's hand-written stand-in, which
+ *   disappears when MUL-425 lands.
  *
  * C7's narrower constraint remains independent: replica modules may reference
  * the contract only as types, even though C3's runtime now imports its values.
@@ -62,11 +72,42 @@ const C0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/api/hub/live-hub.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/hub-transport.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/upstream-contracts.ts"),
-  // C3's own modules live in the same seam and import the C0 ones; counting them
-  // as consumers would make every entry above pass for the wrong reason.
+  // C1/C3's own modules, so their imports of the C0 surface are not counted as
+  // "runtime wired" on the strength of the hub importing itself.
   join(REPO_ROOT, "packages/server/src/api/hub/browser-stream.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/stream-auth.ts"),
 ]);
+
+/**
+ * The hub package itself.
+ *
+ * C1 fills `api/hub/` in, so its modules import each other by construction; those
+ * intra-package imports say nothing about whether the rest of the server can reach
+ * the hub. A `wired: true` entry is therefore satisfied only by a consumer
+ * *outside* this directory — `server.ts` for the hub, `apps/` or the CLI for the
+ * guard — which is the fact that actually matters.
+ */
+const HUB_PACKAGE = join(REPO_ROOT, "packages/server/src/api/hub");
+
+/**
+ * Whether an import specifier reaches `specifier` from `fromFile`.
+ *
+ * Two spellings reach the same module here, and the scan has to see both or it
+ * proves nothing: the package subpath (`@multiremi/api/hub/live-hub`, resolved
+ * through `packages/server/package.json`'s `"./*": "./src/*"` export) and a
+ * relative path (`./hub/live-hub.js`), which is how `api/server.ts` imports its
+ * siblings. The relative branch normalises to the repo path before comparing, so a
+ * file cannot dodge the guard by choosing one spelling over the other.
+ */
+function matchesSpecifier(spec: string, specifier: string, fromFile: string): boolean {
+  if (spec === specifier || spec === `${specifier}.js`) return true;
+  if (!spec.startsWith(".")) return false;
+  const resolved = resolve(dirname(fromFile), spec).replace(/\.js$/, "");
+  const target = specifier === "@multiremi/contracts/live-hub"
+    ? join(REPO_ROOT, "packages/contracts/src/live-hub")
+    : join(REPO_ROOT, "packages/server/src", specifier.replace("@multiremi/api/", "api/"));
+  return resolved === target;
+}
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
@@ -138,10 +179,17 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
         expect(files.length, `${root} yielded no files to scan`).toBeGreaterThan(0);
         for (const file of files) {
           if (C0_SOURCES.has(file)) continue;
-          const src = readFileSync(file, "utf8");
-          for (const match of src.matchAll(IMPORT_RE)) {
+          const source = readFileSync(file, "utf8");
+          for (const match of source.matchAll(IMPORT_RE)) {
             const spec = match[1]!;
-            if (spec === specifier || spec === `${specifier}.js`) consumers.push(file);
+            if (!matchesSpecifier(spec, specifier, file)) continue;
+            // For the hub's own modules, an import from inside the package is not
+            // wiring — it is what C1 filling the package in looks like. For the
+            // contracts module it *is*: `hub-core.ts` is the runtime consumer that
+            // makes the subpath reachable.
+            const intraPackage = specifier.startsWith("@multiremi/api/hub/");
+            if (intraPackage && file.startsWith(`${HUB_PACKAGE}/`)) continue;
+            consumers.push(file);
           }
         }
       }
