@@ -149,6 +149,23 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
         expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
       });
 
+      it(`keeps exact IDs ahead of a scoped prefix candidate selected by ${selector}`, async () => {
+        const { store, app, workspaceA, workspaceB } = await setup();
+        const exactParent = store.createIssue({ id: "iss_mul415_exact111", workspaceId: workspaceB.id, title: "Exact parent" });
+        const exactChild = store.createIssue({ workspaceId: workspaceB.id, title: "Exact child", parentIssueId: exactParent.id });
+        const prefixParent = store.createIssue({ id: `${exactParent.id}extra`, workspaceId: workspaceA.id, title: "Prefix parent" });
+        const prefixChild = store.createIssue({ workspaceId: workspaceA.id, title: "Prefix child", parentIssueId: prefixParent.id });
+        expect(store.getIssueByRef(exactParent.id, workspaceA.id)?.id).toBe(prefixParent.id);
+
+        const response = await request(app, exactParent.id, workspaceA, authHeaders(masterToken));
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.total).toBe(1);
+        expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([exactChild.id]);
+        expect(body.issues.map((issue: { id: string }) => issue.id)).not.toContain(prefixChild.id);
+        expect(body.issues.map((issue: { title: string }) => issue.title)).toEqual(["Exact child"]);
+      });
+
       it(`hides an inaccessible full ID outside the workspace selected by ${selector}`, async () => {
         const { store, app, foreign, workspaceB, headers } = await setup();
         const listChildren = spyOn(store, "listChildIssues");
