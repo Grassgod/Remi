@@ -1,5 +1,6 @@
 import type { Context, Hono } from "hono";
 import {
+  canCurrentUserAccessAgentChecker,
   canCurrentUserAccessChatSessionAgent,
   denyCurrentUserWorkspaceAccess,
   loadChatSessionForCurrentUser,
@@ -225,12 +226,30 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const tasks = store.listPendingChatTasks(workspaceId, { creatorId: currentRequestUserId(c) })
-      .filter((task) => {
-        const session = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
-        return session ? isListedSession(c, session) : false;
+    // MUL-473: the candidates arrive ranked per Session by SQL, with the Feishu
+    // transport Chats excluded there, so the route no longer re-reads each Chat
+    // and each winner. The remaining rule — the Session's Agent must be reachable
+    // by this caller — costs one query for the Agents in play instead of one per
+    // task, and the lite projection avoids pulling Skill bodies for a visibility
+    // decision that never reads one.
+    const candidates = store.listPendingChatTaskCandidates(workspaceId, {
+      creatorId: currentRequestUserId(c),
+      excludeTransportSessions: true,
+    });
+    if (!candidates.length) return c.json({ tasks: [] });
+    const agentsById = new Map(store.listAgentsLiteByIds(candidates.map((candidate) => candidate.sessionAgentId))
+      .map((agent) => [agent.id, agent]));
+    const canAccessAgent = canCurrentUserAccessAgentChecker(c, store);
+    const tasks = candidates
+      .filter((candidate) => {
+        const agent = agentsById.get(candidate.sessionAgentId);
+        return Boolean(agent && agent.workspaceId === candidate.sessionWorkspaceId && canAccessAgent(agent));
       })
-      .map((task) => ({ task_id: task.id, status: task.status, chat_session_id: task.chatSessionId }));
+      .map((candidate) => ({
+        task_id: candidate.taskId,
+        status: candidate.status,
+        chat_session_id: candidate.chatSessionId,
+      }));
     return c.json({ tasks });
   });
 }

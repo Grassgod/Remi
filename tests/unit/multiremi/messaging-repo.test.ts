@@ -366,6 +366,43 @@ describe("MessagingRepo", () => {
     })).toBeNull();
   });
 
+  it("keeps recordOutcome as an atomic standalone entry point", () => {
+    const repo = createRepo();
+    addConnectionAndSource(repo, "a");
+    repo.ingestMessages({
+      connectionId: "conn_a",
+      sourceId: "source_a",
+      messages: [canonicalMessage({ externalMessageId: "m1", sentAt: "2026-08-31T09:10:00.000Z" })],
+    });
+
+    const original = repo.getOutcome;
+    repo.getOutcome = (id) => {
+      original.call(repo, id);
+      throw new Error("standalone outcome rollback injection");
+    };
+    try {
+      expect(() => repo.recordOutcome({
+        workspaceId: "local",
+        connectionId: "conn_a",
+        externalMessageId: "m1",
+        outcomeKind: "ignored",
+        reason: "standalone",
+      })).toThrow("standalone outcome rollback injection");
+    } finally {
+      repo.getOutcome = original;
+    }
+    expect(repo.listOutcomes("conn_a", "m1")).toEqual([]);
+
+    expect(repo.recordOutcome({
+      workspaceId: "local",
+      connectionId: "conn_a",
+      externalMessageId: "m1",
+      outcomeKind: "ignored",
+      reason: "standalone",
+    })).toMatchObject({ outcomeKind: "ignored", reason: "standalone" });
+    expect(db!.query("SELECT sequence FROM multiremi_message_outcomes").get()).toEqual({ sequence: 1 });
+  });
+
   it("cascades message and outcome deletion when a connection goes away", () => {
     const repo = createRepo();
     addConnectionAndSource(repo, "a");

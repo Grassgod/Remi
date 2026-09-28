@@ -29,7 +29,9 @@ import {
   useArchiveAllReadInbox,
   useArchiveCompletedInbox,
   useMarkInboxItemsRead,
+  MarkInboxItemsReadError,
 } from "@multiremi/core/inbox/mutations";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 
 import { FeishuInboxActions } from "./feishu-inbox-actions";
 import { IssueDetail } from "../../issues/components";
@@ -66,6 +68,7 @@ import {
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { InboxListItem, useTimeAgo } from "./inbox-list-item";
 import { useInboxTitle, useTypeLabels } from "./inbox-detail-label";
 import { getAutopilotRunOutcome } from "./inbox-display";
@@ -99,7 +102,7 @@ function InboxLoadError({ onRetry }: { onRetry: () => void }) {
 export function InboxPage() {
   const { t } = useT("inbox");
   const { t: tCommon } = useT("common");
-  const { searchParams, replace } = useNavigation();
+  const { searchParams, replace, pathname } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
   const urlItem = searchParams.get("item") ?? "";
   const urlSession = searchParams.get("session") ?? "";
@@ -136,7 +139,18 @@ export function InboxPage() {
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    status: inboxStatus,
+    isPlaceholderData: inboxIsPlaceholderData,
   } = useInfiniteQuery(inboxPageOptions(wsId));
+  // MUL-472 item 5: the list column is this page's measured viewport; the rows
+  // count as new only once this round's own first-page response resolved.
+  // `useInfiniteQuery`'s `isPlaceholderData` is always false here (the inbox has
+  // no placeholder), but the helper keeps the marker's contract uniform.
+  const perfMarker = useListPerfMarker({
+    status: inboxStatus,
+    isPlaceholderData: inboxIsPlaceholderData,
+  });
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const rawItems = useMemo(
     () => inboxPages?.pages.flatMap((page) => page.items) ?? [],
     [inboxPages],
@@ -247,7 +261,8 @@ export function InboxPage() {
   });
 
   const isMobile = useIsMobile();
-  const unreadCount = useInboxUnreadCount(wsId);
+  // The unread total is decoration; the list above publishes page readiness.
+  const unreadCount = useInboxUnreadCount(wsId, afterFirstScreen);
 
   const archiveMutation = useArchiveInboxItems();
   const markAllReadMutation = useMarkAllInboxRead();
@@ -261,10 +276,19 @@ export function InboxPage() {
 
   // Auto-mark the selected display entry as read. A collapsed entry covers
   // every successful run represented by the row, including URL selection.
-  // The mutation flips `read: true` optimistically, so this effect settles
-  // in one pass and can't loop. Kept in a `useEffect` rather than inlined
-  // in handleSelect so URL-driven selection triggers it too.
+  // The mutation flips `read: true` optimistically and retries a bounded number
+  // of times (see `useMarkInboxItemsRead`), so this effect settles in one pass
+  // per row and can't loop. Kept in a `useEffect` rather than inlined in
+  // handleSelect so URL-driven selection triggers it too.
+  //
+  // MUL-472 (d): rows whose budget is used up (or that 404'd) are parked here.
+  // The optimistic rollback + `invalidateInbox` on settle used to make the
+  // effect re-enter with the same unread id, which is the loop that produced
+  // 992 retries in the MUL-367 baseline. The set lives in a ref so parking a
+  // row does not itself re-render.
   const markReadMutate = markGroupReadMutation.mutate;
+  const markReadParkedRef = useRef<Set<string>>(new Set());
+  const markReadToastShownRef = useRef(false);
   const selectedUnreadIds = selectedEntry
     ? selectedEntry.items.filter((item) => !item.read).map((item) => item.id)
     : selected && !selected.read
@@ -273,13 +297,30 @@ export function InboxPage() {
   const selectedUnreadKey = selectedUnreadIds.join(",");
   useEffect(() => {
     if (!selectedUnreadKey) return;
-    markReadMutate(selectedUnreadKey.split(","), {
-      onError: (err) =>
+    const pendingIds = selectedUnreadKey
+      .split(",")
+      .filter((id) => !markReadParkedRef.current.has(id));
+    if (pendingIds.length === 0) return;
+    markReadMutate(pendingIds, {
+      onError: (err) => {
+        // Park every row the bounded retry gave up on, so a refetch that still
+        // reports `read: false` cannot re-enter through this effect.
+        if (err instanceof MarkInboxItemsReadError) {
+          for (const failure of err.failed) markReadParkedRef.current.add(failure.id);
+        } else {
+          for (const id of pendingIds) markReadParkedRef.current.add(id);
+        }
+        // One toast for the whole episode: retries and multiple rows share it.
+        if (markReadToastShownRef.current) return;
+        markReadToastShownRef.current = true;
         toast.error(
-          err instanceof Error && err.message
-            ? err.message
-            : t(($) => $.errors.mark_read_failed),
-        ),
+          err instanceof MarkInboxItemsReadError
+            ? t(($) => $.errors.mark_read_failed)
+            : err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.errors.mark_read_failed),
+        );
+      },
     });
   }, [selectedUnreadKey, markReadMutate, t]);
 
@@ -334,12 +375,20 @@ export function InboxPage() {
     const unreadIds = groupItems.filter((item) => !item.read).map((item) => item.id);
     if (!unreadIds.length) return;
     markGroupReadMutation.mutate(unreadIds, {
-      onError: (err) =>
+      onError: (err) => {
+        if (err instanceof MarkInboxItemsReadError) {
+          // The bounded retry already gave up on these rows; park them so the
+          // auto-mark effect does not start a second round for the same ids.
+          for (const failure of err.failed) markReadParkedRef.current.add(failure.id);
+        }
         toast.error(
-          err instanceof Error && err.message
-            ? err.message
-            : t(($) => $.errors.mark_group_read_failed),
-        ),
+          err instanceof MarkInboxItemsReadError
+            ? t(($) => $.errors.mark_group_read_failed)
+            : err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.errors.mark_group_read_failed),
+        );
+      },
     });
   };
 
@@ -507,7 +556,7 @@ export function InboxPage() {
                 isSelected={entry.items.some((item) => inboxItemSelectionKey(item) === selectedKey)}
                 onClick={() => handleSelect(entry.item)}
                 onItemClick={handleSelect}
-                onArchive={() => handleArchive(inboxDisplayEntryIds(entry))}
+                onArchive={(itemsToArchive) => handleArchive(itemsToArchive.map((item) => item.id))}
               />
             ))}
           </section>
@@ -704,7 +753,7 @@ export function InboxPage() {
 
     // Mobile: full-screen list
     return (
-      <div className="flex flex-1 flex-col min-h-0">
+      <div className="flex flex-1 flex-col min-h-0" {...perfMarker}>
         {listHeader}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {listBody}
@@ -750,7 +799,7 @@ export function InboxPage() {
   return (
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
       <ResizablePanel id="list" defaultSize={320} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size">
-      <div className="flex flex-col border-r h-full">
+      <div className="flex flex-col border-r h-full" {...perfMarker}>
         {listHeader}
         <div className="flex-1 min-h-0 overflow-y-auto">
           {listBody}

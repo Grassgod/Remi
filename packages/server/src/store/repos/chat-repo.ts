@@ -1,7 +1,7 @@
 // Chat domain (chat sessions and chat messages), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
-import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js";
+import { cleanOptionalString, nullableString, resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import {
   chatMessageToConversationLog,
@@ -35,6 +35,27 @@ export interface QueuedChatTask {
   content: string;
   attachment_ids: string[];
   created_at: string;
+}
+
+/** The in-flight statuses a Chat's queue counts as pending, in `pendingTasks()` terms. */
+const PENDING_CHAT_TASK_STATUSES: MultiremiTask["status"][] = [
+  "queued",
+  "dispatched",
+  "running",
+  "waiting_local_directory",
+  "awaiting_human",
+];
+
+/**
+ * One row of the batched pending-task read: the winning task plus the Session
+ * fields a caller needs to authorize it without re-reading the Chat.
+ */
+export interface PendingChatTaskCandidate {
+  taskId: string;
+  status: MultiremiTask["status"];
+  chatSessionId: string;
+  sessionAgentId: string;
+  sessionWorkspaceId: string;
 }
 
 const CHAT_SESSION_SELECT = `SELECT chat.*,
@@ -329,11 +350,89 @@ export class ChatRepo {
     return { task_id: taskId, active_task_id: result.activeTaskId };
   }
 
+  /**
+   * The first in-flight task of every Chat the caller can list, in one statement.
+   *
+   * The list surface used to walk the caller's Sessions and run
+   * {@link pendingTasks} per Session: on a workspace with ~200 unarchived Chats
+   * that is ~400 statements per poll, plus one Agent load each. The ranking
+   * below is the same expression {@link pendingTasks} orders by, applied per
+   * partition, so "first pending task of a Session" keeps its exact meaning;
+   * only the row that wins the partition comes back.
+   *
+   * The join reads `multiremi_chat_sessions` for ownership, workspace, archived
+   * state and the response's tie-break order. No Chat message column is touched
+   * (MUL-402 B1), and the projection carries only what a caller needs to
+   * authorize and answer — the prompts and results stay in the table.
+   */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options: { creatorId?: string | null; excludeTransportSessions?: boolean } = {},
+  ): PendingChatTaskCandidate[] {
+    const clauses = ["chat.status != 'archived'"];
+    const params: unknown[] = [];
+    if (workspaceId) {
+      clauses.push("chat.workspace_id = ?");
+      params.push(workspaceId);
+    }
+    if (options.creatorId) {
+      clauses.push("chat.creator_id = ?");
+      params.push(options.creatorId);
+    }
+    if (options.excludeTransportSessions) {
+      clauses.push(
+        "NOT EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings binding"
+        + " WHERE binding.chat_session_id = chat.id)",
+      );
+    }
+    const statuses = PENDING_CHAT_TASK_STATUSES.map(() => "?").join(", ");
+    const rows = this.ctx.db.query(
+      `WITH ranked_pending AS (
+         SELECT task.id AS task_id,
+                task.status AS status,
+                task.chat_session_id AS chat_session_id,
+                task.created_at AS task_created_at,
+                chat.agent_id AS session_agent_id,
+                chat.workspace_id AS session_workspace_id,
+                chat.pinned AS session_pinned,
+                chat.updated_at AS session_updated_at,
+                ROW_NUMBER() OVER (
+                  PARTITION BY task.chat_session_id
+                  ORDER BY CASE WHEN task.status = 'queued' THEN 1 ELSE 0 END,
+                           task.priority DESC,
+                           task.chat_queue_order ASC,
+                           task.created_at ASC,
+                           task.id ASC
+                ) AS pending_rank
+         FROM multiremi_tasks task
+         JOIN multiremi_chat_sessions chat ON chat.id = task.chat_session_id
+         WHERE ${clauses.join(" AND ")}
+           AND task.status IN (${statuses})
+       )
+       SELECT task_id, status, chat_session_id, session_agent_id, session_workspace_id
+       FROM ranked_pending
+       WHERE pending_rank = 1
+       ORDER BY task_created_at DESC, session_pinned DESC, session_updated_at DESC, chat_session_id ASC`,
+    ).all(...params, ...PENDING_CHAT_TASK_STATUSES) as Row[];
+    return rows.map((row) => ({
+      taskId: String(row.task_id),
+      status: String(row.status) as MultiremiTask["status"],
+      chatSessionId: String(row.chat_session_id),
+      sessionAgentId: String(row.session_agent_id),
+      sessionWorkspaceId: String(row.session_workspace_id ?? "local"),
+    }));
+  }
+
+  /**
+   * Full task rows for the first in-flight task of each of the caller's Chats.
+   *
+   * Same set and order as the old per-Session walk; the rows come back in one
+   * `IN (…)` hydration instead of one statement per Session.
+   */
   listPendingChatTasks(workspaceId?: string | null, options: { creatorId?: string | null } = {}): MultiremiTask[] {
-    return this.listChatSessions(workspaceId, { creatorId: options.creatorId })
-      .map((session) => this.getPendingChatTask(session.id))
-      .filter((task): task is MultiremiTask => task != null)
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    const candidates = this.listPendingChatTaskCandidates(workspaceId, options);
+    if (!candidates.length) return [];
+    return this.ctx.tasks().hydrateTasksByIds(candidates.map((candidate) => candidate.taskId));
   }
 
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {
@@ -554,7 +653,8 @@ export class ChatRepo {
         workspaceId: session.workspaceId,
         holdsWorkspace: false,
         prompt: body,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, childStatusChanges, deferredEvents);
       this.appendChatMessageWithinTransaction({
         id: messageId,

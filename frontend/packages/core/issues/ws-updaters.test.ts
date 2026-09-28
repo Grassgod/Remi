@@ -281,6 +281,54 @@ describe("issue archive cache updates", () => {
   });
 });
 
+describe("parent done grant cache updates", () => {
+  it("invalidates detail when raw grant columns arrive without deriving effective state", () => {
+    const qc = new QueryClient();
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue,
+      parent_done_grant_at: "2026-09-28T00:00:00.000Z",
+      parent_done_grant_by: "member-1",
+      parent_done_grant_agent_id: "agent-old",
+      parent_done_grant: {
+        granted_at: "2026-09-28T00:00:00.000Z",
+        granted_by: "member-1",
+        agent_id: "agent-old",
+        effective: true,
+        ineffective_reason: null,
+      },
+    });
+
+    onIssueUpdated(qc, WS_ID, {
+      id: ISSUE_ID,
+      parent_done_grant_at: "2026-09-28T00:00:00.000Z",
+      parent_done_grant_by: "member-1",
+      parent_done_grant_agent_id: "agent-new",
+    });
+
+    expectInvalidated(qc, issueKeys.detail(WS_ID, ISSUE_ID));
+    expect(
+      qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID))
+        ?.parent_done_grant,
+    ).toEqual({
+      granted_at: "2026-09-28T00:00:00.000Z",
+      granted_by: "member-1",
+      agent_id: "agent-old",
+      effective: true,
+      ineffective_reason: null,
+    });
+  });
+
+  it("keeps detail valid for updates without raw grant columns", () => {
+    const qc = new QueryClient();
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), baseIssue);
+
+    onIssueUpdated(qc, WS_ID, { id: ISSUE_ID, title: "Updated" });
+
+    expect(qc.getQueryState(issueKeys.detail(WS_ID, ISSUE_ID))?.isInvalidated)
+      .toBe(false);
+  });
+});
+
 describe("generated issue cache invalidation", () => {
   const SOURCE_ISSUE_ID = "source-1";
   const NEW_SOURCE_ISSUE_ID = "source-2";

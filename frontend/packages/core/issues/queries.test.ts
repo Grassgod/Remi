@@ -13,7 +13,11 @@ import {
   PROJECT_GANTT_PAGE_LIMIT,
   childrenByParentsOptions,
   findCachedIssue,
+  issueListOptions,
+  myIssueListOptions,
+  childIssueProgressOptions,
   issueKeys,
+  issueDecisionsOptions,
   issueTimelinePageOptions,
   issueTimelinePrimerOptions,
   projectGanttIssuesOptions,
@@ -21,6 +25,47 @@ import {
 
 const WS_ID = "ws-1";
 const PROJECT_ID = "project-1";
+
+describe("sub-issue visibility queries", () => {
+  it("keys and fetches the server-filtered workspace and personal lists separately", async () => {
+    const listIssues = vi.fn().mockResolvedValue({ issues: [], total: 0 });
+    setApiInstance({ listIssues } as unknown as ApiClient);
+    const hidden = issueListOptions(WS_ID, { top_level_only: true });
+    const shown = issueListOptions(WS_ID, { top_level_only: false });
+    expect(hidden.queryKey).not.toEqual(shown.queryKey);
+    await new QueryClient().fetchQuery(hidden);
+    expect(listIssues.mock.calls.length).toBeGreaterThan(0);
+    expect(listIssues.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
+
+    listIssues.mockClear();
+    const personal = myIssueListOptions(WS_ID, "all", { top_level_only: true }, "user-1");
+    await new QueryClient().fetchQuery(personal);
+    expect(listIssues.mock.calls.every(([params]) => params.top_level_only === true)).toBe(true);
+  });
+
+  it("indexes child progress by the server's parentIssueId field", () => {
+    const options = childIssueProgressOptions(WS_ID);
+    const map = options.select?.({ progress: [{ parentIssueId: "parent-1", total: 2, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 1 }] });
+    expect(map?.get("parent-1")?.total).toBe(2);
+  });
+});
+
+describe("issue decision query options", () => {
+  it("uses an issue-scoped key and fetches the complete decision list", async () => {
+    const response = {
+      waiting_on_human: [],
+      owner_and_answered: { pending: [], answered: [] },
+      count: 0,
+    };
+    const listIssueDecisions = vi.fn().mockResolvedValue(response);
+    setApiInstance({ listIssueDecisions } as unknown as ApiClient);
+    const options = issueDecisionsOptions(WS_ID, "issue-1");
+
+    expect(options.queryKey).toEqual(["issues", WS_ID, "decisions", "issue-1"]);
+    await expect(new QueryClient().fetchQuery(options)).resolves.toEqual(response);
+    expect(listIssueDecisions).toHaveBeenCalledWith("issue-1");
+  });
+});
 
 describe("issue timeline query options", () => {
   const page = (hasMore: boolean): TimelinePage => ({

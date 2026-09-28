@@ -17,6 +17,7 @@ export interface CreateIssueRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   parent_issue_id?: string;
+  blocked_by?: string[];
   project_id?: string | null;
   start_date?: string;
   due_date?: string;
@@ -24,6 +25,7 @@ export interface CreateIssueRequest {
 }
 
 export interface UpdateIssueRequest {
+  force?: boolean;
   runtime_workspace_id?: string | null;
   title?: string;
   description?: string;
@@ -57,10 +59,17 @@ export interface IssueRetitleResponse {
 }
 
 export interface ListIssuesParams {
+  top_level_only?: boolean;
   limit?: number;
   offset?: number;
   workspace_id?: string;
   status?: IssueStatus;
+  /**
+   * Comma list form of `status` (MUL-472 c). `GET /api/issues` has always read
+   * `statuses` and `status` through the same splitter; this only exposes the
+   * list form to callers that want one request for several statuses.
+   */
+  statuses?: IssueStatus[];
   priority?: IssuePriority;
   assignee_id?: string;
   assignee_ids?: string[];
@@ -97,6 +106,7 @@ export interface IssueActorRef {
 }
 
 export interface ListGroupedIssuesParams {
+  top_level_only?: boolean;
   group_by: "assignee";
   limit?: number;
   offset?: number;
@@ -280,7 +290,7 @@ export interface SharedIssueBundle {
 }
 
 export interface SharedTaskTracePage {
-  events: Array<Record<string, unknown> & { seq: number; type: string; ts: string; truncated?: true; original_bytes?: number; truncated_fields?: string[] }>;
+  events: Array<Record<string, unknown> & { seq: number; type: string; ts: string }>;
   next_after_seq: number;
   head: number;
   eof: boolean;

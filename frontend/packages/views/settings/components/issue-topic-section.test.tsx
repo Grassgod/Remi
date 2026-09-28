@@ -107,6 +107,45 @@ function resetFixtures() {
 describe("IssueTopicSection", () => {
   beforeEach(resetFixtures);
 
+  it("shows an invalid stored person warning and lets an admin repair the recipient", async () => {
+    configRef.current = {
+      workspace_id: "workspace-1",
+      config: { enabled: true, chat_id: "oc_team", project_ids: null, notify_mode: "person", notify_open_id: null },
+      invalid: { code: "issue_topic_config_invalid", message: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person" },
+    };
+    const user = userEvent.setup();
+    const view = renderSection();
+    expect(screen.getByRole("alert")).toHaveTextContent("The saved configuration failed validation");
+    expect(screen.getByRole("alert")).toHaveTextContent(configRef.current.invalid!.message);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Recipient open_id (bot application)"), "ou_repaired");
+    const repaired = { workspace_id: "workspace-1", config: { ...configRef.current.config, notify_open_id: "ou_repaired" } };
+    mockSave.mockResolvedValue(repaired);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ notify_mode: "person", notify_open_id: "ou_repaired" }));
+    configRef.current = repaired;
+    view.rerender(<IssueTopicSection />);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("allows saving recovered valid fields even without an unrelated form edit", async () => {
+    configRef.current.invalid = { code: "issue_topic_config_invalid", message: "issueTopics.projectIds must be an array" };
+    const user = userEvent.setup();
+    renderSection();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, chat_id: "oc_team", project_ids: ["prj_1"] }));
+  });
+
+  it("shows the stored validation reason to read-only members", () => {
+    membersRef.current = [{ user_id: "user-1", role: "member" }];
+    configRef.current.invalid = { code: "issue_topic_config_invalid", message: "issueTopics.enabled must be a boolean" };
+    renderSection();
+    expect(screen.getByRole("alert")).toHaveTextContent("issueTopics.enabled must be a boolean");
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
   it("defaults proactive notifications to the group owner and can disable mentions", async () => {
     const user = userEvent.setup();
     renderSection();
@@ -139,6 +178,7 @@ describe("IssueTopicSection", () => {
     expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeChecked();
     expect(screen.queryByText("Archived")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("saves an explicit project whitelist without changing null semantics", async () => {

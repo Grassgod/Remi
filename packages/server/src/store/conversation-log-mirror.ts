@@ -3,12 +3,13 @@
 // readers; this module is what fills the new table from the same transaction, so
 // the log is complete the moment the read endpoints switch over.
 //
-// The mapping covers every kind main has a producer for: the fourteen
+// The mapping covers every kind main has a producer for: the fifteen
 // `session_events` kinds plus `head`, with `task_assigned` renamed to `turn` and
-// everything else under its existing name. Issue sessions keep
-// `session_events.seq` as their log seq, which is what lets lane cursors,
-// `inherit_cutoff_seq`, `follow_frozen_seq` and stored `requiredEventSeq` values
-// stay valid without remapping.
+// everything else under its existing name. `delegation_report` (ADR 0005, merged
+// from main) is one of the hidden kinds, so its seq is not a hole in the log.
+// Issue sessions keep `session_events.seq` as their log seq, which is what lets
+// lane cursors, `inherit_cutoff_seq`, `follow_frozen_seq` and stored
+// `requiredEventSeq` values stay valid without remapping.
 import type {
   ConversationLogEntryMetadata,
   ConversationLogKind,
@@ -52,6 +53,14 @@ export interface MirrorSessionEvent {
   created_at: string;
 }
 
+/**
+ * Kinds the log stores, keyed by the `session_events.kind` that produces them.
+ * Every kind an `appendSessionEvent` caller writes is here (ruling
+ * cmt_u7m8e7yitmai for `follow_frozen` / `thread_resolved` /
+ * `thread_unresolved`, ruling (ad) for `delegation_report`); the kind-coverage
+ * test in `conversation-log-delegation-report.test.ts` pins that nothing is
+ * left unmapped.
+ */
 const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   message: "message",
   system: "system",
@@ -67,6 +76,7 @@ const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   follow_frozen: "follow_frozen",
   thread_resolved: "thread_resolved",
   thread_unresolved: "thread_unresolved",
+  delegation_report: "delegation_report",
 };
 
 /** The log kind a `session_events` row maps to, or null when it is not mirrored. */

@@ -2451,6 +2451,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.status-pages": {
+      "command": "remi issue status-pages",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.status-pages",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.grouped": {
       "command": "remi issue grouped",
       "auth": [

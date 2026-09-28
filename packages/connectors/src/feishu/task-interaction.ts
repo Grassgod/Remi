@@ -1,9 +1,12 @@
-import type { MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { MultiremiIssueDecision, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
 import {
+  buildIssueDecisionCard as buildSharedIssueDecisionCard,
   buildTaskInteractionCard as buildSharedTaskInteractionCard,
+  decisionInteractionMarker,
   interactionMarker,
   normalizePermissionOptions,
   normalizeQuestions,
+  type IssueDecisionCardOptions,
   type TaskInteractionCardOptions,
 } from "@shared/feishu-task-card.js";
 import { buildCardHeader } from "./send.js";
@@ -13,6 +16,7 @@ type Card = Record<string, unknown>;
 const object = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 export {
   buildQuestionElements,
+  decisionInteractionMarker,
   escapeCardText,
   interactionMarker,
   normalizePermissionOptions,
@@ -29,6 +33,21 @@ export function buildTaskInteractionCard(
   options: Omit<TaskInteractionCardOptions, "header">,
 ): Card {
   return buildSharedTaskInteractionCard(request, {
+    ...options,
+    header: buildCardHeader({ sessionId: options.sessionId, agentName: options.agentName }),
+  });
+}
+
+/**
+ * The connector's header for an Issue decision card (MUL-412). Only the header
+ * differs from the control plane's copy: the conversation label is
+ * connector-owned, exactly as it is for a human-request card.
+ */
+export function buildIssueDecisionCard(
+  decision: MultiremiIssueDecision,
+  options: Omit<IssueDecisionCardOptions, "header"> & { agentName?: string | null; sessionId?: string | null },
+): Card {
+  return buildSharedIssueDecisionCard(decision, {
     ...options,
     header: buildCardHeader({ sessionId: options.sessionId, agentName: options.agentName }),
   });
@@ -61,6 +80,70 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
     answers[q.question] = [selected.join("、"), custom ? `自定义回答：${custom}` : ""].filter(Boolean).join("\n");
   });
   return answers;
+}
+
+/**
+ * What a registered Issue decision card needs to answer a click (MUL-412).
+ *
+ * The decision is re-read on every click for the same reason a human request
+ * is: the card may have been settled in the web workbench while it was on
+ * screen, and a restarted host re-registers cards it did not send.
+ */
+export interface IssueDecisionCardInteraction {
+  appId: string;
+  chatId: string;
+  messageId: string;
+  recipientOpenId: string;
+  getDecision: () => Promise<MultiremiIssueDecision | null>;
+  /**
+   * Answer with what the person submitted plus the operator the callback named.
+   * The server maps that open_id to a workspace member itself; no member id or
+   * answerer field ever travels from here.
+   */
+  submit: (answer: string, operatorOpenId: string) => Promise<MultiremiIssueDecision>;
+  agentName?: string | null;
+  sessionId?: string | null;
+}
+
+const pendingDecisions = new Map<string, IssueDecisionCardInteraction>();
+
+function issueDecisionFailureToast(error: unknown): string {
+  const value = object(error);
+  const code = typeof value.code === "string" ? value.code.trim() : "";
+  const status = typeof value.status === "number" ? value.status : null;
+  if (code === "decision_member_unmapped") {
+    return "本次没有提交：飞书身份还未关联到 Remi 成员。请先用飞书登录一次网页端，或在本话题给机器人发一条消息后再试；也可以直接去网页端回答。";
+  }
+  if (code === "decision_member_ambiguous") {
+    return "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。";
+  }
+  if (code === "decision_operator_mismatch") {
+    return "本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。";
+  }
+  if (status === 404 || status === 409) {
+    return code
+      ? `本次没有提交：这次没能提交（错误码：${code}）。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。`
+      : "本次没有提交：这次没能提交。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。";
+  }
+  return code
+    ? `本次没有提交：提交失败，请稍后重试（错误码：${code}）。`
+    : "本次没有提交：提交失败，请稍后重试。";
+}
+
+/**
+ * Register the click handler for one Issue decision card (MUL-412).
+ *
+ * The callback name is derived from the Issue and the decision, so answering
+ * needs only those two ids plus the recipient — which is exactly what the
+ * delivery row persists, and therefore all a restarted host needs to rebuild
+ * the registration.
+ */
+export function registerIssueDecisionCardInteraction(
+  entry: IssueDecisionCardInteraction,
+): { dispose: () => void } {
+  const key = `${entry.appId}:${entry.messageId}`;
+  pendingDecisions.set(key, entry);
+  return { dispose: () => { if (pendingDecisions.get(key) === entry) pendingDecisions.delete(key); } };
 }
 
 interface PendingInteraction {
@@ -137,6 +220,81 @@ export function registerDecisionCardInteraction(
     },
   });
   return { dispose: () => { if (pending.get(key)) pending.delete(key); } };
+}
+
+/**
+ * Handle a click on an Issue decision card (MUL-412).
+ *
+ * Same gate as a human-request card — the person named on the card, in the chat
+ * it was sent to — and the same protocol: the canonical write happens on the
+ * server before the toast acknowledges success. The only field that leaves this
+ * process is the answer text; the answerer is derived server-side from the
+ * callback's operator, so a forged body cannot attribute an answer to somebody
+ * else.
+ */
+export async function handleIssueDecisionInteractionEvent(appId: string, raw: unknown): Promise<Card | null> {
+  const event = object(raw), action = object(event.action), context = object(event.context);
+  if (typeof action.name !== "string" || !action.name.startsWith("fd_")) return null;
+  const entry = pendingDecisions.get(`${appId}:${String(context.open_message_id ?? "")}`);
+  const toast = (content: string, type = "error") => ({ toast: { type, content } });
+  if (!entry) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
+  if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
+    || object(event.operator).open_id !== entry.recipientOpenId) {
+    return toast("本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。");
+  }
+  let decision: MultiremiIssueDecision | null = null;
+  try {
+    decision = await entry.getDecision();
+  } catch (error) {
+    return toast(issueDecisionFailureToast(error));
+  }
+  if (!decision) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
+  if (decision.status !== "escalated") {
+    return { ...toast("本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", "info"),
+      card: { type: "raw", data: buildIssueDecisionCard(decision,
+        { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+  }
+  const marker = decisionInteractionMarker(decision.issueId, decision.id);
+  const form = object(action.form_value);
+  // The form submits as one button whose name is the marker; individual option
+  // buttons append `_o<index>`. Both carry the free-text field, so either may be
+  // combined with a custom answer.
+  if (action.name !== marker && !action.name.startsWith(`${marker}_o`)) {
+    return toast("本次没有提交：这个按钮和卡片上当前的问题对不上，可能是旧卡片。请到网页端回答。");
+  }
+  let custom = "";
+  try {
+    custom = answerText(form[`${marker}_answer`]);
+  } catch {
+    return toast("本次没有提交：自定义回答的格式无法识别。请重新填写文字后再提交，或到网页端回答。");
+  }
+  const choices = Array.isArray(decision.options) ? decision.options : [];
+  const optionIndex = action.name === marker ? -1 : Number(action.name.slice(marker.length + 2));
+  const option = Number.isSafeInteger(optionIndex) && optionIndex >= 0 && optionIndex < choices.length
+    ? String(choices[optionIndex])
+    : null;
+  if (!option && !custom) {
+    return toast(choices.length
+      ? "本次没有提交：请选择一项，或填写自定义回答后再提交。"
+      : "本次没有提交：请填写回答后再提交。");
+  }
+  const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
+  try {
+    const settled = await entry.submit(answer, String(object(event.operator).open_id ?? ""));
+    if (settled.status === "answered") {
+      return { ...toast("已提交", "success"),
+        card: { type: "raw", data: buildIssueDecisionCard(settled,
+          { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+    }
+    if (settled.status !== "escalated") {
+      return { ...toast("本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", "info"),
+        card: { type: "raw", data: buildIssueDecisionCard(settled,
+          { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+    }
+    return toast("本次没有提交：这次没能提交。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。");
+  } catch (error) {
+    return toast(issueDecisionFailureToast(error));
+  }
 }
 
 /** Native-task actions are never passed to the legacy in-memory permission map. */

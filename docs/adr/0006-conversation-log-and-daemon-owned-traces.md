@@ -89,7 +89,10 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    `visibility = 'hidden'` rows with a `target_seq`: `task_completed`,
    `task_failed`, `task_cancelled`, `session_created`, `task_steer`,
    `message_edited`, `message_deleted`, `thread_resolved` and `thread_unresolved`.
-   Shown rows also include `follow_frozen`. Together they cover every kind main
+   Shown rows also include `follow_frozen`. `delegation_report` (ADR 0005) is
+   hidden too, under its own name: it lands in the delegator's session with the
+   delegated child's `task_id`, which has no `turn` row there, so like
+   `session_created` it has no `target_seq`. Together they cover every kind main
    has a producer for, under their existing names. In-place updates of shown rows bump
    `revision`. The hidden markers are also the change feed for the Live Hub and
    the browser replica. A row with `kind = 'head'` is not an event: every
@@ -135,28 +138,49 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
    missing card statistics or unavailable live reads retain the legacy-table
    fallback until MUL-432 removes that table.
-   B5's page/share trace endpoints and their CLI readers return `TraceReadEvent`:
-   a first event exceeding the serialized page budget is shortened by Unicode
-   code point in `content`, `output`, then string values inside `input`, and
-   returned alone with `truncated: true` and `original_bytes` (the original
-   event JSON's UTF-8 size). If payload removal is insufficient, only identity
-   fields and these markers remain. If that minimum still exceeds the budget,
-   string identity fields `tool_call_id`, `tool`, `type`, `status`, `ts` are
-   shortened from longest to shortest by their current UTF-8 byte size, using
-   the same code-point binary prefix search as payload strings. `seq` and the
-   real head/cursor never change. `truncated_fields: string[]` lists only identity
-   fields actually shortened and is absent when none were shortened. The final
-   `Buffer.byteLength(JSON.stringify(events))` check includes array punctuation
-   and all markers; marker overhead is reclaimed from identity strings if needed.
-   `TRACE_READ_MIN_BYTES = 256`: an event with all five identity strings empty,
-   all three markers, all five names in `truncated_fields`, and `seq` and
-   `original_bytes` equal to `Number.MAX_SAFE_INTEGER` measures 197 UTF-8 bytes,
-   or 199 including array brackets, leaving 57 bytes of margin. `readTrace`
-   rejects smaller `maxBytes` values with `RangeError` before accessing any source.
-   These read-only markers are not persisted or added to daemon frames; A's
-   write/sanitize contract is unchanged (MUL-402 `cmt_037dbjdd5rxs`, ruling (t)).
-   The share view displays shortened identity values, keeps the existing
-   truncation notice, and continues paging to `eof` without additional controls.
+   B5's page/share trace endpoints and CLI return the original `TraceEvent`.
+   Multi-event pages stay within the serialized events-array budget (default
+   1MiB, including brackets and commas). If the first event alone exceeds that
+   budget, it is returned alone, byte-for-byte, even over 1MiB. No field is
+   shortened or removed; `state=ok`, the cursor equals that event's `seq`,
+   the real `head` is retained, and subsequent pages continue normally to `eof`.
+   The share view displays the full event with its existing type/pre rendering,
+   automatically pages to `eof`, and adds no size notice or controls.
+   MUL-402 `cmt_9y4qvdn2ytng` and `cmt_1u7d8q41zsdp` revoke the read-time
+   truncation in (n) and all of (t). The unpublished read projection fields and
+   its minimum budget are removed; positive integer `maxBytes` remains required.
+
+   `TRACE_SANITIZED_EVENT_MAX_BYTES` in
+   [budget fixture](../../tests/unit/multiremi/trace-budget-fixtures.ts) computes the
+   finite bound of sanitized fields plus the JSON skeleton from
+   [sanitize constants](../../packages/shared/src/trace-sanitize.ts):
+   `6 * (TRACE_CONTENT_MAX_BYTES + TRACE_OUTPUT_MAX_BYTES + TRACE_TOOL_MAX_BYTES)`
+   plus three serialized write-truncation markers (excluding their quotes),
+   plus `TRACE_INPUT_MAX_BYTES + TRACE_META_MAX_BYTES`, plus the actual serialized
+   skeleton (all field names, punctuation, empty string quotes, the largest safe
+   `seq`, longest canonical ISO timestamp and accepted `status`), minus the two
+   `null` placeholders replaced by structured fields. String fields use UTF-8
+   caps, so one-byte control characters escaping to six-byte JSON are the worst
+   case. The marker is included because the existing write sanitizer appends it
+   after its UTF-8 cut. Structured `input` and `meta` are capped by serialized
+   JSON bytes; capped invalid JSON becomes null, so their caps are not multiplied
+   by six. The calculated finite portion is **2,297,039 bytes**.
+   A contract-limit fixture fills all five bounded fields, remains unchanged
+   through A's sanitizer, and exceeds 1MiB; HTTP response size is checked against
+   its actual serialized event bytes plus the existing 512-byte envelope margin.
+
+   **Gap:** the write sanitizer does not bound `type` or `tool_call_id`.
+   Their string contents are excluded from this finite calculation (the skeleton
+   uses empty values); their actual escaped JSON bytes must be added when
+   determining an event's total size. There is no universal finite event bound
+   or read-time fallback for these fields. Oversized values are returned intact.
+   A-0's store admits the first over-budget event and its daemon reader forwards
+   it. `DAEMON_TRACE_READ_MAX_BYTES=1MiB` is the request budget; the declared WS
+   maximum is 4MiB. Real A-6 RPC/WS validation, including the separately declared
+   `DAEMON_FRAME_MAX_BYTES=1MiB`, is **integration-time verification**: no
+   transport implementation enforces these constants on this parent baseline.
+   If integration discards, splits or rejects the contract-limit event, stop
+   and obtain an A-side ruling; B5 does not alter A's transport or sanitizer.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and

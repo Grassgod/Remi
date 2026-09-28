@@ -1029,7 +1029,12 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       expect(item, status).toBeDefined();
       expect(item?.severity, status).toBe(severity);
       expect(item?.issueId).toBe(parent.id);
+      expect(item?.issue_parent_id).toBe(parent.id);
+      expect(item?.issue_parent_key).toBe(parent.key);
+      expect(item?.issue_parent_title).toBe(parent.title);
     }
+    expect(store.markInboxItemRead(items[0]!.id).issue_parent_key).toBe(parent.key);
+    expect(store.archiveInboxItem(items[1]!.id).issue_parent_title).toBe(parent.title);
 
     // A human owner never gets a wakeup round or a parent system comment.
     expect(store.listTasksForIssue(parent.id)).toHaveLength(0);

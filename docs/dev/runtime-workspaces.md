@@ -54,13 +54,32 @@ Agent 创建模式把工作目录绑定到 intake Issue / Task，并在生成提
 ## 生命周期
 
 - 工作区归属 `(workspace_id, daemon_id)`。同一 daemon 上的 Claude / Codex Runtime 可使用同一工作区。
-- Chat、Issue、Task 保存引用；Task 创建时确定绑定。独立 Task 的基础设施重试和重新调度保留工作区。Issue 中不占用工作区的讨论/侧会话（`holds_workspace=false`）使用独立目录，不继承父 Issue 的本机目录或机器限制；重试和重新调度同样保持隔离。
-- 领取要求 Runtime 声明 `runtime_workspaces: 1`、匹配 daemon，并通过已有 provider、Agent、插件和 Project 设备路由检查。旧版或其他机器不能领取；会话重置不会解除机器约束。
+- Chat、Issue、Task 保存引用；Task 创建时确定绑定。独立 Task 的基础设施重试和重新调度保留工作区。Issue 中不占用工作区的讨论/侧会话（`holds_workspace=false`）使用独立目录，不继承父 Issue 的本机目录或机器限制；重试和重新调度同样保持隔离。工作区亲和不与设备解耦：Project 设备绑定和独享设备对**所有**任务生效，不管 `holds_workspace` 是多少（MUL-449）。会话亲和（`chat_sessions.session_runtime_id`）在重算时一并检查设备路由，被 Project 拒绝的机器不会被钉死排队。
+- 领取要求 Runtime 声明 `runtime_workspaces: 1`、匹配 daemon，并通过已有 provider、Agent、插件和 Project 设备路由检查；抢单 SQL 与派发回收的 eligibility 判定一致。旧版或其他机器不能领取；会话重置不会解除机器约束。
 - 主机离线、Runtime 行被清理或暂缺兼容 provider 时，任务等待。记录和文件保留，不回落到自动目录。「主机可用」表示主机协议状态；目录和上下文在任务启动时检查。
 - 服务端将同一工作区的任务串行领取。daemon 按真实 cwd 加进程间锁，覆盖目录别名及不同 provider 进程；锁记录位于外部本机状态目录，活进程不会因超时被抢锁。
 - 完成、取消、删除 Chat / Issue 不删除工作区。归档注册要求没有排队或执行中的任务，只阻止新运行，保留原目录。此接口不承担目录删除或迁移。
 
 未选择工作区时继续使用原有自动目录规则。独立 Task 的基础设施重试使用新的临时 provider home，不复用旧的原生会话 ID；工作区文件继续保留。
+
+## 亲和与设备路由
+
+Project 设备绑定（含独享设备）是放置约束，任何亲和都不能绕过它。显式 Runtime 工作区的任务仍按无项目计算；当工作区与任务属于同一团队、`daemon_id` 等于当前设备且未归档时，独享设备允许领取这类任务（MUL-466）。其他机器、归档工作区和未指定工作区的无项目任务不能使用这个例外。共享路由 SQL、等待原因状态和 Chat / Issue lane 亲和检查使用相同规则，不要求工作区增加项目归属。Issue lane 刷新仅在任务钉机与 Agent 绑定相同时保留该绑定；等待原因观察者独立判断 Agent 是否绑定，避免旧 lane 钉机失去自愈能力。亲和分两类，规则不同（MUL-449）：
+
+- **软亲和**＝ provider 会话血统：Chat 的 `chat_sessions.session_id / session_runtime_id`，Issue 的 `session_agent_lanes.provider_session_id / runtime_id`。钉住的机器过不了设备路由、或与真实 Issue 工作区所在机器冲突时，放弃血统、任务回池冷启动（`inheritChatSession=false`，Issue lane 走 `resetSessionAgentLane`，重置原因分别记为 `device_routing_rejected` / `issue_workspace_elsewhere`）。硬亲和优先于软亲和：真实工作区在 B 而旧会话在 A 时丢掉会话（`issue_workspace_elsewhere`），由工作区把任务约束到 B。工作区只约束**持有它**的任务（`holds_workspace=1`），讨论/侧会话轮次不因此丢会话；没有未 cleaned 工作区时不构成约束，lane 照常继承。判定按**机器**而非 Runtime id：同一台机器上的另一个 provider（例如 B 上的 codex 与 claude）算作同一台，不会互相判成冲突，只有 Runtime 已删除时才退化为按 id 比较。建单时（`createTaskWithinWorkspaceLock`）和领取前（`refreshQueuedIssueLaneAffinity` / `refreshQueuedChatAffinity`）都重算，所以改绑后已排队和存量的这类任务会自愈，不需要数据迁移。
+- **落点** ＝ 同时满足任务全部硬亲和、能被抢单放行的机器。抢单 SQL 的结构谓词（`placementBeforeRoutingSql` / `placementAfterRoutingSql` + 共享的 `TASK_CLAIM_FROM_SQL`）与观察者共用同源只读探针；扫描排队任务时，每台 Runtime 批量计算候选任务，`store.describeTaskPlacement(taskId)` 仍可只读地看单条任务在每台 Runtime 的 `placementOk` / `routingOk`。观察者按一条不变式判定：有机器同时满足落点与路由 → 不写原因；有落点但全被设备路由拒绝 → 写「等待项目设备：」并列出这些机器；没有任何机器满足落点 → 全部约束指向同一台未注册机器时退回 daemon 级判断，否则写「等待任务落点：」。优先级为落点 > 设备 > 模型能力；可回池的 provider 血统不写落点原因。
+- **硬亲和与硬钉**：代码快照、真实 Issue 工作区、项目本机目录、显式 Runtime 工作区和 Agent Runtime 绑定是数据或配置亲和，不能回池。除此之外，`runtime_id` 钉机只有在 `execution_fingerprint IS NULL AND attempt = 1` 时才由领取前刷新回池；取反为硬钉。带指纹的任务称为「冻结重试」，`attempt>1` 但无指纹的任务称为「重试钉机」，不能误报为冻结。工作区按机器别名集合判断，与抢单 SQL 的 `EXISTS` 一致。硬亲和或硬钉冲突时，60 秒观察者写 `wait_reason`，由设备绑定拒绝写「等待项目设备：」，约束相互冲突写「等待任务落点：」。
+- **补救**：以本机目录、代码快照或工作区这些数据约束所在机器为锚点。设备路由同时要求项目绑定条件与独享条件成立：机器不在已有的项目设备绑定里时，有项目的任务可把机器加入绑定；机器是独享设备，且项目没有设备绑定或任务没有项目、又不满足本机显式工作区例外时，取消独享也能单独放行。只有项目尚无设备绑定、机器又独享时，这两个动作才是可任选的「或」；没有项目且未满足本机显式工作区例外时，只能取消独享。已满足该例外的工作区拥有机器不会收到取消独享建议。等待原因写出实际拒绝条件，有锚点和没有锚点的设备等待都遵循同一规则。Agent 绑定同时指向别处时，再改绑到锚点。已满足的步骤不重复提示；只需恢复设备路由时，原任务可继续被领取。数据约束本身指向不同机器时，等待原因列明冲突约束，归入「让这些约束指向同一台机器」，不提供机械补救。没有数据锚点时，等待原因只给当前可独立放行的设备动作；落点冲突的改绑目标必须通过项目设备路由。工作区 Runtime 已删除则重新注册原机器或人工处理。无指纹的「重试钉机」不会收到 redispatch 建议。设备路由恢复后等待原因自动清空。
+- **Issue 冻结任务**：需要改绑到数据锚点时，先运行 `remi task redispatch <原任务 ID> --reason '恢复已冻结任务并保留原请求' --yes`，再运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；替代任务保留原请求和会话、没有执行指纹，由锚点机器领取。直接改绑会取消原任务。没有数据锚点时，只有不含代码快照、本机目录的冻结任务才单独收到 redispatch 建议。redispatch 需要 supervisor 角色的任务凭证，工作区 organizer 模式须为 act。
+- **Chat 冻结任务**：只要任务带 `chatSessionId`，即使同时带 `issueId`，也按 Chat 处理。直接改绑会取消这条已冻结的任务。若需改绑，Agent 所有者或工作区 owner/admin 先运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；能查看该 Chat 的用户运行 `remi chat message list <Chat ID> --output json`，找到 `task_id` 为原任务 ID、`role` 为 `user` 的消息。默认只返回最新 50 条；找不到时，将本页 `next_cursor` 对象序列化为 JSON，运行 `remi chat message list <Chat ID> --output json --cursor '<next_cursor JSON>'` 继续翻更早的消息。将命中消息的 `content` 字段正文原样存成文件，再运行 `remi chat message create <Chat ID> --content-file <文件>` 重发。发送入口会 trim 首尾空白；原消息本身已 trim 时，新消息和新任务 prompt 与原文逐字相同，内部空白保留。改绑与重发可以由不同的人执行；原消息附件需重新上传。Chat 任务不能沿用 Issue 的 redispatch 补救：supervisor 任务凭证无法通过 `canCurrentUserAccessChatTask` 的私有 Chat 访问检查，而 Chat 用户 PAT 不满足 organizer 的 supervisor 要求。重发后会生成新任务，原冻结任务仍为 cancelled。
+
+## 任务私有 /tmp
+
+每个任务执行前，daemon 在本次执行的 provider home 下分配一个独占目录（`task-tmp/<task>-XXXXXX`，0700），执行结束后删除。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
+
+macOS 是有意降级（MUL-449）：内核没有 user / mount namespace，无法按任务替换字面 `/tmp`。darwin 上不套 `unshare`，改为把 `TMPDIR` / `TMP` / `TEMP` 指向该任务的私有目录，并接受字面 `/tmp` 与主机共享；`mapPrivateTmpPath` / `privateTmpVisiblePath` 在 darwin 上恒等，保证文件工具与 shell 解析同一路径（包括 antigravity 的 `--log-file`）。其他非 Linux 平台（win32 等）仍然报错。平台参数只为单测模拟 darwin，不影响 Linux 行为。
+
+macOS 的 socket 路径上限是 104 字节（`sun_path`），而真实私有目录在 provider home 下，委派任务的路径可超过 220 字节，所以在 TMPDIR 里建 socket 的工具（MCP/IDE 的 IPC、git credential cache、tmux 等）会失败。darwin 上因此额外为每次执行创建一个 `/tmp/remi-XXXXXXXX` 短别名（`symlink()` 原子创建，随机名字，EEXIST 就换名重试，有次数上限；建好后 `lstat` 校验确实是自己建的链接并指向本次真实目录），`TMPDIR` / `TMP` / `TEMP` 指向别名，真实目录仍在 `task-tmp` 下。别名创建失败（例如 `/tmp` 不可写）只记一条 warn 并退回长路径，任务照常执行。执行结束时先校验「是符号链接」且「readlink 等于本次真实目录」，两项都满足才 `unlink` 别名，绝不经由别名递归删除；真实目录仍由 `cleanupTaskPrivateTempDirectory` 按 storage 边界删除。daemon 崩溃留下的悬空别名不做启动清扫：macOS 会定期清理 `/tmp`，且残留链接指向已删除的目录，只占名字不占数据。`isolateProcessTmp` 的 darwin 分支因此保留传入路径原样（不做 realpath），否则别名会被展开回长路径。
 
 ## 本地上下文
 

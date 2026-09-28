@@ -479,7 +479,10 @@ export function SwimLaneView({
     ...projectListOptions(wsId),
     enabled: swimlaneGrouping === "project",
   });
-  const { getActorName } = useActorName();
+  const { getActorName } = useActorName({
+    squadsEnabled: swimlaneGrouping === "assignee" ? true : undefined,
+    agentsEnabled: swimlaneGrouping === "assignee" ? true : undefined,
+  });
 
   const laneSourceIssues = unfilteredIssues ?? issues;
 

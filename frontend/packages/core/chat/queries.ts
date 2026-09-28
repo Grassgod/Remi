@@ -28,7 +28,18 @@ export const chatKeys = {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PREFIXED_TASK_ID_PATTERN = /^tsk_[a-z0-9_]+$/i;
-export const CHAT_PENDING_REFETCH_INTERVAL_MS = 3000;
+/**
+ * Fallback re-poll cadence for chat pending tasks (MUL-472 a / A6).
+ *
+ * WS events remain the primary refresh signal (`createChatHandlers` invalidates
+ * both the per-session and the aggregate key on every chat/task lifecycle
+ * event, which refetches immediately). This poll only reconciles events the
+ * socket missed. At 3 s one open tab with a queued task kept ~136 SQL/s of
+ * `pending-tasks` load alive (MUL-383 `cmt_lnvu0atqu87w`), so the steady state
+ * is 10 s; `refetchIntervalInBackground: false` on the consumers stops it
+ * entirely while the tab is hidden.
+ */
+export const CHAT_PENDING_REFETCH_INTERVAL_MS = 10_000;
 const TASK_MESSAGE_IN_FLIGHT_MAX_PER_TASK = 200;
 const TASK_MESSAGE_IN_FLIGHT_MAX_TASKS = 100;
 const inFlightTaskMessages = new Map<string, TaskMessagePayload[]>();
@@ -126,10 +137,16 @@ export function pendingChatTasksRefetchInterval(query: {
     : false;
 }
 
-export function chatSessionsOptions(wsId: string, status: "all" | "active" | "archived" = "all") {
+export function chatSessionsOptions(
+  wsId: string,
+  status: "all" | "active" | "archived" = "all",
+  /** MUL-472 b: the minimised chat window keeps cached sessions but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.sessionList(wsId, status),
     queryFn: () => api.listChatSessions({ status }),
+    enabled: options.enabled ?? true,
     staleTime: Infinity,
   });
 }
@@ -152,7 +169,12 @@ export function chatMessagesOptions(sessionId: string) {
   });
 }
 
-export function chatMessagesPageOptions(sessionId: string, limit = 50) {
+export function chatMessagesPageOptions(
+  sessionId: string,
+  limit = 50,
+  /** MUL-472 b: the minimised chat window keeps cached pages but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return infiniteQueryOptions({
     queryKey: chatKeys.messagesPage(sessionId),
     queryFn: ({ pageParam }) =>
@@ -160,7 +182,7 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
     initialPageParam: null as { created_at: string; id: string } | null,
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
-    enabled: !!sessionId,
+    enabled: !!sessionId && (options.enabled ?? true),
     staleTime: Infinity,
   });
 }
@@ -172,13 +194,17 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
  * poll reconciles missed WS events so the UI cannot stay queued forever after
  * the server has already completed the task.
  */
-export function pendingChatTaskOptions(sessionId: string) {
+export function pendingChatTaskOptions(
+  sessionId: string,
+  /** MUL-472 b: the minimised chat window keeps the cached task but stops fetching. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.pendingTask(sessionId),
     queryFn: () => api.getPendingChatTask(sessionId),
-    enabled: !!sessionId,
+    enabled: !!sessionId && (options.enabled ?? true),
     refetchInterval: pendingChatTaskRefetchInterval,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     staleTime: Infinity,
   });
 }
@@ -212,12 +238,17 @@ export function taskMessagesOptions(taskId: string) {
  * Drives the FAB "running" indicator while the chat window is minimised —
  * no per-session query is active then, so we need this roll-up.
  */
-export function pendingChatTasksOptions(wsId: string) {
+export function pendingChatTasksOptions(
+  wsId: string,
+  /** MUL-472 b: the FAB keeps reading a cached roll-up while the window is closed. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: chatKeys.pendingTasks(wsId),
     queryFn: () => api.listPendingChatTasks(),
+    enabled: options.enabled ?? true,
     refetchInterval: pendingChatTasksRefetchInterval,
-    refetchIntervalInBackground: true,
+    refetchIntervalInBackground: false,
     staleTime: Infinity,
   });
 }

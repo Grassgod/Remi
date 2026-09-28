@@ -1,0 +1,14 @@
+{
+  "name": "MUL-474 browser task-message fan-out frames",
+  "capturedAt": "<timestamp>",
+  "source": "pre-change implementation (parent commit of the subject narrowing)",
+  "workspaceFrames": [
+    "{\"type\":\"task:message\",\"payload\":{\"task_id\":\"tsk_fanout_workspace\",\"issue_id\":null,\"seq\":1,\"type\":\"text\",\"created_at\":\"2026-09-27T12:00:00.044Z\",\"content\":\"hello\"},\"actor_id\":\"agt_fanout\",\"actor_type\":\"agent\"}",
+    "{\"type\":\"task:message\",\"payload\":{\"task_id\":\"tsk_fanout_workspace\",\"issue_id\":null,\"seq\":2,\"type\":\"tool_use\",\"created_at\":\"2026-09-27T12:00:00.044Z\",\"tool\":\"Bash\",\"input\":{\"command\":\"ls\"},\"tool_call_id\":\"tc_1\",\"status\":\"in_progress\"},\"actor_id\":\"agt_fanout\",\"actor_type\":\"agent\"}",
+    "{\"type\":\"task:message\",\"payload\":{\"task_id\":\"tsk_fanout_workspace\",\"issue_id\":null,\"seq\":3,\"type\":\"tool_result\",\"created_at\":\"2026-09-27T12:00:00.044Z\",\"tool\":\"Bash\",\"output\":\"ok\",\"tool_call_id\":\"tc_1\",\"status\":\"completed\",\"meta\":{\"duration_ms\":42}},\"actor_id\":\"agt_fanout\",\"actor_type\":\"agent\"}"
+  ],
+  "chatFrames": [
+    "{\"type\":\"task:message\",\"payload\":{\"task_id\":\"tsk_fanout_chat\",\"issue_id\":null,\"seq\":1,\"type\":\"text\",\"created_at\":\"2026-09-27T12:00:00.047Z\",\"chat_session_id\":\"chs_fanout\",\"content\":\"chat hello\"},\"actor_id\":\"agt_fanout\",\"actor_type\":\"agent\"}"
+  ],
+  "deniedFrames": []
+}

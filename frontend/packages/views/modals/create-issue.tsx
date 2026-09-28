@@ -15,6 +15,8 @@ import {
   Maximize2,
   Minimize2,
   MoreHorizontal,
+  Link2,
+  Plus,
   X as XIcon,
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
@@ -140,6 +142,8 @@ export function ManualCreatePanel({
   // object, and we never need to hydrate from an ID the way we do for parent.
   const [childIssues, setChildIssues] = useState<Issue[]>([]);
   const [childPickerOpen, setChildPickerOpen] = useState(false);
+  const [prerequisites, setPrerequisites] = useState<Issue[]>([]);
+  const [prerequisitePickerOpen, setPrerequisitePickerOpen] = useState(false);
   // Fetch parent issue details for the chip (status/identifier/title).
   // List cache usually has it already, so this resolves synchronously.
   const wsId = useWorkspaceId();
@@ -231,6 +235,7 @@ export function ManualCreatePanel({
     setRuntimeWorkspaceId(null);
     setParentIssueId(undefined);
     setChildIssues([]);
+    setPrerequisites([]);
     setAttachmentIds([]);
     setDraft({
       title: "",
@@ -264,6 +269,7 @@ export function ManualCreatePanel({
         due_date: dueDate || undefined,
         attachment_ids: attachmentIds.length > 0 ? attachmentIds : undefined,
         parent_issue_id: parentIssueId,
+        ...(prerequisites.length > 0 ? { blocked_by: prerequisites.map((prerequisite) => prerequisite.id) } : {}),
         project_id: projectId ?? null,
         runtime_workspace_id: runtimeWorkspaceId,
       });
@@ -646,6 +652,21 @@ export function ManualCreatePanel({
                 </div>
               ))}
 
+              {parentIssueId && prerequisites.map((prerequisite) => (
+                <span key={prerequisite.id} className="inline-flex h-7 items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                  <Link2 className="size-3" />
+                  {t(($) => $.create_issue.prerequisite_chip, { identifier: prerequisite.identifier })}
+                  <button type="button" onClick={() => setPrerequisites((items) => items.filter((item) => item.id !== prerequisite.id))} aria-label={t(($) => $.create_issue.remove_prerequisite, { identifier: prerequisite.identifier })}>
+                    <XIcon className="size-3" />
+                  </button>
+                </span>
+              ))}
+              {parentIssueId && (
+                <button type="button" className="inline-flex h-7 items-center gap-1 rounded-full border px-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setPrerequisitePickerOpen(true)}>
+                  <Plus className="size-3" />{t(($) => $.create_issue.add_prerequisite)}
+                </button>
+              )}
+
               {/* Overflow — always the last child so DOM order keeps it at the
                   end of the wrap flow, no matter how many chips are present. */}
               <DropdownMenu>
@@ -723,6 +744,14 @@ export function ManualCreatePanel({
                   prev.some((x) => x.id === selected.id) ? prev : [...prev, selected],
                 );
               }}
+            />
+            <IssuePickerModal
+              open={prerequisitePickerOpen}
+              onOpenChange={setPrerequisitePickerOpen}
+              title={t(($) => $.create_issue.add_prerequisite)}
+              description={t(($) => $.create_issue.prerequisite_picker_description)}
+              excludeIds={[...(parentIssueId ? [parentIssueId] : []), ...prerequisites.map((prerequisite) => prerequisite.id)]}
+              onSelect={(selected) => setPrerequisites((items) => [...items, selected])}
             />
 
             {/* Footer */}

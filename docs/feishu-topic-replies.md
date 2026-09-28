@@ -196,10 +196,16 @@ delivery in the batch: a rejection there stranded the whole queue, so it tolerat
 exactly `IssueTopicConfigError` — the old row goes out as plain text with no `@`,
 and the next row still ships. Any other failure still propagates.
 
-One reader stays strict on purpose and is outside this change: the
-inbound-message path (`submitMessage`). It is `origin/main` behavior, and a config
-that reaches it has already been rejected at save time; the queue is where the
-outage actually showed up.
+Inbound messages (`submitMessage`) also use the lenient reader. Invalid stored
+notification settings produce a warning containing only the workspace ID; they
+do not block message acceptance or automatic Issue creation when `enabled` and
+`chatId` match. Invalid `projectIds` are treated as no project selection.
+The settings GET returns HTTP 200 with the recovered `config` and an optional
+`invalid: { code, message }` containing static validation details. Valid configs
+keep the previous response shape. The settings page shows the validation reason
+and asks the user to correct and save the configuration. PUT reads the previous
+config leniently but still validates the new config strictly: replacing an invalid
+recipient is allowed, while retaining an invalid `person` target returns HTTP 400.
 
 An expired request is never an approval: the terminal card reads
 「已超时，未回答」and the task takes the existing cancel path. The decision lanes
@@ -285,6 +291,120 @@ HTTP 到测试内 API 的那一跳。
 第 6 步（`notifyMode=none`）验证的是**预先降级**：控制面在建请求时就判定没人
 可问，直接把文字行排进队列。它不经过「卡片被飞书拒绝」这条路径，因此**不能替代
 第 5 步**。
+
+## Decision Cards ("待你决定") in the Topic
+
+An E4 decision handed to a person rides the same card pipeline as the human
+requests above (MUL-412). The control plane writes one `decision_card` delivery
+into the topic of the Issue the decision hangs on — the parent when there is
+one, otherwise the source Issue — and the bot host sends it, registers the
+submit button, and rewrites the same message when the decision settles.
+
+Only two states get a card: `pending -> escalated` and a decision created
+straight as `escalated`. A decision the parent's owner agent answers itself
+never leaves the web workbench, and a decision whose Issue has no topic seed
+message records `decision_card_skipped` with `reason = no_topic` and stays on
+the web rather than being re-aimed at the source Issue's topic.
+
+A decision has no deadline. There is no timeout state and no expiry column; the
+card gets exactly one text nudge 50 minutes after it was sent, deduped on the
+decision row's own `reminder_sent_at`, and that nudge @s the person the card was
+addressed to. Answers and withdrawals — from the topic, the web workbench or the
+CLI — all queue one `decision_card_patch` that rewrites the original message to
+「已回答」or「已撤回」. A card that went out as plain text (`notifyMode = none`,
+an unusable `person` target, or a Feishu rejection that retrying cannot fix)
+gets neither a patch nor a reminder, because there is no card on screen to
+rewrite.
+
+Permissions follow the human-request lane, with one addition. Only the operator
+named on the card, in the chat it was sent to, may submit; anyone else is told
+「本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是
+这张单的负责人，可以到网页端回答。」. The operator's Feishu `open_id` is then resolved
+server-side to a live, non-archived, non-agent workspace member — one the users
+table already knows through same-app SSO (`external_id`), or through a sender
+row scoped to the same workspace + bot app + `open_id` whose `union_id` links a
+user. An `open_id` is never compared directly with a `union_id`. Zero valid
+members is refused with `decision_member_unmapped`; more than one is refused
+with `decision_member_ambiguous`. The request body carries no answerer: it names the
+operator that Feishu reported and nothing else, and the write goes through the
+same store function as the HTTP answer route, so `history`, `answered_at`, the
+`decision_answered` / `decision_received` activities, the inbox item and the
+wakeup of the source Issue's owner are identical whichever surface answered.
+
+A bot host may read and answer only decisions on an Issue that has an active
+topic binding under its own app; creating, escalating and withdrawing stay with
+the executing side and the human surfaces. The capability flag
+(`feishu_issue_decision_card`) is declared separately from the human-request
+one, so a host that predates decisions is handed no decision card at all — the
+decision simply stays on the web workbench, exactly as it did before.
+
+### 真人与第二个人验收（D6）
+
+前置条件与上一节相同，另加两条：decision 挂在**父单**上（子单里 `remi issue
+decision request` 出来的是子单自己的父单），且 bot host 的 heartbeat 报
+`feishu_issue_decision_card = 1`。清单里的「网页」指父单详情页的「待你决定」
+区域，或 `remi issue decision list <parent>`。
+
+第 2 步的「第二个人」必须先由**第二个人本人**建立可信映射：任选其一，用飞书
+SSO 登录一次 Remi 网页端，或先在本次测试话题给 bot 发一条消息。操作员随后在
+209 上只读核验：以本 workspace、当前 bot `app_id` 和第二个人的 `open_id` 查询
+`multiremi_feishu_bot_senders`，再用其 `union_id` 关联 `multiremi_users` 和未归档的
+`multiremi_workspace_members`；走 SSO 时，仅当 API 容器的
+`MULTIREMI_LARK_APP_ID` 与当前 bot `app_id` 相同，才用 `users.external_id = open_id`
+查询。排除 member id 同名的 agent 后，查询结果必须**恰好一条**。这可以在 API
+容器中用现有 `MULTIREMI_DATABASE_URL` 执行只含 `SELECT` 的查询完成，不打印连接串
+或凭证，也不写库；同时用 `remi member list --output json` 核对该 member 属于本
+workspace。结果为 0 或多于 1 时，不进入第 2 步。
+
+核验前先确认 SSO secret 已配置；只记录「已配置」，不写值。下面是只读查询模板，
+`$1` 到 `$4` 依次为 workspace id、bot app id、第二个人的 open_id，以及 SSO app
+是否与 bot app 相同。最终只数 `DISTINCT member.id`，不要把同一 member 的 sender
+与 SSO 两条证据误数成两个人：
+
+```sql
+WITH candidate_user AS (
+  SELECT users.id
+  FROM multiremi_users AS users
+  WHERE $4::boolean AND users.external_id = $3
+  UNION
+  SELECT users.id
+  FROM multiremi_feishu_bot_senders AS sender
+  JOIN multiremi_users AS users ON users.feishu_union_id = sender.union_id
+  WHERE sender.workspace_id = $1
+    AND sender.app_id = $2
+    AND sender.open_id = $3
+)
+SELECT DISTINCT member.id
+FROM candidate_user AS candidate
+JOIN multiremi_workspace_members AS member ON member.user_id = candidate.id
+WHERE member.workspace_id = $1
+  AND member.archived_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM multiremi_agents AS agent WHERE agent.id = member.id
+  );
+```
+
+下面 7 步每一步都新建一条 decision；不得复用上一步已经回答、撤回或用于降级
+验证的 decision。
+
+| # | 谁来操作 | 操作 | 飞书上看到什么 | 预期活动 / 数据 |
+|---|---|---|---|---|
+| 1 | 发起人 | 在子单里提一个 `production_change`（`remi issue decision request <child> --kind production_change --title "..." --option 是 --option 否`），或让父单负责人 agent 把一个 `merge` 上交给人 | 父单话题里出现一张**独立卡片**：标题、正文、编号选项、自定义回答框、提交按钮，并 @ 被问的人 | 父单活动 `decision_escalated` 与 `decision_card_queued`（`kind=decision_card`）；投递行 `decision.degraded` 为 NULL |
+| 2 | 第二个人 | 点卡片上的提交 | 第二个人只看到 toast「本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。」，卡片不变、问题仍在 | 不写任何活动；decision 仍为 `escalated` |
+| 3 | 贺华杰（被问的人） | 在卡片里选一项或填自定义回答并提交 | 提示「已提交」，**同一张卡片原地**变成终态：答案、答者、时间，不新增消息 | decision 变 `answered`，压入一条 `history`；父单 `decision_answered`、来源单 `decision_received` 各一条；来源单负责人的排队任务被唤醒；投递走后一条 `decision_card_patch` |
+| 4 | 发起人 | 另提一个 decision，然后在 Remi 工作台网页答掉 | 飞书那张卡片同样**原地**变终态（答案与答者取自网页那次回答） | 与第 3 步相同的一组活动；`decision_card_patch` 只有一条 |
+| 5 | 发起人 | 再提一个 decision，然后撤回（`remi issue decision withdraw <parent> <decision>`） | 卡片**原地**变成「已撤回」，不出现「已超时」字样，也不再可点 | decision 变 `withdrawn`；同样一条 `decision_card_patch`；没有任何 timeout 状态写入 |
+| 6 | 发起人 | 提一个 decision，确认卡片实际发出后再从该发出时刻计时 50 分钟，全程不答 | 话题里出现**一条 @ 被问的人**的文字提醒，且只出现一次；卡片仍是等待回答，不会超时 | 以成功投递行的 `sent_at + 50 分钟` 为到期点；decision 行 `reminder_sent_at` 写入一次；父单活动 `decision_card_reminder` 恰一条；再等不会出现第二条 |
+| 7 | 发起人 | 删掉/改掉话题配置使该话题没有 seed（或在没有 seed 的新单上提 decision）；另将 `remi workspace issue-topics set --notify none` 后提一个 decision | 前者话题里**什么也不出现**；后者只出现**文字**（标题、正文、编号选项、父单网页链接），不出卡片、不 @ 任何人 | 前者 `decision_card_skipped`（`reason=no_topic`）；后者 `decision_card_degraded`（`reason=notify_none`）且投递行 `degraded=notify_none`；两者 decision 本身照常出现在网页与收件箱 |
+
+第 7 步的两种降级必须分别做：`no_topic` 是**不发**（只在网页），`notify_none`
+是**发文字**，两项都在 209 现场验。不可重试的发送失败降级为文字由自动化用例
+验收，不在 209 上人工制造飞书发送失败。降级为文字的不会收到 50 分钟提醒，和
+S5a 一致。跑这一步之前不要在 209 上改任何配置；
+这是本单交付后由带头大哥安排的实测步骤。
+
+已知产品口径：S4 兜底可能给多位 owner 发收件箱，但飞书卡只点名一个人。
+其他 owner 在网页或收件箱回答，不在飞书卡上回答；这不是本期缺陷。
 
 ## Continuing Issue Work From a Topic
 

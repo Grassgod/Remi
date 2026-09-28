@@ -22,6 +22,8 @@ import {
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { PageHeader } from "../../layout/page-header";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
@@ -29,6 +31,7 @@ import { ListView } from "./list-view";
 import { SwimLaneView } from "./swimlane-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import type { ChildProgress } from "./list-row";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 const EMPTY_CHILD_PROGRESS = new Map<string, ChildProgress>();
@@ -36,6 +39,7 @@ const EMPTY_CHILD_PROGRESS = new Map<string, ChildProgress>();
 export function IssuesPage() {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const { pathname } = useNavigation();
 
   const scope = useIssuesScopeStore((s) => s.scope);
   const viewMode = useIssueViewStore((s) => s.viewMode);
@@ -51,14 +55,16 @@ export function IssuesPage() {
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const agentRunningFilter = useIssueViewStore((s) => s.agentRunningFilter);
+  const showSubIssues = useIssueViewStore((s) => s.showSubIssues);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
 
   const sort = useMemo(
     () => ({
       sort_by: sortBy,
       sort_direction: sortBy !== "position" ? sortDirection : undefined,
+      top_level_only: !showSubIssues,
     } as const),
-    [sortBy, sortDirection],
+    [sortBy, sortDirection, showSubIssues],
   );
 
   // Derive the set of issue ids that currently have at least one
@@ -67,14 +73,26 @@ export function IssuesPage() {
   // filter pure and lets the snapshot stay cached at one workspace-
   // scoped place — every issue card already subscribes for its own
   // indicator, so this is a no-op extra fetch.
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  //
+  // MUL-472 b: the snapshot is a workspace roll-up, not this page's own list
+  // request, so it normally waits with the rest of the page-level queries.
+  // The exception is the "agents working" quick filter: with it on, the
+  // snapshot *is* the row set (filterIssues keeps only issues in
+  // `runningIssueIds`), and an empty initial value would render a confident
+  // "nothing here" while the real answer is still in flight. In that state the
+  // query is not gated — the page shows a loading row instead of an empty one.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const snapshotIsLoadBearing = agentRunningFilter;
+  const snapshotQuery = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const t of snapshot) {
+    for (const t of snapshotQuery.data ?? []) {
       if (t.status === "running" && t.issue_id) ids.add(t.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(() => {
     const filter: AssigneeGroupedIssuesFilter = {
@@ -86,11 +104,12 @@ export function IssuesPage() {
       project_ids: projectFilters,
       include_no_project: includeNoProject,
       label_ids: labelFilters,
+      top_level_only: !showSubIssues,
     };
     if (scope === "members") filter.assignee_types = ["member"];
     if (scope === "agents") filter.assignee_types = ["agent", "squad"];
     return filter;
-  }, [assigneeFilters, creatorFilters, includeNoAssignee, includeNoProject, labelFilters, priorityFilters, projectFilters, scope, statusFilters]);
+  }, [assigneeFilters, creatorFilters, includeNoAssignee, includeNoProject, labelFilters, priorityFilters, projectFilters, scope, statusFilters, showSubIssues]);
 
   const assigneeGroupsOptions = issueAssigneeGroupsOptions(wsId, assigneeGroupFilter, sort);
   const statusIssuesQuery = useQuery({
@@ -111,9 +130,23 @@ export function IssuesPage() {
     () => assigneeGroupsQuery.data?.groups.flatMap((group) => group.issues) ?? [],
     [assigneeGroupsQuery.data],
   );
-  const loading = usesAssigneeBoard
+  // When the running-agent filter is on, the list is not renderable until the
+  // snapshot is here: showing the unfiltered rows would be wrong, and showing
+  // "no issues" would be worse. Hold the loading state until both land.
+  const snapshotPending = snapshotIsLoadBearing && snapshotQuery.isPending;
+  const loading = (usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
-    : statusIssuesQuery.isLoading;
+    : statusIssuesQuery.isLoading) || snapshotPending;
+  // MUL-472 item 5: prove this list is showing the rows the page's own request
+  // returned (`status === "success"` and not `keepPreviousData` leftovers).
+  const perfMarker = useListPerfMarker({
+    status: snapshotPending || archivedCountQuery.isPending ? "pending"
+      : archivedCountQuery.isError || (snapshotIsLoadBearing && snapshotQuery.isError) ? "error"
+      : usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    isPlaceholderData: usesAssigneeBoard
+      ? assigneeGroupsQuery.isPlaceholderData
+      : statusIssuesQuery.isPlaceholderData,
+  });
 
   // Clear filter state when switching between workspaces (URL-driven).
   useClearFiltersOnWorkspaceChange(useIssueViewStore, wsId);
@@ -152,7 +185,9 @@ export function IssuesPage() {
 
   // Fetch sub-issue progress from the backend so counts are accurate
   // regardless of client-side pagination or filtering of done issues.
-  const { data: childProgressMap = EMPTY_CHILD_PROGRESS } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = EMPTY_CHILD_PROGRESS } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)
@@ -202,7 +237,7 @@ export function IssuesPage() {
   );
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeader className="gap-2">
         <ListTodo className="h-4 w-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">{t(($) => $.page.breadcrumb_title)}</h1>
