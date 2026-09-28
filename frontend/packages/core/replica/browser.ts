@@ -158,7 +158,6 @@ class ReplicaFacade implements BrowserReplica {
   private readonly wanted = new Set<string>();
   /** Sockets/tabs seen since the last `replica:leader`, to detect a new holder. */
   private lastLeaderTabId: string | null = null;
-  private degradedReason: string | null = null;
   private disposed = false;
   private requestCounter = 0;
   private releaseLock: (() => void) | null = null;
@@ -283,7 +282,6 @@ class ReplicaFacade implements BrowserReplica {
     }
     this.follower.suspend();
     this.leader = session;
-    this.degradedReason = session.degraded ? "leader opened without OPFS" : null;
     this.broadcast({ type: "replica:leader", tabId: this.options.tabId, sessions: [...this.wanted] });
     // Every session this tab is showing must be subscribed by *somebody*; the tab
     // that just took over is now that somebody.
@@ -358,7 +356,7 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   get degraded(): boolean {
-    return this.degradedReason !== null;
+    return this.leader?.degraded ?? false;
   }
 
   /** The tab that held the lock when this tab last heard from one, for diagnostics. */
@@ -429,7 +427,7 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
 interface LeaderSession {
   leader: ReplicaLeader;
   bridge: WorkerBridge;
-  storage: "opfs" | "memory";
+  storage: "opfs" | "memory" | null;
   degraded: boolean;
 }
 
@@ -450,7 +448,7 @@ async function startLeader(
   wanted: ReadonlySet<string>,
 ): Promise<LeaderSession> {
   const bridge = createWorkerBridge(options, env);
-  let storage: "opfs" | "memory" = "opfs";
+  let storage: "opfs" | "memory" | null = null;
   let degraded = false;
 
   const leader = new ReplicaLeader({
@@ -495,7 +493,7 @@ async function startLeader(
     storage: env.hasOpfs === false ? "memory" : "opfs",
   });
   void wanted;
-  return { leader, bridge, storage, degraded };
+  return { leader, bridge, get storage() { return storage; }, get degraded() { return degraded; } };
 }
 
 interface WorkerBridge {
@@ -525,7 +523,7 @@ function createWorkerBridge(options: BrowserReplicaOptions, env: BrowserReplicaE
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      terminate: () => worker.terminate(),
+      terminate: () => { listeners.clear(); worker.terminate(); },
     };
   }
 
@@ -558,7 +556,7 @@ function handleInline(
 ): ReplicaWorkerResponse[] {
   switch (request.type) {
     case "init":
-      return [{ type: "ready", storage: "memory", degraded: null }];
+      return [{ type: "ready", storage: "memory", degraded: request.storage === "opfs" ? "DedicatedWorker unavailable; using memory" : null }];
     case "open": {
       const opened = engine.openSession({
         sessionId: request.sessionId,

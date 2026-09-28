@@ -5,6 +5,23 @@ import { replicaLockName } from "./channel";
 const replicas: BrowserReplica[] = [];
 afterEach(() => { for (const replica of replicas.splice(0)) replica.dispose(); });
 
+test("storage and degraded reflect the delayed Worker ready result", async () => {
+  let deliver: ((event: MessageEvent) => void) | undefined;
+  const replica = await openBrowserReplica({
+    userId: "user", workspaceId: "ws", tabId: "tab", subscribe: () => {}, unsubscribe: () => {}, readRange: async () => [],
+    env: { hasOpfs: true, broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+      locks: { request: (_name: string, _options: unknown, callback: () => Promise<void>) => callback() } as never,
+      createWorker: () => ({ postMessage() {}, terminate() {}, addEventListener: (_type, listener) => { deliver = listener; } }),
+    },
+  });
+  replicas.push(replica);
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  expect(replica.storage).toBeNull();
+  deliver!({ data: { type: "ready", storage: "memory", degraded: "denied" } } as MessageEvent);
+  expect(replica.storage).toBe("memory");
+  expect(replica.degraded).toBe(true);
+});
+
 test.each(["shared", "no-opfs", "no-locks"])("%s fills every hole from one sparse frame batch", async (mode) => {
   const reads: Array<{ from: number; to: number }> = [];
   const replica = await openBrowserReplica({

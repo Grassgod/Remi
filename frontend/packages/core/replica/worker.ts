@@ -26,11 +26,8 @@ import { SqlReplicaStorage } from "./sql-store";
 import { MemoryReplicaStorage, type ReplicaStorage } from "./storage";
 import { wasmSqlDatabase, type WasmDatabase } from "./sql";
 import { rangeOfFrames } from "./frames";
+import { replicaLockName } from "./channel";
 import type { ReplicaWorkerRequest, ReplicaWorkerResponse, ReplicaWorkerStorage } from "./worker-protocol";
-
-/** The SAH pool name and directory. One per browser, matching the one database. */
-const SAH_POOL_NAME = "remi-replica-pool";
-const SAH_POOL_DIR = "remi-replica";
 
 /**
  * The plan's per-`(user, workspace)` path (3/6 §1): `remi-replica/<user>/<ws>.sqlite3`.
@@ -45,7 +42,7 @@ export function replicaDatabaseName(userId: string, workspaceId: string): string
 
 /** Keep a user or workspace id from naming a parent directory. */
 function sanitizePathSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, "_") || "unknown";
+  return encodeURIComponent(value).replace(/\./g, "%2E") || "unknown";
 }
 
 export interface ReplicaWorkerOptions {
@@ -78,6 +75,7 @@ interface SahPoolUtil {
 export async function openReplicaStorage(
   databaseName: string,
   requested: ReplicaWorkerStorage,
+  identityKey: string,
 ): Promise<{ storage: ReplicaStorage; storageKind: ReplicaWorkerStorage; degraded: string | null }> {
   if (requested === "memory") {
     return { storage: new MemoryReplicaStorage(), storageKind: "memory", degraded: null };
@@ -91,8 +89,8 @@ export async function openReplicaStorage(
     }
     const sqlite3 = await sqlite3InitModule();
     const util = (await sqlite3.installOpfsSAHPoolVfs({
-      name: SAH_POOL_NAME,
-      directory: SAH_POOL_DIR,
+      name: identityKey,
+      directory: identityKey,
     })) as unknown as SahPoolUtil;
     await util.reserveMinimumCapacity(4);
     const db = new util.OpfsSAHPoolDb(databaseName);
@@ -150,7 +148,8 @@ export class ReplicaWorkerHost {
     try {
       if (request.type === "init") {
         this.databaseName = this.options.databaseName ?? replicaDatabaseName(request.userId, request.workspaceId);
-        const opened = await openReplicaStorage(this.databaseName, this.options.storage ?? request.storage);
+        const opened = await openReplicaStorage(this.databaseName, this.options.storage ?? request.storage,
+          replicaLockName(request.userId, request.workspaceId));
         this.identity = { userId: request.userId, workspaceId: request.workspaceId };
         this.engine = new ReplicaEngine(opened.storage);
         this.storageKind = opened.storageKind;
