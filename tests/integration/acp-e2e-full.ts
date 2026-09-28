@@ -194,7 +194,15 @@ class AcpTestClient {
             const properties = params?.requestedSchema?.properties ?? {};
             const content: Record<string, unknown> = {};
             for (const [field, schema] of Object.entries(properties) as Array<[string, any]>) {
-              if (field.endsWith("__other") || schema?._meta?.codex?.isOtherAnswer) continue;
+              // codex-acp 1.11 tags its "<id>__other" companion with
+              // isOtherAnswer; 1.12+ renamed it to "<id>_note" with
+              // _meta.codex.role = "user_note". Neither is a question.
+              const codexMeta = schema?._meta?.codex;
+              if (
+                field.endsWith("__other")
+                || codexMeta?.isOtherAnswer
+                || codexMeta?.role === "user_note"
+              ) continue;
               const first = schema?.oneOf?.[0]?.const ?? schema?.enum?.[0];
               if (first !== undefined) content[field] = first;
             }
