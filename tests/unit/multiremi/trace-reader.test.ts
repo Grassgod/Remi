@@ -128,6 +128,33 @@ describe("TraceReader oversized first event", () => {
 });
 
 describe("TraceReader states and hot routing", () => {
+  it("enforces its own JSON byte budget and sparse cursor without source truncation", async () => {
+    const content = "中文😀\u0001".repeat(35_000);
+    const events: TraceEvent[] = [1, 7, 21].map((seq) => ({ seq, ts: "2026-09-28T00:00:00Z", type: "text", content }));
+    const daemon: DaemonTraceReader = {
+      read: async (request) => {
+        const remaining = events.filter((event) => event.seq > (request.afterSeq ?? 0)).slice(0, request.limit);
+        return { ok: true, events: remaining, next_after_seq: remaining.at(-1)?.seq ?? request.afterSeq ?? 0, head: 21, eof: true, closed: true };
+      },
+    };
+    const store = createStore();
+    const reader = new TraceReader({ store, daemon, archive: new SessionArchiveReader({ store, root: "/nonexistent" }), getPointer: () => pointer("daemon") });
+    const seen: number[] = [];
+    let afterSeq = 0;
+    for (const seq of [1, 7, 21]) {
+      const page = await reader.readTrace("tsk_trace", afterSeq);
+      expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+      expect(page).toMatchObject({ state: "ok", head: 21, next_after_seq: seq, eof: seq === 21 });
+      expect(page.events).toEqual([events.find((event) => event.seq === seq)!]);
+      expect(page.next_after_seq).toBe(page.events.at(-1)!.seq);
+      expect(page.next_after_seq).toBeGreaterThan(afterSeq);
+      seen.push(...page.events.map((event) => event.seq));
+      afterSeq = page.next_after_seq;
+    }
+    expect(seen).toEqual([1, 7, 21]);
+  });
+
   it("writes a daemon pointer on claim, none for an empty terminal trace, and lost for abandon", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
