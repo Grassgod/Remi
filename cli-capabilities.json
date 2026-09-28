@@ -11166,6 +11166,11 @@
     "GET /healthz": {
       "command": "platform.health"
     },
+    "GET /internal/peer/health": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow."
+    },
     "GET /readyz": {
       "command": "platform.ready"
     },
@@ -12262,6 +12267,11 @@
     },
     "POST /auth/verify-code": {
       "command": "context.auth.verify-code"
+    },
+    "POST /internal/peer/events": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow."
     },
     "PUT /api/agents/:id": {
       "command": "agent.update"
