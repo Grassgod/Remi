@@ -1269,6 +1269,119 @@ export interface MultiremiTaskHumanRequest {
   expiresAt?: string | null;
 }
 
+/**
+ * MUL-400 E4: one "waiting for your decision" item recorded on a parent Issue.
+ *
+ * A child run raises it instead of blocking: the parent owner either answers it
+ * itself (`answered`) or hands it to a human (`escalated`). Only escalated rows
+ * enter the human "waiting for you" list. This is deliberately a light row, not
+ * a scoped grant object: there is no scope, expiry or revocation.
+ */
+export type MultiremiIssueDecisionKind = "merge" | "production_change" | "criteria" | "question" | "permission" | "other";
+
+export type MultiremiIssueDecisionStatus = "pending" | "escalated" | "answered" | "withdrawn";
+
+/** Who answered: a human (`member`) or the parent's owner agent (`agent`). */
+export type MultiremiIssueDecisionAnswererType = "member" | "agent";
+
+export interface MultiremiIssueDecisionAnswer {
+  answererType: MultiremiIssueDecisionAnswererType;
+  answererId: string;
+  /** The answer itself: the chosen option(s) or free text. */
+  answer: string;
+  /** Why this is the right call. Required for an agent answer. */
+  reason: string;
+  /** How to overturn it. Required when the parent's owner agent answers. */
+  overturn: string | null;
+  answeredAt: string;
+}
+
+export interface MultiremiIssueDecision {
+  id: string;
+  workspaceId: string;
+  /** The Issue the row hangs on: the source Issue's parent, or the source itself. */
+  issueId: string;
+  /** The child Issue (or the run's own Issue) that raised it. */
+  sourceIssueId: string;
+  sourceTaskId: string | null;
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string;
+  options: string[] | null;
+  status: MultiremiIssueDecisionStatus;
+  /** Latest answer; earlier answers stay in {@link history}. */
+  answer: MultiremiIssueDecisionAnswer | null;
+  answeredByMemberId: string | null;
+  answeredAt: string | null;
+  /** Every answer in order, so a human re-answer keeps the previous record. */
+  history: MultiremiIssueDecisionAnswer[];
+  /** The parent owner agent expected to answer a `pending` row, when one exists. */
+  ownerAgentId: string | null;
+  createdByAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MultiremiIssueDecisionBucket = "waiting_on_human" | "pending_owner" | "answered";
+
+/**
+ * MUL-400 E4 read model: the two groups the parent page renders. The waiting
+ * group mixes escalated decisions with the subtree's pending human requests, so
+ * it is a union view rather than a mirror table.
+ */
+export interface MultiremiIssueDecisionEntry {
+  id: string;
+  bucket: MultiremiIssueDecisionBucket;
+  type: "decision" | "human_request";
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string | null;
+  status: string;
+  issueId: string;
+  sourceIssueId: string | null;
+  sourceTaskId: string | null;
+  options: string[] | null;
+  /** Original payload for the existing human-request cards. */
+  payload?: Record<string, unknown>;
+  answer: MultiremiIssueDecisionAnswer | null;
+  /**
+   * Every answer in chronological order, oldest first. Present on `decision`
+   * entries (and `[]` when never answered) so a member revision does not hide
+   * the owner's original call; human-request entries omit the key.
+   */
+  history?: MultiremiIssueDecisionAnswer[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiIssueDecisionList {
+  waiting_on_human: MultiremiIssueDecisionEntry[];
+  owner_and_answered: {
+    pending: MultiremiIssueDecisionEntry[];
+    answered: MultiremiIssueDecisionEntry[];
+  };
+  count: number;
+}
+
+export interface IssueDecisionActor {
+  type: "member" | "agent";
+  id: string;
+  taskId: string | null;
+}
+
+export interface CreateIssueDecisionInput {
+  kind: string;
+  title: string;
+  body?: string | null;
+  options?: string[] | null;
+}
+
+export interface AnswerIssueDecisionInput {
+  answer: string;
+  reason: string;
+  overturn?: string | null;
+}
+
 export type MultiremiTaskPromptMode = "bootstrap" | "delta";
 
 export interface MultiremiTaskPromptArtifact {
@@ -1825,11 +1938,40 @@ export interface MultiremiIssue {
   labels: MultiremiLabel[];
   /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
   attachments?: MultiremiAttachment[];
+  /**
+   * MUL-400 S1c (A4): the raw `parent_done_grant` columns. All three are null
+   * when no member has authorized the owner agent, which is the default for
+   * every existing row. The derived shape the detail routes expose is
+   * {@link MultiremiIssueParentDoneGrant}.
+   */
+  parentDoneGrantAt: string | null;
+  parentDoneGrantBy: string | null;
+  parentDoneGrantAgentId: string | null;
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * MUL-400 S1c (A4): why a stored grant does or does not authorize the CURRENT
+ * owner agent to close the parent. `grant_missing` is "nobody granted";
+ * `assignee_changed` is "the grant still names a different agent" (D1: a grant
+ * never follows a re-assignment); `owner_not_agent` is "the owner resolves to no
+ * runnable agent at all", which is also what a member-owned parent reports.
+ */
+export type MultiremiIssueParentDoneGrantIneffectiveReason =
+  | "grant_missing"
+  | "assignee_changed"
+  | "owner_not_agent";
+
+export interface MultiremiIssueParentDoneGrant {
+  granted_at: string;
+  granted_by: string;
+  agent_id: string;
+  effective: boolean;
+  ineffective_reason: MultiremiIssueParentDoneGrantIneffectiveReason | null;
 }
 
 export interface MultiremiIssueWithTasks extends MultiremiIssue {
@@ -2306,6 +2448,16 @@ export interface UpdateIssueOptions {
    * reads it.
    */
   parentStatusForce?: boolean;
+  /**
+   * MUL-400 S1c (QA round 1): where the `parent_done_grant_used` audit row came
+   * from. The SCM merge effect closes the parent through the same in-transaction
+   * writer as the API, so the row must still distinguish the two. Server-only —
+   * `UpdateIssueOptions` is passed positionally by the store and is never built
+   * from the request body.
+   */
+  parentDoneGrantSource?: "api" | "scm_merge";
+  /** Extra audit fields for the merge-sourced grant use (PR number and URL). */
+  parentDoneGrantData?: Record<string, unknown> | null;
 }
 
 /**

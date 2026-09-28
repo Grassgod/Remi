@@ -24,6 +24,7 @@ export const INBOX_ROUTE_BY_TYPE = {
   // only in the issue activity feed.
   dependency_prerequisite_failed: "inbox_action",
   dependency_satisfied: "inbox_action",
+  decision_requested: "inbox_action",
 } as const satisfies Record<string, RegisteredInboxRoute>;
 
 export type RegisteredInboxType = keyof typeof INBOX_ROUTE_BY_TYPE;

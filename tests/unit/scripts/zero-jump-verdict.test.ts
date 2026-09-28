@@ -180,7 +180,11 @@ describe("zero jump verdict — the shipped allowlist", () => {
 
   it("is a well-formed debt record", async () => {
     const allowlist = JSON.parse(await Bun.file(allowlistPath).text()) as ZeroJumpAllowlist;
-    expect(allowlist.rows.length).toBeGreaterThan(0);
+    // The row count is deliberately not asserted to be positive: shrinking the
+    // record is the documented direction, and MUL-390 took it to zero by fixing
+    // all nine rows. Well-formedness is what this test owns — a row that exists
+    // must still name its owner and its reason.
+    expect(Array.isArray(allowlist.rows)).toBe(true);
     expect(validateZeroJumpAllowlist(allowlist)).toEqual([]);
     // Every row names the issue that owns its fix.
     for (const row of allowlist.rows) {
@@ -209,13 +213,13 @@ describe("zero jump verdict — the shipped allowlist", () => {
     expect(baselineRows.length).toBeGreaterThan(0);
     expect(allowlistWithinBaseline(allowlist, baselineRows)).toEqual([]);
 
-    // The shipped allowlist covers every baseline row today, so a stricter
-    // reading is still meaningful: nothing was silently dropped. A future
-    // shrink (MUL-443 / MUL-444 / MUL-393) is expected to relax this and is not
-    // an error — the ratchet above is the invariant.
+    // The shipped allowlist covered every baseline row when it was written, and
+    // a stricter reading was meaningful then: nothing had been silently dropped.
+    // A shrink is the documented direction and MUL-390 took it all the way to an
+    // empty record, so the size assertion is gone on purpose; what survives is
+    // the invariant that anything still listed must be a baseline pair.
     const baselinePairs = new Set(baselineRows.map((row) => row.pair));
     const allowlistPairs = new Set(allowlist.rows.map((row) => zeroJumpPairKey(row)));
-    expect(allowlistPairs.size).toBeGreaterThan(0);
     for (const pair of allowlistPairs) expect(baselinePairs.has(pair)).toBe(true);
   });
 
