@@ -3,7 +3,7 @@ import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/post
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
-export type ChildMutation = "create" | "attach" | "reopen_done" | "reopen_cancelled";
+export type ChildMutation = "create" | "attach" | "reopen_done" | "reopen_cancelled" | "assign_done" | "assign_cancelled";
 export interface RaceOperation {
   type: "run";
   role: "parent" | "child";
@@ -81,7 +81,8 @@ self.onmessage = (event: MessageEvent<
       const result = run(sql, ...params);
       if (operation?.role === "child"
         && (/INSERT INTO multiremi_issues\s*\(/.test(sql)
-          || /UPDATE multiremi_issues SET\s+title =/.test(sql))) barrier();
+          || /UPDATE multiremi_issues SET\s+title =/.test(sql)
+          || /UPDATE multiremi_issues\s+SET assignee_type = .*status =/s.test(sql))) barrier();
       return result;
     };
     store.onWorkspaceEvent(() => {
@@ -104,6 +105,8 @@ self.onmessage = (event: MessageEvent<
     if (input.role === "child") {
       if (input.mutation === "create") {
         store.createIssue({ id: input.childId, title: "Concurrent child", parentIssueId: input.parentId, status: "in_progress" });
+      } else if (input.mutation.startsWith("assign_")) {
+        store.assignIssue(input.childId, { assigneeType: "agent", assigneeId: input.ownerId });
       } else {
         store.updateIssue(input.childId, input.mutation === "attach"
           ? { parent_issue_id: input.parentId }

@@ -8,7 +8,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import type { ChildMutation, RaceOperation, RaceResult } from "./fixtures/parent-status-race-worker.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-const mutations: ChildMutation[] = ["create", "attach", "reopen_done", "reopen_cancelled"];
+const mutations: ChildMutation[] = ["create", "attach", "reopen_done", "reopen_cancelled", "assign_done", "assign_cancelled"];
 
 function message<T>(worker: Worker, input: unknown, phase: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -105,7 +105,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
               sequence += 1;
               const parent = store.createIssue({ title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
               const childId = mutation === "create" ? `race-child-${sequence}` : store.createIssue({
-                title: `Child ${sequence}`, status: mutation === "attach" ? "in_progress" : mutation === "reopen_done" ? "done" : "cancelled",
+                title: `Child ${sequence}`, status: mutation === "attach" ? "in_progress" : mutation.endsWith("_done") ? "done" : "cancelled",
                 parentIssueId: mutation === "attach" ? null : parent.id,
               }).id;
               store.grantParentDone(parent.id, "local");
