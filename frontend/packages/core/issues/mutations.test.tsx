@@ -2,8 +2,8 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
@@ -18,6 +18,8 @@ import {
 } from "./mutations";
 import {
   issueKeys,
+  issueListOptions,
+  PAGINATED_STATUSES,
   type IssueSortParam,
 } from "./queries";
 import type {
@@ -83,6 +85,30 @@ describe("useLoadMoreByStatus", () => {
   afterEach(() => {
     qc.clear();
     vi.restoreAllMocks();
+  });
+
+  it("continues a grouped first page at offset 50 without repeating or losing rows", async () => {
+    const rows = Array.from({ length: 60 }, (_, i) => makeIssue(i + 1));
+    const listIssueStatusPages = vi.fn().mockResolvedValue({
+      groups: Object.fromEntries(PAGINATED_STATUSES.map((status) => [status, {
+        issues: status === "todo" ? rows.slice(0, 50) : [], total: status === "todo" ? 60 : 0,
+        has_more: status === "todo",
+      }])), archived_total: 0,
+    });
+    listIssues.mockResolvedValue({ issues: rows.slice(50), total: 60 });
+    setApiInstance({ listIssueStatusPages, listIssues } as unknown as ApiClient);
+    const sort: IssueSortParam = { sort_by: "priority", sort_direction: "desc" };
+    await qc.fetchQuery(issueListOptions(WS_ID, sort));
+    const { result } = renderHook(() => {
+      useQuery({ ...issueListOptions(WS_ID, sort), staleTime: Infinity });
+      return useLoadMoreByStatus("todo", undefined, sort);
+    }, { wrapper: createWrapper(qc) });
+    expect(result.current.hasMore).toBe(true);
+    await act(async () => { await result.current.loadMore(); });
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(1);
+    expect(listIssues).toHaveBeenCalledExactlyOnceWith({ status: "todo", limit: 50, offset: 50, ...sort });
+    expect(qc.getQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, sort))?.byStatus.todo).toEqual({ issues: rows, total: 60 });
+    await waitFor(() => expect(result.current.hasMore).toBe(false));
   });
 
   it("targets the sorted cache key and forwards sort to the API", async () => {

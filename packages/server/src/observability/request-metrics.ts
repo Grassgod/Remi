@@ -736,7 +736,7 @@ function applyServerTiming(c: Context, value: string): void {
 }
 
 /**
- * Route PATTERN of the last non-middleware route Hono matched.
+ * Route PATTERN of the first non-middleware handler Hono matched.
  *
  * Middleware registers as `ALL`, real handlers register as their method, so the
  * `ALL` filter is what separates the two. Anything unmatched — a 404, or a
@@ -746,7 +746,9 @@ function applyServerTiming(c: Context, value: string): void {
 export function resolveRoutePattern(c: Context): string {
   try {
     const matched = c.req.matchedRoutes;
-    for (let index = matched.length - 1; index >= 0; index -= 1) {
+    // Hono also lists later overlapping handlers (e.g. /issues/:id after
+    // /issues/status-pages), even when the first handler returns the response.
+    for (let index = 0; index < matched.length; index += 1) {
       const route = matched[index];
       if (!route) continue;
       if (String(route.method ?? "ALL").toUpperCase() === "ALL") continue;

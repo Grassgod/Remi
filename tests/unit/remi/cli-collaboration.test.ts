@@ -34,6 +34,18 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("executes assignee grouped lists with the opt-in workspace archive count", async () => {
+    useCliEnv();
+    const spec = specById("issue.grouped");
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/issues/grouped");
+      expect(url.searchParams.get("include_archived_total")).toBe("true");
+      return Response.json({ groups: [], archived_total: 7 });
+    });
+    const output = await capture(() => registryFor([spec]).execute([...spec.path, "--include-archived-total", "--output", "json"]));
+    expect(JSON.parse(output.stdout).archived_total).toBe(7);
+  });
   it("executes status-pages with list filters and optional archived total", async () => {
     useCliEnv();
     const spec = specById("issue.status-pages");

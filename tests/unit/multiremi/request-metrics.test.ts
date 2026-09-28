@@ -153,6 +153,18 @@ describe("MUL-367 request metrics — Server-Timing format", () => {
     expect(response.headers.get("server-timing")).not.toContain("SECRET_P");
     expect(response.status).toBe(200);
   });
+
+  it("keeps static status-pages separate from a later overlapping issue-id handler", async () => {
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware(OPTIONS));
+    app.get("/api/issues/status-pages", (c) => c.json({ groups: {} }));
+    app.get("/api/issues/:id", (c) => c.json({ id: c.req.param("id") }));
+    await app.request("/api/issues/status-pages?assignee_id=usr_private");
+    await app.request("/api/issues/iss_private");
+    expect(drainRequestMetricsForTest().samples.map((sample) => sample.route)).toEqual([
+      "/api/issues/status-pages", "/api/issues/:id",
+    ]);
+  });
 });
 
 describe("MUL-367 request metrics — attribution under concurrent interleaving", () => {
@@ -651,7 +663,7 @@ async function postgresReachable(): Promise<boolean> {
 
 const pgAvailable = await postgresReachable();
 if (!pgAvailable) {
-  console.warn(`[mul367-metrics] Postgres not reachable at ${PG_URL} — skipping the real-bridge checks.`);
+  console.warn("[mul367-metrics] Test Postgres not reachable; skipping the real-bridge checks.");
 }
 
 describe.skipIf(!pgAvailable)("MUL-367 request metrics — real Postgres bridge", () => {
