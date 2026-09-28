@@ -178,7 +178,11 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
-import { createRealtimeFanout } from "./realtime-fanout.js";
+import {
+  createRealtimeFanout,
+  type RealtimeFanout,
+  type RealtimeFanoutOptions,
+} from "./realtime-fanout.js";
 import {
   createPeerChannel,
   resolvePeerSecret,
@@ -264,6 +268,15 @@ export interface MultiremiApiOptions {
    * `MULTIREMI_PEER_SECRET` (falling back to `MULTIREMI_TOKEN`).
    */
   peerSecret?: string | null;
+  /**
+   * MUL-462: seam for observing/overriding the realtime fanout this server
+   * builds. The fanout's role is otherwise unobservable from outside: the guard
+   * already prevents the *other* side's sockets from existing, so a process that
+   * wired the wrong role still looks correct until a socket on that side appears.
+   * A wrapper can therefore assert that the fanout got the process's one
+   * effective role.
+   */
+  createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
 }
 
 /**
@@ -586,15 +599,20 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
-    // MUL-461: `role` rides this body once a role was actually configured — its
-    // value is the process's one effective role, not a second reading of env.
-    ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
-    // MUL-462: `peer_healthy` is a split field, additive like `role`. On a process
-    // with neither a role nor a peer this body stays byte-for-byte what it was
-    // before the split, so existing consumers (CLI `platform realtime`, updaters
-    // comparing health payloads) see no change at all.
-    ...(splitConfigured
-      ? { peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false }
+    // MUL-461 × MUL-462: the two split fields are additive and gated together.
+    // They appear once this process is part of a split EITHER way — a configured
+    // role (MUL-461) or a configured peer (MUL-462) — because each one alone means
+    // an operator is looking at a split process and needs both answers. With
+    // neither set the body stays byte-for-byte main's, which is what the route
+    // snapshot checks.
+    //
+    // `role` is the process's ONE effective role (never a second env read), and
+    // `peer_healthy` is the peer channel's own liveness.
+    ...(apiRoleConfigured || splitConfigured
+      ? {
+        role: effectiveApiRole,
+        peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
+      }
       : {}),
   }));
   // `/internal/*` is deliberately outside the dashboard auth middleware (see
@@ -893,7 +911,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
   // the process's effective role and forwards to the peer. `all` (the default)
   // is exactly the two deliveries that used to live inline here.
-  const realtimeFanout = createRealtimeFanout({
+  const buildFanout = options.createRealtimeFanout ?? createRealtimeFanout;
+  const realtimeFanout = buildFanout({
     role: effectiveApiRole,
     store,
     peer,

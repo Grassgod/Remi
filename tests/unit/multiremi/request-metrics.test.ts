@@ -561,6 +561,41 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     runtime!.stop();
   });
 
+  it("carries MUL-461's role and MUL-462's peer block in the same summary line", async () => {
+    // The two features landed independently and both touch this line: role names
+    // the process, peer is a per-window counter block. Merging them must not drop
+    // either — and role must be the configured value, not a hardcoded `all`.
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware({ ...OPTIONS, role: "runtime", bufferCapacity: 64 }));
+    app.get("/api/daemon/runtimes/:id/activity", (c) => c.json({ ok: true }));
+    const runtime = startRequestMetricsSummary({
+      ...OPTIONS, role: "runtime", bufferCapacity: 64, summaryTopRoutes: 10,
+    });
+
+    recordPeerBatch({ events: 4, rttMs: 6 });
+    recordPeerDropped(1);
+
+    const { lines } = await captureConsoleLog(async () => {
+      await app.request("/api/daemon/runtimes/rt_1/activity");
+      runtime!.flush();
+    });
+
+    const summaryLine = lines.find((line) => line.includes("api_minute_summary"));
+    expect(summaryLine).toBeTruthy();
+    const summary = JSON.parse(summaryLine!) as {
+      role?: string;
+      peer?: Record<string, number>;
+    };
+
+    // MUL-461 field, with its own value.
+    expect(summary.role).toBe("runtime");
+    // MUL-462 block, with its own counters — both present, neither clobbering
+    // the other's reading.
+    expect(summary.peer).toMatchObject({ sent: 4, batches: 1, dropped: 1, failed: 0 });
+
+    runtime!.stop();
+  });
+
   it("reports this window's peer counters and resets them for the next one", () => {
     // MUL-462: the peer block is per-window, not a running total, so a burst of
     // cross-process forwarding in one minute is not smeared across the next.
