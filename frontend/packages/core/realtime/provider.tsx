@@ -10,6 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { WSClient } from "../api/ws-client";
+import type { StreamSubscription, StreamSubscriptionHandlers } from "../api/ws-client";
+import {
+  TraceSocket,
+  deriveTraceWsUrl,
+  setTraceClientFactoryForTesting,
+} from "../api/trace-socket";
 import type { WSEventType, StorageAdapter } from "../types";
 import type { ClientIdentity } from "../platform/types";
 import type { StoreApi, UseBoundStore } from "zustand";
@@ -26,6 +32,21 @@ type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => 
 interface WSContextValue {
   subscribe: (event: WSEventType, handler: EventHandler) => () => void;
   onReconnect: (callback: () => void) => () => void;
+  /**
+   * Subscribe to a v2 stream on the main socket (`log:*`). The returned handle
+   * resumes from this client's own head after a reconnect or a server resync.
+   */
+  subscribeStream: (
+    stream: "log",
+    id: string,
+    handlers: StreamSubscriptionHandlers,
+    options?: { fromSeq?: number },
+  ) => StreamSubscription | null;
+  /**
+   * Subscribe to `trace:<taskId>` on the lazily-created trace socket. The socket
+   * opens on the first subscription and closes with the last one.
+   */
+  subscribeTrace: (taskId: string, handlers: StreamSubscriptionHandlers) => StreamSubscription | null;
   /**
    * Subscribe to a server scope (e.g. task/chat) for the lifetime of the
    * returned disposer. Sends the subscribe frame on every authenticated
@@ -74,6 +95,11 @@ export function WSProvider({
     () => null,
   );
   const [wsClient, setWsClient] = useState<WSClient | null>(null);
+  // The trace socket is created on the first `subscribeTrace` and torn down with
+  // its last subscriber, so a user who never opens 「执行过程」 never opens a
+  // second connection. It is keyed to the same auth identity as the main socket:
+  // the effect below replaces it whenever the token or workspace changes.
+  const [traceSocket, setTraceSocket] = useState<TraceSocket | null>(null);
 
   // Depend on identity primitives instead of the object reference so a parent
   // re-render that passes a new `{ platform, version, os }` literal does not
@@ -107,9 +133,20 @@ export function WSProvider({
     setWsClient(ws);
     ws.connect();
 
+    const traces = new TraceSocket({
+      url: deriveTraceWsUrl(wsUrl),
+      token,
+      workspaceSlug: wsSlug,
+      cookieAuth,
+      logger: createLogger("ws.trace"),
+    });
+    setTraceSocket(traces);
+
     return () => {
       ws.disconnect();
+      traces.close();
       setWsClient(null);
+      setTraceSocket(null);
     };
   }, [
     user,
@@ -158,12 +195,37 @@ export function WSProvider({
     [wsClient],
   );
 
+  const subscribeStream = useCallback(
+    (
+      stream: "log",
+      id: string,
+      handlers: StreamSubscriptionHandlers,
+      options?: { fromSeq?: number },
+    ) => {
+      if (!wsClient) return null;
+      return wsClient.subscribeStream(stream, id, handlers, options);
+    },
+    [wsClient],
+  );
+
+  const subscribeTrace = useCallback(
+    (taskId: string, handlers: StreamSubscriptionHandlers) => {
+      if (!traceSocket) return null;
+      return traceSocket.subscribe(taskId, handlers);
+    },
+    [traceSocket],
+  );
+
   return (
-    <WSContext.Provider value={{ subscribe, onReconnect: onReconnectCb, subscribeScope }}>
+    <WSContext.Provider
+      value={{ subscribe, onReconnect: onReconnectCb, subscribeScope, subscribeStream, subscribeTrace }}
+    >
       {children}
     </WSContext.Provider>
   );
 }
+
+export { setTraceClientFactoryForTesting };
 
 export function useWS() {
   const ctx = use(WSContext);

@@ -16,7 +16,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 /**
  * Every module C0 adds, and whether runtime code may import it yet.
  *
- * C1 (MUL-436) is the wiring PR, so three entries flipped here. What "wired" means
+ * C1 (MUL-436) and C3 (MUL-438) wire these three modules. What "wired" means
  * is deliberately narrow: imported by runtime code **outside** the hub package,
  * which is the fact that decides whether the hub can be reached at all.
  *
@@ -35,6 +35,10 @@ const C0_MODULES = [
   { specifier: "@multiremi/contracts/live-hub", wired: true },
   { specifier: "@multiremi/api/hub/live-hub", wired: true },
   { specifier: "@multiremi/api/hub/hub-transport", wired: true },
+  // Still unreachable in the sense this guard measures: the only importer is
+  // `hub/live-hub.ts`, and it reaches the file relatively (`./upstream-contracts.js`)
+  // because they are two files of one seam. The stand-in leaves when B0 (PR #262)
+  // lands, which replaces it with `@multiremi/contracts/conversation-log.js`.
   { specifier: "@multiremi/api/hub/upstream-contracts", wired: false },
 ] as const;
 
@@ -63,8 +67,10 @@ const C0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/api/hub/live-hub.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/hub-transport.ts"),
   join(REPO_ROOT, "packages/server/src/api/hub/upstream-contracts.ts"),
-  // C1's own modules, so their imports of the C0 surface are not counted as
+  // C1/C3's own modules, so their imports of the C0 surface are not counted as
   // "runtime wired" on the strength of the hub importing itself.
+  join(REPO_ROOT, "packages/server/src/api/hub/browser-stream.ts"),
+  join(REPO_ROOT, "packages/server/src/api/hub/stream-auth.ts"),
 ]);
 
 /**

@@ -163,13 +163,32 @@ export interface HubStreamGapPayload {
 }
 
 /**
- * `stream.error`: the subscription failed. The code set is frozen by C3 together
- * with the handler that emits it; C0 deliberately does not invent one here.
+ * The code set of `stream.error`, frozen by C3 together with the handler that
+ * emits it (`packages/server/src/api/realtime.ts`):
+ *
+ * - `invalid_payload` — the frame is not a well-formed `stream.subscribe`.
+ * - `forbidden` — the subscription failed its ownership/visibility check. Used
+ *   for an id that does not exist as well, so a probe cannot tell "not yours"
+ *   from "not there".
+ * - `wrong_endpoint` — a `trace` subscription on `/ws`, or a `log` subscription
+ *   on `/api/trace/ws`. The two streams live in different processes.
+ * - `unavailable` — the check could not be answered (the read pool refused or
+ *   timed out); the client may retry rather than treat it as a denial.
  */
+export const HUB_STREAM_ERROR_CODES = [
+  "invalid_payload",
+  "forbidden",
+  "wrong_endpoint",
+  "unavailable",
+] as const;
+
+export type HubStreamErrorCode = (typeof HUB_STREAM_ERROR_CODES)[number];
+
+/** `stream.error`: the subscription failed, with one of the codes above. */
 export interface HubStreamErrorPayload {
   stream: HubStreamName;
   id: string;
-  code: string;
+  code: HubStreamErrorCode;
 }
 
 /**
@@ -182,12 +201,22 @@ export type BrowserWsClientFrame =
   | { type: "stream.unsubscribe"; payload: HubStreamUnsubscribePayload }
   | { type: "ping" };
 
-/** Server → client. `pong` carries no payload, matching the current handler. */
+/**
+ * Server → client. `pong` carries no payload, matching the current handler.
+ *
+ * `resync` (C3) carries no payload either: it is the process telling every
+ * browser socket it holds that the cross-process link came back and that the
+ * client should re-run its reconnect work (re-subscribe every active stream from
+ * its own head, then refetch the non-stream queries). The peer adapter calls
+ * `broadcastBrowserResync` after it recovers, and the client's handling is
+ * deliberately the same code path as a socket reconnect.
+ */
 export type BrowserWsServerFrame =
   | { type: "stream.ack"; payload: HubStreamAckPayload }
   | { type: "stream.data"; payload: HubStreamDataPayload }
   | { type: "stream.gap"; payload: HubStreamGapPayload }
   | { type: "stream.error"; payload: HubStreamErrorPayload }
+  | { type: "resync" }
   | { type: "pong" };
 
 export type BrowserWsClientFrameType = BrowserWsClientFrame["type"];
