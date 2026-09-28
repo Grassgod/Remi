@@ -536,6 +536,8 @@ export interface TasksSurface {
   getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
   /** MUL-474: the `status` route's fields, without the prompt column. */
   getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
+  listTaskMessages(taskId: string, sinceSeq?: number | null): import("@multiremi/contracts/types.js").MultiremiTaskMessage[];
+  listTaskHumanRequests(taskId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest[];
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -697,6 +699,7 @@ export interface FeishuBotSurface {
   }): MultiremiTask[];
   retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;
+  materializeFeishuTaskDeliveries(taskId: string): void;
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -704,6 +707,7 @@ export interface FeishuBotSurface {
     supportsTaskStream?: boolean,
     supportsNativeCot?: boolean,
     supportsAttachments?: boolean,
+    supportsKinds?: boolean,
   ): MultiremiFeishuBotOutboundDelivery | null;
   getFeishuBotOutboundAttachment(
     workspaceId: string,
@@ -951,6 +955,10 @@ export class StoreContext {
   }
 
   notifyTaskEvent(type: string, task: MultiremiTask): void {
+    if (["task:running", "task:awaiting_human", "task:completed", "task:failed", "task:cancelled"].includes(type)) {
+      try { this.feishuBot().materializeFeishuTaskDeliveries(task.id); }
+      catch (error) { log.warn(`Feishu task delivery materialization failed for ${task.id}; background claim will retry`); }
+    }
     for (const listener of [...this.taskEventListeners]) {
       try {
         listener({ type, task });

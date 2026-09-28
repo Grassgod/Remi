@@ -1,17 +1,18 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 772,
+    "routeCount": 773,
     "routeCountByPrefix": {
       "native": 212,
       "compat": 544,
-      "root": 16
+      "root": 17
     },
-    "getRoutes": 328,
+    "getRoutes": 329,
     "getRoutesWithBody": 325,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
+      "GET /api/trace/ws",
       "GET /ws"
     ],
     "mutationRoutes": 444,
@@ -397,6 +398,7 @@
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -1152,6 +1154,7 @@
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -24150,6 +24153,17 @@
           "created_at": "<timestamp>"
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/trace/ws",
+      "route": "GET /api/trace/ws",
+      "path": "/api/trace/ws",
+      "status": 426,
+      "body": {
+        "__body__": {
+          "omitted": "websocket-upgrade route; status recorded only"
+        }
+      }
     },
     {
       "key": "get-sweep GET /api/workspaces",

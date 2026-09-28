@@ -10972,6 +10972,11 @@
     "GET /api/tokens": {
       "command": "token.list"
     },
+    "GET /api/trace/ws": {
+      "cli_exempt": true,
+      "category": "websocket_transport",
+      "reason": "Long-lived WebSocket transport is outside the CLI command surface."
+    },
     "GET /api/workspaces": {
       "command": "workspace.list"
     },

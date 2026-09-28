@@ -1,0 +1,201 @@
+/**
+ * The non-leader half (MUL-403 C7 §3).
+ *
+ * A tab that does not hold the lock reads through `BroadcastChannel`: it announces
+ * `replica:open{session_id}` when it starts showing a session, asks the leader for
+ * the window it needs, and re-reads when `replica:appended` says rows landed. It
+ * never touches the Worker, the database or the socket, which is what keeps "one
+ * subscription, one write path" true no matter how many tabs are open.
+ *
+ * The one thing it does own is a cache: the port's reads are synchronous, so the
+ * last window the leader returned is what `getSnapshot` answers with, and an
+ * `appended` message is what invalidates it.
+ */
+
+import type { ReplicaChannelMessage } from "./channel";
+import type { SessionLogEntry, SessionReplicaPort, SessionReplicaSnapshot } from "./port";
+import type { ReplicaView } from "./view";
+
+export interface ReplicaFollowerOptions {
+  view: ReplicaView;
+  /**
+   * Called when the leader says the whole database was dropped.
+   *
+   * A follower owns no database, but it does own the cached window its consumer
+   * is rendering, so the clear has to reach the tab's own state — otherwise the
+   * app would keep whatever it had already read while a leader elsewhere deleted
+   * the rows underneath it.
+   */
+  onCleared?: (reason: "logout" | "user_mismatch" | "schema_upgrade") => void;
+  broadcast: (message: ReplicaChannelMessage) => void;
+  /** Request ids, injectable so a test can be deterministic. */
+  nextRequestId?: () => string;
+  /** Answers a window request; in production this is a channel round trip. */
+  requestWindow: (input: {
+    requestId: string;
+    sessionId: string;
+    from: number;
+    to: number;
+  }) => void;
+  /** The window the leader is showing by default; the list can ask for another. */
+  defaultRange?: () => { from: number; to: number };
+}
+
+/**
+ * A reader tab's replica port.
+ *
+ * `getSnapshot` answers from the cache, and the first read of a session triggers
+ * the `replica:open` + `replica:query` pair. Until the leader answers, the
+ * snapshot is `ready: false` — which is exactly the gate `useAnchoredReveal`
+ * takes as `dataReady`, so a tab never claims a window it has not received.
+ */
+export class ReplicaFollower implements SessionReplicaPort {
+  private readonly requested = new Set<string>();
+  private readonly pending = new Map<string, { sessionId: string; from: number; to: number; resolve: () => void }>();
+  private requestCounter = 0;
+  private readonly closed = new Set<string>();
+  private disposed = false;
+
+  constructor(private readonly options: ReplicaFollowerOptions) {}
+
+  getSnapshot(sessionId: string): SessionReplicaSnapshot & { entries: readonly SessionLogEntry[] } {
+    const snapshot = this.options.view.getSnapshot(sessionId);
+    if (!snapshot.ready && !this.closed.has(sessionId)) this.open(sessionId);
+    return snapshot;
+  }
+
+  open(sessionId: string): void {
+    if (this.disposed || this.requested.has(sessionId)) return;
+    this.closed.delete(sessionId);
+    this.requested.add(sessionId);
+    this.options.broadcast({ type: "replica:open", sessionId });
+    this.request(sessionId);
+  }
+
+  subscribe(sessionId: string, listener: () => void): () => void {
+    return this.options.view.subscribe(sessionId, listener);
+  }
+
+  readRowHeight(sessionId: string, seq: number, key: string): number | null {
+    return this.options.view.readRowHeight(sessionId, seq, key);
+  }
+
+  writeRowHeight(sessionId: string, seq: number, key: string, height: number): void {
+    // Keep it locally so a re-render in this tab hits, and send it to the leader
+    // so the next leader (or the next tab) hot-starts with the measurement. The
+    // leader's Worker is the only writer of the database, so the local write is
+    // the cache and the message is the persistence.
+    this.options.view.writeRowHeight(sessionId, seq, key, height);
+    this.options.broadcast({ type: "replica:rowHeight", sessionId, seq, key, height });
+  }
+
+  /** Ask the leader for a window (a deep link, or the tail the list needs). */
+  request(sessionId: string, range?: { from: number; to: number }): Promise<void> {
+    if (this.disposed || this.closed.has(sessionId)) return Promise.resolve();
+    const superseded: Array<() => void> = [];
+    for (const [id, pending] of this.pending) {
+      if (pending.sessionId !== sessionId) continue;
+      superseded.push(pending.resolve);
+      this.pending.delete(id);
+    }
+    const resolved = range ?? this.options.defaultRange?.() ?? { from: 0, to: Number.MAX_SAFE_INTEGER };
+    const requestId = this.nextRequestId();
+    const result = new Promise<void>((resolve) => {
+      this.pending.set(requestId, { sessionId, from: resolved.from, to: resolved.to,
+        resolve: () => { resolve(); for (const done of superseded) done(); },
+      });
+    });
+    this.options.requestWindow({ requestId, sessionId, from: resolved.from, to: resolved.to });
+    return result;
+  }
+
+  /** Leave the session; the leader drops the subscription when the last tab does. */
+  close(sessionId: string): void {
+    this.closed.add(sessionId);
+    this.cancelPending(sessionId);
+    if (!this.requested.delete(sessionId)) return;
+    this.options.broadcast({ type: "replica:close", sessionId });
+  }
+
+  /** Role changes invalidate follower requests before the Worker can publish. */
+  suspend(): void {
+    for (const pending of this.pending.values()) pending.resolve();
+    this.pending.clear();
+    this.requested.clear();
+  }
+
+  invalidate(): void {
+    for (const pending of this.pending.values()) pending.resolve();
+    this.pending.clear();
+    this.options.view.dropAll();
+  }
+
+  dispose(): void {
+    for (const sessionId of [...this.requested]) this.close(sessionId);
+    this.disposed = true;
+    this.pending.clear();
+  }
+
+  private cancelPending(sessionId: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.sessionId === sessionId) { pending.resolve(); this.pending.delete(id); }
+    }
+  }
+
+  /**
+   * Handle a leader broadcast.
+   *
+   * `appended` and `cleared` both invalidate rather than patch: the follower does
+   * not know what a batch did to the rows it holds (a patch changes a row in
+   * place, a hidden marker removes one), and re-reading a window is one message.
+   */
+  handle(message: ReplicaChannelMessage): void {
+    if (this.disposed) return;
+    switch (message.type) {
+      case "replica:ack": {
+        if (!this.requested.has(message.sessionId)) return;
+        this.cancelPending(message.sessionId);
+        this.options.view.updateFreshness(message.sessionId, false);
+        return;
+      }
+      case "replica:window": {
+        const pending = this.pending.get(message.requestId);
+        if (!pending || pending.sessionId !== message.sessionId) return;
+        this.pending.delete(message.requestId);
+        this.options.view.setWindow(message.sessionId, message.entries, {
+          head: message.snapshot.head,
+          fresh: message.snapshot.fresh,
+          ready: message.snapshot.ready,
+        });
+        pending.resolve();
+        return;
+      }
+      case "replica:appended": {
+        if (!this.requested.has(message.sessionId)) return;
+        this.request(message.sessionId);
+        return;
+      }
+      case "replica:cleared": {
+        this.invalidate();
+        this.options.onCleared?.(message.reason);
+        return;
+      }
+      case "replica:leader": {
+        // A new leader holds none of this tab's interest unless it is told, so
+        // every open session is re-announced.
+        for (const sessionId of [...this.requested]) {
+          this.options.broadcast({ type: "replica:open", sessionId });
+          this.request(sessionId);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private nextRequestId(): string {
+    this.requestCounter += 1;
+    return this.options.nextRequestId?.() ?? `req_${this.requestCounter}`;
+  }
+}

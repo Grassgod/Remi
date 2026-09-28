@@ -32,6 +32,7 @@ import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { readContextUsage } from "@shared/agent-execution.js";
 import { formatCardStats } from "./card-metadata.js";
 import { resolveProactiveMention } from "./proactive-mention.js";
+import { setFeishuMessageReceipt, type FeishuMessageReceipt } from "./message-receipt.js";
 import type { FeishuBotOutboundMention } from "@multiremi/contracts/types.js";
 
 const log = createLogger("feishu");
@@ -155,6 +156,10 @@ export class FeishuConnector implements Connector {
 
   async sendProactiveAttachment(input: FeishuAttachmentSendInput): Promise<{ messageId: string }> {
     return sendAttachmentFeishu(createFeishuClient(this._config), input);
+  }
+
+  async sendProactiveReceipt(messageId: string, state: FeishuMessageReceipt, signal?: AbortSignal): Promise<void> {
+    await setFeishuMessageReceipt(createFeishuClient(this._config), this._config.appId, messageId, state, signal);
   }
 
   /** Post a server-built card into a topic (MUL-407 decision cards). */
