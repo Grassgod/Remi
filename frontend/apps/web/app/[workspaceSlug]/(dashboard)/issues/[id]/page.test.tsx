@@ -35,7 +35,7 @@ vi.mock("@multiremi/views/issues/components", () => ({
   ),
 }));
 
-import IssueDetailPage from "./page";
+import IssueDetailPage from "../../../../../features/issues/issue-page-client";
 
 describe("IssueDetailPage", () => {
   it("keeps Session deep links and lets the standalone route own Session navigation", async () => {
@@ -44,7 +44,7 @@ describe("IssueDetailPage", () => {
     await act(async () => {
       render(
         <Suspense fallback={null}>
-          <IssueDetailPage params={params} searchParams={searchParams} />
+          <IssueDetailPage issueId="issue-1" initialIssueSessionId="session-main" />
         </Suspense>,
       );
       await Promise.all([params, searchParams]);
