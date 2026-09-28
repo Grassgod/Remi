@@ -144,6 +144,107 @@ describe.each(["log", "trace"] as const)("MUL-438 pending %s subscriptions over 
   });
 });
 
+async function streamResumeFixture(stream: "log" | "trace") {
+  const store = createStore();
+  const workspace = store.ensureLocalWorkspace();
+  store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+  const issue = store.createIssue({ title: "Resume anchors", workspaceId: workspace.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
+  const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
+  const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "resume", issueId: issue.id });
+  const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+  const reader = createStreamAuthReader(store);
+  const entered = deferred();
+  const release = deferred();
+  const finished = deferred();
+  let firstRead = true;
+  async function pause<T>(read: () => Promise<T>): Promise<T> {
+    if (firstRead) {
+      firstRead = false;
+      entered.resolve();
+      await release.promise;
+      try { return await read(); } finally { finished.resolve(); }
+    }
+    return read();
+  }
+  const auth: StreamAuthReader = {
+    backend: reader.backend,
+    logFacts: (...args) => pause(() => reader.logFacts(...args)),
+    traceFacts: (...args) => pause(() => reader.traceFacts(...args)),
+  };
+  const anchors: number[] = [];
+  const hub = createEmptyLiveHub(createLocalHubTransport());
+  const subscribe = hub.subscribe.bind(hub);
+  hub.subscribe = ((...args: Parameters<typeof hub.subscribe>) => {
+    anchors.push(args[1]);
+    return subscribe(...args);
+  }) as typeof hub.subscribe;
+  const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null, liveHub: hub, streamAuth: auth });
+  const path = stream === "log" ? "/ws" : "/api/trace/ws";
+  const client = new WSClient(`ws://127.0.0.1:${server.port}${path}?workspace_id=${workspace.id}`);
+  client.setAuth(token.token, workspace.slug);
+  client.connect();
+  const socket = (client as unknown as { ws: WebSocket }).ws;
+  const id = stream === "log" ? session.id : task.id;
+  const cleanup = async () => {
+    release.resolve();
+    await finished.promise;
+    client.disconnect();
+    server.stop(true);
+  };
+  return { client, socket, id, anchors, entered, release, cleanup };
+}
+
+describe.each(["log", "trace"] as const)("MUL-438 %s resume anchors over real sockets", (stream) => {
+  it.each([false, true])("keeps zero without data across reconnect, acknowledged=%s", async (acknowledged) => {
+    const { client, socket, id, anchors, entered, release, cleanup } = await streamResumeFixture(stream);
+    const firstAck = deferred();
+    const resumed = deferred();
+    let acks = 0;
+    client.subscribeStream(stream, id, { onAck: () => { if (++acks === 1) firstAck.resolve(); else resumed.resolve(); } }, { fromSeq: 0 });
+    try {
+      await entered.promise;
+      if (acknowledged) {
+        release.resolve();
+        await firstAck.promise;
+        expect(anchors).toEqual([0]);
+      }
+      const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve(), { once: true }));
+      socket.close();
+      await closed;
+      await (acknowledged ? resumed.promise : firstAck.promise);
+      // The new connection's ACK is also a barrier for disposing the old one.
+      release.resolve();
+      expect(anchors).toEqual(acknowledged ? [0, 0] : [0]);
+    } finally { await cleanup(); }
+  });
+
+  it("retains a failed zero replacement after the real older ACK and reconnect", async () => {
+    const { client, socket, id, anchors, entered, release, cleanup } = await streamResumeFixture(stream);
+    const firstAck = deferred();
+    const resumed = deferred();
+    let acks = 0;
+    const handlers = { onAck: () => { if (++acks === 1) firstAck.resolve(); else resumed.resolve(); } };
+    client.subscribeStream(stream, id, handlers, { fromSeq: 1 });
+    try {
+      await entered.promise;
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        if (JSON.parse(String(data)).type === "stream.subscribe") throw new Error("replacement send failed");
+        send(data);
+      };
+      expect(() => client.subscribeStream(stream, id, handlers, { fromSeq: 0 })).toThrow("replacement send failed");
+      socket.send = send;
+      release.resolve();
+      await firstAck.promise;
+      expect(anchors).toEqual([1]);
+      socket.close();
+      await resumed.promise;
+      expect(anchors).toEqual([1, 0]);
+    } finally { await cleanup(); }
+  });
+});
+
 describe("MUL-438 browser stream endpoints", () => {
   it("sends a real WSClient's fromSeq zero registered while CONNECTING to the Hub unchanged", async () => {
     const store = createStore();

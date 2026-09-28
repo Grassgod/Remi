@@ -64,7 +64,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 - 重连为 1s→30s 抖动指数退避（`reconnectDelayMs`），失败计数在认证成功后归零。
 - 每 25s 发一次 `ping`（Bun `idleTimeout` 为 120s）。
 - OPEN 只表示传输已打开；当前连接收到 `auth_ack` 后才发送流订阅。重连重新等待认证，已关闭或被替换连接的事件不影响当前连接。
-- 显式 `fromSeq`（包括 0）保留到订阅帧成功发送；连接未打开、未认证或发送失败不会消费锚点。
+- 显式 `fromSeq`（包括 0）保留到真正收到数据；成功发送和 `stream.ack` 都不消费锚点，旧 ACK 也不会抹掉替换订阅的锚点。内部区分「尚无数据」和「已收到 seq 0」，后者从 1 续传。
 - 认证成功后对每条活动流重发 `stream.subscribe`：有本地帧则 `from_seq = 本地 head + 1`，否则沿用调用方原始锚点。
 - 收到 `resync` 与收到重连走同一恢复动作：重订阅所有流，再跑一次非流式缓存的失效（[use-realtime-sync.ts](../../frontend/packages/core/realtime/use-realtime-sync.ts)）。
 

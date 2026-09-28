@@ -78,13 +78,10 @@ interface ActiveStream {
   stream: HubStreamName;
   id: string;
   handlers: StreamSubscriptionHandlers;
-  /**
-   * The caller's explicit anchor for the next successful subscription send.
-   * A socket that is connecting, authenticating or cannot send must retain it.
-   */
-  pendingFromSeq: number | null;
-  head: number;
-  sent: boolean;
+  /** The caller's anchor stays valid until actual data supplies a resume point. */
+  initialFromSeq: number | null;
+  /** null means no data received, distinct from a received frame at seq 0. */
+  head: number | null;
 }
 
 function streamSubscriptionKey(stream: HubStreamName, id: string): string {
@@ -337,16 +334,15 @@ export class WSClient {
       stream,
       id,
       handlers,
-      pendingFromSeq: options.fromSeq ?? null,
-      head: options.fromSeq != null && options.fromSeq > 1 ? options.fromSeq - 1 : 0,
-      sent: false,
+      initialFromSeq: options.fromSeq ?? null,
+      head: null,
     };
     this.streams.set(key, entry);
     this.sendStreamSubscribe(entry);
     return {
       stream,
       id,
-      head: () => this.streams.get(key)?.head ?? entry.head,
+      head: () => this.streams.get(key)?.head ?? entry.head ?? 0,
       unsubscribe: () => {
         const current = this.streams.get(key);
         if (!current) return;
@@ -382,13 +378,11 @@ export class WSClient {
 
   private sendStreamSubscribe(entry: ActiveStream): void {
     if (!this.authenticated) return;
-    const fromSeq = entry.pendingFromSeq ?? (entry.head > 0 ? entry.head + 1 : 1);
-    if (!this.trySend({
+    const fromSeq = entry.head !== null ? entry.head + 1 : entry.initialFromSeq ?? 1;
+    this.trySend({
       type: "stream.subscribe",
       payload: { stream: entry.stream, id: entry.id, from_seq: fromSeq },
-    } as never)) return;
-    entry.pendingFromSeq = null;
-    entry.sent = true;
+    } as never);
   }
 
   /**
@@ -406,7 +400,8 @@ export class WSClient {
     switch (msg.type) {
       case "stream.ack": {
         const ack = msg.payload as HubStreamAckPayload;
-        entry.pendingFromSeq = null;
+        // ACK has no request identity and may belong to a replaced subscription.
+        // Only data, never ACK metadata, advances the resume point.
         entry.handlers.onAck?.(ack);
         break;
       }
@@ -414,7 +409,7 @@ export class WSClient {
         const frames = (payload.frames ?? []) as HubFrame[];
         if (frames.length > 0) {
           const latest = frames[frames.length - 1]!.seq;
-          if (typeof latest === "number" && latest > entry.head) entry.head = latest;
+          if (typeof latest === "number" && (entry.head === null || latest > entry.head)) entry.head = latest;
           entry.handlers.onFrames?.(frames);
         }
         break;

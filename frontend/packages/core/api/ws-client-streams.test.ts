@@ -176,6 +176,71 @@ describe("MUL-438 WSClient streams", () => {
     ws.disconnect();
   });
 
+  describe.each(["log", "trace"] as const)("%s zero-anchor resume", (stream) => {
+    function retry(ws: WSClient, socket: FakeWebSocket, mode: "reconnect" | "resync") {
+      if (mode === "resync") {
+        socket.serverSend({ type: "resync" });
+        return socket;
+      }
+      socket.drop();
+      vi.runOnlyPendingTimers();
+      const next = FakeWebSocket.instances.at(-1)!;
+      next.open();
+      next.serverSend({ type: "auth_ack" });
+      expect(ws.authenticated).toBe(true);
+      return next;
+    }
+
+    function acknowledge(socket: FakeWebSocket) {
+      socket.serverSend({
+        type: "stream.ack",
+        payload: { stream, id: "zero", first_seq: 1, head_seq: 50, log_version: null, gap: null },
+      });
+    }
+
+    for (const mode of ["reconnect", "resync"] as const) {
+      it.each([false, true])(`keeps zero on ${mode} without data, acknowledged=%s`, (acknowledged) => {
+        const { ws, socket } = connected();
+        try {
+          ws.subscribeStream(stream, "zero", {}, { fromSeq: 0 });
+          if (acknowledged) acknowledge(socket);
+          // An empty data batch is not evidence that seq 0 has been received.
+          socket.serverSend({ type: "stream.data", payload: { stream, id: "zero", frames: [] } });
+          const next = retry(ws, socket, mode);
+          expect(next.streamFrames.at(-1)!.payload.from_seq).toBe(0);
+        } finally { ws.disconnect(); }
+      });
+
+      it(`keeps a failed zero replacement after an older ACK on ${mode}`, () => {
+        const { ws, socket } = connected();
+        try {
+          ws.subscribeStream(stream, "zero", {}, { fromSeq: 1 });
+          vi.spyOn(socket, "send").mockImplementationOnce(() => { throw new Error("replacement send failed"); });
+          expect(() => ws.subscribeStream(stream, "zero", {}, { fromSeq: 0 })).toThrow("replacement send failed");
+          expect(socket.streamFrames.map((frame) => frame.payload.from_seq)).toEqual([1]);
+          acknowledge(socket);
+          const next = retry(ws, socket, mode);
+          expect(next.streamFrames.at(-1)!.payload.from_seq).toBe(0);
+        } finally { ws.disconnect(); }
+      });
+
+      it(`advances past received seq zero on ${mode}`, () => {
+        const { ws, socket } = connected();
+        try {
+          const subscription = ws.subscribeStream(stream, "zero", {}, { fromSeq: 0 });
+          socket.serverSend({
+            type: "stream.data",
+            payload: { stream, id: "zero", frames: [{ seq: 0, kind: "entry", payload: {} }] },
+          });
+          acknowledge(socket);
+          expect(subscription.head()).toBe(0);
+          const next = retry(ws, socket, mode);
+          expect(next.streamFrames.at(-1)!.payload.from_seq).toBe(1);
+        } finally { ws.disconnect(); }
+      });
+    }
+  });
+
   it("tracks the local head and resumes from head + 1 after a reconnect", () => {
     const { ws, socket } = connected();
     const subscription = ws.subscribeStream("log", "ises_1", {});
