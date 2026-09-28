@@ -745,7 +745,8 @@ describe("Multiremi API — realtime websockets", () => {
       store.archiveWorkspaceMember(removedMember.id);
       const closed = new Promise<number>(resolve => removedOwner.addEventListener("close", event => resolve(event.code), { once: true }));
       removedOwner.send(JSON.stringify({ v: 2, t: "hb", id: "hb-removed", p: { active_task_count: 0 } }));
-      expect(await closed).toBe(4401);
+      // Retirement wins over the simultaneously revoked owner membership.
+      expect(await closed).toBe(4410);
       for (const [token, status, code] of [
         [humanToken.token, 403, "daemon_token_required"],
         [taskToken.token, 403, "daemon_token_required"],

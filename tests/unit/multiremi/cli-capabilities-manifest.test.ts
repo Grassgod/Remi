@@ -172,10 +172,11 @@ describe("CLI capabilities manifest", () => {
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
-      // MUL-419 A-3 removes four daemon-internal polling routes, not user commands.
-      exempt: 83,
+      // MUL-419 removes daemon-internal routes, including the human-request
+      // GET whose authorized read is now a v2 RPC, not a user command.
+      exempt: 82,
       missing: 0,
-      total: 760,
+      total: 759,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });

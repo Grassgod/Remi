@@ -689,6 +689,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const agent = store.createAgent({ name: "PG Feishu bot", provider: "codex", workspaceId });
       const runtimeId = `rt_feishu_allowlist_${wsCounter}`;
       store.registerRuntime({ id: runtimeId, name: "PG bot", provider: "codex", workspaceId, daemonId: `pg_bot_${wsCounter}` });
+      store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
       (await receiveRuntimeInputs(store, runtimeId));
       const config = store.upsertFeishuBotConfig(workspaceId, {
         agentId: agent.id, runtimeId, appId: "cli_pg_allowlist", domain: "feishu", enabled: true,

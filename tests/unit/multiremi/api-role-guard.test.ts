@@ -355,17 +355,18 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // 61 of the 757 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // 60 of the 756 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
-    // so the full-inventory total is 62. Pinning the swept count AND the arithmetic
+    // so the full-inventory total is 61. Pinning the swept count AND the arithmetic
     // means a route cannot be reclassified without one of the numbers moving.
     // Unchanged by MUL-410's five /api/issues/:id/decisions routes and by MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes: all nine are browser
     // traffic, so this process serves them and the count stands.
-    // MUL-419 removes four offer routes and five steer/human/desired routes,
+    // MUL-419 removes four offer routes, five steer/human/desired routes, and
+    // the human-request GET after its read moved to an authorized v2 RPC,
     // all under /api/daemon/. The status route remains for MUL-418's final stage.
-    expect(misdirected, routeCountHint("ui")).toHaveLength(61);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(62);
+    expect(misdirected, routeCountHint("ui")).toHaveLength(60);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(61);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {

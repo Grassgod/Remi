@@ -223,18 +223,19 @@ async function waitUntil(check: () => boolean, description: string, timeoutMs = 
 }
 
 describe("daemon heartbeat network recovery", () => {
-  it("cleans up a retired daemon when its authority response body exceeds the deadline", async () => {
+  it("cleans up a retired daemon on v2 close without waiting for an HTTP authority body", async () => {
     const bed = await faultTestBed("retired-body");
     try {
       await waitUntil(() => bed.state.claims > 0, "initial healthy polling");
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
       expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
       bed.state.armed = true;
-      // The response headers are enough to detect the revocation even when the
-      // body never arrives, and local cleanup still runs.
+      // The v2 terminal close takes priority over an HTTP response whose body
+      // would be delayed by this fixture; local cleanup still runs.
       await waitUntil(() => bed.state.cleanupCalls >= 1, "retirement cleanup after an incomplete authority response", 1_500);
-      expect(bed.state.authorityStatus).toBe(401);
-      expect(bed.state.failures).toBe(1);
+      expect(bed.daemon.daemonProtocolClient().connectionState()).toBe("terminal");
+      expect(bed.state.authorityStatus).toBe(0);
+      expect(bed.state.failures).toBe(0);
 
       // Cleanup success no longer ends the process: exiting here is what let the
       // service manager's restart policy retry every few seconds. The daemon
