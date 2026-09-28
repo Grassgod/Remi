@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ const backupSuffix = ".pre-legacy-agent-config-purge-v1.bak";
 const configBackupSuffix = ".pre-remi-config-purge-v2.bak";
 
 function createLegacyDb(path: string): void {
-  const legacy = new Database(path);
+  const legacy = openSqliteDatabase(path);
   legacy.exec(`
     CREATE TABLE group_configs (chat_id TEXT PRIMARY KEY, project_id TEXT);
     INSERT INTO group_configs VALUES ('chat-1', 'project-1');
@@ -67,7 +67,7 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
 
   const backupPath = `${path}${backupSuffix}`;
   expect(existsSync(backupPath)).toBe(true);
-  const backup = new Database(backupPath, { readonly: true });
+  const backup = openSqliteDatabase(backupPath, { readonly: true });
   expect(backup.query("SELECT chat_id FROM group_configs").get()).toEqual({ chat_id: "chat-1" });
   expect(backup.query("SELECT id FROM embeddings").get()).toEqual({ id: "embedding-1" });
   expect(backup.query("SELECT id, name FROM projects").get()).toEqual({
@@ -81,7 +81,7 @@ test("opening an existing Remi DB backs it up and removes all legacy state", () 
   ]);
   backup.close();
 
-  const configBackup = new Database(`${path}${configBackupSuffix}`, { readonly: true });
+  const configBackup = openSqliteDatabase(`${path}${configBackupSuffix}`, { readonly: true });
   expect(configBackup.query("SELECT section FROM remi_config ORDER BY section").all()).toEqual([
     { section: "feishu" },
   ]);
@@ -93,7 +93,7 @@ test("a real mid-migration SQL failure rolls back every destructive change", () 
   roots.push(root);
   const path = join(root, "remi.db");
   createLegacyDb(path);
-  const legacy = new Database(path);
+  const legacy = openSqliteDatabase(path);
   legacy.exec(`
     CREATE TRIGGER inject_legacy_purge_failure
     BEFORE DELETE ON remi_config
@@ -108,7 +108,7 @@ test("a real mid-migration SQL failure rolls back every destructive change", () 
   expect(() => getDb()).toThrow(`${path}${backupSuffix}`);
   expect(existsSync(`${path}${backupSuffix}`)).toBe(true);
 
-  const rolledBack = new Database(path, { readonly: true });
+  const rolledBack = openSqliteDatabase(path, { readonly: true });
   expect(rolledBack.query("SELECT chat_id, project_id FROM group_configs").all()).toEqual([
     { chat_id: "chat-1", project_id: "project-1" },
   ]);

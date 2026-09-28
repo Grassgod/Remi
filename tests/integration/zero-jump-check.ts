@@ -29,7 +29,8 @@
  * Localhost only. The check never reads MULTIREMI_QA_WEB_TOKEN (it mints its own
  * in-memory PAT) and never prints one.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -625,7 +626,7 @@ async function main(): Promise<void> {
   // ── API + fixture ────────────────────────────────────────────────────────
   const uploadDir = join(tmpdir(), `mul394-zero-jump-uploads-${process.pid}`);
   ensureDir(uploadDir);
-  database = new Database(":memory:");
+  database = openSqliteDatabase(":memory:");
   const store = new MultiremiStore(database);
   const fixture = await seedZeroJumpFixture(store);
   const minted = await store.createAccessToken({

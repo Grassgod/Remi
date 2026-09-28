@@ -12,7 +12,8 @@
 //   2. the query count is bounded — `/sessions` must not grow with session
 //      count, and `/api/issues/:id` must not re-load tasks/children/dependencies.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -83,7 +84,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
 }
 
 function createCountedStore(): { store: MultiremiStore; db: Database; probe: Probe } {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   const probe: Probe = {
     statements: 0,
@@ -97,7 +98,7 @@ function createCountedStore(): { store: MultiremiStore; db: Database; probe: Pro
 }
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }

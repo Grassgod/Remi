@@ -10,7 +10,7 @@
  * copied row-for-row. Existing target rows in each copied table are replaced.
  */
 import "@shared/db/sqlite-custom.js";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { PostgresSyncDatabase, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
@@ -23,7 +23,7 @@ if (!isPostgresConfigured()) {
   process.exit(1);
 }
 
-const src = new Database(sqlitePath, { readonly: true });
+const src = openSqliteDatabase(sqlitePath, { readonly: true });
 const pg = new PostgresSyncDatabase(pgUrl);
 new MultiremiStore(pg); // creates the multiremi_* schema on Postgres
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createRealtimeFanout } from "@multiremi/api/realtime-fanout.js";
 import { createPeerChannel, PEER_MAX_EVENT_BYTES } from "@multiremi/api/peer/peer-channel.js";
@@ -24,7 +24,7 @@ describe("MUL-474 peer task-message wire", () => {
   for (const path of ["local", "full", "degraded", "reference"] as const) {
     it(`${path} emits the unchanged workspace, denied-recipient and Chat golden bytes`, async () => {
       const restoreClock = installDeterministicFanoutClock();
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       try {
         const store = fanoutFixtureStore(db);
         const frames = driveTaskMessageFanout(store, (store, browser, browserScope, task, messages) => {
@@ -86,7 +86,7 @@ describe("MUL-474 peer task-message wire", () => {
   }
 
   it("projects a full store task object to exactly the six routing fields", async () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     const agent = store.createAgent({ name: "Projection", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "p".repeat(128 * 1024) });
@@ -118,7 +118,7 @@ describe("MUL-474 peer task-message wire", () => {
 describe("peer real store serialized burst bound", () => {
   for (const escaped of [false, true]) {
     it(`keeps two same-tick 256-message reports complete and ordered within ${BYTE_BOUND} B (${escaped ? "escaped" : "plain"})`, async () => {
-      const db = new Database(":memory:");
+      const db = openSqliteDatabase(":memory:");
       const store = new MultiremiStore(db);
       const agent = store.createAgent({ name: "Burst", provider: "codex" });
       const task = store.createTask({ agentId: agent.id, prompt: "p".repeat(128 * 1024) });

@@ -17,7 +17,8 @@
  * JSON cost; it does not model production network transfer, and it is not a
  * PostgreSQL measurement.
  */
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -180,7 +181,7 @@ async function main(): Promise<void> {
   const outIndex = args.indexOf("--out");
   const outPath = outIndex >= 0 ? args[outIndex + 1]! : DEFAULT_OUT;
 
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   const { db, probe } = instrument(raw);
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();

@@ -7,7 +7,8 @@
  * No production service or database is contacted.
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { SqlStatement } from "@multiremi/store/db/postgres.js";
@@ -573,7 +574,7 @@ async function main(): Promise<void> {
     headers: { "Content-Type": "application/json" },
   })) as typeof fetch;
 
-  const rawDb = new Database(":memory:");
+  const rawDb = openSqliteDatabase(":memory:");
   const tracker = new SqlTracker();
   const db = trackedDatabase(rawDb, tracker);
   try {

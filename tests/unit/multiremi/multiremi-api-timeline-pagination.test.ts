@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -12,7 +13,7 @@ afterEach(() => {
 });
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+  const db = openSqliteDatabase(":memory:");
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }
@@ -211,7 +212,7 @@ describe("issue timeline reverse pagination", () => {
 
 describe("issue timeline hydration query count", () => {
   it("stays constant as the page fills", () => {
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     databases.push(db);
     let queryCount = 0;
     const countingDb: SqlDatabase = {

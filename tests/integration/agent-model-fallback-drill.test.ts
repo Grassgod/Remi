@@ -15,7 +15,8 @@
  * recovery chain and the claim payload into the engine's hands.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,7 +118,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 10_000, de
 }
 
 async function runDrill(options: { fallback: boolean; fallbackLevels?: string[]; fallbackThinkingLevel?: string | null }): Promise<Drill & { taskId: string; issueId: string }> {
-  db = new Database(":memory:");
+  db = openSqliteDatabase(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-fallback-drill-"));
   const store = new MultiremiStore(db);
   const engineModels: Drill["engineModels"] = [];
