@@ -118,8 +118,8 @@ daemon is connected to — `runtime`. Browser trace subscriptions therefore go t
 `/api/trace/ws`, which nginx routes to `runtime` (B5's trace HTTP endpoints route
 there too). Trace bytes across processes are zero by construction.
 
-**The cross-process channel is MUL-462's `publish(subscribe)topic` peer channel**,
-topic `hub`; C1a adds the `HubTransport` peer adapter on top of it (topic `hub`,
+**The cross-process channel is MUL-462's `publish(topic) / subscribe(topic)` peer channel**,
+topic `hub`; C1 adds the `HubTransport` peer adapter on top of it (topic `hub`,
 sending `{kind: "head"}`). There is no second peer link: 7/6's `/internal/hub`,
 `X-Peer-Secret`, `api/role.ts` and `EventBridge` are superseded by MUL-461/462. The
 head pointer is the whole payload, so the channel's ≤200ms budget is comfortable.
@@ -127,7 +127,7 @@ MUL-462's receiver-side 「可能漏了」 signal is what makes the hub **reconc
 that signal a process re-reads the head of every stream it holds and fills the
 difference, which is also the recovery path after the channel reconnects.
 
-The role guard is an advisory lock **per role**, not one global lock: C1a takes
+The role guard is an advisory lock **per role**, not one global lock: C1 takes
 `pg_try_advisory_lock(hashtext('remi:hub:ui'))` or
 `hashtext('remi:hub:runtime')` on a dedicated connection at startup, retries for
 30 s (the updater's `up -d --no-deps` stops then starts), and exits non-zero if it
@@ -197,7 +197,7 @@ sub-issue behind it.
 ### 5. The adapter seam over MUL-462's peer channel
 
 `HubTransport` has one implementation today, `local`, which does nothing on
-publish because the hub already fanned the frame out in this process. C1a adds the
+publish because the hub already fanned the frame out in this process. C1 adds the
 second one on top of MUL-462's `publish(topic) / subscribe(topic)` peer channel
 rather than on a link of its own: the adapter publishes `{kind: "head", key, head,
 log_version}` on topic `hub` and feeds the peer's pointers into the receiving
@@ -210,7 +210,7 @@ than from a durable queue, a dropped or late pointer cannot lose data — the
 receiver's reconcile pass re-reads the head and fills the difference.
 
 Three implementation details deliberately stay out of this decision and land in
-the ADR when **C1a (MUL-436)** builds them: the peer adapter itself, the `/readyz`
+the ADR when **C1 (MUL-436)** builds them: the peer adapter itself, the `/readyz`
 `hub.*` fields and the per-role read-pool sizes. C0 fixes the decision only.
 
 ### 6. Close codes: four are terminal, everything else reconnects
@@ -337,7 +337,7 @@ state of `agent/MUL-403` still runs.
   the hub calls when the task's trace is final. `task.complete` / `task.fail`
   frames carry `trace{head, event_count, closed: true, ...}`, so a receiver that
   sees the completion frame knows the trace it names is final. The Feishu
-  connector therefore waits on `closed` instead of polling `/status`; C6 deletes
+  connector therefore waits on `closed` instead of polling `/status`; C12 deletes
   that 400ms poll. Reading `closed` live is what makes it work without
   re-subscribing: a caller that holds one subscription for the life of a turn sees
   the flag flip.
