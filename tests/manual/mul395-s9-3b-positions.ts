@@ -6,6 +6,13 @@ import { computeRoundMeasurement } from "../../frontend/scripts/perf/lib/round-m
 
 const phase = process.argv[2]!;
 const base = process.argv[3]!;
+const option = (name: string) => {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+};
+const timeout = Number(option("--timeout") ?? 60000);
+const rounds = Number(option("--rounds") ?? 5);
+const output = option("--out") ?? resolve(import.meta.dir, `../../reports/performance/MUL-395-s9-3b/${phase}-positions.json`);
 const marker = process.env.MUL395_S9_3B_FIXTURE_AUTH;
 if (!marker) throw new Error("Local fixture authentication must be supplied in memory");
 const browser = await launchBrowser();
@@ -15,8 +22,8 @@ const gated = (url: URL) => /\/api\/(pins|invitations|cli\/latest-version|inbox\
   || (url.pathname === "/api/issues" && url.searchParams.get("statuses") === "in_review,blocked")
   || url.pathname === "/api/issues/iss_pin_me";
 const scenarios = [
-  { name: "issues", path: "issues", shape: "list", kind: "issue", rounds: 5 },
-  { name: "my-issues-all", path: "my-issues", shape: "list", kind: "issue", rounds: 5 },
+  { name: "issues", path: "issues", shape: "list", kind: "issue", rounds },
+  { name: "my-issues-all", path: "my-issues", shape: "list", kind: "issue", rounds },
   ...(phase === "after" ? [
     { name: "472-issues", path: "issues", shape: "list", kind: "issue", rounds: 1 },
     { name: "472-inbox", path: "inbox", shape: "list", kind: "inbox", rounds: 1 },
@@ -25,8 +32,8 @@ const scenarios = [
   ] as const : []),
 ] as const;
 try {
-  for (const scene of scenarios) for (const mode of ["cold", "warm"] as const) for (let round = 1; round <= scene.rounds; round++) {
-    await fetch("http://127.0.0.1:18561/reset-inbox", { method: "POST" });
+  for (const scene of scenarios.filter((scene) => !process.argv.includes("--issues-only") || scene.name === "issues")) for (const mode of ["cold", "warm"] as const) for (let round = 1; round <= scene.rounds; round++) {
+    await fetch("http://127.0.0.1:18561/reset-inbox", { method: "POST", signal: AbortSignal.timeout(timeout) });
     const target = `/local/${scene.path}`;
     const context = await mktContext(browser, marker, [], base);
     await context.addInitScript(({ target, kind, all }) => {
@@ -71,6 +78,8 @@ try {
     }, { target, kind: scene.kind, all: scene.name === "my-issues-all" });
     await installRecorderOnContext(context, { profiles: profilesFor({ modes: ["contract", "legacy"], shape: scene.shape }) });
     const page = await context.newPage();
+    page.setDefaultTimeout(timeout);
+    page.setDefaultNavigationTimeout(timeout);
     const collectors = attachCollectors(page, round, `${scene.name}:${mode}`, ["local"]);
     await context.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
@@ -83,12 +92,12 @@ try {
     const waitRow = (kind: string) => page.waitForFunction((kind) => [...document.querySelectorAll(`[data-perf-item="${kind}"]`)].some((element) => {
       const rect = element.getBoundingClientRect();
       return rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight;
-    }), kind, { timeout: 60000 });
+    }), kind, { timeout });
     try {
-      if (mode === "cold") await page.goto(`${base}${target}`, { waitUntil: "commit", timeout: 60000 });
+      if (mode === "cold") await page.goto(`${base}${target}`, { waitUntil: "commit", timeout });
       else {
         const entry = scene.path === "issues" ? "inbox" : "issues";
-        await page.goto(`${base}/local/${entry}`, { waitUntil: "commit", timeout: 60000 });
+        await page.goto(`${base}/local/${entry}`, { waitUntil: "commit", timeout });
         await waitRow(entry === "inbox" ? "inbox" : "issue");
         await page.waitForFunction(() => {
           const requests = (window as unknown as { __mul395: { requests: { start: number }[] } }).__mul395.requests;
@@ -98,7 +107,7 @@ try {
         await link.hover();
         await page.waitForTimeout(150);
         await link.click();
-        await page.waitForURL(`${base}${target}`, { waitUntil: "commit", timeout: 60000 });
+        await page.waitForURL(`${base}${target}`, { waitUntil: "commit", timeout });
       }
       await waitRow(scene.kind);
       await page.waitForFunction(() => (window as unknown as { __mul395: { firstVisible: number | null } }).__mul395.firstVisible !== null);
@@ -132,7 +141,7 @@ try {
         requests, samples: data.samples.map((sample) => ({ ...sample, t: sample.t - data.navStart })),
         blockedWrites: collectors.blockedWrites };
       results.push(result);
-      await Bun.write(resolve(import.meta.dir, `../../reports/performance/MUL-395-s9-3b/${phase}-positions.json`), JSON.stringify({
+      await Bun.write(output, JSON.stringify({
         beforeHead: process.env.MUL395_S9_3B_BEFORE_HEAD, viewport: "1440x900", primaryDelayMs: 300, deferredDelayMs: 900,
         observationMs: 3000, jumpWindowMs: 1500, results,
       }, null, 2));
