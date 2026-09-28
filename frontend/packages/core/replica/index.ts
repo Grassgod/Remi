@@ -11,18 +11,18 @@ export type {
   SessionReplicaPort,
   SessionReplicaSnapshot,
   RowHeightKeyInput,
-} from "./port.js";
+} from "./port";
 export {
   ROW_HEIGHT_WIDTH_BUCKET_PX,
   renderVariant,
   rowHeightKey,
   widthBucket,
-} from "./port.js";
+} from "./port";
 export {
   MemorySessionReplica,
   memoryReplicaWith,
   type MemorySessionReplicaSeed,
-} from "./memory.js";
+} from "./memory";
 
 /**
  * C7 (MUL-442): the persistent replica behind the same port.
@@ -38,7 +38,7 @@ export {
   ReplicaEngine,
   type ReplicaClearEvent,
   type ReplicaSessionView,
-} from "./engine.js";
+} from "./engine";
 export {
   applyFrames,
   computeFresh,
@@ -50,14 +50,14 @@ export {
   type AckDecision,
   type FrameApplyResult,
   type ReplicaState,
-} from "./protocol.js";
-export { addRange, contiguousTail, coversSeq, highestCoveredSeq, normalizeRanges, type SeqRange } from "./ranges.js";
+} from "./protocol";
+export { addRange, contiguousTail, coversSeq, highestCoveredSeq, normalizeRanges, type SeqRange } from "./ranges";
 export {
   MemoryReplicaStorage,
   type ReplicaStorage,
-} from "./storage.js";
-export { SqlReplicaStorage } from "./sql-store.js";
-export { wasmSqlDatabase, type SqlDatabase, type SqlStatement, type SqlValue, type WasmDatabase } from "./sql.js";
+} from "./storage";
+export { SqlReplicaStorage } from "./sql-store";
+export { wasmSqlDatabase, type SqlDatabase, type SqlStatement, type SqlValue, type WasmDatabase } from "./sql";
 export {
   META_SCHEMA_VERSION,
   META_USER_ID,
@@ -65,11 +65,11 @@ export {
   REPLICA_SCHEMA_SQL,
   REPLICA_SCHEMA_VERSION,
   SQL,
-} from "./schema.js";
-export { REPLICA_CHANNEL, REPLICA_LOCK_PREFIX, replicaLockName } from "./channel.js";
-export { ReplicaLeader, type ReplicaLeaderOptions } from "./leader.js";
-export { ReplicaFollower, type ReplicaFollowerOptions } from "./follower.js";
-export { ReplicaView, type SessionViewState } from "./view.js";
+} from "./schema";
+export { REPLICA_CHANNEL, REPLICA_LOCK_PREFIX, replicaLockName } from "./channel";
+export { ReplicaLeader, type ReplicaLeaderOptions } from "./leader";
+export { ReplicaFollower, type ReplicaFollowerOptions } from "./follower";
+export { ReplicaView, type SessionViewState } from "./view";
 export type {
   ReplicaChannelMessage,
   ReplicaRowHeightMessage,
@@ -80,11 +80,11 @@ export type {
   ReplicaClearedMessage,
   ReplicaLeaderChangedMessage,
   ReplicaAckMessage,
-} from "./channel.js";
-export type { BrowserReplicaEnv, ReplicaWorkerLike } from "./browser.js";
+} from "./channel";
+export type { BrowserReplicaEnv, ReplicaWorkerLike } from "./browser";
 export type {
   ReplicaWorkerRequest,
   ReplicaWorkerResponse,
   ReplicaWorkerStorage,
-} from "./worker-protocol.js";
-export { openBrowserReplica, type BrowserReplica, type BrowserReplicaOptions } from "./browser.js";
+} from "./worker-protocol";
+export { openBrowserReplica, type BrowserReplica, type BrowserReplicaOptions } from "./browser";

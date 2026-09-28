@@ -24,10 +24,12 @@ interface EntryRow {
   body_md: string;
   body_html: string | null;
   render_version: string | null;
+  payload_json?: string | null;
 }
 
 function toEntry(row: EntryRow): SessionLogEntry {
   return {
+    ...(row.payload_json ? JSON.parse(row.payload_json) : {}),
     session_id: row.session_id,
     seq: row.seq,
     id: row.id,
@@ -114,12 +116,16 @@ export class SqlReplicaStorage implements ReplicaStorage {
         entry.body_html,
         entry.render_version,
       ]);
+      this.statement(SQL.upsertPayload).run([entry.session_id, entry.seq, JSON.stringify(entry)]);
     }
   }
 
   deleteEntries(sessionId: string, seqs: readonly number[]): void {
     const statement = this.statement(SQL.deleteEntry);
-    for (const seq of seqs) statement.run([sessionId, seq]);
+    for (const seq of seqs) {
+      statement.run([sessionId, seq]);
+      this.statement(SQL.deletePayload).run([sessionId, seq]);
+    }
   }
 
   readEntries(sessionId: string): Map<number, SessionLogEntry> {
@@ -145,6 +151,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
 
   clearSession(sessionId: string): void {
     this.statement(SQL.deleteSessionEntries).run([sessionId]);
+    this.statement(SQL.deleteSessionPayloads).run([sessionId]);
     this.statement(SQL.deleteSessionRevisionWatermarks).run([sessionId]);
     this.statement(SQL.deleteRanges).run([sessionId]);
     this.statement(SQL.deleteSessionHead).run([sessionId]);
@@ -162,6 +169,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
   clearDatabase(): void {
     this.statement(SQL.deleteAllMeta).run([]);
     this.statement(SQL.deleteAllEntries).run([]);
+    this.statement(SQL.deleteAllPayloads).run([]);
     this.statement(SQL.deleteAllRevisionWatermarks).run([]);
     this.statement(SQL.deleteAllRanges).run([]);
     this.statement(SQL.deleteAllHeads).run([]);

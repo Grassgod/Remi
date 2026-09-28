@@ -53,6 +53,22 @@ function entryFrame(seq: number, overrides: Record<string, unknown> = {}): HubFr
 }
 
 describe("SQL replica storage", () => {
+  test("retains full presentation fields across SQL reopen and in-place patches", async () => {
+    const { storage } = await openSqlStorage();
+    const engine = new ReplicaEngine(storage);
+    engine.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    engine.frames("sess_1", [entryFrame(1, { author_type: "member", author_id: "u", parent_id: "p",
+      metadata: { attachments: [{ id: "a" }] }, resolved_at: null })]);
+    engine.frames("sess_1", [{ seq: 1, kind: "patch", payload: { session_id: "sess_1", target_seq: 1, revision: 2,
+      fields: { resolved_at: "2026-09-28", resolved_by_id: "u" } } }]);
+    const reopened = new ReplicaEngine(storage);
+    reopened.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    expect(reopened.readWindow("sess_1", 1, 1)).toEqual([expect.objectContaining({ author_id: "u", parent_id: "p",
+      metadata: { attachments: [{ id: "a" }] }, resolved_at: "2026-09-28", resolved_by_id: "u", revision: 2 })]);
+    reopened.frames("sess_1", [{ seq: 1, kind: "patch", payload: { session_id: "sess_1", target_seq: 1, revision: 3, deleted_at: "deleted" } }]);
+    expect(reopened.readWindow("sess_1", 1, 1)).toEqual([]);
+    storage.close();
+  });
   test("creates the five plan tables", async () => {
     const { storage, db } = await openSqlStorage();
     const names = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((row) => row.name);

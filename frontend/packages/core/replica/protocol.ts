@@ -292,6 +292,7 @@ function frameAsEntry(frame: HubFrame): ParsedFrame | null {
     seq,
     hidden: false,
     entry: {
+      ...row,
       session_id: sessionId,
       seq,
       id: typeof row.id === "string" ? row.id : `${sessionId}:${seq}`,
@@ -315,6 +316,8 @@ function applyPatch(entry: SessionLogEntry, payload: unknown): SessionLogEntry {
   if (typeof patch.revision === "number" && revision <= entry.revision) return entry;
   const fields = (patch.fields && typeof patch.fields === "object" ? patch.fields : patch) as Record<string, unknown>;
   return {
+    ...entry,
+    ...fields,
     session_id: entry.session_id,
     seq: entry.seq,
     id: typeof patch.id === "string" ? patch.id : entry.id,
