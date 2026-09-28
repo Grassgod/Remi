@@ -184,3 +184,69 @@ export interface ConversationLogTurnEntry extends ConversationLogEntry {
   kind: "turn";
   metadata: ConversationLogTurnMetadata;
 }
+
+/**
+ * An in-place update of a shown row, as delivered to the write hook. `revision`
+ * is the value after the update, and `fields.metadata`, when present, replaces
+ * the stored metadata wholesale rather than merging into it.
+ *
+ * Hidden marker rows are never delivered as patches: they are appended.
+ */
+export interface ConversationLogPatch {
+  target_seq: number;
+  revision: number;
+  fields: Partial<Pick<
+    ConversationLogEntry,
+    | "body_md"
+    | "body_html"
+    | "render_version"
+    | "metadata"
+    | "deleted_at"
+    | "updated_at"
+    | "resolved_at"
+    | "resolved_by_type"
+    | "resolved_by_id"
+  >>;
+}
+
+/**
+ * Write hook for the conversation log. The server calls it once per inserted row
+ * and once per in-place update, inside the writing transaction, so a subscriber
+ * (MUL-403's Live Hub) sees the same ordering as the seq axis. B1 ships an empty
+ * implementation; the listener must not throw.
+ */
+export interface ConversationLogListener {
+  onEntry(session_id: string, entry: ConversationLogEntry | ConversationLogPatch): void;
+}
+
+/**
+ * One `GET /api/sessions/:id/log` window. `entries` are materialized rows with
+ * their newest revision inlined; hidden markers are never included. Readers
+ * treat `log_version` as the freshness token: a matching `log_version` and
+ * `head_seq` means nothing changed.
+ */
+export interface ConversationLogWindow {
+  entries: ConversationLogEntry[];
+  head_seq: number;
+  log_version: number;
+  has_more_before: boolean;
+  has_more_after: boolean;
+  /**
+   * Present only when `has_more_before` is true: shown rows before the window's
+   * first entry, capped at `CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP` so the
+   * query stays on the `(session_id, visibility, seq)` index instead of
+   * counting the session. `capped` means "at least this many".
+   */
+  before_visible_count?: number;
+  before_visible_count_capped?: boolean;
+}
+
+/** Upper bound the window query returns for `before_visible_count`. */
+export const CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP = 1000;
+
+/** Reading one entry's seq by id, for `GET /api/sessions/:id/log/locate`. */
+export interface ConversationLogLocation {
+  id: string;
+  seq: number;
+  head_seq: number;
+}

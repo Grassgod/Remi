@@ -70,7 +70,7 @@ rows, so traces are stored twice.
 Constraints: the end state is required in one release with no compatibility
 layer; wake-up rules are ported 1:1 (rule changes belong to MUL-404); the schema
 is written once in SQLite dialect and translated for Postgres, foreign keys are
-not enforced on either backend, and Postgres transactions have no savepoints.
+not enforced on either backend. Postgres nested transactions use savepoints.
 
 ## Decision
 
@@ -175,6 +175,24 @@ not enforced on either backend, and Postgres transactions have no savepoints.
    round-trips (`JSON.stringify(JSON.parse(text)) === text`) and reports every
    mismatch as `json_nonroundtrip`, expected to be zero. Already-truncated members
    reconcile against the stored value, not against a re-truncated copy.
+
+## B1 implementation boundary (MUL-426)
+
+The B1 branch creates the log and heads tables, mirrors new Issue and Chat
+writes in the same transaction, and exposes `GET /api/sessions/:id/log` and
+`/log/locate` through `remi session log window|locate`. Window reads use seq,
+exclude hidden markers and deleted rows, and cap the older visible count at
+1,000. The existing Chat `/messages/page` route pages by log seq while keeping
+its timestamp-and-id cursor wire.
+
+Legacy writers remain active until B2 ports internal readers. In particular,
+resolve and unresolve still append legacy `thread_resolved` and
+`thread_unresolved` events, but update only the comment row in the new log; no
+resolution marker exists in `conversation_log`. Explicitly created Issue
+sessions append `session_created`. The implicit default Issue session gets its
+seq-0 head without a creation marker, preserving the existing first event seq
+and stored follow/delegation cursors. Older rows without a log mirror retain
+their legacy read path until B7 backfills them.
 
 ## Alternatives considered
 

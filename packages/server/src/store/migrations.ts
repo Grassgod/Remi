@@ -45,6 +45,7 @@ const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_in
 const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
 const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
+const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -3206,6 +3207,51 @@ export function runMigrations(db: SqlDatabase): void {
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_content_uri
         ON multiremi_project_docs(project_id, content_uri);
+    `);
+  });
+  // MUL-426 / B1 (ADR 0006): the single per-session conversation log. One row is
+  // one display unit (`head` at seq 0, `message`, `system`, `turn`,
+  // `result_published`); every other lifecycle fact is a hidden marker row so
+  // lane cursors, projection windows and the browser replica keep reading one
+  // ordering. `multiremi_conversation_heads` allocates seq with an atomic
+  // `head_seq = head_seq + 1` update; the `(session_id, seq)` primary key is the
+  // backstop. Written once in SQLite dialect and translated for Postgres.
+  runMigrationOnce(db, CONVERSATION_LOG_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_conversation_log (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        id TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        author_type TEXT NOT NULL DEFAULT 'system',
+        author_id TEXT,
+        task_id TEXT,
+        body_md TEXT NOT NULL DEFAULT '',
+        body_html TEXT,
+        render_version TEXT,
+        parent_id TEXT,
+        resolved_at TEXT,
+        resolved_by_type TEXT,
+        resolved_by_id TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        revision INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        PRIMARY KEY(session_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_multiremi_conversation_log_window
+        ON multiremi_conversation_log(session_id, visibility, seq);
+      CREATE INDEX IF NOT EXISTS idx_multiremi_conversation_log_task
+        ON multiremi_conversation_log(task_id);
+
+      CREATE TABLE IF NOT EXISTS multiremi_conversation_heads (
+        session_id TEXT PRIMARY KEY,
+        head_seq INTEGER NOT NULL DEFAULT 0,
+        log_version INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );
     `);
   });
   runMigrationOnce(db, "20260919_agent_fallback_model", () => {

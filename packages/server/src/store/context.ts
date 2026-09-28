@@ -428,6 +428,83 @@ export interface ChatSurface {
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
 }
 
+export interface ConversationLogSurface {
+  /** Allocates the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number;
+  /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */
+  appendWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** In-place update with `revision++` and the write hook; caller owns the transaction. */
+  updateWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void;
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input?: { bodyMd: string; title?: string | null; metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata; createdAt?: string },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync the `head` row to the Issue title and description, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** The `turn` card of a task, updated in place through its lifecycle. */
+  findTurnEntry(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: {
+      status?: string | null;
+      finalReplyMd?: string | null;
+      finalEntryId?: string | null;
+      summary?: string | null;
+      toolCallCount?: number | null;
+      eventCount?: number | null;
+      typeHistogram?: unknown[] | null;
+      usage?: unknown[] | null;
+      model?: unknown | null;
+      elapsedMs?: number | null;
+      failureReason?: string | null;
+    },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  appendConversationLog(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  appendConversationLogWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  updateConversationLogWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntry(sessionId: string, seq: number, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntryById(id: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogHead(sessionId: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): { sessionId: string; headSeq: number; logVersion: number; updatedAt: string } | null;
+  conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
+  locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
+  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
+  ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogIssueHead(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogChatHead(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+}
+
 export interface IssueSessionsSurface {
   getIssueSession(id: string): MultiremiIssueSession | null;
   getOrCreateDefaultIssueSession(issueId: string, createdById?: string | null): MultiremiIssueSession;
@@ -544,7 +621,7 @@ export interface TaskTracesSurface {
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
-export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -688,6 +765,10 @@ export class StoreContext {
   }
 
   issueSessions(): IssueSessionsSurface {
+    return this.resolveHost();
+  }
+
+  conversationLog(): ConversationLogSurface {
     return this.resolveHost();
   }
 
@@ -876,7 +957,7 @@ export class StoreContext {
       ],
     );
     try {
-      this.host.queueAgentIssueUpdate({
+      const queueUpdate = () => this.host.queueAgentIssueUpdate({
         activityId: id,
         issueId,
         actorType: input.actorType,
@@ -886,6 +967,8 @@ export class StoreContext {
         data: input.data ?? null,
         createdAt: now,
       });
+      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
+      else queueUpdate();
     } catch (err) {
       log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -896,7 +979,10 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const workspaceId = this.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
+      const workspaceId = this.db.inTransaction
+        ? this.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (!workspaceId) return;
       this.emitWorkspaceEvent({
         type: "activity:created",
