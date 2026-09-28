@@ -24,6 +24,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import { taskMessagePageRows } from "@multiremi/store/task-message-pagination.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
   TRANSIENT_RETRY_FAILURE_REASONS,
@@ -35,6 +36,7 @@ import {
   createCommitEventQueue,
   type CommitEventQueue,
   type StoreContext,
+  type TaskMessageFanoutSubject,
   type WorkspaceEvent,
 } from "@multiremi/store/context.js";
 import {
@@ -2144,19 +2146,24 @@ export class TasksRepo {
    * (>=100 KB in production), `result`, `usage`, the duplicated plugin snapshot —
    * made every 2.5 s poll pay for columns nobody read.
    */
-  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout"): MultiremiTaskIdentity | TaskMessageFanoutSubject | null {
     const cache = activeRequestReadCache();
-    const key = cacheKey("multiremi_tasks", "identity", id);
+    const key = cacheKey("multiremi_tasks", projection ?? "identity", id);
+    const convert = projection === "fanout" ? toTaskMessageFanoutSubject : toTaskIdentity;
     if (cache) {
       const cached = cache.get<Row | null>(key);
-      if (cached !== undefined) return cached ? toTaskIdentity(cached) : null;
+      if (cached !== undefined) return cached ? convert(cached) : null;
     }
+    const columns = projection === "fanout"
+      ? "id, workspace_id, agent_id, chat_session_id, issue_id, issue_session_id"
+      : "id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id";
     const row = this.ctx.db.query(
-      `SELECT id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id
-       FROM multiremi_tasks WHERE id = ?`,
+      `SELECT ${columns} FROM multiremi_tasks WHERE id = ?`,
     ).get(id) as Row | null;
     cache?.set(key, row);
-    return row ? toTaskIdentity(row) : null;
+    return row ? convert(row) : null;
   }
 
   /**
@@ -4236,27 +4243,36 @@ ${placementAfter.sql}
     const changedSeqSet = new Set(changedSeqs);
     const minSeq = Math.min(...changedSeqs);
     const maxSeq = Math.max(...changedSeqs);
-    const changed = (this.ctx.db.query(
-      `SELECT * FROM multiremi_task_messages
-       WHERE task_id = ? AND seq >= ? AND seq <= ?
-       ORDER BY seq ASC`,
-    ).all(taskId, minSeq, maxSeq) as Row[])
-      .filter((row) => changedSeqSet.has(Number(row.seq)))
-      .map(toTaskMessage);
+    const changed: MultiremiTaskMessage[] = [];
+    const pageRows = this.getTaskMessagePageRows();
+    let cursor = minSeq - 1;
+    while (cursor < maxSeq) {
+      const page = this.listTaskMessages(taskId, cursor, maxSeq, pageRows);
+      if (page.length === 0) break;
+      changed.push(...page.filter((message) => changedSeqSet.has(message.seq)));
+      cursor = page.at(-1)!.seq;
+      if (page.length < pageRows) break;
+    }
     // Listeners see only rows that changed, using their persisted, sanitized values.
     this.ctx.notifyTaskMessages(this.getTaskIdentity(taskId) ?? task, changed);
     return changed;
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
+  getTaskMessagePageRows(): number {
+    return taskMessagePageRows(this.ctx.db);
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
     const since = sinceSeq == null ? null : Math.floor(Number(sinceSeq));
+    const rowLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit));
+    const limitSql = rowLimit === undefined ? "" : " LIMIT ?";
     const rows = since != null && Number.isFinite(since)
       ? this.ctx.db.query(
-        "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ? ORDER BY seq ASC",
-      ).all(taskId, since) as Row[]
+        `SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ?${throughSeq === undefined ? "" : " AND seq <= ?"} ORDER BY seq ASC${limitSql}`,
+      ).all(...[taskId, since, ...(throughSeq === undefined ? [] : [throughSeq]), ...(rowLimit === undefined ? [] : [rowLimit])]) as Row[]
       : this.ctx.db.query(
-        "SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC",
-      ).all(taskId) as Row[];
+        `SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC${limitSql}`,
+      ).all(taskId, ...(rowLimit === undefined ? [] : [rowLimit])) as Row[];
     return rows.map(toTaskMessage);
   }
 
@@ -6433,10 +6449,16 @@ function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) =>
 
 function toTaskIdentity(row: Row): MultiremiTaskIdentity {
   return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id ?? "local"),
+    ...toTaskMessageFanoutSubject(row),
     runtimeId: nullableString(row.runtime_id),
     status: String(row.status) as MultiremiTaskStatus,
+  };
+}
+
+function toTaskMessageFanoutSubject(row: Row): TaskMessageFanoutSubject {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
     agentId: String(row.agent_id),
     chatSessionId: nullableString(row.chat_session_id),
     issueId: nullableString(row.issue_id),
