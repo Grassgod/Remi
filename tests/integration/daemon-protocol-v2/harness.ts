@@ -73,6 +73,8 @@ export class DaemonProtocolHarness {
   private readonly serverWork = new Set<Promise<void>>();
   private disposed = false;
   private runError: unknown;
+  private createDaemons!: () => MultiremiDaemon[];
+  private apiRole: "all" | "runtime" = "all";
   get client() { return this.daemons[0]!.daemonProtocolClient(); }
   get daemon() { return this.daemons[0]!; }
   get url() { return `http://127.0.0.1:${this.server.port}`; }
@@ -84,16 +86,23 @@ export class DaemonProtocolHarness {
     outboxBackoffMs?: number[];
     providerFactory?: MultiremiDaemonProviderFactory;
     beforeStart?: (harness: DaemonProtocolHarness) => void | Promise<void>;
+    omitDaemonId?: boolean;
+    cliVersion?: string;
+    updateRunner?: (version: string) => Promise<string>;
+    apiRole?: "all" | "runtime";
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
   } = {}): Promise<DaemonProtocolHarness> {
     const h = new DaemonProtocolHarness();
     try {
       h.store.ensureLocalWorkspace();
-      const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId: "dmn_fixture" });
+      const daemonId = options.omitDaemonId ? "protocol-fixture-device" : "dmn_fixture";
+      h.apiRole = options.apiRole ?? "all";
+      const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
-      h.daemons = instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map((provider, index) => ({
-        serverUrl: h.url, token: token.token, daemonId: "dmn_fixture", runtimeId: options.runtimeIds?.[index] ?? options.runtimeId,
+      h.createDaemons = () => instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map((provider, index) => ({
+        serverUrl: h.url, token: token.token, ...(options.omitDaemonId ? {} : { daemonId }), runtimeId: options.runtimeIds?.[index] ?? options.runtimeId,
+        deviceName: "protocol-fixture-device", ...(options.updateRunner ? { updateRunner: options.updateRunner } : {}),
         runtimeName: "protocol fixture", provider, workspaceId: "local", daemonPort: 0,
         workspacesRoot: join(h.root, "workspaces"), repoCacheRoot: join(h.root, "repos"),
         pluginCacheRoot: join(h.root, "plugins"), outboxPath: join(h.root, `${provider}-outbox.db`),
@@ -107,7 +116,7 @@ export class DaemonProtocolHarness {
         })),
         sshMeshManager: { getHeartbeatStatus: () => ({ status: "disabled" }), reconcile: async () => {}, cleanupForRetirement: async () => {} },
         protocolClientOptions: {
-          cliVersion: DAEMON_MIN_CLI_VERSION,
+          cliVersion: options.cliVersion ?? DAEMON_MIN_CLI_VERSION,
           clock: h.clock, random: () => 0.5, onError: error => h.errors.push(error),
           onFrame: frame => { h.received.push(frame.raw); },
           connect: (url, init) => {
@@ -117,6 +126,7 @@ export class DaemonProtocolHarness {
           },
         },
       })));
+      h.daemons = h.createDaemons();
       await options.beforeStart?.(h);
       return h;
     } catch (error) { await h.dispose(); throw error; }
@@ -125,7 +135,7 @@ export class DaemonProtocolHarness {
   private startServer(port = 0): void {
     this.server = startMultiremiServer({
       store: this.store, scheduler: null, backgroundJobs: false, hostname: "127.0.0.1", port,
-      authToken: "fixture-master", apiRole: "all",
+      authToken: "fixture-master", apiRole: this.apiRole,
       onDaemonProtocol: layer => {
         this.layer = layer;
         const open = layer.openSession.bind(layer);
@@ -148,11 +158,14 @@ export class DaemonProtocolHarness {
     });
   }
 
-  async startDaemon(options: { waitForSocket?: boolean } = {}): Promise<void> {
+  async startDaemon(options: string | { waitForSocket?: boolean } = "connected"): Promise<void> {
     this.runError = null;
     this.runs = this.daemons.map(daemon => daemon.start());
     for (const run of this.runs) void run.catch(error => { this.runError = error; });
-    await waitFor(() => (options.waitForSocket === false ? this.daemons.every(daemon => (daemon as any).supervisorReady()) : this.client.connectionState() === "connected") || !!this.runError, "daemon startup");
+    const waitForSocket = typeof options === "string" || options.waitForSocket !== false;
+    const expectedState = typeof options === "string" ? options : "connected";
+    await waitFor(() => (waitForSocket ? this.client.connectionState() === expectedState
+      : this.daemons.every(daemon => (daemon as any).supervisorReady())) || !!this.runError, "daemon startup");
     if (this.runError) throw this.runError;
   }
 
@@ -170,6 +183,12 @@ export class DaemonProtocolHarness {
   }
 
   async restartDaemon(): Promise<void> { await this.stopDaemon(); await this.startDaemon(); }
+
+  async recreateDaemon(): Promise<void> {
+    await this.stopDaemon();
+    this.daemons = this.createDaemons();
+    await this.startDaemon();
+  }
 
   async disconnect(): Promise<void> {
     this.sockets.at(-1)!.close(4001);

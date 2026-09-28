@@ -20865,7 +20865,11 @@
           "expiresAt": null,
           "reason": null
         },
-        "recentReleases": []
+        "recentReleases": [],
+        "daemonProtocol": {
+          "pending": 1,
+          "failed": 0
+        }
       }
     },
     {
@@ -21019,6 +21023,7 @@
       "body": {
         "runtimes": [
           {
+            "daemonProtocolVersion": null,
             "id": "rt_snapshot",
             "name": "snapshot-runtime",
             "provider": "claude",
@@ -21059,6 +21064,12 @@
             "lastHeartbeatAt": "<timestamp>",
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
+            "protocol": {
+              "version": 1,
+              "state": "rejected",
+              "min_version": "0.2.83",
+              "last_error": null
+            },
             "executionGroupIds": [
               "eg_28e77cae80e6822ff0223ecf2c27d4a7"
             ]
@@ -21073,6 +21084,7 @@
       "status": 200,
       "body": {
         "runtime": {
+          "daemonProtocolVersion": null,
           "id": "rt_snapshot",
           "name": "snapshot-runtime",
           "provider": "claude",
@@ -21113,6 +21125,12 @@
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
+          },
           "executionGroupIds": [
             "eg_28e77cae80e6822ff0223ecf2c27d4a7"
           ]
@@ -22830,6 +22848,12 @@
             "feishu_bot_menu": true,
             "feishu_concierge_config_v1": true
           },
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
+          },
           "owner_id": "local",
           "visibility": "public",
           "last_seen_at": "<timestamp>",
@@ -22845,6 +22869,7 @@
       "status": 200,
       "body": {
         "runtime": {
+          "daemonProtocolVersion": null,
           "id": "rt_snapshot",
           "name": "snapshot-runtime",
           "provider": "claude",
@@ -22885,6 +22910,12 @@
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
+          },
           "executionGroupIds": [
             "eg_28e77cae80e6822ff0223ecf2c27d4a7"
           ],
@@ -27112,6 +27143,7 @@
       "status": 201,
       "body": {
         "runtime": {
+          "daemonProtocolVersion": null,
           "id": "rt_7212d1hv48ko",
           "name": "flow-runtime",
           "provider": "codex",
@@ -27140,6 +27172,12 @@
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
+          },
           "executionGroupIds": [
             "eg_b4e2c1897e7844cbdfa15492413c2506"
           ]
@@ -27153,6 +27191,7 @@
       "status": 200,
       "body": {
         "runtime": {
+          "daemonProtocolVersion": null,
           "id": "rt_snapshot",
           "name": "flow-runtime-native",
           "provider": "claude",
@@ -27193,6 +27232,12 @@
           "lastHeartbeatAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>",
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
+          },
           "executionGroupIds": [
             "eg_28e77cae80e6822ff0223ecf2c27d4a7"
           ]
@@ -27222,6 +27267,12 @@
         "metadata": {
           "feishu_bot_menu": true,
           "feishu_concierge_config_v1": true
+        },
+        "protocol": {
+          "version": 1,
+          "state": "rejected",
+          "min_version": "0.2.83",
+          "last_error": null
         },
         "owner_id": "local",
         "visibility": "public",

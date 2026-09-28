@@ -1,4 +1,6 @@
 import { createLogger } from "@shared/logger.js";
+import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_VERSION, meetsDaemonMinCliVersion } from "@multiremi/contracts/daemon-protocol.js";
+import type { RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
 import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
@@ -492,6 +494,18 @@ export class RuntimesRepo {
   getRuntimeLite(id: string): MultiremiRuntime | null {
     const row = this.readRuntimeRow(id);
     return row ? withRuntimeLiveness(toRuntime(row)) : null;
+  }
+
+  recordDaemonProtocol(runtimeId: string, daemonId: string, version: number, cliVersion?: string): void {
+    if (!this.readRuntimeRow(runtimeId)) return;
+    this.withRuntimeLifecycleLock(runtimeId, runtime => {
+      if (runtime.daemonId && runtime.daemonId !== daemonId) return;
+      const metadata = cliVersion === undefined ? runtime.metadata : { ...runtime.metadata, cli_version: cliVersion };
+      this.ctx.db.run(
+        "UPDATE multiremi_runtimes SET daemon_protocol_version = ?, metadata = ? WHERE id = ?",
+        [version, toJson(metadata), runtimeId],
+      );
+    });
   }
 
   /**
@@ -2212,9 +2226,26 @@ export class RuntimesRepo {
     return {
       ...runtime,
       ...stats,
+      protocol: this.runtimeProtocol(runtime),
       executionGroupIds: (this.ctx.db.query("SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider").all(runtime.id) as { group_id: string }[]).map(row => row.group_id),
       models: this.listRuntimeModelsForExistingRuntime(runtime.id),
     };
+  }
+
+  private runtimeProtocol(runtime: MultiremiRuntime): RuntimeProtocolStatus {
+    const version = runtime.daemonProtocolVersion ?? 1;
+    const latest = this.ctx.db.query(
+      `SELECT status, error FROM multiremi_runtime_update_requests
+       WHERE runtime_id = ? AND scope = 'cli'
+       ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                created_at DESC, updated_at DESC, id DESC LIMIT 1`,
+    ).get(runtime.id) as { status: string; error: string | null } | null;
+    // A successfully negotiated current daemon is healthy even if an old upgrade failed.
+    const compatible = version === DAEMON_PROTOCOL_VERSION && meetsDaemonMinCliVersion(runtimeCliVersion(runtime));
+    const state = compatible ? "ok"
+      : latest?.status === "pending" || latest?.status === "running" ? "upgrade_pending"
+      : latest?.status === "failed" ? "upgrade_failed" : "rejected";
+    return { version, state, min_version: DAEMON_MIN_CLI_VERSION, last_error: state === "upgrade_failed" ? latest?.error ?? "runtime update failed" : null };
   }
 
   private assertRuntimeOnline(runtime: MultiremiRuntime): void {
@@ -2589,6 +2620,7 @@ function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"])
 
 function toRuntime(row: Row): MultiremiRuntime {
   return {
+    daemonProtocolVersion: row.daemon_protocol_version == null ? null : Number(row.daemon_protocol_version),
     id: String(row.id),
     name: String(row.name),
     provider: String(row.provider),

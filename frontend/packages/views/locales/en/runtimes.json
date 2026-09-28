@@ -1,4 +1,11 @@
 {
+  "protocol": {
+    "version": "Protocol v{{version}}",
+    "ok": "OK",
+    "upgrade_pending": "Upgrade pending",
+    "upgrade_failed": "Upgrade failed: {{error}}",
+    "rejected": "Protocol rejected"
+  },
   "codex_profile": {
     "auth": "Authentication",
     "api_key": "API key",

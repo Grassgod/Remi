@@ -87,6 +87,17 @@ stop reconnecting as authority failures. HTTP upgrade failures map only
 401/403/410 through the shared authority mapper; all other statuses, including
 421 from an incorrectly selected UI process and 5xx, retry with backoff.
 
+The HTTP heartbeat now automatically queues a CLI update for an older or
+unreadable stored CLI version, targeting the server's own release. It reuses
+the existing update queue and physical-daemon idle gate, keeps one active
+request per runtime, and retries a failed update at the next heartbeat.
+The runtime `protocol` display is derived from persisted hello/CLI version and
+CLI update requests, so a separate UI process can read it without accessing
+the runtime process's session registry. The [cutover checklist](daemon-v2-cutover.md)
+covers the placeholder minimum version, legacy source-version fallback and
+shared-outbox gate before rollback. This stage does not narrow heartbeat acks
+or remove additional v1 routes.
+
 Authority failures such as 401, 403, and 410 still enter terminal cleanup,
 including when their response headers arrive but the error body times out or is
 interrupted. A long-running daemon then stays alive and probes

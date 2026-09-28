@@ -20,6 +20,13 @@ import type {
 } from "../../runtimes/types";
 import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
 
+export const RuntimeProtocolStatusSchema = z.object({
+  version: z.number().int().positive(),
+  state: z.enum(["ok", "upgrade_pending", "upgrade_failed", "rejected"]),
+  min_version: z.string(),
+  last_error: z.string().nullable(),
+});
+
 export const AgentRuntimeSchema = z.object({
   id: z.string(),
   execution_group_id: z.string().nullable().optional(),
@@ -34,6 +41,7 @@ export const AgentRuntimeSchema = z.object({
   status: z.enum(["online", "offline"]),
   device_info: z.string(),
   metadata: z.record(z.string(), z.unknown()).default({}),
+  protocol: RuntimeProtocolStatusSchema.nullable().optional().catch(null),
   owner_id: z.string().nullable(),
   visibility: z.enum(["private", "public"]).optional().default("private"),
   last_seen_at: z.string().nullable(),

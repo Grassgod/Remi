@@ -6,6 +6,7 @@
 
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
+import type { RuntimeProtocolStatus } from "./runtime-protocol.js";
 
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
@@ -649,6 +650,8 @@ export interface CreateRuntimeWorkspaceInput {
 }
 
 export interface MultiremiRuntime {
+  daemonProtocolVersion?: number | null;
+  protocol?: RuntimeProtocolStatus;
   executionGroupIds?: string[];
   executionGroupId?: string | null;
   execution_group_id?: string | null;
