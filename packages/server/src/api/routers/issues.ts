@@ -44,6 +44,7 @@ import {
   currentAccessToken,
   currentWorkspaceMember,
   hasRequestField,
+  isAnonymousCompatibilityRequest,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
   issueCommentListErrorResponse,
@@ -66,7 +67,12 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedAssignFields,
+  stripServerOwnedIssueCreateFields,
+  stripServerOwnedIssueSourceFields,
+  stripServerOwnedQuickCreateFields,
   stripServerOwnedIssueUpdateFields,
+  stripServerOwnedSessionTaskFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -701,8 +707,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
+    // MUL-448 B3: a credentialed request cannot pick the lineage that decides
+    // whether this create is served from the generated-issue cache. Anonymous
+    // compatibility mode keeps the historical body pass-through.
+    const sourceStripped = isAnonymousCompatibilityRequest(c)
+      ? body
+      : stripServerOwnedIssueSourceFields(body);
+    // MUL-448 B4: the body's `created_by` is dropped, but this route does not
+    // stamp the caller either - main records no creator here, and creator
+    // ownership feeds share management and automatic subscription.
     const issue = store.createIssue({
-      ...body,
+      ...stripServerOwnedIssueCreateFields(sourceStripped),
       workspaceId,
       assigneeType: null,
       assignee_type: null,
@@ -824,7 +839,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    const result = safeQuickCreateIssue(store, { ...body, workspaceId });
+    // MUL-448 B4: the body's requester is dropped and no credentialed requester
+    // is stamped on, so this route records no creator exactly as main does.
+    const result = safeQuickCreateIssue(store, {
+      ...stripServerOwnedQuickCreateFields(body),
+      workspaceId,
+    });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
       taskId: result.task.id,
@@ -841,7 +861,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<QuickCreateIssueInput>(c);
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
-    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
+    const input = {
+      ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
+      workspaceId,
+    };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");
@@ -1046,12 +1069,30 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (!issue) return c.json({ error: "issue not found" }, 404);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
       if (denied) return denied;
+      // MUL-448 B2: the evaluator is the credential, never the request body.
+      //
+      // `recordSquadLeaderEvaluation` falls back to the squad's leader agent when
+      // no actor is given, so a member PAT posting `actor_id=<leader>` (or
+      // nothing at all) was recorded as `agent/leader` with a 201. Only a task
+      // token may name the evaluating agent; a credentialed non-task request has
+      // no agent identity at all and is rejected here, before any write. The
+      // header/body fallbacks remain for the anonymous compatibility mode, where
+      // they are the historical behaviour.
       const taskToken = currentTaskAccessToken(c);
+      const anonymousCompat = isAnonymousCompatibilityRequest(c);
+      // Anonymous compatibility mode keeps main's behaviour exactly, including
+      // the store's "no actor given -> the squad leader" default. A credentialed
+      // request that is not a task token has no agent identity to evaluate with.
+      if (!taskToken?.agentId && !anonymousCompat) {
+        return c.json({ error: "only the squad leader agent can record evaluations" }, 403);
+      }
       const activity = store.recordSquadLeaderEvaluation(issue.id, {
         outcome: body.outcome ?? "",
         reason: body.reason ?? null,
-        taskId: taskToken?.taskId ?? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null,
-        actorId: taskToken?.agentId ?? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null,
+        taskId: taskToken?.taskId
+          ?? (anonymousCompat ? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null : null),
+        actorId: taskToken?.agentId
+          ?? (anonymousCompat ? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null : null),
       });
       return c.json({
         ...activity,
@@ -1391,8 +1432,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;
     const { actorType, actorId } = issueMutationActivity(c);
+    // MUL-448: strip both lineage spellings before stamping, so a member body
+    // cannot supply the parent task that the credential did not.
     const result = safeAssignIssue(store, issue.id, {
-      ...body,
+      ...stripServerOwnedAssignFields(body),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
@@ -1593,7 +1636,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const creator = issueSubscriberCaller(c);
     try {
       const task = store.createSessionTask(session.id, {
-        ...body,
+        ...stripServerOwnedSessionTaskFields(body),
         // Non-null past the `if (!agent) return 404` guard above; cleanString's
         // null just has to become the `agentId?: string` field's undefined.
         agentId: agentId ?? undefined,

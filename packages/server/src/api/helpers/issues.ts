@@ -70,9 +70,21 @@ export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStor
   }, 403);
 }
 
+/**
+ * MUL-448 B1: who the request is acting as, in credential order.
+ *
+ * A task token speaks for its agent; a verified member identity speaks for that
+ * member; only the anonymous compatibility mode (master token or auth-disabled)
+ * may name an agent through `X-Agent-ID`. The route-level callers below turn
+ * this into subscriber rows, session-task `task_assigned` authors, session
+ * creators and published results, so reading the header first let any member
+ * PAT write another agent's id into those durable records.
+ */
 export function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; actorId: string } {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) return { actorType: "agent", actorId: taskToken.agentId };
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { actorType: "member", actorId: userId };
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { actorType: "agent", actorId: agentId };
   return { actorType: "member", actorId: currentRequestUserId(c) };
@@ -102,13 +114,33 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
+  // MUL-448: no credential path below may name the run a comment belongs to.
+  // `comment.taskId` is read back as trusted lineage — the mention dispatcher
+  // uses it as the `sourceTask` for delegation returns and `createTask` inherits
+  // it as `parentTaskId` — so a member (or an anonymous caller) could otherwise
+  // borrow another run's lane by putting `task_id` in the body. Only the task
+  // token branch above sets it, and it takes it from the token.
+  const publicInput = stripCommentTaskLink(input);
   const userId = authenticatedRequestUserId(c);
-  if (userId) return { ...input, authorType: "member", authorId: userId };
-  if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
+  if (userId) return { ...publicInput, authorType: "member", authorId: userId };
+  // MUL-448 B1: everything below runs only for the anonymous compatibility mode
+  // (master token / auth disabled), which keeps its historical behaviour; a
+  // request with a credential never reaches the header or the body identity.
+  if (cleanString(publicInput.authorType) || cleanString(publicInput.authorId)) return publicInput;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
-  if (agentId) return { ...input, authorType: "agent", authorId: agentId };
-  if (!currentAccessToken(c) && !currentJwtUserId(c)) return input;
-  return { ...input, authorType: "member", authorId: currentRequestUserId(c) };
+  if (agentId) return { ...publicInput, authorType: "agent", authorId: agentId };
+  if (!currentAccessToken(c) && !currentJwtUserId(c)) return publicInput;
+  return { ...publicInput, authorType: "member", authorId: currentRequestUserId(c) };
+}
+
+/** Drop both spellings of the run link from a comment body. */
+export function stripCommentTaskLink<T extends { taskId?: string | null; task_id?: string | null }>(
+  input: T,
+): Omit<T, "taskId" | "task_id"> {
+  const out = { ...input };
+  delete out.taskId;
+  delete out.task_id;
+  return out;
 }
 
 export function issueSubscriberTarget(
