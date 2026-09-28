@@ -322,6 +322,38 @@ interface ForcedStartOutcome {
   skipped: { reason: string; error: string } | null;
 }
 
+interface IssueCreationTransactionOwner {
+  childStatusChanges: ChildStatusChangeCollector;
+  deferredEvents: CommitEventQueue;
+}
+
+/**
+ * The public types keep ordinary callers honest, but API adapters and tests can
+ * still reach these methods through `any`. Reject a partial owner before the
+ * first SQL statement so a rollback cannot leave queued in-memory events that
+ * describe rows which never committed.
+ */
+function assertIssueCreationTransactionOwner(
+  value: unknown,
+): asserts value is IssueCreationTransactionOwner {
+  if (!value || typeof value !== "object") {
+    throw new Error("issue creation inside a transaction requires a transaction owner");
+  }
+  const owner = value as Partial<IssueCreationTransactionOwner>;
+  if (!Array.isArray(owner.childStatusChanges)) {
+    throw new Error("issue creation transaction owner requires childStatusChanges");
+  }
+  const queue = owner.deferredEvents as Partial<CommitEventQueue> | undefined;
+  if (!queue || typeof queue !== "object") {
+    throw new Error("issue creation transaction owner requires deferredEvents");
+  }
+  for (const field of ["workspace", "enqueuedTasks", "issueActivities"] as const) {
+    if (!Array.isArray(queue[field])) {
+      throw new Error(`issue creation deferredEvents requires ${field}`);
+    }
+  }
+}
+
 interface ReactionInput {
   actorType?: string;
   actorId?: string | null;
@@ -393,16 +425,14 @@ export class IssuesRepo {
    * decides whether it owns the transaction, because Postgres has no savepoints
    * here and callers such as Feishu ingestion and autopilots already hold one.
    */
-  createIssue(input: CreateIssueInput, transaction?: {
-    childStatusChanges: ChildStatusChangeCollector;
-    deferredEvents: CommitEventQueue;
-  }): MultiremiIssue {
+  createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
     // (the `issue_created` activity, the parent re-derivation) has to wait for
     // that COMMIT — a browser must never render a row a ROLLBACK would erase.
     // A caller that already owns a transaction keeps its own queue.
+    if (transaction !== undefined) assertIssueCreationTransactionOwner(transaction);
     if (this.ctx.db.inTransaction) {
-      if (!transaction) throw new Error("createIssue inside a transaction requires a child-status collector and deferredEvents");
+      assertIssueCreationTransactionOwner(transaction);
       return this.createIssueWithinTransaction(input, transaction.childStatusChanges, transaction.deferredEvents);
     }
     const commitEvents = createCommitEventQueue();
@@ -736,6 +766,7 @@ export class IssuesRepo {
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): MultiremiIssue {
+    assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;

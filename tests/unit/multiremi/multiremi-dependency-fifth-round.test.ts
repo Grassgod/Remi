@@ -16,6 +16,22 @@ function inTransaction(store: Store): boolean {
   return (store as unknown as { ctx: { db: { inTransaction: boolean } } }).ctx.db.inTransaction;
 }
 
+function storeDatabase(store: Store) {
+  return (store as unknown as {
+    ctx: {
+      db: {
+        transaction<T>(body: () => T): () => T;
+        query(sql: string): { get(...params: unknown[]): Record<string, unknown> | null };
+      };
+    };
+  }).ctx.db;
+}
+
+function tableCount(store: Store, table: "multiremi_issues" | "multiremi_issue_activity"): number {
+  const row = storeDatabase(store).query(`SELECT COUNT(*) AS total FROM ${table}`).get();
+  return Number(row?.total ?? 0);
+}
+
 function createRunnableOwner(store: Store, label: string) {
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ name: `${label} runtime`, provider: "claude", maxConcurrency: 4 });
@@ -146,6 +162,88 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   });
 }
 
+function registerIssueCreationOwnerContract(label: string, currentStore: () => Store): void {
+  const completeQueue = () => ({ workspace: [], enqueuedTasks: [], issueActivities: [] });
+  const incompleteOwners = [
+    {
+      missing: "childStatusChanges",
+      owner: () => ({ deferredEvents: completeQueue() }),
+      error: "requires childStatusChanges",
+    },
+    {
+      missing: "deferredEvents",
+      owner: () => ({ childStatusChanges: [] }),
+      error: "requires deferredEvents",
+    },
+    {
+      missing: "deferredEvents.workspace",
+      owner: () => ({
+        childStatusChanges: [],
+        deferredEvents: { enqueuedTasks: [], issueActivities: [] },
+      }),
+      error: "requires workspace",
+    },
+    {
+      missing: "deferredEvents.enqueuedTasks",
+      owner: () => ({
+        childStatusChanges: [],
+        deferredEvents: { workspace: [], issueActivities: [] },
+      }),
+      error: "requires enqueuedTasks",
+    },
+    {
+      missing: "deferredEvents.issueActivities",
+      owner: () => ({
+        childStatusChanges: [],
+        deferredEvents: { workspace: [], enqueuedTasks: [] },
+      }),
+      error: "requires issueActivities",
+    },
+  ];
+
+  for (const entry of ["createIssue", "createIssueWithinTransaction"] as const) {
+    for (const variant of incompleteOwners) {
+      it(`${label}: ${entry} rejects an owner missing ${variant.missing} before writing`, () => {
+        const store = currentStore();
+        store.ensureLocalWorkspace();
+        const owner = variant.owner() as {
+          childStatusChanges?: unknown;
+          deferredEvents?: unknown;
+        };
+        const before = {
+          issues: tableCount(store, "multiremi_issues"),
+          activities: tableCount(store, "multiremi_issue_activity"),
+        };
+        const events: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => events.push(event.type));
+
+        try {
+          expect(() => storeDatabase(store).transaction(() => {
+            const input = { title: `${label} incomplete ${entry} ${variant.missing}` };
+            if (entry === "createIssue") {
+              (store.createIssue as unknown as (value: unknown, transaction: unknown) => unknown)(input, owner);
+            } else {
+              (store.createIssueWithinTransaction as unknown as (
+                value: unknown,
+                collector: unknown,
+                queue: unknown,
+              ) => unknown)(input, owner.childStatusChanges, owner.deferredEvents);
+            }
+          })()).toThrow(variant.error);
+        } finally {
+          unsubscribe();
+        }
+
+        expect({
+          issues: tableCount(store, "multiremi_issues"),
+          activities: tableCount(store, "multiremi_issue_activity"),
+          events,
+        }).toEqual({ ...before, events: [] });
+      });
+    }
+  }
+}
+
 describe("MUL-409 QA round 5 task wakeups on SQLite", () => {
   let database: Database;
   let store: Store;
@@ -158,6 +256,7 @@ describe("MUL-409 QA round 5 task wakeups on SQLite", () => {
   afterEach(() => database.close());
 
   registerTaskWakeupContract("SQLite", () => store);
+  registerIssueCreationOwnerContract("SQLite", () => store);
 });
 
 const postgresAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -182,4 +281,5 @@ describe.skipIf(!postgresAdminUrl)("MUL-409 QA round 5 task wakeups on PostgreSQ
   });
 
   registerTaskWakeupContract("PostgreSQL", () => store);
+  registerIssueCreationOwnerContract("PostgreSQL", () => store);
 });
