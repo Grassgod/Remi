@@ -355,7 +355,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // 70 of the 766 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // 70 of the 767 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
     // so the full-inventory total is 71. Pinning the swept count AND the arithmetic
     // means a route cannot be reclassified without one of the numbers moving.
@@ -374,15 +374,17 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 691 of the 766 swept patterns are refused; the two browser upgrade routes
+    // 692 of the 767 swept patterns are refused; the two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 693. Every route main has added since this matrix landed sits outside
+    // total is 694. Every route main has added since this matrix landed sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
-    expect(refused, routeCountHint("runtime")).toBe(691);
-    expect(refused + 2, routeCountHint("runtime")).toBe(693);
+    // MUL-479's context-window PUT is workspace admin/browser traffic, outside
+    // every runtime allowlist prefix; ui serves it and runtime refuses it.
+    expect(refused, routeCountHint("runtime")).toBe(692);
+    expect(refused + 2, routeCountHint("runtime")).toBe(694);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {
