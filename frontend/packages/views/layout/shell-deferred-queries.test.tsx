@@ -12,6 +12,7 @@
 import type { ReactNode } from "react";
 import { act, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { VirtuosoMockContext } from "react-virtuoso";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "@multiremi/core/api";
 import type { ApiClient } from "@multiremi/core/api/client";
@@ -222,7 +223,11 @@ function PendingPage() {
 }
 
 function Shell() {
-  return <DashboardLayout extra={<><ChatFab /><ChatWindow /></>}><PendingPage /></DashboardLayout>;
+  return (
+    <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 60 }}>
+      <DashboardLayout extra={<><ChatFab /><ChatWindow /></>}><PendingPage /></DashboardLayout>
+    </VirtuosoMockContext.Provider>
+  );
 }
 
 function isDeferredShellKey(key: readonly unknown[]): boolean {
@@ -346,7 +351,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [projectKeys.detail("ws-1", "prj_guard_pin"), { id: "prj_guard_pin", title: "Cached project", icon: null }],
       [chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_guard", status: "active", title: "Cached chat" }]],
       [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
-      [chatKeys.messagesPage(sessionId), { pages: [{ messages: [{ id: "msg_guard", role: "user", content: "Cached message" }], has_more: false, next_cursor: null }], pageParams: [null] }],
+      [chatKeys.messagesPage(sessionId), { pages: [{ messages: [{ id: "msg_guard", role: "assistant", task_id: taskId, content: "Cached reply" }], has_more: false, next_cursor: null }], pageParams: [null] }],
       [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
       [chatKeys.taskMessages(taskId), []], [chatKeys.humanRequests(taskId), []],
     ];
@@ -362,6 +367,9 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
     try {
       await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
+      // A persisted reply suppresses the live observer, so this guards the
+      // nested historical observer with the real virtualized row mounted.
+      await waitFor(() => expect(view.getByText("Cached reply")).toBeTruthy());
       await act(async () => {
         for (const [queryKey] of cached) await client.invalidateQueries({ queryKey, exact: true });
         sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 });
