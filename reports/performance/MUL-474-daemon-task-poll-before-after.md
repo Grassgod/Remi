@@ -4,7 +4,8 @@
 | --- | --- |
 | 单号 | MUL-474（父单 MUL-383 的 S8e） |
 | 基线 main | `1bb060fb`（开工前确认的 head） |
-| after head | `d78f9430`（`agent/MUL-474`，已 `git merge origin/main` 到 `d6714966`） |
+| after head | 第一轮 `d78f9430`（merge main 到 `d6714966`）；第二轮返工后为 `065c66b2`（merge main 到 `1653b038`） |
+| 第一轮复核 | QA 不通过，证据 `cmt_riedojckre5q`（写为 `cmt_rieodjckre5q`） |
 | 数据库 | 真实 PostgreSQL 18.4，`PostgresSyncDatabase`（Worker + SharedArrayBuffer + `Atomics.wait`），每次运行新建一次性库并删除 |
 | 采集脚本 | `tests/manual/bench-daemon-task-poll.ts` |
 | fixture | `tests/fixtures/multiremi/daemon-task-poll-fixture.ts`，prompt 131,072 B，一条 Feishu 回执投递，第二个 Runtime + 独立 daemon token |
@@ -60,3 +61,58 @@ before 的主要构成：3 × `SELECT * FROM multiremi_tasks WHERE id = ?`（守
 ```
 
 另有一份独立 golden（`tests/fixtures/multiremi/daemon-task-poll-golden.json`，由 `capture-daemon-task-poll-golden.ts` 在 `1bb060fb` 上采集、在本分支 head 上复采）：`sha256 c45bd5349c314bfcca3fee6434d3e0ba76069099ab1d5e4206153ce56a3c285c`，两处完全一致，并由 `mul474-daemon-task-poll-count.test.ts` 的 golden 用例持续守住。
+
+## 第二轮返工（QA r1 `cmt_rieodjckre5q`）
+
+### B1 合并 main 后 tsc 失败
+
+`tests/manual/bench-daemon-task-poll.ts` 的 `requestMetrics` 缺 MUL-461 新增的必填
+`role`。补 `role: "all"`：取值来自 `resolveApiRole()` 在 `MULTIREMI_API_ROLE` 未设时
+的返回，即生产默认的单进程形态，也正是本报告三条路由描述的场景。合并 `origin/main`
+（`1653b038`）后 `bunx tsc --noEmit` 0 错误。
+
+### B2 容量淘汰破坏 60 秒节流
+
+第一轮只用进程内 Map 判定窗口，条目被容量清理淘汰后，同一个 token 会在窗口内再次
+UPDATE。采用 QA 的建议，**以数据库里的 `last_used_at` 为准、Map 只作快速路径**：
+
+- Map 未命中时，用本次校验那条 SELECT 已经读出的 `last_used_at` 判断窗口
+  （**不增加任何 SELECT**）；在窗口内则不写并回填 Map，超窗或为空才写；
+- 时钟与现有节流共用一次注入：`verifyAccessToken` 读一次 `Date.now()`，过期判定与
+  节流判定用同一个 `nowMs`；
+- 库里的时间戳比现在晚、且超出窗口的按异常处理，照常写入，避免节流卡死；
+- 容量改为**先清理再插入**，并记录 Map 峰值；实际峰值 = 声明的 4096（QA 第一轮实测
+  4097）。
+
+吊销、过期与 `allowedTypes` 检查在两条路径（Map 命中 / 未命中）上每次都执行。
+
+### 本轮前后对比（同口径重测）
+
+| 路由 | 语句数 before | 语句数 after | 过桥字节 before | 过桥字节 after |
+| --- | ---: | ---: | ---: | ---: |
+| `GET status` | 18 | **5** | 401,432 B | **1,763 B** |
+| `GET steer` | 16 | **4** | 401,347 B | **1,314 B** |
+| `POST messages` | 25 | **10** | 668,083 B | **1,869 B** |
+
+与第一轮逐字相同，证明 B2 没有多出一条 SELECT。
+
+### 与 MUL-462 的联合检查
+
+`origin/agent/MUL-462` head `bb44290d`，`git merge --no-commit --no-ff` 无文本冲突，
+随后 `--abort`。
+
+- 462 的 realtime 相关测试（`realtime-fanout.test.ts`、`peer-channel.test.ts`、
+  `api-role-peer-unification.test.ts`）在试合并结果上 **53 pass / 0 fail**；
+- 但 `bunx tsc --noEmit` 在试合并结果上失败：
+
+```text
+packages/server/src/api/realtime-fanout.ts(182,25): error TS2345: Argument of type
+'{ task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[]; }' is not assignable to
+parameter of type '{ task: MultiremiTask; messages: MultiremiTaskMessage[]; }'.
+```
+
+原因：462 把 store 的 `onTaskMessages` 事件直接转发给 peer，其
+`PeerTaskMessagesPayload.task` 声明为完整 `MultiremiTask`，并同时带 `task_id`。实际
+消费端只读 `task.id`（`peer-channel.ts` 的 `taskIdOf`）与降级后重新读整行的
+`resolveRemoteTask()`，因此逻辑上与六个字段的 subject 相容，纯粹是声明类型过宽。
+按派单要求只报告，未在本分支替 462 改。

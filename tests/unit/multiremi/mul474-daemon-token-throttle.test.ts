@@ -17,7 +17,6 @@ import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 const TOKEN_CREATED_AT = Date.UTC(2026, 8, 27, 12, 0, 0);
 /** The declared ceiling in access-tokens-repo.ts. */
 const MAP_CAPACITY = 4_096;
-const WINDOW_MS = 60_000;
 
 beforeEach(() => {
   resetLastUsedAtThrottleForTest();
@@ -94,7 +93,6 @@ describe("MUL-474 last_used_at write throttle", () => {
     setSystemTime(new Date(TOKEN_CREATED_AT + 60_000));
     expect((await store.verifyAccessToken(token))?.lastUsedAt).toBe("2026-09-27T12:01:00.000Z");
     expect(readLastUsedAt(id)).toBe("2026-09-27T12:01:00.000Z");
-    void WINDOW_MS;
   });
 
   it("keeps two tokens' windows independent", async () => {
