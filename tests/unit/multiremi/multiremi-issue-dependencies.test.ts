@@ -802,7 +802,7 @@ describe("MUL-400 E3 — the kill switch", () => {
  * MUL-409 fix round 2, blocking 3 (Senior大哥 ruling `cmt_am1o8xnzkwy0`): the
  * dependency gate gains a second layer at the single task-creation funnel, so
  * every path that can start work on a waiting issue is covered, and the only
- * way across stays the audited member `force`.
+ * way across stays an audited member action.
  */
 describe("MUL-400 E3 — task-creation gate", () => {
   function parked() {
@@ -879,21 +879,33 @@ describe("MUL-400 E3 — task-creation gate", () => {
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
   });
 
-  it("keeps a human comment and records a dispatch_skipped hold on a waiting issue", () => {
-    const { store, agent, dependent } = parked();
+  it("treats a human comment as an audited force-start", () => {
+    const { store, agent, prereq, dependent } = parked();
     store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
     expect(activityOf(store, dependent.id, "dispatch_skipped")).toHaveLength(1);
 
     const comment = store.createIssueComment(dependent.id, { body: "please start", authorType: "member", authorId: "local" });
     expect(store.getIssueComment(comment.id)).not.toBeNull();
-    // The comment landed, no round was created, and the hold is visible.
-    const skips = activityOf(store, dependent.id, "dispatch_skipped");
-    expect(skips.length).toBeGreaterThanOrEqual(2);
-    expect(skips.at(-1)!.data).toMatchObject({ reason: "dependencies_unmet", commentId: comment.id });
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.triggerCommentId).toBe(comment.id);
+    expect(tasks[0]!.prompt).toContain(`unfinished prerequisites (${prereq.key})`);
+    expect(tasks[0]!.prompt).toContain("started it by commenting");
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    const forced = activityOf(store, dependent.id, "dependency_force_started");
+    expect(forced).toHaveLength(1);
+    expect(forced[0]!.data).toMatchObject({
+      source: "comment",
+      actor: "member:local",
+      commentId: comment.id,
+      taskId: tasks[0]!.id,
+      assigneeDispatched: true,
+    });
+    // The earlier assignment remains the only dependency hold.
+    expect(activityOf(store, dependent.id, "dispatch_skipped")).toHaveLength(1);
   });
 
-  it("keeps an agent mention and records comment_mention_skipped", () => {
+  it("treats a human mention as a force-start and only dispatches its target", () => {
     const { store, agent, dependent } = parked();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const comment = store.createIssueComment(dependent.id, {
@@ -903,11 +915,20 @@ describe("MUL-400 E3 — task-creation gate", () => {
     });
 
     expect(store.getIssueComment(comment.id)).not.toBeNull();
-    const skipped = activityOf(store, dependent.id, "comment_mention_skipped");
-    expect(skipped).toHaveLength(1);
-    expect(skipped[0]!.data).toMatchObject({ reason: "dependencies_unmet", agentId: agent.id });
-    expect(activityOf(store, dependent.id, "comment_mention_triggered")).toHaveLength(0);
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(activityOf(store, dependent.id, "comment_mention_skipped")).toHaveLength(0);
+    expect(activityOf(store, dependent.id, "comment_mention_triggered")).toHaveLength(1);
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.agentId).toBe(agent.id);
+    expect(tasks[0]!.prompt).toContain("started it by mentioning an agent");
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({
+      source: "mention",
+      commentId: comment.id,
+      taskId: tasks[0]!.id,
+      agentId: agent.id,
+      assigneeDispatched: false,
+    });
     expect(leader.archivedAt).toBeNull();
   });
 
@@ -940,7 +961,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
     expect(store.getIssue(prereq.id)!.status).toBe("in_progress");
   });
 
-  it("returns 409 from the rerun route for a waiting issue", async () => {
+  it("treats a human rerun as an audited force-start", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
     const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
@@ -948,11 +969,32 @@ describe("MUL-400 E3 — task-creation gate", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ agent_id: agent.id }),
     });
-    expect(response.status).toBe(409);
-    const body = await response.json() as { code?: string };
-    expect(body.code).toBe("dependencies_unmet");
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(response.status).toBe(202);
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.prompt).toContain("started it by rerunning it");
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({
+      source: "rerun",
+      taskId: tasks[0]!.id,
+      agentId: agent.id,
+      assigneeDispatched: false,
+    });
     expect(allActivityRows(store, dependent.id, "dependency_gate_exempted")).toEqual([]);
+  });
+
+  it("keeps an agent rerun behind the dependency gate", async () => {
+    const { store, agent, dependent } = parked();
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Agent-ID": agent.id },
+      body: JSON.stringify({ agent_id: agent.id }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
   });
 
   it("does not block a continuation that names continuedFromTaskId", () => {
@@ -1179,9 +1221,7 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     }
   });
 
-  it("records a real mention-skip event with the dependencies_unmet reason", () => {
-    // The unit above renders the copy; this one proves the activity the UI reads
-    // is actually produced by the mention path on a waiting issue.
+  it("records a real human mention force event", () => {
     const { store, agent, dependent } = parkedWithOwner();
     const comment = store.createIssueComment(dependent.id, {
       body: `[@${agent.name}](mention://agent/${agent.id}) please start`,
@@ -1190,14 +1230,14 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     });
 
     expect(store.getIssueComment(comment.id)).not.toBeNull();
-    const skipped = allActivityRows(store, dependent.id, "comment_mention_skipped");
-    expect(skipped).toHaveLength(1);
-    expect((skipped[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({
-      reason: "dependencies_unmet",
+    const forced = allActivityRows(store, dependent.id, "dependency_force_started");
+    expect(forced).toHaveLength(1);
+    expect((forced[0]!.data ?? {}) as Record<string, unknown>).toMatchObject({
+      source: "mention",
       commentId: comment.id,
       agentId: agent.id,
     });
-    expect(allTaskRows(store, dependent.id)).toEqual([]);
+    expect(allTaskRows(store, dependent.id)).toHaveLength(1);
   });
 
   it("records a real coalesced-readiness event", () => {

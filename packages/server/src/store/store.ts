@@ -3334,6 +3334,15 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  /** MUL-458: caller owns the force-start task/status/activity transaction. */
+  recordDependencyForceStarted(
+    issueId: string,
+    input: import("@multiremi/store/repos/issues-repo.js").DependencyForceStartedInput,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+  ): void {
+    this.issues.recordDependencyForceStarted(issueId, input, deferredEvents);
+  }
+
   /** MUL-400 E3: `waiting_on` page data (unmet + all direct prerequisites). */
   getIssueWaitingOn(issueId: string): import("@multiremi/contracts/types.js").MultiremiIssueWaitingOn {
     return this.issues.getIssueWaitingOn(issueId);
