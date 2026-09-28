@@ -207,6 +207,7 @@ export interface ConversationLogPatch {
     | "body_html"
     | "render_version"
     | "metadata"
+    | "task_id"
     | "deleted_at"
     | "updated_at"
     | "resolved_at"

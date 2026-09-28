@@ -195,6 +195,12 @@ seq-0 head without a creation marker, preserving the existing first event seq
 and stored follow/delegation cursors. Older rows without a log mirror retain
 their legacy read path until B7 backfills them.
 
+Issue comment log rows take `task_id` from the comment, including system
+comments; the legacy mirror event keeps its NULL task association. Deletion
+clears the tombstone's `task_id`. The agent projection and legacy `/events`
+wire output NULL whenever `source_comment_id` is present, preserving their
+existing shape (MUL-427, ruling (e)).
+
 The five self-transactional comment operations own a commit-event queue when
 the caller has not supplied one. Workspace pushes and triggered-task enqueue
 notifications are released only after their transaction commits; rollback

@@ -309,7 +309,7 @@ function eventLine(
     line.body_truncated = true;
     line.body_omitted_chars = bodyOmittedChars;
   }
-  line.task_id = event.taskId;
+  line.task_id = event.sourceCommentId ? null : event.taskId;
   line.source_comment_id = event.sourceCommentId;
   line.metadata = metadata;
   line.created_at = event.createdAt;

@@ -3255,6 +3255,7 @@ export class IssuesRepo {
         this.ctx.conversationLog().updateWithinTransaction(comment.issueSessionId, seq, {
           fields: {
             body_md: "",
+            task_id: null,
             deleted_at: now,
             updated_at: now,
             metadata: { ...existing.metadata, deleted_body: comment.body },

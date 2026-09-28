@@ -441,7 +441,10 @@ export class IssueSessionsRepo {
       "SELECT * FROM multiremi_session_events WHERE id = ?",
     ).get(eventId) as Row | null;
     if (!row) return;
-    const mapped = sessionEventToConversationLog(row as unknown as MirrorSessionEvent);
+    const comment = row.source_comment_id
+      ? this.ctx.db.query("SELECT task_id FROM multiremi_issue_comments WHERE id = ?").get(row.source_comment_id) as { task_id: string | null } | null
+      : null;
+    const mapped = sessionEventToConversationLog(row as unknown as MirrorSessionEvent, comment?.task_id ?? null);
     if (!mapped) return;
     // A marker points at the row it describes: resolve the target's seq on the
     // same axis, which is what W4's coverage check reads.
