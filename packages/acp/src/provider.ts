@@ -17,6 +17,7 @@ import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { AcpClient } from "./client.js";
+import { AcpSessionFailureError, readSessionFailure, type AcpSessionFailure } from "./session-failure.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { hasOneMillionContext, resolveClaudeContextModel } from "./adapters/claude-code/model-context.js";
@@ -446,6 +447,7 @@ export class AcpProvider implements Provider {
   private _elicitationHandlers = new Map<string, ElicitationHandler>();
   private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
+  private _typedSessionFailures: boolean | undefined;
   /** Active-stream wakeups keyed by chatId, fired when the entry's ACP process dies. */
   private _deathListeners = new Map<string, (reason: string) => void>();
 
@@ -457,6 +459,10 @@ export class AcpProvider implements Provider {
 
   get adapter(): AgentAdapter {
     return this._adapter;
+  }
+
+  get typedSessionFailures(): boolean | undefined {
+    return this._typedSessionFailures;
   }
 
   /** Register external handler for permission requests (AskUserQuestion, ExitPlanMode, tool approval). */
@@ -575,6 +581,7 @@ export class AcpProvider implements Provider {
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
     const chatId = options?.chatId ?? "__default__";
     const entry = await abortableEnsureSession(this._ensureSession(chatId, options), options?.signal);
+    this._typedSessionFailures = entry.client.typedSessionFailures ?? false;
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
@@ -584,6 +591,7 @@ export class AcpProvider implements Provider {
     const eventQueue: ProviderEvent[] = [];
     let promptDone = false;
     let promptError: Error | null = null;
+    const failureState: { failure: AcpSessionFailure | null } = { failure: null };
     let resolveWaiting: (() => void) | null = null;
 
     const pushEvent = (evt: ProviderEvent) => {
@@ -612,6 +620,10 @@ export class AcpProvider implements Provider {
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
       const update = notification.update;
+      if (update.sessionUpdate === "session_info_update") {
+        const failure = readSessionFailure(update._meta);
+        if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
+      }
       if (update.sessionUpdate === "config_option_update" && update.configOptions) {
         entry.configOptions = update.configOptions;
       } else if (update.sessionUpdate === "config_option_update" && update.id === "model" && typeof update.value === "string") {
@@ -644,7 +656,9 @@ export class AcpProvider implements Provider {
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
         promptDone = true;
-        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope);
+        const failure = readSessionFailure(result._meta);
+        if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
+        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, failureState.failure);
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
           promptError = new Error("Cancelled");
         }
@@ -684,6 +698,7 @@ export class AcpProvider implements Provider {
       entry.lastUsed = Date.now();
     }
 
+    if (failureState.failure?.severity === "error") throw new AcpSessionFailureError(failureState.failure, promptError ?? undefined);
     if (promptError) throw promptError;
   }
 
@@ -1337,7 +1352,7 @@ function nonNegativeFinite(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope): AgentResponse {
+function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope, sessionFailure?: AcpSessionFailure | null): AgentResponse {
   const { usage, text, promptStartTime, completedToolCount, contextUsage } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
 
@@ -1362,6 +1377,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope:
     metadata: {
       stopReason: result.stopReason,
       provider: "acp",
+      ...(sessionFailure ? { sessionFailure } : {}),
       ...(contextUsage ? { contextUsage } : {}),
     },
   });

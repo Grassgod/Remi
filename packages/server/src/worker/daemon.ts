@@ -13,6 +13,8 @@ import { basename, join, resolve } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
+  AcpSessionFailureError,
+  AcpRpcError,
   createRuntimeProvider,
   type AcpModelCapability,
   type AcpProviderOptions,
@@ -91,6 +93,7 @@ import {
 } from "@multiremi/repo-cache.js";
 import {
   classifyDaemonTaskFailure,
+  classifyLegacyProviderFailure,
   classifyPoisonedOutput,
   TaskFailureReason,
   type TaskFailureReasonValue,
@@ -560,6 +563,7 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
+  readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
   getStreamedText?: (chatId: string) => string;
@@ -3542,7 +3546,10 @@ export class MultiremiDaemon {
       }
       const failureReason = err instanceof LocalDirectoryError
         ? err.failureReason
-        : classifyDaemonTaskFailure(task.agent?.provider ?? "", error);
+        : classifyDaemonTaskFailure(task.agent?.provider ?? "", error,
+          err instanceof AcpSessionFailureError ? err.hint
+            : err instanceof AcpRpcError && err.data && typeof err.data === "object"
+              ? err.data : undefined);
       this.enqueueTaskReport(task.id, "fail", {
         error,
         sessionId: summary?.sessionId ?? task.sessionId,
@@ -4423,11 +4430,13 @@ export class MultiremiDaemon {
         }
         steerFeed.setInterrupt(() => turnAbort.abort());
         let turnError: unknown = null;
+        let lastTurnMessage: { type: string; content?: string | null } | null = null;
         try {
           resetElicitationContextOffset();
           for await (const event of session.run(prompt)) {
             const emitted = toMessages(event);
             for (const message of emitted) {
+              lastTurnMessage = message;
               if (message.type === "compaction") sawCompaction = true;
               // Assistant text becomes the task result / issue activity body.
               if (message.type === "text" && message.content) output += message.content;
@@ -4457,6 +4466,14 @@ export class MultiremiDaemon {
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
+        if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastTurnMessage?.type === "text") {
+          const error = lastTurnMessage.content ?? "";
+          const failureReason = classifyLegacyProviderFailure(error);
+          if (failureReason) {
+            await this.client.pinTaskSession(task.id, finalSessionId, workDir);
+            return { output: error, sessionId: finalSessionId, workDir, usage, completed: false, failureReason };
+          }
+        }
         if (forceAnswerExpired) {
           log.warn(`Task ${task.id} force-answer grace elapsed; delivering accumulated output`);
           // Steers that arrived too late to act on are still recorded/consumed

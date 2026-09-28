@@ -102,9 +102,8 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   }
 
   // The gateway's account pool is empty for this model. This is the marker
-  // MUL-336 switches models on, so it must be recognised BEFORE the generic
-  // 5xx rule — "503 No available accounts" would otherwise degrade into an
-  // ambiguous provider_server_error and never trigger a fallback. The phrases
+  // MUL-336 introduced model switching for this marker; keep it BEFORE the
+  // generic 5xx rule so the switch record retains the specific cause. The phrases
   // are deliberately account-pool specific: a bare 503 stays ambiguous.
   if (containsAny(
     lower,
