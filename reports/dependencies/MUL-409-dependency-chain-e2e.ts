@@ -19,17 +19,18 @@
  *   1. one parent with three serially dependent children (C1 <- C2 <- C3,
  *      i.e. C2 and C3 each declare `blocked_by`), all owned by one agent;
  *   2. create with `status: todo` — C2/C3 must park in `backlog` while C1 runs;
- *   3. only C1 was dispatched: run its round to `done`;
- *   4. the platform must start C2 by itself, then C3, with no further writes;
+ *   3. a human comments on waiting C3, which force-starts exactly one C3 round;
+ *   4. C3 may finish early while C1 -> C2 still advances normally;
  *   5. the parent must not reach `in_review` until the last child is done.
  *
  * Usage (points at a throwaway database on an existing server):
  *
  *   MULTIREMI_TEST_POSTGRES_URL=postgres://user@127.0.0.1:5432/postgres \
- *     bun run reports/dependencies/MUL-409-dependency-chain-e2e.ts [--out <path>]
+ *     bun run reports/dependencies/MUL-409-dependency-chain-e2e.ts [--backend postgres|sqlite] [--out <path>]
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { Database } from "bun:sqlite";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -37,11 +38,16 @@ import { createMultiremiApp } from "@multiremi/api.js";
 const ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL ?? "postgres://multimira:multimira@localhost:5432/postgres";
 const TEST_DB = `multiremi_dep_e2e_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
 const REPO_ROOT = resolve(import.meta.dir, "../..");
+const backendIndex = process.argv.indexOf("--backend");
+const BACKEND = backendIndex >= 0 ? process.argv[backendIndex + 1] : "postgres";
+if (BACKEND !== "postgres" && BACKEND !== "sqlite") {
+  throw new Error("--backend must be postgres or sqlite");
+}
 
 const outIndex = process.argv.indexOf("--out");
 const OUT_PATH = outIndex >= 0 && process.argv[outIndex + 1]
   ? resolve(process.argv[outIndex + 1])
-  : resolve(REPO_ROOT, "reports/dependencies/MUL-409-dependency-chain-e2e.json");
+  : resolve(REPO_ROOT, `reports/dependencies/MUL-409-dependency-chain-e2e-${BACKEND}.json`);
 
 interface Step {
   step: string;
@@ -62,12 +68,16 @@ function pgDatabaseUrl(database: string): string {
 }
 
 async function main(): Promise<void> {
-  const admin = new Bun.SQL(ADMIN_URL, { max: 1 });
-  await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-  await admin.unsafe(`CREATE DATABASE ${TEST_DB}`);
-  await admin.end();
+  if (BACKEND === "postgres") {
+    const admin = new Bun.SQL(ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${TEST_DB}`);
+    await admin.end();
+  }
 
-  const db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+  const db = BACKEND === "postgres"
+    ? new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB))
+    : new Database(":memory:");
   const store = new MultiremiStore(db);
   const app = createMultiremiApp({ store });
   const failures: string[] = [];
@@ -191,6 +201,34 @@ async function main(): Promise<void> {
       status: held.status, code: held.body.code, reason: held.body.reason,
     });
 
+    const snapshot = (step: number) => ({
+      step,
+      c1: store.getIssue(firstId)?.status,
+      c2: store.getIssue(secondId)?.status,
+      c3: store.getIssue(thirdId)?.status,
+      parent: store.getIssue(parentId)?.status,
+    });
+
+    // ── MUL-458: a human explicitly starts the third waiting child ───────────
+    const earlyComment = await post(`/api/issues/${thirdId}/comments`, {
+      body: "Start C3 now; re-check its unfinished prerequisite before proceeding.",
+    });
+    check("human comment on waiting C3 is accepted", earlyComment.status === 201, {
+      status: earlyComment.status,
+    });
+    const earlyC3Rounds = tasksOf(thirdId);
+    check("human comment starts exactly one C3 round", earlyC3Rounds.length === 1, {
+      rounds: earlyC3Rounds.length,
+    });
+    check("human comment moves C3 to todo", store.getIssue(thirdId)?.status === "todo", snapshot(1));
+    const c3Force = store.listIssueActivity(thirdId).filter((entry) => entry.type === "dependency_force_started");
+    check("human comment records one comment force-start", c3Force.length === 1
+      && (c3Force[0]!.data as Record<string, unknown>)?.source === "comment", {
+      activities: c3Force.map((entry) => entry.data),
+    });
+    check("C2 remains waiting while C3 starts early", store.getIssue(secondId)?.status === "backlog", snapshot(1));
+    check("parent stays out of in_review after the early start", store.getIssue(parentId)?.status !== "in_review", snapshot(1));
+
     /**
      * Drive the one round the platform queued for `issueId`, the way a daemon
      * would: claim, start, complete. Then review the child the way a person
@@ -222,14 +260,6 @@ async function main(): Promise<void> {
       });
     };
 
-    const snapshot = (step: number) => ({
-      step,
-      c1: store.getIssue(firstId)?.status,
-      c2: store.getIssue(secondId)?.status,
-      c3: store.getIssue(thirdId)?.status,
-      parent: store.getIssue(parentId)?.status,
-    });
-
     await runChildRound(firstId, "C1");
     check("C2 auto-started after C1 finished", store.getIssue(secondId)?.status === "todo", snapshot(2));
     check("C2 reports dependency_auto_started",
@@ -240,20 +270,21 @@ async function main(): Promise<void> {
     check("C2 published issue:updated as todo",
       c2Events.some((event) => event.status === "todo" && event.prevStatus === "backlog"),
       { events: c2Events });
-    check("C3 still waiting after C1", store.getIssue(thirdId)?.status === "backlog", snapshot(2));
+    check("C3 stays independently active after C1", store.getIssue(thirdId)?.status === "todo", snapshot(2));
     check("parent still held after C1", store.getIssue(parentId)?.status !== "in_review", snapshot(2));
 
-    await runChildRound(secondId, "C2");
-    check("C3 auto-started after C2 finished", store.getIssue(thirdId)?.status === "todo", snapshot(3));
-    check("C3 reports dependency_auto_started",
-      store.listIssueActivity(thirdId).some((entry) => entry.type === "dependency_auto_started"), {});
-    const c3Events = issueUpdatedEvents.filter((event) => event.issueId === thirdId);
-    check("C3 published issue:updated as todo",
-      c3Events.some((event) => event.status === "todo" && event.prevStatus === "backlog"),
-      { events: c3Events });
-    check("parent still held after C2", store.getIssue(parentId)?.status !== "in_review", snapshot(3));
+    // C3's forced round was queued before C2's automatic round. It can finish
+    // while its direct prerequisite C2 is still unfinished.
+    await runChildRound(thirdId, "C3 early");
+    check("C3 can finish before its prerequisite", store.getIssue(thirdId)?.status === "done", snapshot(3));
+    check("parent remains held after early C3", store.getIssue(parentId)?.status !== "in_review", snapshot(3));
 
-    await runChildRound(thirdId, "C3");
+    await runChildRound(secondId, "C2");
+    check("C2 completion does not add a second C3 round", tasksOf(thirdId).length === 1, {
+      rounds: tasksOf(thirdId).length,
+    });
+    check("C3 has no automatic start after its human force-start",
+      !store.listIssueActivity(thirdId).some((entry) => entry.type === "dependency_auto_started"), {});
     check("every child reached done", [firstId, secondId, thirdId]
       .every((id) => store.getIssue(id)?.status === "done"), snapshot(4));
 
@@ -381,15 +412,17 @@ async function main(): Promise<void> {
       expected: `MUL-${issuesBefore + 1}`, actual: afterRejection.body.identifier,
     });
     // A successful creation with a prerequisite exercises the same wrapper.
-    db.resetTransactionDepthStats();
+    if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
     await post("/api/issues", {
       title: "Depth probe",
       status: "todo",
       parent_issue_id: parentId,
       blocked_by: [firstId],
     });
-    check("issue creation stays a single transaction on Postgres",
-      db.maxTransactionDepth === 1, { maxTransactionDepth: db.maxTransactionDepth });
+    if (db instanceof PostgresSyncDatabase) {
+      check("issue creation stays a single transaction on Postgres",
+        db.maxTransactionDepth === 1, { maxTransactionDepth: db.maxTransactionDepth });
+    }
 
     // (c) A readiness report for an unowned dependent that shares the
     // prerequisite's parent must not queue a round of its own.
@@ -467,10 +500,10 @@ async function main(): Promise<void> {
 
     const rerun = await json(`/api/issues/${gatedId}/rerun`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "X-Agent-ID": agent.id },
       body: JSON.stringify({ agent_id: agent.id }),
     });
-    check("rerun on a waiting issue answers 409 dependencies_unmet",
+    check("agent rerun on a waiting issue answers 409 dependencies_unmet",
       rerun.status === 409 && rerun.body.code === "dependencies_unmet", {
       status: rerun.status, code: rerun.body.code,
     });
@@ -585,16 +618,18 @@ async function main(): Promise<void> {
 
   } finally {
     db.close();
-    const cleanup = new Bun.SQL(ADMIN_URL, { max: 1 });
-    await cleanup.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-    await cleanup.end();
+    if (BACKEND === "postgres") {
+      const cleanup = new Bun.SQL(ADMIN_URL, { max: 1 });
+      await cleanup.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+      await cleanup.end();
+    }
   }
 
   const report = {
     issue: "MUL-409",
-    acceptance: "MUL-400 E3 acceptance 2 — parent + 3 serially dependent children, real PostgreSQL",
-    database: "throwaway PG database, dropped after the run",
-    serverCode: "real MultiremiStore over PostgresSyncDatabase + real HTTP app",
+    acceptance: "MUL-400 E3 acceptance 2 + MUL-458 early human comment — parent + 3 serially dependent children",
+    database: BACKEND === "postgres" ? "throwaway PG database, dropped after the run" : "in-memory SQLite database",
+    serverCode: `real MultiremiStore over ${BACKEND === "postgres" ? "PostgresSyncDatabase" : "bun:sqlite"} + real HTTP app`,
     testDoubles: "execution agent and worker only (no provider is run)",
     ranAt: new Date().toISOString(),
     steps,

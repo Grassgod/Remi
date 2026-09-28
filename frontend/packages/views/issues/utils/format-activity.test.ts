@@ -130,6 +130,9 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("delegation_return_triggered"), t)).toBe(
       "activity.delegation_return_triggered",
     );
+    expect(formatActivity(activity("delegation_return_triggered", {
+      details: { sourceIssueId: "child", sourceIssueKey: "MUL-456", returnIssueId: "parent" },
+    }), t)).toBe('activity.delegation_return_triggered_cross_issue {"key":"MUL-456"}');
     expect(
       formatActivity(
         activity("delegation_return_skipped", { details: { reason: "already_covered" } }),
@@ -142,6 +145,15 @@ describe("formatActivity", () => {
       "coalesced_into_pending_return",
       "covered_by_queued_task",
       "deferred_lane_busy",
+      "source_not_issue_task",
+      "source_side_session",
+      "source_not_squad_leader",
+      "target_not_squad_member",
+      "cross_issue_no_lineage",
+      "self_dispatch",
+      "covered_by_delegate_wakeup",
+      "delegator_issue_closed",
+      "delegator_session_missing",
     ]) {
       expect(
         formatActivity(activity("delegation_return_skipped", { details: { reason } }), t),
@@ -364,8 +376,16 @@ describe("formatActivity — dependency activities", () => {
     expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
   });
 
-  it("renders a member forced start", () => {
+  it("renders each member force-start source", () => {
     expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "comment" } }), t))
+      .toBe("activity.dependency_force_started_comment");
+    expect(formatActivity(activity("dependency_force_started", {
+      details: { source: "mention", agent_id: "agt_qa" },
+    }), t, (_type, id) => id === "agt_qa" ? "QA" : id))
+      .toBe('activity.dependency_force_started_mention {"agent":"QA"}');
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "rerun" } }), t))
+      .toBe("activity.dependency_force_started_rerun");
   });
 
   it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {

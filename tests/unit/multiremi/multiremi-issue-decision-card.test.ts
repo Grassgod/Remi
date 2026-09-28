@@ -325,6 +325,13 @@ describe("MUL-412 issue decision cards", () => {
     const sourceOwnerTask = store.listTasksForIssue(child.id).find(item => item.status === "queued");
     expect(sourceOwnerTask).toBeTruthy();
     expect(sourceOwnerTask!.prompt).toContain(decision.id);
+    expect(sourceOwnerTask).toMatchObject({
+      delegationId: null,
+      delegatedByAgentId: null,
+      delegatedFromIssueSessionId: null,
+      delegationSkipReason: null,
+      wakeSource: null,
+    });
     expect(store.listInboxItems(member.id)).toHaveLength(1);
     expect(store.listInboxItems(member.id)[0]).toMatchObject({
       type: "decision_requested", issueId: parent.id,

@@ -56,3 +56,18 @@ describe("IssuesEndpoints issue workspace response schema", () => {
     await expect(endpoints.getIssueWorkspace("issue-1")).resolves.toEqual({ workspace: null });
   });
 });
+
+describe("IssuesEndpoints batch updates", () => {
+  it("accepts both the legacy success body and per-row dependency skips", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ updated: 2 }))
+      .mockResolvedValueOnce(jsonResponse({ updated: 1, skipped: [{ issueId: "issue-2", error: "waiting", code: "dependencies_unmet" }] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new IssuesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.batchUpdateIssues(["issue-1", "issue-2"], { status: "todo" }))
+      .resolves.toEqual({ updated: 2, skipped: [] });
+    await expect(endpoints.batchUpdateIssues(["issue-1", "issue-2"], { status: "todo" }))
+      .resolves.toEqual({ updated: 1, skipped: [{ issueId: "issue-2", error: "waiting", code: "dependencies_unmet" }] });
+  });
+});

@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
+import * as nodeFs from "node:fs";
+import { parse as parseToml } from "smol-toml";
 import {
   cleanupTemporaryTaskProviderHome,
   cleanupTaskPrivateTempDirectory,
@@ -51,6 +54,114 @@ describe("Issue Session provider home", () => {
     expect(readFileSync(join(second.path, "second.txt"), "utf8")).toBe("second");
     await cleanupTaskPrivateTempDirectory(second);
     expect(existsSync(second.path)).toBe(false);
+  });
+
+  // MUL-449: macOS caps a unix socket path at 104 bytes, while a delegation's
+  // real task temp directory runs past 220. Each execution therefore gets a
+  // short `/tmp/remi-XXXXXXXX` alias, and TMPDIR/TMP/TEMP point at that alias.
+  it("allocates a short /tmp alias for the task temp directory on darwin", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-tmp-alias-"));
+    roots.push(root);
+    const home = resolveTaskProviderHome(task("claude"), join(root, "issue-runtime"), join(root, "workspaces"))!;
+    const directory = await prepareTaskPrivateTempDirectory(home, "tsk_alias", "darwin");
+    if (directory.aliasPath) roots.push(directory.aliasPath);
+
+    expect(directory.aliasPath).toBeDefined();
+    // Short enough that a socket inside it stays under the 104-byte cap.
+    expect(Buffer.byteLength(directory.aliasPath!)).toBeLessThanOrEqual(24);
+    expect(directory.aliasPath!.startsWith("/tmp/remi-")).toBe(true);
+    // The alias names the real directory; the real directory does not move.
+    expect(lstatSync(directory.aliasPath!).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(directory.aliasPath!)).toBe(directory.path);
+    expect(directory.path).toContain("task-tmp");
+
+    await cleanupTaskPrivateTempDirectory(directory);
+    expect(existsSync(directory.aliasPath!)).toBe(false);
+    expect(existsSync(directory.path)).toBe(false);
+  });
+
+  it("keeps the alias usable for a unix socket when the real path is too long", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-tmp-socket-"));
+    roots.push(root);
+    // A provider home deep enough to blow macOS's 104-byte `sun_path` cap,
+    // shaped like the delegation path the MBP actually uses.
+    const deep = join(
+      root, "w".repeat(80), "delegations", "d".repeat(60), "executions", "e".repeat(64),
+    );
+    mkdirSync(deep, { recursive: true });
+    const home = resolveTaskProviderHome(task("claude"), deep, join(deep, "workspaces"))!;
+    const directory = await prepareTaskPrivateTempDirectory(home, "tsk_socket", "darwin");
+    if (directory.aliasPath) roots.push(directory.aliasPath);
+
+    expect(directory.aliasPath).toBeDefined();
+    // The real directory is unusable as a socket directory on macOS: its own
+    // path already exceeds the cap before any socket name is appended. Linux
+    // accepts longer paths, so assert the length contract rather than trying to
+    // reproduce the macOS kernel error here.
+    const realSocket = join(directory.path, "probe.sock");
+    const aliasSocket = join(directory.aliasPath!, "probe.sock");
+    expect(Buffer.byteLength(realSocket)).toBeGreaterThan(104);
+    expect(Buffer.byteLength(aliasSocket)).toBeLessThanOrEqual(64);
+
+    // A listener really can bind through the alias, and the node lands in the
+    // real directory (the alias is a link, not a copy).
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(aliasSocket, resolve);
+    });
+    expect(existsSync(join(directory.path, "probe.sock"))).toBe(true);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await cleanupTaskPrivateTempDirectory(directory);
+  });
+
+  it("never deletes an alias that is not the one this execution created", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-tmp-foreign-"));
+    roots.push(root);
+    const home = resolveTaskProviderHome(task("claude"), join(root, "issue-runtime"), join(root, "workspaces"))!;
+    const directory = await prepareTaskPrivateTempDirectory(home, "tsk_foreign", "darwin");
+    expect(directory.aliasPath).toBeDefined();
+    // Someone else's directory now occupies the alias name.
+    rmSync(directory.aliasPath!, { force: true });
+    const foreignTarget = join(root, "foreign");
+    mkdirSync(foreignTarget, { recursive: true });
+    symlinkSync(foreignTarget, directory.aliasPath!);
+    roots.push(directory.aliasPath!);
+
+    await cleanupTaskPrivateTempDirectory({ ...directory, aliasPath: directory.aliasPath });
+    // The foreign link and its target survive; only the owned directory goes.
+    expect(existsSync(directory.aliasPath!)).toBe(true);
+    expect(existsSync(foreignTarget)).toBe(true);
+    expect(existsSync(directory.path)).toBe(false);
+  });
+
+  it("falls back to the long real path when the alias cannot be created", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-tmp-fallback-"));
+    roots.push(root);
+    const home = resolveTaskProviderHome(task("claude"), join(root, "issue-runtime"), join(root, "workspaces"))!;
+    // Force every candidate name to collide, which is the same code path as an
+    // unwritable /tmp: the execution keeps the long path and still succeeds.
+    const aliasSpy = spyOn(nodeFs, "symlinkSync").mockImplementation(() => {
+      throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
+    });
+    try {
+      const directory = await prepareTaskPrivateTempDirectory(home, "tsk_fallback", "darwin");
+      expect(directory.aliasPath).toBeUndefined();
+      expect(existsSync(directory.path)).toBe(true);
+      await cleanupTaskPrivateTempDirectory(directory);
+      expect(existsSync(directory.path)).toBe(false);
+    } finally {
+      aliasSpy.mockRestore();
+    }
+  });
+
+  it("does not create an alias on non-darwin platforms", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-task-tmp-linux-"));
+    roots.push(root);
+    const home = resolveTaskProviderHome(task("claude"), join(root, "issue-runtime"), join(root, "workspaces"))!;
+    const directory = await prepareTaskPrivateTempDirectory(home, "tsk_linux", "linux");
+    expect(directory.aliasPath).toBeUndefined();
+    await cleanupTaskPrivateTempDirectory(directory);
   });
 
   it("isolates delegation working directories and refuses a symlinked directory", async () => {
@@ -377,6 +488,36 @@ describe("Issue Session provider home", () => {
     expect(taskConfig).toContain('model = "gpt-test"');
     expect(taskConfig).not.toContain("must-never-enter-task-home");
     expect(existsSync(join(resolved.home, "auth.json"))).toBe(false);
+  });
+
+  it("enables Codex Default-mode request_user_input in every generated home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-session-home-"));
+    const baseHome = join(root, "base");
+    roots.push(root);
+    mkdirSync(baseHome, { recursive: true });
+    writeFileSync(join(baseHome, "auth.json"), JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "oauth-secret" },
+    }), { mode: 0o600 });
+    writeFileSync(join(baseHome, "config.toml"), 'model = "gpt-test"\n');
+
+    // Plain Issue Session lane.
+    const native = resolveIssueSessionProviderHome(task("codex"), join(root, "MUL-1"), join(root, "workspaces"))!;
+    await prepareIssueSessionProviderHome(native, { baseCodexHome: baseHome, linkCodexAuth: false });
+    const nativeConfig = parseToml(readFileSync(join(native.home, "config.toml"), "utf8")) as Record<string, any>;
+    expect(nativeConfig.features.default_mode_request_user_input).toBe(true);
+
+    // Side conversation lane: reconcile also appends its developer_instructions,
+    // which must not displace the features table.
+    const side = resolveIssueSessionProviderHome(task("codex"), join(root, "MUL-2"), join(root, "workspaces"))!;
+    await prepareIssueSessionProviderHome(side, {
+      baseCodexHome: baseHome,
+      linkCodexAuth: false,
+      sideConversation: true,
+    });
+    const sideConfig = parseToml(readFileSync(join(side.home, "config.toml"), "utf8")) as Record<string, any>;
+    expect(sideConfig.features.default_mode_request_user_input).toBe(true);
+    expect(sideConfig.developer_instructions).toContain("Sub-agents are off-limits");
   });
 
   it("copies only whitelisted Claude execution settings", async () => {

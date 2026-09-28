@@ -75,7 +75,7 @@ export function getInboxDisplayTitle(
 export function getAutopilotRunOutcome(item: InboxItem): AutopilotRunOutcome | null {
   const value = item.details?.outcome;
   if (!isRecord(value)) return null;
-  if (!["no_change", "changes", "failed", "unknown"].includes(value.kind)) return null;
+  if (typeof value.kind !== "string" || !["no_change", "changes", "failed", "unknown"].includes(value.kind)) return null;
   if (!Array.isArray(value.links)) return null;
   if (value.text !== null && typeof value.text !== "string") return null;
   const headline = typeof value.headline === "string" && value.headline.trim()
@@ -86,7 +86,7 @@ export function getAutopilotRunOutcome(item: InboxItem): AutopilotRunOutcome | n
     if (link.kind !== "pull_request" && link.kind !== "merge_request") return [];
     if (typeof link.url !== "string" || !/^https?:\/\//u.test(link.url)) return [];
     return [{
-      kind: link.kind,
+      kind: link.kind as "pull_request" | "merge_request",
       url: link.url,
       ...(typeof link.number === "number" ? { number: link.number } : {}),
     }];

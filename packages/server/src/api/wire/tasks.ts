@@ -3,6 +3,7 @@
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiChatMessage,
   MultiremiDaemonHeartbeatAck,
@@ -22,6 +23,12 @@ type InternalTaskField =
   | "delegated_by_agent_id"
   | "delegationReturnTaskId"
   | "delegation_return_task_id"
+  | "delegatedFromIssueSessionId"
+  | "delegated_from_issue_session_id"
+  | "delegationSkipReason"
+  | "delegation_skip_reason"
+  | "wakeSource"
+  | "wake_source"
   | "issueCreationRestricted"
   | "issue_creation_restricted";
 
@@ -51,6 +58,12 @@ export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, In
     delegated_by_agent_id: _delegatedByAgentIdSnake,
     delegationReturnTaskId: _delegationReturnTaskId,
     delegation_return_task_id: _delegationReturnTaskIdSnake,
+    delegatedFromIssueSessionId: _delegatedFromIssueSessionId,
+    delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
+    delegationSkipReason: _delegationSkipReason,
+    delegation_skip_reason: _delegationSkipReasonSnake,
+    wakeSource: _wakeSource,
+    wake_source: _wakeSourceSnake,
     issueCreationRestricted: _issueCreationRestricted,
     issue_creation_restricted: _issueCreationRestrictedSnake,
     ...publicTask
@@ -115,7 +128,15 @@ export function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): R
   return response;
 }
 
-export function taskMessageRealtimePayload(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
+/**
+ * MUL-474: only routing/scope fields are read, so the builder takes the narrow
+ * fan-out subject instead of a whole Task — appending a message must not load
+ * the prompt.
+ */
+export function taskMessageRealtimePayload(
+  message: MultiremiTaskMessage,
+  task: TaskMessageFanoutSubject,
+): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     task_id: message.taskId,
     issue_id: task.issueId,
@@ -822,7 +843,10 @@ function taskResultWireValue(task: MultiremiTask): unknown | null {
   };
 }
 
-export function daemonTaskMessageWireResponse(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
+export function daemonTaskMessageWireResponse(
+  message: MultiremiTaskMessage,
+  task: TaskMessageFanoutSubject,
+): Record<string, unknown> {
   const response: Record<string, unknown> = {
     task_id: message.taskId,
     seq: message.seq,
@@ -872,4 +896,3 @@ function daemonBasename(path: string): string {
   const index = trimmed.lastIndexOf("/");
   return index >= 0 ? trimmed.slice(index + 1) : trimmed;
 }
-

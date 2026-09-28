@@ -16,7 +16,7 @@ import { useViewStore } from "@multiremi/core/issues/stores/view-store-context";
 import { projectListOptions } from "@multiremi/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
-import { ProgressRing } from "./progress-ring";
+import { ChildProgressSummary } from "./child-progress-summary";
 import { IssueActionsContextMenu } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
@@ -24,6 +24,10 @@ import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 export interface ChildProgress {
   done: number;
   total: number;
+  cancelled?: number;
+  blocked?: number;
+  waiting?: number;
+  active?: number;
 }
 
 function formatDate(date: string): string {
@@ -104,15 +108,10 @@ function ListRowContent({
           </span>
           <IssueAgentActivityIndicator issueId={issue.id} />
 
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="truncate">{issue.title}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap">
+            <span className="min-w-0 truncate">{issue.title}</span>
             {showChildProgress && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5">
-                <ProgressRing done={childProgress!.done} total={childProgress!.total} size={14} />
-                <span className="text-[11px] text-muted-foreground tabular-nums font-medium">
-                  {childProgress!.done}/{childProgress!.total}
-                </span>
-              </span>
+              <ChildProgressSummary progress={childProgress!} />
             )}
             {showLabels && (
               <span className="ml-1.5 hidden md:inline-flex shrink-0 items-center gap-1 max-w-[260px] overflow-hidden">

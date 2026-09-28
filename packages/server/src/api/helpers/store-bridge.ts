@@ -6,6 +6,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
 import {
   agentBroadcastCompatibilityResponse,
   cleanString,
@@ -21,6 +22,7 @@ import type {
   AssignIssueInput,
   CreateFeedbackInput,
   CreateRuntimeUpdateInput,
+  CreateTaskInput,
   MultiremiAgent,
   MultiremiIssue,
   MultiremiProject,
@@ -74,7 +76,9 @@ export function maybeDispatchOnIssueUpdate(
       assigneeId: issue.assigneeId,
       actorType: input.actorType,
       actorId: input.actorId,
-      parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+      // MUL-456 fix round 1: the authoritative camelCase read; a present
+      // `parentTaskId` (including an explicit `null`) wins over the alias.
+      parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
     }, { force: input.force === true });
   } catch (err) {
     log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -569,7 +573,13 @@ export function createOnboardingIssue(
 export function safeRerunIssue(
   store: MultiremiStore,
   issueId: string,
-  body: { agent_id?: string; agentId?: string; prompt?: string; parentTaskId?: string | null },
+  body: {
+    agent_id?: string;
+    agentId?: string;
+    prompt?: string;
+    parentTaskId?: string | null;
+    dependencyForce?: CreateTaskInput["dependencyForce"];
+  },
 ): { task: MultiremiTask } | { error: string; status: 400 | 404 | 409; code?: string; unmet?: IssueDependencyError["details"]["unmet"] } {
   const issue = store.getIssue(issueId);
   if (!issue) return { error: "issue not found", status: 404 };
@@ -588,6 +598,7 @@ export function safeRerunIssue(
       workspaceId: issue.workspaceId,
       prompt: body.prompt ?? issue.title,
       parentTaskId: body.parentTaskId ?? null,
+      dependencyForce: body.dependencyForce,
     });
     return { task };
   } catch (error) {

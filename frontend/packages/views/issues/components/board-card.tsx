@@ -21,7 +21,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
 import { PriorityPicker, AssigneePicker, StartDatePicker, DueDatePicker } from "./pickers";
 import { useViewStore } from "@multiremi/core/issues/stores/view-store-context";
-import { ProgressRing } from "./progress-ring";
+import { ChildProgressSummary } from "./child-progress-summary";
 import type { ChildProgress } from "./list-row";
 import { IssueActionsContextMenu } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
@@ -190,7 +190,7 @@ export const BoardCardContent = memo(function BoardCardContent({
       </div>
 
       {/* Row 2: Title */}
-      <p className="mt-1 text-sm font-medium leading-snug line-clamp-2">
+      <p className="mt-1 truncate text-sm font-medium leading-snug sm:whitespace-normal sm:line-clamp-2">
         {issue.title}
       </p>
 
@@ -285,10 +285,7 @@ export const BoardCardContent = memo(function BoardCardContent({
               )}
               {showChildProgress && (
                 <div className="inline-flex shrink-0 items-center gap-1">
-                  <ProgressRing done={childProgress!.done} total={childProgress!.total} size={14} />
-                  <span className="text-[11px] text-muted-foreground tabular-nums font-medium">
-                    {childProgress!.done}/{childProgress!.total}
-                  </span>
+                  <ChildProgressSummary progress={childProgress!} />
                 </div>
               )}
               {showUpdatedHint && (

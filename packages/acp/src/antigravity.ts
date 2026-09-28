@@ -139,9 +139,17 @@ export class AntigravityProvider implements Provider {
 
   private launch(args: string[], cwd?: string): ChildProcess {
     // argv is never composed into a shell command. Windows uses the native exe.
-    const launch = isolateProcessTmp({ executable: this.executable, args: [...this.prefix, ...args] }, this.options.privateTmpDirectory, this.env);
+    const launch = isolateProcessTmp(
+      { executable: this.executable, args: [...this.prefix, ...args] },
+      this.options.privateTmpDirectory,
+      this.env,
+      this.options.privateTmpPlatform,
+    );
+    // `this.env` is shared by every launch, so merge the platform's temp
+    // overrides into a per-spawn copy instead of the instance environment.
+    const env = launch.env ? { ...this.env, ...launch.env } : this.env;
     const child = spawn(launch.executable, launch.args, {
-      cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
       detached: process.platform !== "win32" && !this.options.inheritProcessGroup,
     });
     this.children.add(child);
@@ -213,7 +221,13 @@ export class AntigravityProvider implements Provider {
     const prompt = [options.systemPrompt, options.context, localContext, message].filter(Boolean).join("\n\n");
     const directory = await mkdtemp(join(this.options.privateTmpDirectory ?? tmpdir(), "remi-agy-"));
     const hostLogPath = join(directory, "run.log");
-    const logPath = privateTmpVisiblePath(hostLogPath, this.options.privateTmpDirectory);
+    // ACP file tools, the shell and agy's --log-file must all address the same
+    // path: Linux maps into the mounted /tmp, macOS keeps the host path.
+    const logPath = privateTmpVisiblePath(
+      hostLogPath,
+      this.options.privateTmpDirectory,
+      this.options.privateTmpPlatform,
+    );
     const started = Date.now();
     const timeoutMs = options.deadlineMs != null ? Math.max(1, options.deadlineMs - started) : this.options.timeout ? this.options.timeout * 1000 : 24 * 60 * 60 * 1000;
     const args = ["--log-file", logPath, "--print-timeout", `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`];

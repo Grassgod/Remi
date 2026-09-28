@@ -12,6 +12,7 @@ import {
   isJsonApiError,
   issueCommentCreateInput,
   issueFromParam,
+  humanRequestActor,
   issueListQuery,
   issueMutationActor,
   denyAttachmentCreationAccess,
@@ -1089,9 +1090,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
+    const human = humanRequestActor(c);
     const result = safeRerunIssue(store, issue.id, {
       ...body,
       parentTaskId: currentTaskParentId(c),
+      dependencyForce: human
+        ? { source: "rerun", actorMemberId: human.memberId }
+        : undefined,
     });
     if ("error" in result) {
       // MUL-400 E3: the task-creation gate reports the same 409 code as the

@@ -1,0 +1,1702 @@
+{
+  "generatedAt": "2026-09-27T22:42:07.786Z",
+  "issue": "MUL-474",
+  "parentIssue": "MUL-383",
+  "stage": "before",
+  "commit": "1bb060fb4788eaed3cb1d9d44294f16c740b68a2",
+  "runtime": {
+    "bun": "1.3.14",
+    "platform": "linux x64",
+    "postgres": "PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0, 64-bit",
+    "database": "multiremi_mul474_1491370_623787",
+    "transport": "in-process app.request() over PostgresSyncDatabase (Worker + SharedArrayBuffer)",
+    "accounting": "Server-Timing dbb/dbq (production request-metrics) + per-statement JSON.stringify({rows,count}) attribution"
+  },
+  "fixture": {
+    "promptBytes": 131072,
+    "resultBytes": 0,
+    "targetPromptBytes": 131072
+  },
+  "warmups": 2,
+  "samplesPerRoute": 5,
+  "routes": [
+    {
+      "label": "status",
+      "method": "GET",
+      "path": "/api/daemon/tasks/tsk_mul474_poll/status",
+      "samples": 5,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "dbMs": 12.8,
+      "dbParseMs": 0.7,
+      "responseBytes": 391,
+      "stableAcrossSamples": true,
+      "sql": [
+        "SELECT * FROM multiremi_tasks WHERE id = ?",
+        "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+        "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+        "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+        "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+        "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+        "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+        "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+        "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1"
+      ],
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ],
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      }
+    },
+    {
+      "label": "steer",
+      "method": "GET",
+      "path": "/api/daemon/tasks/tsk_mul474_poll/steer",
+      "samples": 5,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "dbMs": 15.9,
+      "dbParseMs": 0.4,
+      "responseBytes": 15,
+      "stableAcrossSamples": true,
+      "sql": [
+        "SELECT * FROM multiremi_tasks WHERE id = ?",
+        "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+        "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+        "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+        "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+        "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+        "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+        "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC"
+      ],
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ],
+      "responseBody": {
+        "messages": []
+      }
+    },
+    {
+      "label": "messages",
+      "method": "POST",
+      "path": "/api/daemon/tasks/tsk_mul474_poll/messages",
+      "samples": 5,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "dbMs": 29.8,
+      "dbParseMs": 1.2,
+      "responseBytes": 15,
+      "stableAcrossSamples": true,
+      "sql": [
+        "SELECT * FROM multiremi_tasks WHERE id = ?",
+        "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+        "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+        "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+        "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+        "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+        "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+        "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+        "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+        "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?"
+      ],
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ],
+      "responseBody": {
+        "status": "ok"
+      }
+    }
+  ],
+  "authorityMatrix": [
+    {
+      "label": "owner daemon / status",
+      "status": 200,
+      "body": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      }
+    },
+    {
+      "label": "owner daemon / steer",
+      "status": 200,
+      "body": {
+        "messages": []
+      }
+    },
+    {
+      "label": "foreign daemon / status",
+      "status": 403,
+      "body": {
+        "error": "forbidden for daemon identity",
+        "code": "daemon_identity_forbidden"
+      }
+    },
+    {
+      "label": "foreign daemon / steer",
+      "status": 403,
+      "body": {
+        "error": "forbidden for daemon identity",
+        "code": "daemon_identity_forbidden"
+      }
+    },
+    {
+      "label": "foreign daemon / messages",
+      "status": 403,
+      "body": {
+        "error": "forbidden for daemon identity",
+        "code": "daemon_identity_forbidden"
+      }
+    },
+    {
+      "label": "foreign daemon / complete",
+      "status": 403,
+      "body": {
+        "error": "forbidden for daemon identity",
+        "code": "daemon_identity_forbidden"
+      }
+    },
+    {
+      "label": "master token / status",
+      "status": 200,
+      "body": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      }
+    }
+  ],
+  "statusGolden": {
+    "task_id": "tsk_mul474_poll",
+    "status": "running",
+    "result": null,
+    "error": null,
+    "session_id": "ises_mul474_poll_session",
+    "work_dir": "/tmp/mul474-work",
+    "usage": [
+      {
+        "provider": "codex",
+        "model": "gpt-5",
+        "inputTokens": 1000,
+        "outputTokens": 500,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "totalTokens": 0
+      }
+    ],
+    "started_at": "2026-09-27T00:00:00.000Z",
+    "completed_at": null,
+    "receipt_message_ids": [
+      "om_mul474_receipt"
+    ]
+  },
+  "raw": [
+    {
+      "route": "status",
+      "status": 200,
+      "totalMs": 18.017,
+      "dbMs": 12.8,
+      "dbParseMs": 0.7,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "responseBytes": 391,
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "status",
+      "status": 200,
+      "totalMs": 17.377,
+      "dbMs": 13.9,
+      "dbParseMs": 0.4,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "responseBytes": 391,
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "status",
+      "status": 200,
+      "totalMs": 16.167,
+      "dbMs": 12.6,
+      "dbParseMs": 0.4,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "responseBytes": 391,
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "status",
+      "status": 200,
+      "totalMs": 18.246,
+      "dbMs": 13.9,
+      "dbParseMs": 1.6,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "responseBytes": 391,
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "status",
+      "status": 200,
+      "totalMs": 19.411,
+      "dbMs": 15.5,
+      "dbParseMs": 0.4,
+      "dbQueries": 18,
+      "dbBytes": 401432,
+      "responseBytes": 391,
+      "responseBody": {
+        "task_id": "tsk_mul474_poll",
+        "status": "running",
+        "result": null,
+        "error": null,
+        "session_id": "ises_mul474_poll_session",
+        "work_dir": "/tmp/mul474-work",
+        "usage": [
+          {
+            "provider": "codex",
+            "model": "gpt-5",
+            "inputTokens": 1000,
+            "outputTokens": 500,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 0
+          }
+        ],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": [
+          "om_mul474_receipt"
+        ]
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT d.external_message_id FROM multiremi_feishu_bot_deliveries d JOIN multiremi_feishu_bot_chat_bindings b ON b.id = d.binding_id JOIN multiremi_feishu_bot_configs c ON c.workspace_id = d.workspace_id AND c.app_id = b.app_id WHERE d.workspace_id = ? AND d.task_id = ? ORDER BY d.created_at, d.external_message_id",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 64
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_configs c JOIN multiremi_runtimes r ON r.id = c.runtime_id AND r.workspace_id = c.workspace_id JOIN multiremi_feishu_bot_chat_bindings b ON b.workspace_id = c.workspace_id AND b.app_id = c.app_id JOIN multiremi_tasks t ON t.chat_session_id = b.chat_session_id AND t.workspace_id = b.workspace_id AND t.agent_id = b.agent_id WHERE c.workspace_id = ? AND c.enabled = 1 AND r.daemon_id = ? AND t.id = ? LIMIT 1",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "steer",
+      "status": 200,
+      "totalMs": 20.496,
+      "dbMs": 15.9,
+      "dbParseMs": 0.4,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "responseBytes": 15,
+      "responseBody": {
+        "messages": []
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "steer",
+      "status": 200,
+      "totalMs": 16.324,
+      "dbMs": 12.4,
+      "dbParseMs": 0.4,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "responseBytes": 15,
+      "responseBody": {
+        "messages": []
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "steer",
+      "status": 200,
+      "totalMs": 18.09,
+      "dbMs": 13.9,
+      "dbParseMs": 0.4,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "responseBytes": 15,
+      "responseBody": {
+        "messages": []
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "steer",
+      "status": 200,
+      "totalMs": 20.002,
+      "dbMs": 15.2,
+      "dbParseMs": 0.4,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "responseBytes": 15,
+      "responseBody": {
+        "messages": []
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "steer",
+      "status": 200,
+      "totalMs": 22.566,
+      "dbMs": 17,
+      "dbParseMs": 0.8,
+      "dbQueries": 16,
+      "dbBytes": 401347,
+      "responseBytes": 15,
+      "responseBody": {
+        "messages": []
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 3,
+          "rows": 3,
+          "bytes": 399522
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 3,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_steer_messages WHERE task_id = ? AND consumed_at IS NULL ORDER BY created_at ASC, id ASC",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "messages",
+      "status": 200,
+      "totalMs": 35.527,
+      "dbMs": 29.8,
+      "dbParseMs": 1.2,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "responseBytes": 15,
+      "responseBody": {
+        "status": "ok"
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "messages",
+      "status": 200,
+      "totalMs": 23.903,
+      "dbMs": 19.4,
+      "dbParseMs": 0.6,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "responseBytes": 15,
+      "responseBody": {
+        "status": "ok"
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "messages",
+      "status": 200,
+      "totalMs": 15.684,
+      "dbMs": 11.5,
+      "dbParseMs": 1.8,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "responseBytes": 15,
+      "responseBody": {
+        "status": "ok"
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "messages",
+      "status": 200,
+      "totalMs": 22.415,
+      "dbMs": 18.4,
+      "dbParseMs": 1.2,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "responseBytes": 15,
+      "responseBody": {
+        "status": "ok"
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    },
+    {
+      "route": "messages",
+      "status": 200,
+      "totalMs": 28.069,
+      "dbMs": 22.7,
+      "dbParseMs": 1,
+      "dbQueries": 25,
+      "dbBytes": 668083,
+      "responseBytes": 15,
+      "responseBody": {
+        "status": "ok"
+      },
+      "statements": [
+        {
+          "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+          "calls": 5,
+          "rows": 5,
+          "bytes": 665870
+        },
+        {
+          "sql": "SELECT runtime.*, profile.display_name AS daemon_display_name FROM multiremi_runtimes runtime LEFT JOIN multiremi_daemon_profiles profile ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local') AND profile.daemon_id = runtime.daemon_id WHERE runtime.id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 627
+        },
+        {
+          "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 457
+        },
+        {
+          "sql": "SELECT id, status, usage FROM multiremi_tasks WHERE runtime_id = ?",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 452
+        },
+        {
+          "sql": "SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 253
+        },
+        {
+          "sql": "SELECT group_id FROM multiremi_execution_group_members WHERE runtime_id = ? ORDER BY provider",
+          "calls": 2,
+          "rows": 2,
+          "bytes": 142
+        },
+        {
+          "sql": "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?",
+          "calls": 1,
+          "rows": 1,
+          "bytes": 30
+        },
+        {
+          "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+          "calls": 5,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "SELECT * FROM multiremi_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC",
+          "calls": 2,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "INSERT INTO multiremi_task_messages ( id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(task_id, seq) DO UPDATE SET type = excluded.type, tool = excluded.tool, content = excluded.content, input = excluded.input, output = excluded.output, tool_call_id = excluded.tool_call_id, status = excluded.status, meta = excluded.meta WHERE (multiremi_task_messages.type, multiremi_task_messages.tool, multiremi_task_messages.content, multiremi_task_messages.input, multiremi_task_messages.output, multiremi_task_messages.tool_call_id, multiremi_task_messages.status, multiremi_task_messages.meta) IS DISTINCT FROM (excluded.type, excluded.tool, excluded.content, excluded.input, excluded.output, excluded.tool_call_id, excluded.status, excluded.meta)",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        },
+        {
+          "sql": "UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?",
+          "calls": 1,
+          "rows": 0,
+          "bytes": 0
+        }
+      ]
+    }
+  ]
+}
