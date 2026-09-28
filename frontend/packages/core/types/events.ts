@@ -7,12 +7,15 @@ import type { Workspace, MemberWithUser, Invitation } from "./workspace";
 import type { Project } from "./project";
 import type { ProjectDoc } from "./project-doc";
 import type { Label } from "./label";
+import type { MultiremiIssueDecision } from "@multiremi/contracts";
 
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
   | "issue:created"
   | "issue:updated"
   | "issue:deleted"
+  | "decision:created"
+  | "decision:updated"
   | "comment:created"
   | "comment:updated"
   | "comment:deleted"
@@ -115,6 +118,11 @@ export interface IssueUpdatedPayload {
 
 export interface IssueDeletedPayload {
   issue_id: string;
+}
+
+export interface IssueDecisionChangedPayload {
+  issue_id: string;
+  decision: MultiremiIssueDecision;
 }
 
 export interface IssueLabelsChangedPayload {
@@ -269,6 +277,17 @@ export interface TaskMessagePayload {
   meta?: Record<string, unknown>;
   /** Server insert time; present on the wire already (GET as createdAt, WS as created_at). */
   created_at?: string;
+}
+
+/** Header-only task:message: the peer could not read a referenced seq range. */
+export interface TaskMessageRefetchPayload {
+  task_id: string;
+  issue_id: string | null;
+  chat_session_id?: string;
+  issue_session_id?: string;
+  degraded: true;
+  seq_start: number;
+  seq_end: number;
 }
 
 export interface TaskProgressPayload {
@@ -473,6 +492,8 @@ export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
+  "decision:created": IssueDecisionChangedPayload;
+  "decision:updated": IssueDecisionChangedPayload;
   "issue_labels:changed": IssueLabelsChangedPayload;
   "issue_reaction:added": IssueReactionAddedPayload;
   "issue_reaction:removed": IssueReactionRemovedPayload;
@@ -507,7 +528,7 @@ export interface WSEventPayloadMap {
   "task:awaiting_human": TaskAwaitingHumanPayload;
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
-  "task:message": TaskMessagePayload;
+  "task:message": TaskMessagePayload | TaskMessageRefetchPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": TaskProgressPayload;
   "inbox:new": InboxNewPayload;

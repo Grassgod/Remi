@@ -17,6 +17,7 @@ import {
   myIssueListOptions,
   childIssueProgressOptions,
   issueKeys,
+  issueDecisionsOptions,
   issueTimelinePageOptions,
   issueTimelinePrimerOptions,
   projectGanttIssuesOptions,
@@ -46,6 +47,23 @@ describe("sub-issue visibility queries", () => {
     const options = childIssueProgressOptions(WS_ID);
     const map = options.select?.({ progress: [{ parentIssueId: "parent-1", total: 2, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 1 }] });
     expect(map?.get("parent-1")?.total).toBe(2);
+  });
+});
+
+describe("issue decision query options", () => {
+  it("uses an issue-scoped key and fetches the complete decision list", async () => {
+    const response = {
+      waiting_on_human: [],
+      owner_and_answered: { pending: [], answered: [] },
+      count: 0,
+    };
+    const listIssueDecisions = vi.fn().mockResolvedValue(response);
+    setApiInstance({ listIssueDecisions } as unknown as ApiClient);
+    const options = issueDecisionsOptions(WS_ID, "issue-1");
+
+    expect(options.queryKey).toEqual(["issues", WS_ID, "decisions", "issue-1"]);
+    await expect(new QueryClient().fetchQuery(options)).resolves.toEqual(response);
+    expect(listIssueDecisions).toHaveBeenCalledWith("issue-1");
   });
 });
 

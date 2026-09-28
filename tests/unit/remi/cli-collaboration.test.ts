@@ -34,6 +34,27 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("executes status-pages with list filters and optional archived total", async () => {
+    useCliEnv();
+    const spec = specById("issue.status-pages");
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const url = new URL(request.url);
+      expect(request.method).toBe("GET");
+      expect(url.pathname).toBe("/api/issues/status-pages");
+      for (const [name, value] of Object.entries({
+        workspace_id: "ws_1", statuses: "todo,done", assignee_id: "usr_1", assignee_types: "member",
+        project_id: "prj_1", parent_id: "iss_parent", top_level_only: "true", limit: "50",
+        metadata: '{"lane":1}', include_archived_total: "true",
+      })) expect(url.searchParams.get(name)).toBe(value);
+      return Response.json({ groups: { todo: { issues: [], total: 0, has_more: false } }, archived_total: 3 });
+    });
+    const output = await capture(() => registryFor([spec]).execute([
+      ...spec.path, "--statuses", "todo,done", "--assignee", "usr_1", "--assignee-type", "member",
+      "--project", "prj_1", "--parent", "iss_parent", "--top-level-only", "--limit", "50",
+      "--metadata", '{"lane":1}', "--include-archived-total", "--output", "json",
+    ]));
+    expect(JSON.parse(output.stdout).archived_total).toBe(3);
+  });
   it("passes the previous Chat page cursor to the route and resends file contents unchanged", async () => {
     useCliEnv();
     const list = specById("chat.message.list");
