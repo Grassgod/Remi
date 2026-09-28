@@ -10,10 +10,19 @@ import type { SidebarSectionsState } from "../hooks/use-sidebar-sections";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 const mockApiObj = vi.hoisted(() => ({ listChildIssues: vi.fn() }));
 
-vi.mock("@multiremi/core/api", () => ({
+vi.mock("@multiremi/core/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multiremi/core/api")>()),
   api: mockApiObj,
   getApi: () => mockApiObj,
   setApiInstance: vi.fn(),
+}));
+
+vi.mock("@multiremi/core/auth", () => ({
+  useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "member-1" } }),
+}));
+
+vi.mock("@multiremi/core/modals", () => ({
+  useModalStore: (selector: (state: { open: ReturnType<typeof vi.fn> }) => unknown) => selector({ open: vi.fn() }),
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({
@@ -79,11 +88,13 @@ function renderSummary(childIssues: Issue[]) {
 }
 
 describe("IssueSubIssuesSummary", () => {
-  it("does not render when the issue has no children", async () => {
+  it("keeps the add-sub-issue entry when the parent has no children", async () => {
     renderSummary([]);
 
     await vi.waitFor(() => expect(mockApiObj.listChildIssues).toHaveBeenCalledWith("parent-1"));
-    expect(screen.queryByText("Sub-issues")).not.toBeInTheDocument();
+    expect(screen.getByText("Sub-issues")).toBeInTheDocument();
+    expect(screen.getByText("0/0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add sub-issues" })).toBeInTheDocument();
   });
 
   it("counts only done children in the progress summary", async () => {
