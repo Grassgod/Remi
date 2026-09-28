@@ -29,6 +29,8 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 修改路由时，从请求实际指向的资源解析 workspace，再调用对应 guard；不要仅凭客户端传入的 ID 或“已经登录”认定有权限。[server.ts](../../packages/server/src/api/server.ts)中的 daemon 前缀中间件必须注册在对应 handler 之前，Hono 的注册顺序会影响覆盖范围。
 
+[MultiremiStore.updateAgent](../../packages/server/src/store/store.ts)的角色更新和所属任务凭据撤销共用一个外层事务；仓储调用 `updateAgentWithinTransaction`，保留排序后的 workspace 锁、plugin workspace 锁与 Agent 行锁，不在撤销之前另行提交。`setAgentRole`、`setAgentSupervisor` 同样在角色变化时撤销任务凭据。整体回滚与正常提交的真 PG 对照见 [事务边界用例](../../tests/unit/multiremi/multiremi-existing-pg-transaction-boundaries.test.ts)。
+
 ## Issue 关系与跨工作区移动
 
 [IssuesRepo](../../packages/server/src/store/repos/issues-repo.ts)的父子和依赖内容读取只认可同工作区关系，依赖行自身的 `workspace_id` 也必须与两端一致。旧的跨工作区关系在详情、列表、收件箱、分享、决策、父单状态推导和依赖自动开工中视为不存在；子单序列化仍保留不透明的 `parent_issue_id`，不附带对方标题、key 或状态。旧的跨工作区子单因此不再阻止父单结束；本规则不修改或迁移存量关系。
@@ -39,7 +41,7 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 批量在写入前预检全部 Issue，发现关系冲突则整批拒绝并返回 `issue_ids`。逐行写入仍各自提交；预检后并发新增关系可能使后续行拒绝，先前行不会回滚。该并发边界不允许形成跨工作区关系，也不代表批量具备整批事务原子性。
 
-创建子单、改父单、添加依赖及移动在一个事务内一次性按 ID 升序锁完所需的现有 Issue 行，锁后重读再校验；创建时父单与所有 `blocked_by` 端点一起加锁。沿用已有工作区锁且先于 Issue 行锁，不新增工作区锁，不在获得 Issue 行锁后再拿工作区锁，不改为 `REPEATABLE READ`。删除依赖、清父关系不增加关系行锁。
+创建子单、改父单、添加依赖、移动、把已结束子单改回未结束以及派给 Agent 重开已结束子单，都在一个事务内经 [issue-row-lock](../../packages/server/src/store/issue-row-lock.ts) 一次性按 ID 升序锁完所需的现有 Issue 行，锁后重读再校验；创建时父单与所有 `blocked_by` 端点一起加锁，改回未结束与 Agent 派单把当前父单一起入集。锁集由输入加一次不加锁的本单读取决定；锁后重读发现还需要一行没锁到的 Issue（等锁期间父单或结束状态变了），由事务所有者回滚重来一次，再过期或事务由调用方持有时返回 `409 issue_relation_changed`，任何情况下都不在持有行锁后补锁。沿用已有工作区锁且先于 Issue 行锁，不新增工作区锁，不在获得 Issue 行锁后再拿工作区锁，不改为 `REPEATABLE READ`。删除依赖、清父关系不增加关系行锁。完整顺序见 [ADR 0003](../adr/0003-parent-status-derived-from-children.md) 第 8 条。
 
 ## 启动条件
 

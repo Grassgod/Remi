@@ -254,7 +254,18 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     denyCurrentUserWorkspaceAccess(c, store, workspaceId)
       ?? requireWorkspaceAdmin(c, store, workspaceId);
 
-  const listAccessibleChildIssues = (c: Context, parentIds: string[]): MultiremiIssue[] => {
+  const listAccessibleChildIssues = (c: Context, parentRefs: string[], explicitWorkspaceId: string | null): MultiremiIssue[] => {
+    // Full IDs resolve globally; explicit selectors only scope keys, numbers and
+    // prefixes. Keep unscoped refs on the store's resolver; do not infer token/member defaults.
+    let workspaceId = cleanString(explicitWorkspaceId) ?? cleanString(c.req.header("X-Workspace-ID"));
+    let unknownSlug = false;
+    if (!workspaceId) {
+      const slug = cleanString(c.req.header("X-Workspace-Slug"));
+      if (slug) {
+        workspaceId = store.listWorkspaces().find((candidate) => candidate.slug === slug)?.id ?? null;
+        unknownSlug = !workspaceId;
+      }
+    }
     const workspaceAccess = new Map<string, boolean>();
     const canAccessWorkspace = (workspaceId: string): boolean => {
       let allowed = workspaceAccess.get(workspaceId);
@@ -264,10 +275,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       }
       return allowed;
     };
-    return parentIds.flatMap((parentId) => {
-      const parent = store.getIssue(parentId);
+    const seenParentIds = new Set<string>();
+    return parentRefs.flatMap((ref) => {
+      const parent = store.getIssue(ref.trim()) ?? (unknownSlug ? null : store.getIssueByRef(ref, workspaceId));
       if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
-      return store.listChildIssues(parentId).filter((child) => canAccessWorkspace(child.workspaceId));
+      if (seenParentIds.has(parent.id)) return [];
+      seenParentIds.add(parent.id);
+      return store.listChildIssues(parent.id).filter((child) => canAccessWorkspace(child.workspaceId));
     });
   };
 
@@ -625,7 +639,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
-    const issues = listAccessibleChildIssues(c, parentIds)
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspace_id") ?? null)
       .map((child) => ({
         ...issueCompatibilityResponse(child),
         blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
@@ -634,7 +648,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
+    const issues = listAccessibleChildIssues(c, parentIds, c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? null).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
   function validateIssueWorkspaceMove(c: Context, issue: MultiremiIssue, updates: UpdateIssueInput): Response | null {
@@ -1594,7 +1608,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       actorId,
       parentTaskId: currentTaskParentId(c),
     });
-    if ("error" in result) return c.json({ error: result.error }, result.status);
+    if ("error" in result) {
+      return c.json({ error: result.error, ...("code" in result && result.code ? { code: result.code } : {}) }, result.status);
+    }
     return c.json({
       issue: result.issue,
       cancelled_tasks: result.cancelledTasks,

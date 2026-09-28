@@ -93,6 +93,7 @@ export interface MultiremiRelayEngineWire {
   fragment: string;
   auth_token: string;
   revision: number;
+  one_million_models?: string[];
 }
 export interface MultiremiRelayWire {
   claude: MultiremiRelayEngineWire | null;

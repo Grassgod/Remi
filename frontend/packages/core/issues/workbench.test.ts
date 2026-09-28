@@ -145,14 +145,23 @@ describe("partitionReviewIssues", () => {
   });
 });
 
-describe("useWorkbenchPendingCount", () => {
+describe("useWorkbenchPendingCount (MUL-472 c)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("adds in-review and blocked totals while sharing both query keys", async () => {
-    listIssues.mockImplementation(({ status }: { status: string }) =>
-      Promise.resolve({ issues: [], total: status === "in_review" ? 2 : 3 }),
+  it("rolls both statuses into one statuses= request and equals the merged two-request result", async () => {
+    // The old shape: two `limit=200` requests, one per status. The badge summed
+    // their `total`s. Serve the same two totals through the new single request
+    // and assert both the request shape and the number.
+    const perStatusTotals: Record<string, number> = { in_review: 2, blocked: 3 };
+    const mergedTwoRequestResult = (perStatusTotals.in_review ?? 0) + (perStatusTotals.blocked ?? 0);
+    listIssues.mockImplementation(
+      ({ statuses }: { statuses: string[] }) =>
+        Promise.resolve({
+          issues: [],
+          total: statuses.reduce((sum, status) => sum + (perStatusTotals[status] ?? 0), 0),
+        }),
     );
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -166,14 +175,34 @@ describe("useWorkbenchPendingCount", () => {
     );
 
     await waitFor(() => expect(result.current).toEqual([5, 5]));
-    expect(listIssues).toHaveBeenCalledTimes(2);
-    expect(listIssues.mock.calls.map(([params]) => params.status).sort()).toEqual([
-      "blocked",
-      "in_review",
+    expect(result.current[0]).toBe(mergedTwoRequestResult);
+    // One request for the pair, however many components subscribe.
+    expect(listIssues).toHaveBeenCalledTimes(1);
+    expect(listIssues).toHaveBeenCalledWith({
+      statuses: ["in_review", "blocked"],
+      limit: 1,
+    });
+  });
+
+  it("resolves the badge from the combined key so a mounted page cannot double-fetch it", () => {
+    expect(workbenchKeys.pendingCount("ws1")).toEqual([
+      ...workbenchKeys.all("ws1"),
+      "pending-count",
     ]);
-    expect(workbenchKeys.blocked("ws1")).toEqual(
-      workbenchKeys.status("ws1", "blocked"),
+  });
+
+  it("does not query while the shell gate is closed", () => {
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(
+      () => useWorkbenchPendingCount("ws1", false),
+      { wrapper },
     );
+
+    expect(result.current).toBe(0);
+    expect(listIssues).not.toHaveBeenCalled();
   });
 
   it("does not query without a workspace", () => {

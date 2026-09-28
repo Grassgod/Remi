@@ -153,6 +153,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelContextDecl,
   type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
@@ -161,6 +162,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelContextDecl,
   GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
@@ -845,7 +847,7 @@ runMigrations(this.db);
     return this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1423,6 +1425,24 @@ runMigrations(this.db);
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
   }
 
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    return this.workspaces.listGatewayModelContext(workspaceId, engine);
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    return this.workspaces.getGatewayModelContext(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string, engine: RelayEngine, input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    return this.workspaces.saveGatewayModelContext(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelContext(workspaceId, engine, modelId);
+  }
+
   listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
     return this.workspaces.listGatewayModelReasoning(workspaceId, engine);
   }
@@ -1529,9 +1549,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -4884,6 +4905,10 @@ runMigrations(this.db);
     return this.tasks.createTaskSteerMessage(input);
   }
 
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
+  }
+
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
     return this.tasks.getTaskSteerMessage(steerId);
   }
@@ -4982,7 +5007,7 @@ runMigrations(this.db);
       } else {
         const content = String(input.content ?? "").trim();
         if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
-        message = this.tasks.createTaskSteerMessage({
+        message = this.tasks.createTaskSteerMessageWithinTransaction({
           taskId: target.id,
           kind: input.action,
           content,

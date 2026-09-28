@@ -27,6 +27,7 @@ import type {
 import {
   BatchParentStatusGuardError,
   IssueDependencyError,
+  IssueLockSetStaleError,
   IssueWorkspaceMoveError,
   ParentStatusGuardError,
 } from "@multiremi/store/repos/issues-repo.js";
@@ -267,6 +268,11 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
       error: err.message, code: err.code, relations: err.relations,
       ...(err.issueIds ? { issue_ids: err.issueIds } : {}),
     }, 409);
+  }
+  // ADR 0003 #8: the Issue changed twice while this request waited for its
+  // locks; nothing was written and the client may retry.
+  if (err instanceof IssueLockSetStaleError) {
+    return c.json({ error: err.message, code: err.code }, 409);
   }
   // MUL-400 E1: the parent-status guard is a conflict, and the client needs the
   // machine-readable code plus `open_children` to show the reason and to offer
