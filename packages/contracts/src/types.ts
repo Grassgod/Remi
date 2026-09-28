@@ -954,6 +954,7 @@ export interface MultiremiDaemonHeartbeatAck {
   feishu_bot?: MultiremiFeishuBotDirective;
   /** One leased proactive reply for the Runtime hosting the Feishu concierge. */
   pending_feishu_outbound?: MultiremiFeishuBotOutboundDelivery;
+  pending_feishu_outbounds?: MultiremiFeishuBotOutboundDelivery[];
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -4338,6 +4339,10 @@ export interface FeishuBotOutboundMention {
  * changing the kinds or the checkpoint fields.
  */
 export type FeishuBotOutboundDeliveryKind =
+  | "cot"
+  | "interaction_card"
+  | "result_card"
+  | "receipt"
   | "decision_card"
   | "decision_card_patch"
   | "decision_reminder";
@@ -4437,6 +4442,8 @@ export interface MultiremiFeishuBotOutboundDelivery {
    * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
    */
   kind?: FeishuBotOutboundDeliveryKind;
+  /** A receipt owns exactly one original inbound message and state transition. */
+  receiptState?: "received" | "completed" | "failed";
   /** Set on every decision-card lane so the host can poll the request. */
   humanRequestId?: string;
   human_request_id?: string;
@@ -4799,6 +4806,7 @@ export interface FeishuBotTestResult {
 }
 
 export type FeishuBotAuditAction =
+  | "receipt_failed"
   | "configured"
   | "updated"
   | "deleted"

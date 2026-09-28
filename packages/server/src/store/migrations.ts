@@ -3264,6 +3264,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // delivery is a normal card (or not a decision lane at all).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
   ensureFeishuOutboundKindsSchema(db, dialect);
+  addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "outbound_requested INTEGER NOT NULL DEFAULT 0");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
