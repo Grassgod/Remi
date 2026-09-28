@@ -16,7 +16,7 @@ import { daemonAgentPluginDesiredResponse } from "@multiremi/api/wire/agent-plug
 import { createProjectKnowledgeServiceFromEnv } from "@multiremi/project-knowledge/service.js";
 import { createRepositoryWikiServiceFromEnv } from "@multiremi/repository-wiki/service.js";
 
-type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable" | "retired-body";
+type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable" | "retired-body" | "register";
 let pollingClock: ManualDaemonProtocolClock | null = null;
 let advancePoll: (() => void) | null = null;
 interface FaultSocketData { identity: DaemonProtocolIdentity; session: DaemonProtocolSession | null }
@@ -57,6 +57,10 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     idleTimeout: 0,
     fetch: async (request, server) => {
       const path = new URL(request.url).pathname;
+      if (path === "/api/daemon/register" && fault === "register" && state.armed) {
+        state.failures++;
+        return Response.json({ error: "registration unavailable" }, { status: 503 });
+      }
       if (path === "/api/daemon/ws" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
         const resolved = await protocol.resolveIdentity(request, "heartbeat-test-root");
         if ("response" in resolved) return resolved.response;
@@ -243,21 +247,21 @@ describe("daemon heartbeat network recovery", () => {
     }
   }, 10_000);
 
-  it("stops cleanly during the startup plugin query and can start again", async () => {
+  it("stops within 1s during an online plugin RPC and can start again", async () => {
     const bed = await faultTestBed("plugins", 30_000);
     let restarted: Promise<void> | undefined;
     try {
       bed.state.armed = true;
-      await waitUntil(() => bed.state.failures > 0, "startup plugin query");
-      expect(bed.state.heartbeats).toBe(0);
+      await waitUntil(() => bed.state.failures > 0, "online plugin RPC");
+      expect(bed.isSettled()).toBe(false);
       bed.daemon.stop();
-      await waitUntil(bed.isSettled, "startup cancellation", 1_000);
+      await waitUntil(bed.isSettled, "online RPC cancellation", 1_000);
       expect(bed.error()).toBeUndefined();
       expect(bed.state.cleanupCalls).toBe(0);
 
       bed.state.armed = false;
       restarted = bed.daemon.start();
-      await waitUntil(() => bed.state.claims >= 3, "polling after a cancelled startup");
+      await waitUntil(() => bed.state.claims >= 3, "offers after an online RPC cancellation");
     } finally {
       bed.daemon.stop();
       try {
@@ -268,15 +272,33 @@ describe("daemon heartbeat network recovery", () => {
     }
   }, 10_000);
 
-  it("still rejects startup when workspace ownership is lost during a plugin query", async () => {
+  it("stops and cleans up after workspace ownership is lost during an online plugin RPC", async () => {
     const bed = await faultTestBed("plugins", 30_000);
     try {
       bed.state.armed = true;
-      await waitUntil(() => bed.state.failures > 0, "startup plugin query");
+      await waitUntil(() => bed.state.failures > 0, "online plugin RPC");
+      expect(bed.isSettled()).toBe(false);
       bed.daemon.stopForWorkspaceOwnershipLoss(new Error("workspace ownership lost"));
-      await waitUntil(bed.isSettled, "startup ownership failure", 1_000);
+      await waitUntil(bed.isSettled, "online RPC ownership loss", 1_000);
+      expect(bed.error()).toBeUndefined();
+      expect(bed.daemon.daemonProtocolClient().diagnostics().sockets).toBe(0);
+      const heartbeatsAfterStop = bed.state.heartbeats;
+      pollingClock?.advance(15_000);
+      await Bun.sleep(30);
+      expect(bed.state.heartbeats).toBe(heartbeatsAfterStop);
+    } finally {
+      await bed.close();
+    }
+  }, 10_000);
+
+  it("still rejects startup when registration fails", async () => {
+    const bed = await faultTestBed("register");
+    try {
+      bed.state.armed = true;
+      await waitUntil(bed.isSettled, "registration failure");
+      expect(bed.state.failures).toBeGreaterThan(0);
       expect(bed.error()).toBeInstanceOf(Error);
-      expect(bed.state.heartbeats).toBe(0);
+      expect(bed.state.registrations).toBe(0);
     } finally {
       await bed.close();
     }
