@@ -184,16 +184,19 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
-import { createEmptyLiveHub } from "./hub/live-hub.js";
-import type { LiveHub } from "./hub/live-hub.js";
-import { createLocalHubTransport } from "./hub/hub-transport.js";
-import { broadcastBrowserResync, createBrowserStreamHandler } from "./hub/browser-stream.js";
-import type { BrowserResyncHandle, BrowserStreamHandler } from "./hub/browser-stream.js";
+// Imported through the package alias rather than a relative path: `@multiremi/*`
+// resolves to this same package, and it is the spelling the C0 wiring guard
+// (`tests/arch/c0-live-hub-isolation.test.ts`) and the rest of the server use.
+import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import type { LiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
+import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import {
   createPostgresStreamAuthReader,
   createStreamAuthReader,
-} from "./hub/stream-auth.js";
-import type { StreamAuthReader } from "./hub/stream-auth.js";
+} from "@multiremi/api/hub/stream-auth.js";
+import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
 import { isPostgresConfigured, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 
