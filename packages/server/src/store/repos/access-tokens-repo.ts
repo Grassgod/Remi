@@ -49,11 +49,16 @@ const LAST_USED_AT_WRITE_INTERVAL_MS = 60_000;
  * The map holds one entry per token seen in this process, so without a bound a
  * long-lived API process would grow it with every token it ever authenticated.
  * Entries older than the interval are dead weight the moment they expire, so the
- * sweep drops those first and the cap only has to cover a burst larger than
- * {@link LAST_USED_AT_SWEEP_THRESHOLD}.
+ * sweep drops those first; only when a live burst still fills the map are the
+ * oldest entries evicted. The map is trimmed *before* every insert, so its size
+ * never exceeds this number.
+ *
+ * Eviction is not a correctness hole for the one-write-per-minute promise: the
+ * next verification of an evicted token judges the window from the `last_used_at`
+ * the row already carries (see {@link AccessTokensRepo.stampLastUsedAt}), so it
+ * skips the write instead of stamping again.
  */
 const LAST_USED_AT_MAP_MAX_ENTRIES = 4_096;
-const LAST_USED_AT_SWEEP_THRESHOLD = 4_096;
 
 export class AccessTokensRepo {
   constructor(private db: SqlDatabase) {}
@@ -266,33 +271,66 @@ export class AccessTokensRepo {
     const accessToken = toAccessToken(row);
     if (allowedTypes?.length && !allowedTypes.includes(accessToken.type)) return null;
     if (accessToken.revokedAt) return null;
-    if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= Date.now()) return null;
+    // One clock read for both checks below: the expiry comparison and the throttle decision
+    // must not disagree because the clock moved between them.
+    const nowMs = Date.now();
+    if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= nowMs) return null;
     // The row read above is the one whose hash, type, revocation and expiry were just checked, and
     // the only write since is this `last_used_at` stamp — which the returned value does not carry
     // a stale copy of because `lastUsedAt` is not part of the validation. Re-reading it cost one
     // query on every authenticated request.
-    return { ...accessToken, lastUsedAt: this.stampLastUsedAt(accessToken.id) };
+    return { ...accessToken, lastUsedAt: this.stampLastUsedAt(accessToken.id, accessToken.lastUsedAt, nowMs) };
   }
 
   /**
    * Record `last_used_at`, at most once per {@link LAST_USED_AT_WRITE_INTERVAL_MS}
-   * per token in this process.
+   * per token.
    *
    * Returns the stamp that is now authoritative: the value written, or the one
-   * already standing while this call is inside the throttle window. Two API
-   * processes each keep their own map and therefore each write once per window —
-   * that is expected, and the field only needs day granularity.
+   * already standing while this call is inside the throttle window.
+   *
+   * The map is only a fast path. When it has no entry — the first request in this
+   * process, or an entry the capacity sweep evicted — the decision falls back to
+   * the `last_used_at` that the verification's own SELECT already returned, so the
+   * row stays the source of truth and no extra query is needed. Without that
+   * fallback an evicted token would be stamped again immediately and the
+   * one-write-per-minute promise would depend on map capacity.
+   *
+   * Two API processes each keep their own map and therefore each write once per
+   * window — that is expected, and the field only needs day granularity.
    */
-  private stampLastUsedAt(tokenId: string): string {
-    const now = Date.now();
+  private stampLastUsedAt(tokenId: string, storedLastUsedAt: string | null, nowMs: number): string {
     const throttled = lastUsedAtWrites.get(tokenId);
-    if (throttled && now - throttled.writtenAt < LAST_USED_AT_WRITE_INTERVAL_MS) return throttled.lastUsedAt;
-    const lastUsedAt = new Date(now).toISOString();
+    if (throttled && withinLastUsedAtWindow(throttled.writtenAt, nowMs)) return throttled.lastUsedAt;
+
+    // No usable map entry: judge the window from the value the row already carries.
+    const storedMs = storedLastUsedAt ? Date.parse(storedLastUsedAt) : Number.NaN;
+    if (storedLastUsedAt && Number.isFinite(storedMs) && withinLastUsedAtWindow(storedMs, nowMs)) {
+      makeRoomForLastUsedAtWrite(nowMs);
+      lastUsedAtWrites.set(tokenId, { writtenAt: storedMs, lastUsedAt: storedLastUsedAt });
+      return storedLastUsedAt;
+    }
+
+    const lastUsedAt = new Date(nowMs).toISOString();
     this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [lastUsedAt, tokenId]);
-    if (lastUsedAtWrites.size >= LAST_USED_AT_SWEEP_THRESHOLD) sweepLastUsedAtWrites(now);
-    lastUsedAtWrites.set(tokenId, { writtenAt: now, lastUsedAt });
+    makeRoomForLastUsedAtWrite(nowMs);
+    lastUsedAtWrites.set(tokenId, { writtenAt: nowMs, lastUsedAt });
     return lastUsedAt;
   }
+}
+
+/**
+ * Is `stampMs` close enough to `nowMs` that the token is inside its write window?
+ *
+ * A stamp up to one interval in the past is exactly what the throttle exists for. A stamp slightly
+ * in the *future* counts as inside the window too: an NTP step can put it there, and it drains on
+ * its own. A future stamp more than one interval ahead cannot be what the clock will catch up to in
+ * any reasonable time, so it is treated as an anomaly and the caller writes — the throttle must not
+ * be able to wedge shut on a bad row.
+ */
+function withinLastUsedAtWindow(stampMs: number, nowMs: number): boolean {
+  const ageMs = nowMs - stampMs;
+  return ageMs < LAST_USED_AT_WRITE_INTERVAL_MS && ageMs > -LAST_USED_AT_WRITE_INTERVAL_MS;
 }
 
 /**
@@ -304,16 +342,31 @@ export class AccessTokensRepo {
  */
 const lastUsedAtWrites = new Map<string, { writtenAt: number; lastUsedAt: string }>();
 
-/** Drop expired entries; if a live burst still exceeds the cap, drop the oldest. */
-function sweepLastUsedAtWrites(now: number): void {
+/**
+ * Make room for one more entry: drop everything that has already left its window, then evict the
+ * oldest live entries until the map has room for the insert. Called *before* every `set`, so the
+ * map's size never exceeds {@link LAST_USED_AT_MAP_MAX_ENTRIES}.
+ */
+function makeRoomForLastUsedAtWrite(nowMs: number): void {
+  if (lastUsedAtWrites.size < LAST_USED_AT_MAP_MAX_ENTRIES) return;
   for (const [id, entry] of lastUsedAtWrites) {
-    if (now - entry.writtenAt >= LAST_USED_AT_WRITE_INTERVAL_MS) lastUsedAtWrites.delete(id);
+    if (!withinLastUsedAtWindow(entry.writtenAt, nowMs)) lastUsedAtWrites.delete(id);
   }
-  if (lastUsedAtWrites.size <= LAST_USED_AT_MAP_MAX_ENTRIES) return;
+  if (lastUsedAtWrites.size < LAST_USED_AT_MAP_MAX_ENTRIES) return;
   const oldest = [...lastUsedAtWrites.entries()]
     .sort((left, right) => left[1].writtenAt - right[1].writtenAt)
-    .slice(0, lastUsedAtWrites.size - LAST_USED_AT_MAP_MAX_ENTRIES);
+    .slice(0, lastUsedAtWrites.size - LAST_USED_AT_MAP_MAX_ENTRIES + 1);
   for (const [id] of oldest) lastUsedAtWrites.delete(id);
+}
+
+/** Test seam: how many throttle decisions the map currently holds. */
+export function lastUsedAtThrottleSizeForTest(): number {
+  return lastUsedAtWrites.size;
+}
+
+/** Test seam: forget every throttle decision, so a capacity case starts from empty. */
+export function resetLastUsedAtThrottleForTest(): void {
+  lastUsedAtWrites.clear();
 }
 
 function toAccessToken(row: Row): MultiremiAccessToken {

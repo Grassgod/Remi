@@ -237,6 +237,11 @@ async function main(): Promise<void> {
       summaryIntervalMs: 60_000,
       summaryTopRoutes: 10,
       bufferCapacity: 64,
+      // MUL-461 made the process role part of the metrics identity. This harness
+      // models the single-process deployment the measurements describe, which is
+      // what `resolveApiRole()` returns when `MULTIREMI_API_ROLE` is unset — the
+      // production default.
+      role: "all",
     },
   });
 

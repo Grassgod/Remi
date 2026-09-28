@@ -21,6 +21,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import {
   DAEMON_TASK_POLL_EXTERNAL_MESSAGE_ID,
   seedDaemonTaskPollFixture,
+  seedDaemonTaskPollResultCases,
 } from "./daemon-task-poll-fixture.js";
 
 const OUT_PATH = join(import.meta.dir, "daemon-task-poll-golden.json");
@@ -45,6 +46,22 @@ const response = await app.request(`/api/daemon/tasks/${fixture.taskId}/status`,
 if (response.status !== 200) throw new Error(`capture failed: HTTP ${response.status} ${await response.text()}`);
 const statusBody = await response.json() as unknown;
 
+// The stored-`result` shapes the projection's fallbacks have to survive. Their
+// bodies are captured the same way as the running Task's above.
+const resultCases = await seedDaemonTaskPollResultCases(store, (sql, params) => {
+  db.run(sql, params as SQLQueryBindings[]);
+});
+const resultBodies: Array<{ label: string; taskId: string; body: unknown }> = [];
+for (const testCase of resultCases) {
+  const caseResponse = await app.request(`/api/daemon/tasks/${testCase.taskId}/status`, {
+    headers: { Authorization: `Bearer ${fixture.daemonToken}` },
+  });
+  if (caseResponse.status !== 200) {
+    throw new Error(`capture failed for ${testCase.label}: HTTP ${caseResponse.status} ${await caseResponse.text()}`);
+  }
+  resultBodies.push({ label: testCase.label, taskId: testCase.taskId, body: await caseResponse.json() });
+}
+
 const golden = {
   name: "MUL-474 daemon GET task status response",
   capturedAt: "<timestamp>",
@@ -56,6 +73,7 @@ const golden = {
     startedAt: PINNED_STARTED_AT,
   },
   statusBody,
+  resultBodies,
 };
 writeFileSync(OUT_PATH, `${JSON.stringify(golden, null, 2)}\n`);
 console.log(`wrote ${OUT_PATH}`);

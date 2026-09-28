@@ -28,8 +28,16 @@ import { MultiremiStore } from "@multiremi/store.js";
 import {
   DAEMON_TASK_POLL_APP_ID,
   seedDaemonTaskPollFixture,
+  seedDaemonTaskPollResultCases,
   type DaemonTaskPollFixture,
 } from "../../fixtures/multiremi/daemon-task-poll-fixture.js";
+import { notifyBrowserTaskMessages } from "@multiremi/api/realtime.js";
+import {
+  driveTaskMessageFanout,
+  fanoutFixtureStore,
+  installDeterministicFanoutClock,
+} from "../../fixtures/multiremi/task-message-fanout-fixture.js";
+import fanoutGolden from "../../fixtures/multiremi/task-message-fanout-golden.json";
 import golden from "../../fixtures/multiremi/daemon-task-poll-golden.json";
 
 const AUTH_TOKEN = "mul474-count-token";
@@ -243,6 +251,33 @@ describe("MUL-474 daemon GET task status golden", () => {
     // Feishu host actually consume.
     expect(JSON.stringify(body)).toBe(JSON.stringify(golden.statusBody));
   });
+
+  // The running case above has `result: null`. These cover the stored shapes a
+  // projection's `result` / `session_id` / `work_dir` fallbacks have to survive.
+  it("matches the pre-change body for every stored result shape", async () => {
+    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    databases.push(db);
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const fixture = await seedDaemonTaskPollFixture(store, {
+      run: (sql, params) => { db.run(sql, params as SQLQueryBindings[]); },
+    });
+    await seedDaemonTaskPollResultCases(store, (sql, params) => {
+      db.run(sql, params as SQLQueryBindings[]);
+    });
+    const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
+
+    expect(golden.resultBodies).toHaveLength(4);
+    for (const expected of golden.resultBodies) {
+      const response = await app.request(`/api/daemon/tasks/${expected.taskId}/status`, {
+        headers: { Authorization: `Bearer ${fixture.daemonToken}` },
+      });
+      expect(response.status, expected.label).toBe(200);
+      const body = await response.json();
+      expect(body, expected.label).toEqual(expected.body);
+      expect(JSON.stringify(body), expected.label).toBe(JSON.stringify(expected.body));
+    }
+  });
 });
 
 /**
@@ -278,10 +313,21 @@ describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () 
 
     // Hold the claim inside hydration, cancel the Task, then release. Both polls
     // must come back empty: the claim is not allowed to hand out a cancelled Task.
-    const gate = Promise.withResolvers<void>();
+    //
+    // The wait is a condition gate, not a sleep: `entered` resolves when hydration
+    // is actually in flight, so the cancel provably lands inside the window the
+    // re-check exists to close. A fixed sleep would pass on a fast machine even if
+    // the ordering it needs never happened.
+    let signalEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let hydrationCalls = 0;
     const projectKnowledge = {
       hydrateTaskKnowledge: async (input: unknown) => {
-        await gate.promise;
+        hydrationCalls += 1;
+        signalEntered();
+        await released;
         return input;
       },
     };
@@ -293,9 +339,12 @@ describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () 
     const headers = { Authorization: `Bearer ${token.token}`, "content-type": "application/json" };
     const requests = [0, 1].map(() =>
       app.request("/api/daemon/runtimes/rt_mul474_claim/tasks/claim", { method: "POST", headers }));
-    await Bun.sleep(20);
+    await entered;
+    // The single-flight guard means only the first poll hydrates, and it is now
+    // parked inside hydration with its pre-cancel read already done.
+    expect(hydrationCalls).toBe(1);
     store.cancelTask(task.id);
-    gate.resolve();
+    release();
     for (const response of await Promise.all(requests)) {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ task: null });
@@ -442,5 +491,37 @@ describe("MUL-474 daemon task authority matrix", () => {
       domain: "feishu",
     });
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(403);
+  });
+});
+
+/**
+ * The browser task-message frames are a contract as well: the fan-out now takes a
+ * `TaskMessageFanoutSubject` instead of a whole Task, and the payload must not
+ * have moved with it. The golden was captured on the pre-change commit with the
+ * same fixture (both fan-out branches, a visible and a denied recipient), and the
+ * comparison is on the emitted frame text — what a browser actually receives.
+ */
+describe("MUL-474 browser task-message fan-out wire payload", () => {
+  it("emits the same frames the pre-change implementation emitted, byte for byte", () => {
+    const restoreClock = installDeterministicFanoutClock();
+    const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+    databases.push(db);
+    try {
+      const store = fanoutFixtureStore(db);
+      const frames = driveTaskMessageFanout(store, notifyBrowserTaskMessages);
+
+      expect(frames.workspaceFrames).toEqual(fanoutGolden.workspaceFrames);
+      expect(frames.chatFrames).toEqual(fanoutGolden.chatFrames);
+      // A recipient without access to the Task receives nothing, before and after.
+      expect(frames.deniedFrames).toEqual(fanoutGolden.deniedFrames);
+      // Serialized comparison too: the daemon-facing consumers read the bytes.
+      expect(JSON.stringify(frames)).toBe(JSON.stringify({
+        workspaceFrames: fanoutGolden.workspaceFrames,
+        chatFrames: fanoutGolden.chatFrames,
+        deniedFrames: fanoutGolden.deniedFrames,
+      }));
+    } finally {
+      restoreClock();
+    }
   });
 });

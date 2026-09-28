@@ -19,6 +19,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 export const DAEMON_TASK_POLL_PROMPT_BYTES = 131_072;
 export const DAEMON_TASK_POLL_EXTERNAL_MESSAGE_ID = "om_mul474_receipt";
 export const DAEMON_TASK_POLL_APP_ID = "cli_mul474_fixture_app";
+export const DAEMON_TASK_POLL_RUNTIME_ID = "rt_mul474_poll";
 
 export interface DaemonTaskPollFixture {
   workspaceId: string;
@@ -70,7 +71,7 @@ export async function seedDaemonTaskPollFixture(
     workspaceId,
   });
   store.registerRuntime({
-    id: "rt_mul474_poll",
+    id: DAEMON_TASK_POLL_RUNTIME_ID,
     name: "MUL-474 poll runtime",
     provider: "codex",
     workspaceId,
@@ -150,7 +151,7 @@ export async function seedDaemonTaskPollFixture(
   return {
     workspaceId,
     agentId: agent.id,
-    runtimeId: "rt_mul474_poll",
+    runtimeId: DAEMON_TASK_POLL_RUNTIME_ID,
     foreignRuntimeId: "rt_mul474_foreign",
     taskId: task.id,
     chatSessionId: chatSession.id,
@@ -159,4 +160,101 @@ export async function seedDaemonTaskPollFixture(
     foreignDaemonToken: foreign.token,
     promptBytes: prompt.length,
   };
+}
+
+/**
+ * The `status` body echoes `result`, `session_id` and `work_dir`, and the first of
+ * those has three stored shapes in the wild: the current structured JSON, a bare
+ * string from before the structured form, and a value that is not valid JSON at
+ * all. A projection that only ever saw the running/`null` case could drop one of
+ * the fallbacks without any test noticing, so each shape is its own case.
+ *
+ * The rows are written through `run` because these are exactly the raw column
+ * values old releases left behind — producing them through today's store would
+ * only re-create the structured shape.
+ */
+export interface DaemonTaskPollResultCase {
+  label: string;
+  taskId: string;
+  /** Raw `result` column value. */
+  result: string | null;
+  /** Raw `session_id` / `work_dir` columns; null exercises the result fallback. */
+  sessionId: string | null;
+  workDir: string | null;
+}
+
+export const DAEMON_TASK_POLL_RESULT_CASES: ReadonlyArray<DaemonTaskPollResultCase> = [
+  {
+    label: "structured result, columns also set",
+    taskId: "tsk_mul474_result_structured",
+    result: JSON.stringify({
+      pr_url: "https://example.invalid/mul474/structured",
+      output: "structured output",
+      session_id: "ises_structured_from_result",
+      work_dir: "/tmp/mul474-structured-from-result",
+    }),
+    sessionId: "ises_mul474_column",
+    workDir: "/tmp/mul474-column",
+  },
+  {
+    label: "legacy bare string result",
+    taskId: "tsk_mul474_result_legacy_string",
+    result: "legacy plain text result",
+    sessionId: null,
+    workDir: null,
+  },
+  {
+    label: "result that is not valid JSON",
+    taskId: "tsk_mul474_result_invalid_json",
+    result: "{not json at all",
+    sessionId: null,
+    workDir: null,
+  },
+  {
+    label: "structured result with columns null (session/work_dir fall back)",
+    taskId: "tsk_mul474_result_fallback",
+    result: JSON.stringify({
+      pr_url: "",
+      output: "output without columns",
+      session_id: "ises_from_result_only",
+      work_dir: "/tmp/mul474-from-result-only",
+    }),
+    sessionId: null,
+    workDir: null,
+  },
+];
+
+/**
+ * Seed one running Task per stored-result shape and return them. The caller
+ * supplies the raw statement runner (SQLite for the counting test, the metered PG
+ * handle for the benchmark).
+ */
+export async function seedDaemonTaskPollResultCases(
+  store: MultiremiStore,
+  run: (sql: string, params: unknown[]) => void,
+): Promise<DaemonTaskPollResultCase[]> {
+  const workspaceId = "local";
+  const agent = store.createAgent({
+    id: "agt_mul474_result_cases",
+    name: "MUL-474 result cases",
+    provider: "codex",
+    workspaceId,
+  });
+  for (const testCase of DAEMON_TASK_POLL_RESULT_CASES) {
+    // Each Task belongs to the fixture's existing poll Runtime, which its daemon
+    // token already owns — otherwise the guard would (correctly) refuse these
+    // requests before the projection under test ever runs.
+    store.createTask({
+      id: testCase.taskId,
+      agentId: agent.id,
+      workspaceId,
+      runtimeId: DAEMON_TASK_POLL_RUNTIME_ID,
+      prompt: "result case",
+    });
+    run(
+      "UPDATE multiremi_tasks SET result = ?, session_id = ?, work_dir = ?, started_at = ? WHERE id = ?",
+      [testCase.result, testCase.sessionId, testCase.workDir, "2026-09-27T00:00:00.000Z", testCase.taskId],
+    );
+  }
+  return DAEMON_TASK_POLL_RESULT_CASES.map((testCase) => ({ ...testCase }));
 }

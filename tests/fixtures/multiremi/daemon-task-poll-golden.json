@@ -31,5 +31,71 @@
     "receipt_message_ids": [
       "om_mul474_receipt"
     ]
-  }
+  },
+  "resultBodies": [
+    {
+      "label": "structured result, columns also set",
+      "taskId": "tsk_mul474_result_structured",
+      "body": {
+        "task_id": "tsk_mul474_result_structured",
+        "status": "queued",
+        "result": "structured output",
+        "error": null,
+        "session_id": "ises_mul474_column",
+        "work_dir": "/tmp/mul474-column",
+        "usage": [],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": []
+      }
+    },
+    {
+      "label": "legacy bare string result",
+      "taskId": "tsk_mul474_result_legacy_string",
+      "body": {
+        "task_id": "tsk_mul474_result_legacy_string",
+        "status": "queued",
+        "result": "legacy plain text result",
+        "error": null,
+        "session_id": null,
+        "work_dir": null,
+        "usage": [],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": []
+      }
+    },
+    {
+      "label": "result that is not valid JSON",
+      "taskId": "tsk_mul474_result_invalid_json",
+      "body": {
+        "task_id": "tsk_mul474_result_invalid_json",
+        "status": "queued",
+        "result": "{not json at all",
+        "error": null,
+        "session_id": null,
+        "work_dir": null,
+        "usage": [],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": []
+      }
+    },
+    {
+      "label": "structured result with columns null (session/work_dir fall back)",
+      "taskId": "tsk_mul474_result_fallback",
+      "body": {
+        "task_id": "tsk_mul474_result_fallback",
+        "status": "queued",
+        "result": "output without columns",
+        "error": null,
+        "session_id": "ises_from_result_only",
+        "work_dir": "/tmp/mul474-from-result-only",
+        "usage": [],
+        "started_at": "2026-09-27T00:00:00.000Z",
+        "completed_at": null,
+        "receipt_message_ids": []
+      }
+    }
+  ]
 }
