@@ -245,6 +245,8 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 
 聊天 aggregate pending 的两个 observer 是 ChatFab 和 [SessionDropdown](../../frontend/packages/views/chat/components/session-dropdown.tsx)。后者常驻于隐藏 ChatWindow，条件为 `chatVisible || shellGateOpen`：隐藏时等会话首 gate，用户打开窗口或进入聊天页面时立即查询。共享 key 的去重不能替代每个 observer 的 enabled；[壳层守卫](../../frontend/packages/views/layout/shell-deferred-queries.test.tsx)挂载完整 DashboardLayout、ChatFab 与真实隐藏 ChatWindow，核对门控前请求为 0。
 
+隐藏聊天窗口的缓存子树同样需要门控：ChatMessageList 的 live/assistant 任务消息、HumanRequestDock 表单仅在 `chatVisible` 时 enabled，旧消息分页回调也检查可见性。隐藏时包括 degraded task header 在内的 invalidate 只标 stale，重新打开立即正常 refetch；详情主体的执行行不受此可见性门控影响。壳层守卫预置缓存后逐 key invalidate，并经过真实 `createTaskHandlers`，防止新 observer 从失效路径绕过门控。
+
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 
 参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_in41j1x1dq66`，MUL-67）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70；**MUL-395 前后对比固定用这一条**）、`--issue-xlong`（默认 `iss_o2skonppbq2u`，MUL-454；≥200 条评论的 `detail-xlong`，传空串跳过该场景）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单，以及 MUL-454 `iss_o2skonppbq2u`；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认在探测窗口内自动选取）、`--inbox-probe-pages`（默认 10）、`--hover-lead-ms`（默认 150）、`--entry-quiet-ms`（默认 500，0 关闭）。`targetSelection` 取 `auto | pinned | none`。

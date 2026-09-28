@@ -38,6 +38,8 @@ import { useT } from "../../i18n";
 
 interface ChatMessageListProps {
   messages: ChatMessage[];
+  /** Hidden cached windows keep rendering data, but must not refetch it. */
+  visible?: boolean;
   /**
    * Server-authoritative pending-task snapshot. `null` / undefined means
    * no in-flight task — list renders without StatusPill.
@@ -53,6 +55,7 @@ interface ChatMessageListProps {
 
 export function ChatMessageList({
   messages,
+  visible = true,
   pendingTask,
   availability,
   firstItemIndex = 0,
@@ -91,7 +94,7 @@ export function ChatMessageList({
   const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
   const { data: liveTaskMessages } = useQuery({
     ...taskMessagesOptions(pendingTaskId ?? ""),
-    enabled: canFetchLiveTimeline,
+    enabled: visible && canFetchLiveTimeline,
   });
   const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskMessages ?? []);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
@@ -125,7 +128,7 @@ export function ChatMessageList({
         atBottomStateChange={setIsNearBottom}
         followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
         startReached={() => {
-          if (hasOlderMessages && !isFetchingOlderMessages) {
+          if (visible && hasOlderMessages && !isFetchingOlderMessages) {
             onLoadOlderMessages?.();
           }
         }}
@@ -171,6 +174,7 @@ export function ChatMessageList({
           >
             <MessageBubble
               message={msg}
+              visible={visible}
               isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
             />
           </div>
@@ -210,7 +214,7 @@ export function ChatMessageSkeleton() {
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
-function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
+function MessageBubble({ message, isPending, visible }: { message: ChatMessage; isPending: boolean; visible: boolean }) {
   if (message.role === "user") {
     const markdown = chatMessageMarkdown(message);
     return (
@@ -233,15 +237,17 @@ function MessageBubble({ message, isPending }: { message: ChatMessage; isPending
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} />;
+  return <AssistantMessage message={message} isPending={isPending} visible={visible} />;
 }
 
 function AssistantMessage({
   message,
   isPending,
+  visible,
 }: {
   message: ChatMessage;
   isPending: boolean;
+  visible: boolean;
 }) {
   const taskId = message.task_id;
   // A mid-run attachment push shares its task id with the terminal reply that
@@ -256,7 +262,7 @@ function AssistantMessage({
   // task finishes, since WS already populated it.
   const { data: taskMessages } = useQuery({
     ...taskMessagesOptions(taskId ?? ""),
-    enabled: canFetchTaskMessages,
+    enabled: visible && canFetchTaskMessages,
   });
 
   const timeline: ChatTimelineItem[] = isAttachmentPush

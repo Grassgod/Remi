@@ -757,6 +757,7 @@ export function ChatWindow({
       ) : hasMessages ? (
         <ChatMessageList
           key={activeSessionId}
+          visible={chatVisible}
           messages={messages}
           pendingTask={pendingTask}
           availability={availability}
@@ -785,7 +786,7 @@ export function ChatWindow({
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      <HumanRequestDock taskId={pendingTaskId} />
+      <HumanRequestDock taskId={pendingTaskId} enabled={chatVisible} />
 
       {noAgent ? (
         <NoAgentBanner />

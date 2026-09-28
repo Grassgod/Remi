@@ -16,7 +16,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "@multiremi/core/api";
 import type { ApiClient } from "@multiremi/core/api/client";
 import { createAuthStore, registerAuthStore } from "@multiremi/core/auth";
-import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
+import { createChatStore, registerChatStore, useChatStore, useRecentContextStore } from "@multiremi/core/chat";
+import { chatKeys } from "@multiremi/core/chat/queries";
+import { workspaceKeys } from "@multiremi/core/workspace/queries";
+import { agentTaskSnapshotKeys } from "@multiremi/core/agents/queries";
+import { pinKeys } from "@multiremi/core/pins/queries";
+import { inboxKeys } from "@multiremi/core/inbox/queries";
+import { runtimeKeys } from "@multiremi/core/runtimes/queries";
+import { issueKeys } from "@multiremi/core/issues/queries";
+import { projectKeys } from "@multiremi/core/projects/queries";
+import { workbenchKeys } from "@multiremi/core/issues/workbench";
+import { createTaskHandlers } from "../test/task-handlers";
 import {
   configureAfterFirstScreenForTest,
   markRouteContentReady,
@@ -33,11 +43,17 @@ const getAgentTaskSnapshot = vi.hoisted(() => vi.fn(async () => []));
 const listRuntimes = vi.hoisted(() => vi.fn(async () => []));
 const listMyInvitations = vi.hoisted(() => vi.fn(async () => []));
 const listPins = vi.hoisted(() => vi.fn(async () => []));
+const getIssue = vi.hoisted(() => vi.fn(async () => ({ id: "iss_guard_pin", title: "Cached pin", status: "todo" })));
+const getProject = vi.hoisted(() => vi.fn(async () => ({ id: "prj_guard_pin", title: "Cached project", icon: null })));
 const getInboxSummary = vi.hoisted(() => vi.fn(async () => ({ unread: 0, attention: 0 })));
 const getLatestCliVersion = vi.hoisted(() => vi.fn(async () => "1.0.0"));
 const listIssues = vi.hoisted(() => vi.fn(async () => ({ issues: [], total: 0 })));
 const listChatSessions = vi.hoisted(() => vi.fn(async () => []));
 const listPendingChatTasks = vi.hoisted(() => vi.fn(async () => ({ tasks: [] })).mockName("listPendingChatTasks"));
+const listTaskMessages = vi.hoisted(() => vi.fn(async () => []).mockName("listTaskMessages"));
+const listTaskHumanRequests = vi.hoisted(() => vi.fn(async () => []).mockName("listTaskHumanRequests"));
+const listChatMessagesPage = vi.hoisted(() => vi.fn(async () => ({ messages: [], has_more: false, next_cursor: null })));
+const getPendingChatTask = vi.hoisted(() => vi.fn(async () => ({ task_id: "tsk_guard_live", status: "running" })));
 const listWorkspaces = vi.hoisted(() => vi.fn(async () => [{ id: "ws-1", name: "Acme", slug: "acme" }]));
 
 const navigation = vi.hoisted(() => ({ pathname: "/acme/issues" }));
@@ -102,6 +118,8 @@ beforeEach(() => {
   const chat = createChatStore({ storage: memoryStorage() });
   chat.getState().setOpen(false);
   registerChatStore(chat);
+  useRecentContextStore.setState({ byWorkspace: {} });
+  listPins.mockResolvedValue([]);
   idleQueue = [];
   resetAfterFirstScreenForTest();
   configureAfterFirstScreenForTest({ idleTimeoutMs: 1000, contentFallbackMs: 2000 });
@@ -109,7 +127,8 @@ beforeEach(() => {
   for (const spy of [
     listAgents, listSquads, getAgentTaskSnapshot, listRuntimes, listMyInvitations,
     listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions,
-    listPendingChatTasks, listWorkspaces,
+    listPendingChatTasks, listWorkspaces, listTaskMessages, listTaskHumanRequests,
+    listChatMessagesPage, getPendingChatTask, getIssue, getProject,
   ]) spy.mockClear();
   setApiInstance({
     getBaseUrl: () => "http://127.0.0.1:8080",
@@ -121,11 +140,17 @@ beforeEach(() => {
     listRuntimes,
     listMyInvitations,
     listPins,
+    getIssue,
+    getProject,
     getInboxSummary,
     getLatestCliVersion,
     listIssues,
     listChatSessions,
     listPendingChatTasks,
+    listTaskMessages,
+    listTaskHumanRequests,
+    listChatMessagesPage,
+    getPendingChatTask,
     listWorkspaces,
     listMembers: async () => [],
     listProjects: async () => ({ projects: [] }),
@@ -201,7 +226,7 @@ function Shell() {
 }
 
 function isDeferredShellKey(key: readonly unknown[]): boolean {
-  if (["chat", "pins", "invitations"].includes(String(key[0]))) return true;
+  if (["chat", "pins", "invitations", "task-messages", "task-human-requests"].includes(String(key[0]))) return true;
   if (key[0] === "workspaces") return ["agents", "squads", "agent-task-snapshot"].includes(String(key[2]));
   if (key[0] === "inbox") return key[2] === "summary";
   if (key[0] === "runtimes") return key[1] === "latestVersion";
@@ -210,6 +235,66 @@ function isDeferredShellKey(key: readonly unknown[]): boolean {
 }
 
 describe("complete shell observer guard (MUL-472 R1)", () => {
+  it("QA: a failed-reference header refetches an open chat but not a hidden cached chat", async () => {
+    const client = newClient();
+    const sessionId = "cs_qa_refetch";
+    const taskId = "tsk_qa_refetch";
+    client.setQueryData(chatKeys.sessions("ws-1"), [{
+      id: sessionId, agent_id: "agt_refetch", status: "active", title: "QA chat",
+      created_at: "2026-09-28T00:00:00Z", updated_at: "2026-09-28T00:00:00Z",
+    }]);
+    client.setQueryData(chatKeys.messagesPage(sessionId), {
+      pages: [{ messages: [{ id: "msg_qa", chat_session_id: sessionId, role: "user", content: "QA message", created_at: "2026-09-28T00:00:00Z" }], has_more: false, next_cursor: null }], pageParams: [null],
+    });
+    client.setQueryData(chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" });
+    client.setQueryData(chatKeys.taskMessages(taskId), []);
+    act(() => { useChatStore.getState().setActiveSession(sessionId); useChatStore.getState().setOpen(true); });
+    const view = render(<Shell />, { wrapper: wrapper(client) });
+    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
+    try {
+      await act(async () => {});
+      listTaskMessages.mockClear();
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, issue_id: null, chat_session_id: sessionId, degraded: true, seq_start: 1, seq_end: 2 }); });
+      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
+      act(() => { useChatStore.getState().setOpen(false); });
+      await act(async () => {});
+      listTaskMessages.mockClear();
+      expect(client.getQueryCache().find({ queryKey: chatKeys.taskMessages(taskId) })?.isActive()).toBe(false);
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, issue_id: null, chat_session_id: sessionId, degraded: true, seq_start: 3, seq_end: 4 }); });
+      expect(listTaskMessages).not.toHaveBeenCalled();
+      expect(client.getQueryState(chatKeys.taskMessages(taskId))?.isInvalidated).toBe(true);
+      act(() => { useChatStore.getState().setOpen(true); });
+      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
+      expect(idleQueue).toHaveLength(0);
+    } finally {
+      view.unmount(); sync.dispose?.(); client.clear();
+    }
+  });
+  it("QA: an initially hidden cached chat does not refetch before page readiness", async () => {
+    const client = newClient();
+    const sessionId = "cs_qa_hidden";
+    const taskId = "tsk_qa_hidden";
+    client.setQueryData(chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_refetch", status: "active", title: "QA chat" }]);
+    client.setQueryData(chatKeys.messagesPage(sessionId), {
+      pages: [{ messages: [{ id: "msg_qa_hidden", chat_session_id: sessionId, role: "user", content: "QA message" }], has_more: false, next_cursor: null }], pageParams: [null],
+    });
+    client.setQueryData(chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" });
+    client.setQueryData(chatKeys.taskMessages(taskId), []);
+    act(() => { useChatStore.getState().setActiveSession(sessionId); });
+    listTaskMessages.mockClear();
+    const view = render(<Shell />, { wrapper: wrapper(client) });
+    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
+    try {
+      await act(async () => {});
+      expect(listPendingChatTasks).not.toHaveBeenCalled();
+      expect(listTaskMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState().isOpen).toBe(false);
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 }); });
+      expect(listTaskMessages).not.toHaveBeenCalled();
+    } finally {
+      view.unmount(); sync.dispose?.(); client.clear();
+    }
+  });
   it("keeps every deferred key quiet with the real hidden ChatWindow, then loads after the gate", async () => {
     const client = newClient();
     const startedKeys: Array<readonly unknown[]> = [];
@@ -237,6 +322,76 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     view.unmount();
     unsubscribe();
     client.clear();
+  });
+
+  it("keeps cached deferred keys quiet on invalidation, including a real degraded header", async () => {
+    const client = newClient();
+    const sessionId = "cs_guard_cached";
+    const taskId = "tsk_guard_live";
+    const pins = [
+      { id: "pin_guard_issue", item_type: "issue", item_id: "iss_guard_pin" },
+      { id: "pin_guard_project", item_type: "project", item_id: "prj_guard_pin" },
+    ];
+    listPins.mockResolvedValue(pins as never);
+    useRecentContextStore.getState().recordVisit("ws-1", { type: "issue", id: "iss_guard_pin" });
+    useRecentContextStore.getState().recordVisit("ws-1", { type: "project", id: "prj_guard_pin" });
+    const cached: Array<[readonly unknown[], unknown]> = [
+      [workspaceKeys.agents("ws-1"), []], [workspaceKeys.squads("ws-1"), []],
+      [agentTaskSnapshotKeys.list("ws-1"), []], [pinKeys.list("ws-1", "user-1"), pins],
+      [workspaceKeys.myInvitations(), []], [runtimeKeys.latestVersion(), "1.0.0"],
+      [inboxKeys.summary("ws-1"), { unread: 0, attention: 0 }],
+      [workbenchKeys.pendingCount("ws-1"), { issues: [], total: 0 }],
+      [issueKeys.childProgress("ws-1"), {}],
+      [issueKeys.detail("ws-1", "iss_guard_pin"), { id: "iss_guard_pin", title: "Cached pin", status: "todo" }],
+      [projectKeys.detail("ws-1", "prj_guard_pin"), { id: "prj_guard_pin", title: "Cached project", icon: null }],
+      [chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_guard", status: "active", title: "Cached chat" }]],
+      [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
+      [chatKeys.messagesPage(sessionId), { pages: [{ messages: [{ id: "msg_guard", role: "user", content: "Cached message" }], has_more: false, next_cursor: null }], pageParams: [null] }],
+      [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
+      [chatKeys.taskMessages(taskId), []], [chatKeys.humanRequests(taskId), []],
+    ];
+    for (const [key, data] of cached) client.setQueryData(key, data);
+    act(() => { useChatStore.getState().setActiveSession(sessionId); });
+    const startedKeys: Array<readonly unknown[]> = [];
+    const unsubscribe = client.getQueryCache().subscribe(event => {
+      if (event.type === "updated" && event.action.type === "fetch" && isDeferredShellKey(event.query.queryKey)) {
+        startedKeys.push(event.query.queryKey);
+      }
+    });
+    const view = render(<Shell />, { wrapper: wrapper(client) });
+    const sync = createTaskHandlers({ qc: client } as Parameters<typeof createTaskHandlers>[0]);
+    try {
+      await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
+      await act(async () => {
+        for (const [queryKey] of cached) await client.invalidateQueries({ queryKey, exact: true });
+        sync.handlers["task:message"]?.({ task_id: taskId, degraded: true, seq_start: 1, seq_end: 2 });
+      });
+      expect(startedKeys).toEqual([]);
+      expect(listTaskMessages).not.toHaveBeenCalled();
+      expect(listTaskHumanRequests).not.toHaveBeenCalled();
+      expect(getIssue).not.toHaveBeenCalled();
+      expect(getProject).not.toHaveBeenCalled();
+      act(() => { markRouteContentReady(navigation.pathname); });
+      await act(async () => { flushIdle(); });
+      await waitFor(() => expect(listPendingChatTasks).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        expect(getIssue).toHaveBeenCalledTimes(1);
+        expect(getProject).toHaveBeenCalledTimes(1);
+      });
+      // The message/form observers need an open window even after the shell gate.
+      expect(listTaskMessages).not.toHaveBeenCalled();
+      expect(listTaskHumanRequests).not.toHaveBeenCalled();
+      expect(listChatMessagesPage).not.toHaveBeenCalled();
+      act(() => { useChatStore.getState().setOpen(true); });
+      await waitFor(() => {
+        expect(listTaskMessages).toHaveBeenCalledTimes(1);
+        expect(listTaskHumanRequests).toHaveBeenCalledTimes(1);
+        expect(listChatMessagesPage).toHaveBeenCalledTimes(1);
+        expect(getPendingChatTask).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      view.unmount(); sync.dispose?.(); unsubscribe(); client.clear();
+    }
   });
 
   it("loads aggregate pending immediately when the user opens chat before the gate", async () => {
