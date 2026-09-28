@@ -68,7 +68,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 
 ## 客户端订阅入口
 
-- [realtime/streams.ts](../../frontend/packages/core/realtime/streams.ts) 提供 `useLogStreamSubscription` / `useTraceStreamSubscription`，按 `(stream,id)` 引用计数，多个界面共用一条订阅。
+- [realtime/streams.ts](../../frontend/packages/core/realtime/streams.ts) 提供 `useLogStreamSubscription` / `useTraceStreamSubscription`，按 `(stream,id)` 共用一条订阅，每个消费者独立登记回调。卸载只移除自己的回调，最后一个消费者卸载才退订。
 - `TraceSocket`（[api/trace-socket.ts](../../frontend/packages/core/api/trace-socket.ts)）懒建：第一次 `subscribeTrace` 才建连接，最后一个退订时关闭。`deriveTraceWsUrl` 把 `/ws` 映射到 `/api/trace/ws`。
 
 ## 兼容
