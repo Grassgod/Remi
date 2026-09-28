@@ -1,6 +1,8 @@
 import type { Context } from "hono";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import type { ConversationLogTurnMetadata } from "@multiremi/contracts/conversation-log.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import type { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { currentTaskAccessToken } from "../wire/index.js";
 
@@ -49,16 +51,60 @@ export function organizerTaskListItem(task: MultiremiTask): Record<string, unkno
   };
 }
 
-export function organizerTaskInspection(store: MultiremiStore, task: MultiremiTask): Record<string, unknown> {
-  const messages = store.listTaskMessages(task.id);
+export interface OrganizerTurnStats {
+  toolCallCount: number;
+  eventCount: number;
+  typeHistogram: Array<{ type: string; tool: string | null; count: number }>;
+}
+
+export interface OrganizerInspectionSources {
+  readTrace?: Pick<TraceReader, "readTrace">;
+  getTurnStats?: (taskId: string) => OrganizerTurnStats | null;
+}
+
+export function organizerTurnStats(store: MultiremiStore, taskId: string): OrganizerTurnStats | null {
+  const metadata = store.findTurnEntry(taskId)?.metadata as ConversationLogTurnMetadata | undefined;
+  if (metadata?.tool_call_count == null || metadata.event_count == null || !Array.isArray(metadata.type_histogram)) return null;
+  if (!Number.isSafeInteger(metadata.tool_call_count) || metadata.tool_call_count < 0
+    || !Number.isSafeInteger(metadata.event_count) || metadata.event_count < 0) return null;
+  if (metadata.type_histogram.some((bucket) => !bucket || typeof bucket.type !== "string"
+    || (bucket.tool != null && typeof bucket.tool !== "string")
+    || !Number.isSafeInteger(bucket.count) || bucket.count < 0)) return null;
+  return {
+    toolCallCount: metadata.tool_call_count,
+    eventCount: metadata.event_count,
+    typeHistogram: metadata.type_histogram.map((bucket) => ({ ...bucket, tool: bucket.tool ?? null })),
+  };
+}
+
+export async function organizerTaskInspection(
+  store: MultiremiStore,
+  task: MultiremiTask,
+  sources: OrganizerInspectionSources = {},
+): Promise<Record<string, unknown>> {
+  const terminal = ["completed", "failed", "cancelled"].includes(task.status);
+  const card = terminal ? sources.getTurnStats?.(task.id) ?? null : null;
+  let traceEvents: Awaited<ReturnType<TraceReader["readTrace"]>>["events"] | null = null;
+  if (!terminal && sources.readTrace) {
+    const probe = await sources.readTrace.readTrace(task.id, Number.MAX_SAFE_INTEGER, 1);
+    if (probe.state === "ok") {
+      const tail = await sources.readTrace.readTrace(task.id, Math.max(0, probe.head - 200), 200);
+      if (tail.state === "ok") traceEvents = tail.events;
+    }
+  }
+  // TODO(MUL-432): switch last_message's legacy-tail source and remove the fallback when dropping the table.
+  const messages = traceEvents ? [] : store.listTaskMessages(task.id);
   const histogram = new Map<string, { type: string; tool: string | null; count: number }>();
-  for (const message of messages) {
+  for (const message of traceEvents ?? messages) {
     const key = `${message.type}\u0000${message.tool ?? ""}`;
-    const bucket = histogram.get(key) ?? { type: message.type, tool: message.tool, count: 0 };
+    const bucket = histogram.get(key) ?? { type: message.type, tool: message.tool ?? null, count: 0 };
     bucket.count += 1;
     histogram.set(key, bucket);
   }
-  const latestMessage = messages.at(-1) ?? null;
+  const latestMessage = (traceEvents ?? messages).at(-1) ?? null;
+  const typeHistogram = card?.typeHistogram ?? [...histogram.values()];
+  const toolCallCount = card?.toolCallCount ?? (traceEvents ?? messages).filter((message) => message.type === "tool_use").length;
+  const eventCount = card?.eventCount ?? (traceEvents ? traceEvents.length : messages.length);
   const requests = store.listTaskHumanRequests(task.id);
   const requestCounts = { pending: 0, responded: 0, timeout: 0, cancelled: 0 };
   for (const request of requests) requestCounts[request.status] += 1;
@@ -71,8 +117,10 @@ export function organizerTaskInspection(store: MultiremiStore, task: MultiremiTa
     dispatched_at: task.dispatchedAt,
     failed_at: task.failedAt,
     cancelled_at: task.cancelledAt,
-    last_message: latestMessage ? { seq: latestMessage.seq, created_at: latestMessage.createdAt } : null,
-    message_type_histogram: [...histogram.values()].map((bucket) => ({
+    last_message: latestMessage ? { seq: latestMessage.seq, created_at: "ts" in latestMessage ? latestMessage.ts : latestMessage.createdAt } : null,
+    tool_call_count: toolCallCount,
+    event_count: eventCount,
+    message_type_histogram: typeHistogram.map((bucket) => ({
       type: bucket.type,
       tool: bucket.tool,
       count: bucket.count,

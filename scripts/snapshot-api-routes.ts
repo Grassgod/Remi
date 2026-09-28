@@ -962,6 +962,7 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
   provisionId: "runtimeProvisionId",
   squadId: "squadId",
   taskId: "taskId",
+  task_id: "taskId",
   triggerId: "triggerId",
   updateId: "runtimeUpdateRequestId",
   workspaceId: "workspaceId",

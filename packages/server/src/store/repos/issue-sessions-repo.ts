@@ -5,7 +5,13 @@ import { taskExecutionScope } from "@multiremi/contracts/task-execution.js";
 import { cleanOptionalString, nullableString, parseJson, resolveCamelOrSnakeString, toJson } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
+import {
+  sessionEventToConversationLog,
+  targetSeqForMarker,
+  type MirrorSessionEvent,
+} from "@multiremi/store/conversation-log-mirror.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { conversationLogProjectionEvents } from "@multiremi/store/conversation-log-projection.js";
 import { resolveFollowDeltaRatio, resolveFollowTokenLimit, resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -27,8 +33,9 @@ import type {
 type Row = Record<string, unknown>;
 const log = createLogger("multiremi-store");
 const SESSION_SELECT = `SELECT s.*, (
-  SELECT COUNT(*) FROM multiremi_session_events e
+  SELECT COUNT(*) FROM multiremi_conversation_log e
   WHERE e.session_id = s.parent_session_id
+    AND e.kind <> 'head' AND e.seq > 0
     AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq))
       OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq))
 ) AS inherited_event_count FROM multiremi_issue_sessions s`;
@@ -47,6 +54,10 @@ export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
 
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    return this.ctx.db.transaction(() => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById))();
+  }
+
+  private getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const existing = this.ctx.db.query(
@@ -68,6 +79,12 @@ export class IssueSessionsRepo {
       `${SESSION_SELECT} WHERE issue_id = ? AND is_default = 1 LIMIT 1`,
     ).get(issueId) as Row | null;
     if (!row) throw new Error(`Failed to create default session for issue: ${issueId}`);
+    if (String(row.id) === id) {
+      this.ctx.conversationLog().syncIssueHeadWithinTransaction(id, {
+        title: issue.title,
+        description: issue.description,
+      }, now);
+    }
     return toIssueSession(row);
   }
 
@@ -116,7 +133,7 @@ export class IssueSessionsRepo {
       if (parent.issueId !== issueId) throw new Error("Parent session must belong to the same issue");
       if (parent.inheritMode !== "none") throw new Error("Cannot inherit from a side session (chained forks are not supported)");
       const max = this.ctx.db.query(
-        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
       ).get(parentSessionId) as { seq: number } | null;
       inheritCutoffSeq = Number(max?.seq ?? 0);
       if (withCode) {
@@ -151,6 +168,13 @@ export class IssueSessionsRepo {
     for (const agentId of participantAgentIds) {
       this.addSessionParticipant(id, { participantType: "agent", participantId: agentId });
     }
+    // The head row mirrors the Issue title and description; every session of one
+    // Issue carries its own copy, so the seq axis starts with the same text the
+    // timeline shows at the top.
+    this.ctx.conversationLog().syncIssueHeadWithinTransaction(id, {
+      title: issue.title,
+      description: issue.description,
+    }, now);
     this.appendSessionEventWithinTransaction(id, {
       authorType: "system",
       authorId: null,
@@ -376,12 +400,12 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
-    // Row self-write serializes sequence allocation across server processes.
-    this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
-    const max = this.ctx.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
-    ).get(sessionId) as { seq: number } | null;
-    const seq = Number(max?.seq ?? 0) + 1;
+    // One allocator for both tables (MUL-426): the heads row hands out the next
+    // seq with an atomic `head_seq = head_seq + 1 … RETURNING`, so two server
+    // processes cannot take the same number and the log stays on
+    // `session_events.seq` one for one. This replaces the row lock plus
+    // `MAX(seq) + 1`, which read the whole session to allocate one number.
+    const seq = this.ctx.conversationLog().nextSeqWithinTransaction(sessionId);
     const id = createId("sevt");
     const now = input.createdAt ?? nowIso();
     this.ctx.db.run(
@@ -404,21 +428,71 @@ export class IssueSessionsRepo {
       ],
     );
     this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?", [now, sessionId]);
+    this.mirrorSessionEventWithinTransaction(id);
     return toSessionEvent(this.ctx.db.query("SELECT * FROM multiremi_session_events WHERE id = ?").get(id) as Row);
+  }
+
+  /**
+   * Copy one freshly written `session_events` row into the conversation log at
+   * the same seq (MUL-426 B1). The user-facing reads move to the log now; the
+   * wake-up and projection readers stay on the legacy table until B2, so both
+   * are written from this one transaction. Resolve and unresolve update the
+   * comment row in place and also append hidden markers on this same seq axis.
+   */
+  private mirrorSessionEventWithinTransaction(eventId: string): void {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_session_events WHERE id = ?",
+    ).get(eventId) as Row | null;
+    if (!row) return;
+    const comment = row.source_comment_id
+      ? this.ctx.db.query("SELECT task_id FROM multiremi_issue_comments WHERE id = ?").get(row.source_comment_id) as { task_id: string | null } | null
+      : null;
+    const mapped = sessionEventToConversationLog(row as unknown as MirrorSessionEvent, comment?.task_id ?? null);
+    if (!mapped) return;
+    // A marker points at the row it describes: resolve the target's seq on the
+    // same axis, which is what W4's coverage check reads.
+    if (mapped.kind === "message_edited" || mapped.kind === "message_deleted"
+      || mapped.kind === "thread_resolved" || mapped.kind === "thread_unresolved") {
+      const target = targetSeqForMarker(
+        (commentId) => {
+          const found = this.ctx.db.query(
+            "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND id = ?",
+          ).get(mapped.sessionId, commentId) as { seq?: number } | null;
+          return found?.seq == null ? null : Number(found.seq);
+        },
+        { ...mapped.metadata, comment_id: mapped.metadata.comment_id as string | undefined },
+      );
+      if (target != null) mapped.metadata.target_seq = target;
+    }
+    if (mapped.kind === "task_completed" || mapped.kind === "task_failed" || mapped.kind === "task_cancelled" || mapped.kind === "task_steer") {
+      const target = mapped.taskId
+        ? this.ctx.db.query(
+          "SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND task_id = ? AND kind = 'turn' ORDER BY seq ASC LIMIT 1",
+        ).get(mapped.sessionId, mapped.taskId) as { seq?: number } | null
+        : null;
+      if (target?.seq != null) mapped.metadata.target_seq = Number(target.seq);
+    }
+    this.ctx.conversationLog().appendWithinTransaction({
+      sessionId: mapped.sessionId,
+      seq: mapped.seq,
+      id: mapped.id,
+      kind: mapped.kind,
+      authorType: mapped.authorType,
+      authorId: mapped.authorId,
+      taskId: mapped.taskId,
+      bodyMd: mapped.bodyMd,
+      parentId: mapped.parentId,
+      metadata: mapped.metadata,
+      createdAt: mapped.createdAt,
+    });
   }
 
   listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
     if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
     const sinceSeq = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
     const toSeq = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
-    const rows = toSeq == null
-      ? this.ctx.db.query(
-        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
-      ).all(sessionId, sinceSeq) as Row[]
-      : this.ctx.db.query(
-        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
-      ).all(sessionId, sinceSeq, toSeq) as Row[];
-    return rows.map(toSessionEvent);
+    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId), { includeMarkerTargetSeq: true })
+      .filter((event) => event.seq > sinceSeq && (toSeq == null || event.seq <= toSeq));
   }
 
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
@@ -469,7 +543,7 @@ export class IssueSessionsRepo {
       // The projection budget needs the Agent's provider/model, not its Skills.
       const agent = this.ctx.agents().getAgentLite(task.agentId);
       const session = this.getIssueSession(task.issueSessionId)!;
-      const events = this.listSessionEvents(task.issueSessionId);
+      const events = this.projectionEvents(task.issueSessionId);
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,
@@ -515,7 +589,7 @@ export class IssueSessionsRepo {
         const inheritedProjection = buildSessionProjection({
           sessionId: parent.id,
           targetAgentId: task.agentId,
-          events: this.listSessionEvents(parent.id, { sinceSeq: parentFromSeq, toSeq: parentToSeq }),
+          events: this.projectionEvents(parent.id).filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
           cursorSeq: 0,
           fromSeq: parentFromSeq,
           toSeq: parentToSeq,
@@ -731,9 +805,13 @@ export class IssueSessionsRepo {
 
   private parentMaxSeq(sessionId: string): number {
     const row = this.ctx.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
     ).get(sessionId) as { seq: number };
     return Number(row.seq);
+  }
+
+  private projectionEvents(sessionId: string): MultiremiSessionEvent[] {
+    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
   }
 
   private sessionAuthorName(authorType: string, authorId: string | null): string | null {

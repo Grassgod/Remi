@@ -46,6 +46,7 @@ import type {
   CreateIssueDecisionInput,
   IssueDecisionActor,
   CreateLabelInput,
+  CreateTaskInput,
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   ListIssuesInput,
@@ -1540,7 +1541,7 @@ export class IssuesRepo {
        FROM multiremi_issue_sessions s
        WHERE s.issue_id = ? AND (
          s.is_default = 0
-         OR EXISTS (SELECT 1 FROM multiremi_session_events e WHERE e.session_id = s.id)
+         OR EXISTS (SELECT 1 FROM multiremi_conversation_log e WHERE e.session_id = s.id AND e.kind <> 'head' AND e.seq > 0)
          OR EXISTS (SELECT 1 FROM multiremi_session_participants p WHERE p.session_id = s.id)
          OR EXISTS (SELECT 1 FROM multiremi_session_agent_lanes l WHERE l.session_id = s.id)
        )
@@ -1839,9 +1840,11 @@ export class IssuesRepo {
     if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
     if (options.acceptCommentBy === parentAgentId) {
       const comments = this.ctx.db.query(
-        `SELECT body FROM multiremi_issue_comments
-         WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
-           ${lastChildClosedAt ? "AND created_at >= ?" : ""}`,
+        `SELECT log.body_md AS body FROM multiremi_conversation_log log
+         JOIN multiremi_issue_sessions session ON session.id = log.session_id
+         WHERE session.issue_id = ? AND log.author_type = 'agent' AND log.author_id = ? AND log.kind = 'message'
+           AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.deleted_at IS NULL
+           ${lastChildClosedAt ? "AND log.created_at >= ?" : ""}`,
       ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
       if (comments.some((row) => String(row.body ?? "").trim().length > 0)) {
         return { satisfied: true, lastChildClosedAt };
@@ -2495,6 +2498,10 @@ export class IssuesRepo {
     }
     const next = this.getIssue(id)!;
     this.linkReferencedAttachmentsToIssue(id, next.description);
+    if ((input.title !== undefined && input.title !== current.title)
+      || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {
+      this.syncIssueHeads(next, updatedAt);
+    }
     this.ctx.autopilots().enqueueIssueStatusChangedEvent({
       issue: next,
       previousStatus: current.status,
@@ -2763,6 +2770,23 @@ export class IssuesRepo {
     }, deferredEvents);
   }
 
+  /**
+   * Mirror the Issue title and description into the head row of each of its
+   * sessions. The rows are updated in place, so the seq axis does not shift and
+   * a reader sees the new text through `revision` / `log_version`.
+   */
+  private syncIssueHeads(issue: MultiremiIssue, at?: string): void {
+    const sessions = this.ctx.db.query(
+      "SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issue.id) as Row[];
+    for (const session of sessions) {
+      this.ctx.conversationLog().syncIssueHeadWithinTransaction(String(session.id), {
+        title: issue.title,
+        description: issue.description,
+      }, at);
+    }
+  }
+
   restoreIssue(id: string): MultiremiIssue {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
@@ -2940,7 +2964,10 @@ export class IssuesRepo {
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
-      const workspaceId = this.ctx.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
+      const workspaceId = this.ctx.db.inTransaction
+        ? this.ctx.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
         type: "comment:created",
@@ -4471,8 +4498,32 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
+    if (options.deferredEvents) {
+      return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
+    }
+    const deferredEvents = createCommitEventQueue();
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const comment = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
+      issueId, input, { ...options, deferredEvents }, childStatusChanges,
+    ))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return comment;
+  }
+
+  private createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: CreateIssueCommentOptions,
+    childStatusChanges?: ChildStatusChangeCollector,
+  ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    // Lock before reading Issue/session state so concurrent first comments can
+    // both reach the shared seq allocator on SQLite's deferred transactions.
+    if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
+      throw new Error(`Issue not found: ${issueId}`);
+    }
     const authorType = input.authorType ?? "member";
     if (options.deferAgentMentionDispatch && authorType !== "agent") {
       throw new Error("Only agent comment mentions can be deferred");
@@ -4586,27 +4637,28 @@ export class IssuesRepo {
       { comment_id: id, issue_session_id: issueSessionId },
     );
     if (options.deferAgentMentionDispatch) return comment;
-    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
-    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
+    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq, options.deferredEvents, childStatusChanges);
+    this.triggerAssigneeAutoResponse(
+      issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0, options.deferredEvents, childStatusChanges,
+    );
     return comment;
   }
 
   /**
    * Dispatch mentions for an agent comment that was persisted by an outer
-   * transaction. PostgresSyncDatabase has no nested transaction/savepoint
-   * support, so task creation and enqueue notification must happen only after
-   * that caller commits.
+   * transaction. Task enqueue notifications happen only after that caller
+   * commits, even though nested database writes now use savepoints.
    */
   dispatchDeferredAgentCommentMentions(commentId: string): MultiremiTask[] {
-    const comment = this.getIssueComment(commentId);
+    const comment = this.ctx.getLogIssueComment(commentId);
     if (!comment || comment.authorType !== "agent") {
       throw new Error(`Deferred agent comment not found: ${commentId}`);
     }
     const issue = this.getIssue(comment.issueId);
     if (!issue) throw new Error(`Issue not found: ${comment.issueId}`);
     const event = this.ctx.db.query(
-      `SELECT seq FROM multiremi_session_events
-       WHERE session_id = ? AND source_comment_id = ? AND kind = 'message'
+      `SELECT seq FROM multiremi_conversation_log
+       WHERE session_id = ? AND id = ? AND kind = 'message'
        ORDER BY seq DESC LIMIT 1`,
     ).get(comment.issueSessionId, comment.id) as { seq: number } | null;
     if (!event) throw new Error(`Session event not found for comment: ${comment.id}`);
@@ -4627,6 +4679,8 @@ export class IssuesRepo {
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
     hasExplicitMentions: boolean,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
   ): MultiremiTask | null {
     if (comment.authorType !== "member") return null;
     if (hasExplicitMentions) return null;
@@ -4636,7 +4690,7 @@ export class IssuesRepo {
     if (!agent) return null;
     let task: MultiremiTask;
     try {
-      task = this.ctx.tasks().createTask({
+      task = this.createCommentTriggeredTask({
         agentId: agent.id,
         issueId: issue.id,
         triggerCommentId: comment.id,
@@ -4647,7 +4701,7 @@ export class IssuesRepo {
           actorMemberId: comment.authorId ?? "local",
           commentId: comment.id,
         },
-      });
+      }, deferredEvents, childStatusChanges);
     } catch (err) {
       // MUL-400 E3 gate 3: the comment still lands (it was persisted before the
       // dispatch), but a waiting issue does not get a first round from it. The
@@ -4659,7 +4713,7 @@ export class IssuesRepo {
         actorId: null,
         parentTaskId: null,
         commentId: comment.id,
-      });
+      }, deferredEvents);
       return null;
     }
     this.ctx.appendIssueActivity(issue.id, {
@@ -4674,11 +4728,24 @@ export class IssuesRepo {
         agentId: agent.id,
         taskId: task.id,
       },
-    });
+    }, deferredEvents);
     return task;
   }
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
+    const deferredEvents = createCommitEventQueue();
+    const { comment, changed, issueId } = this.ctx.db.transaction(() => this.updateIssueCommentWithinTransaction(id, input, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    // Keep the comment and its log revision atomic. Trigger cancellation can
+    // wait on a workspace lock, so it follows that commit rather than holding
+    // the comment row invisible for the entire wait.
+    if (changed) this.cancelTasksByTriggerComments(issueId, [id]);
+    return comment;
+  }
+
+  private updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput, deferredEvents: CommitEventQueue): {
+    comment: MultiremiIssueComment; changed: boolean; issueId: string;
+  } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const body = (input.body ?? input.content ?? "").trim();
@@ -4691,9 +4758,22 @@ export class IssuesRepo {
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
     this.linkReferencedAttachmentsToComment(id, current.issueId, body);
-    if (current.body !== body) this.cancelTasksByTriggerComments(current.issueId, [id]);
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId && current.body !== body) {
+      // The edit lands in place on the comment's own row and bumps `revision`;
+      // the hidden marker records what it replaced, for projections and the
+      // browser replica's change feed.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(current.id), {
+        fields: {
+          body_md: body,
+          updated_at: now,
+          metadata: {
+            ...this.commentLogMetadata(current.id),
+            body,
+            previous_body: current.body,
+          },
+        },
+      });
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4709,11 +4789,18 @@ export class IssuesRepo {
       type: "comment_updated",
       body,
       data: { commentId: id },
-    });
-    return this.getIssueComment(id)!;
+    }, deferredEvents);
+    return { comment: this.getIssueComment(id)!, changed: current.body !== body, issueId: current.issueId };
   }
 
   deleteIssueComment(id: string): void {
+    const deferredEvents = createCommitEventQueue();
+    const { issueId, commentIds } = this.ctx.db.transaction(() => this.deleteIssueCommentWithinTransaction(id, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.cancelTasksByTriggerComments(issueId, commentIds);
+  }
+
+  private deleteIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): { issueId: string; commentIds: string[] } {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const ids = this.collectCommentTreeIds(id);
@@ -4721,7 +4808,6 @@ export class IssuesRepo {
       .map((commentId) => this.ctx.getRawIssueComment(commentId))
       .filter((comment): comment is MultiremiIssueComment => comment !== null);
     const now = nowIso();
-    this.cancelTasksByTriggerComments(current.issueId, ids);
     for (const commentId of ids) {
       this.ctx.db.run("DELETE FROM multiremi_comment_reactions WHERE comment_id = ?", [commentId]);
       this.ctx.db.run("DELETE FROM multiremi_attachments WHERE comment_id = ?", [commentId]);
@@ -4731,6 +4817,22 @@ export class IssuesRepo {
     }
     for (const comment of deletedComments) {
       if (!comment.issueSessionId) continue;
+      // Tombstone: the row stays on the axis with `deleted_at` set, its body
+      // cleared and the text preserved under `metadata.deleted_body`. Display
+      // windows filter it out; agent projections still see the marker.
+      const seq = this.commentLogSeq(comment.id);
+      const existing = this.ctx.conversationLog().getConversationLogEntry(comment.issueSessionId, seq);
+      if (existing) {
+        this.ctx.conversationLog().updateWithinTransaction(comment.issueSessionId, seq, {
+          fields: {
+            body_md: "",
+            task_id: null,
+            deleted_at: now,
+            updated_at: now,
+            metadata: { ...existing.metadata, deleted_body: comment.body },
+          },
+        });
+      }
       this.ctx.issueSessions().appendSessionEvent(comment.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4747,10 +4849,18 @@ export class IssuesRepo {
       type: "comment_deleted",
       body: current.body,
       data: { commentId: id, deletedCommentIds: ids },
-    });
+    }, deferredEvents);
+    return { issueId: current.issueId, commentIds: ids };
   }
 
   resolveIssueComment(id: string, input: { actorType?: string; actorId?: string | null } = {}): MultiremiIssueComment {
+    const deferredEvents = createCommitEventQueue();
+    const comment = this.ctx.db.transaction(() => this.resolveIssueCommentWithinTransaction(id, input, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return comment;
+  }
+
+  private resolveIssueCommentWithinTransaction(id: string, input: { actorType?: string; actorId?: string | null }, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -4764,6 +4874,16 @@ export class IssuesRepo {
     );
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
+      // The log resolves in place with `revision++`; the browser replica learns
+      // the new state from the patch's three resolved columns.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(id), {
+        fields: {
+          resolved_at: now,
+          resolved_by_type: input.actorType ?? "member",
+          resolved_by_id: input.actorId ?? "local",
+          updated_at: now,
+        },
+      });
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: input.actorType ?? "member",
         authorId: input.actorId ?? "local",
@@ -4779,11 +4899,18 @@ export class IssuesRepo {
       type: "comment_resolved",
       body: current.body,
       data: { commentId: id },
-    });
+    }, deferredEvents);
     return this.getIssueComment(id)!;
   }
 
   unresolveIssueComment(id: string): MultiremiIssueComment {
+    const deferredEvents = createCommitEventQueue();
+    const comment = this.ctx.db.transaction(() => this.unresolveIssueCommentWithinTransaction(id, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return comment;
+  }
+
+  private unresolveIssueCommentWithinTransaction(id: string, deferredEvents: CommitEventQueue): MultiremiIssueComment {
     const current = this.ctx.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     if (current.parentId) throw new Error("Only root comments can be resolved");
@@ -4795,6 +4922,15 @@ export class IssuesRepo {
     );
     this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     if (current.issueSessionId) {
+      // Unresolve clears all three columns on the same row and bumps `revision`.
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, this.commentLogSeq(id), {
+        fields: {
+          resolved_at: null,
+          resolved_by_type: null,
+          resolved_by_id: null,
+          updated_at: now,
+        },
+      });
       this.ctx.issueSessions().appendSessionEvent(current.issueSessionId, {
         authorType: "system",
         authorId: null,
@@ -4810,20 +4946,46 @@ export class IssuesRepo {
       type: "comment_unresolved",
       body: current.body,
       data: { commentId: id },
-    });
+    }, deferredEvents);
     return this.getIssueComment(id)!;
   }
 
   getIssueComment(id: string): MultiremiIssueComment | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
-    return row ? this.hydrateIssueComment(toIssueComment(row)) : null;
+    const row = this.ctx.db.query(
+      `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
+         log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
+         log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
+       FROM multiremi_issue_comments cmt
+       LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
+       WHERE cmt.id = ?`,
+    ).get(id) as Row | null;
+    return row ? this.hydrateIssueComment(this.commentFromLogRow(row)) : null;
   }
 
   listIssueComments(issueId: string): MultiremiIssueComment[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
+      `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
+         log.updated_at AS log_updated_at, log.resolved_at AS log_resolved_at,
+         log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
+       FROM multiremi_issue_comments cmt
+       LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
+       WHERE cmt.issue_id = ? ORDER BY cmt.created_at ASC`,
     ).all(issueId) as Row[];
-    return this.hydrateIssueComments(rows.map(toIssueComment));
+    return this.hydrateIssueComments(rows.map((row) => this.commentFromLogRow(row)));
+  }
+
+  private commentFromLogRow(row: Row): MultiremiIssueComment {
+    // B7 backfills historical comments. Until then, a missing log row retains
+    // the legacy wire while every newly mirrored comment reads its log revision.
+    if (row.log_id == null) return toIssueComment(row);
+    return toIssueComment({
+      ...row,
+      body: row.log_body_md,
+      updated_at: row.log_updated_at,
+      resolved_at: row.log_resolved_at,
+      resolved_by_type: row.log_resolved_by_type,
+      resolved_by_id: row.log_resolved_by_id,
+    });
   }
 
   listIssueCommentsForGoCli(issueId: string, input: ListIssueCommentsInput = {}): ListIssueCommentsResult {
@@ -6068,6 +6230,27 @@ export class IssuesRepo {
     };
   }
 
+  /**
+   * Comment ids are log row ids; edits, deletes and resolves keep their seq.
+   */
+  private commentLogSeq(commentId: string): number {
+    const row = this.ctx.db.query(
+      `SELECT seq FROM multiremi_conversation_log
+       WHERE id = ? AND kind IN ('message', 'system')
+       LIMIT 1`,
+    ).get(commentId) as { seq?: number } | null;
+    if (row?.seq == null) throw new Error(`Conversation log entry not found for comment: ${commentId}`);
+    return Number(row.seq);
+  }
+
+  /** The comment log row's current metadata, for a metadata update that replaces it. */
+  private commentLogMetadata(commentId: string): Record<string, unknown> {
+    const row = this.ctx.db.query(
+      "SELECT metadata FROM multiremi_conversation_log WHERE id = ? LIMIT 1",
+    ).get(commentId) as { metadata?: string } | null;
+    return row ? parseJson<Record<string, unknown>>(row.metadata, {}) : {};
+  }
+
   private collectCommentTreeIds(commentId: string): string[] {
     const ids: string[] = [];
     const visit = (id: string) => {
@@ -6083,10 +6266,17 @@ export class IssuesRepo {
     let current = this.ctx.getRawIssueComment(commentId);
     while (current?.parentId) current = this.ctx.getRawIssueComment(current.parentId);
     if (!current?.resolvedAt) return;
+    const now = nowIso();
     this.ctx.db.run(
       "UPDATE multiremi_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
-      [nowIso(), current.id],
+      [now, current.id],
     );
+    const entry = this.ctx.conversationLog().getConversationLogEntryById(current.id);
+    if (entry && current.issueSessionId) {
+      this.ctx.conversationLog().updateWithinTransaction(current.issueSessionId, entry.seq, {
+        fields: { resolved_at: null, resolved_by_type: null, resolved_by_id: null, updated_at: now },
+      });
+    }
   }
 
   private linkAttachmentsToComment(commentId: string, issueId: string, attachmentIds: string[]): void {
@@ -6191,6 +6381,8 @@ export class IssuesRepo {
     issue: MultiremiIssue,
     comment: MultiremiIssueComment,
     requiredEventSeq: number,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
   ): MultiremiTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
@@ -6208,7 +6400,7 @@ export class IssuesRepo {
     )) {
       for (const target of targets) {
         const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
-        this.recordCommentMentionSkipped(issue, comment, agent, target, "side_session_delegation_blocked");
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "side_session_delegation_blocked", deferredEvents);
       }
       return [];
     }
@@ -6224,13 +6416,13 @@ export class IssuesRepo {
       const agent = this.ctx.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
       if (!agent) {
         if (comment.authorType === "agent") {
-          this.recordCommentMentionSkipped(issue, comment, null, target, "target_unavailable");
+          this.recordCommentMentionSkipped(issue, comment, null, target, "target_unavailable", deferredEvents);
         }
         continue;
       }
       if (seenAgents.has(agent.id)) continue;
       if (comment.authorType === "agent" && comment.authorId === agent.id) {
-        this.recordCommentMentionSkipped(issue, comment, agent, target, "self_mention");
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "self_mention", deferredEvents);
         continue;
       }
       seenAgents.add(agent.id);
@@ -6247,11 +6439,14 @@ export class IssuesRepo {
         && !!sourceTask?.delegationId
         && sourceTask.delegatedByAgentId === agent.id;
       if (delegationReturn) {
-        const wakeup = this.ctx.tasks().ensureDelegationWakeup({
+        const wakeupInput = {
           sourceTaskId: sourceTask!.id,
           requiredEventSeq,
           triggerCommentId: comment.id,
-        });
+        };
+        const wakeup = deferredEvents && childStatusChanges
+          ? this.ctx.tasks().ensureDelegationWakeupWithinTransaction(wakeupInput, childStatusChanges, deferredEvents)
+          : this.ctx.tasks().ensureDelegationWakeup(wakeupInput);
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
@@ -6262,6 +6457,7 @@ export class IssuesRepo {
           agent,
           target,
           taskAuthoredByCommentAgent ? "unsupported_direction" : "unlinked_agent_comment",
+          deferredEvents,
         );
         continue;
       }
@@ -6295,7 +6491,7 @@ export class IssuesRepo {
             agentId: agent.id,
             taskId: queuedTask.id,
           },
-        });
+        }, deferredEvents);
         continue;
       }
 
@@ -6312,7 +6508,7 @@ export class IssuesRepo {
         : null;
       let task: MultiremiTask;
       try {
-        task = this.ctx.tasks().createTask({
+        task = this.createCommentTriggeredTask({
           agentId: agent.id,
           issueId: issue.id,
           triggerCommentId: comment.id,
@@ -6329,13 +6525,13 @@ export class IssuesRepo {
                 commentId: comment.id,
               }
             : undefined,
-        });
+        }, deferredEvents, childStatusChanges);
       } catch (err) {
         // MUL-400 E3 gate 3: the mention is persisted either way; on a waiting
         // issue the platform records the hold instead of starting a round, and
         // the mention's own skip activity says so.
         if (!(err instanceof IssueDependencyError)) throw err;
-        this.recordCommentMentionSkipped(issue, comment, agent, target, "dependencies_unmet");
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "dependencies_unmet", deferredEvents);
         continue;
       }
       tasks.push(task);
@@ -6353,7 +6549,7 @@ export class IssuesRepo {
           delegationId,
           delegatedByAgentId: delegationId ? comment.authorId : null,
         },
-      });
+      }, deferredEvents);
     }
     return tasks;
   }
@@ -6370,6 +6566,7 @@ export class IssuesRepo {
       | "target_unavailable"
       | "side_session_delegation_blocked"
       | "dependencies_unmet",
+    deferredEvents?: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
@@ -6384,7 +6581,18 @@ export class IssuesRepo {
         assigneeId: target.assigneeId,
         agentId: agent?.id ?? null,
       },
-    });
+    }, deferredEvents);
+  }
+
+  private createCommentTriggeredTask(
+    input: CreateTaskInput,
+    deferredEvents?: CommitEventQueue,
+    childStatusChanges?: ChildStatusChangeCollector,
+  ): MultiremiTask {
+    if (!deferredEvents || !childStatusChanges) return this.ctx.tasks().createTask(input);
+    const task = this.ctx.tasks().createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(task);
+    return task;
   }
 
   private resolveCommentMentionTargets(body: string, workspaceId: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {

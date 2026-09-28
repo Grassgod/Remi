@@ -61,7 +61,8 @@ export function isApiRoleConfigured(env: Record<string, string | undefined> = pr
 
 /**
  * Paths the `runtime` role serves: the daemon protocol, the health trio every
- * container probe uses, and the peer channel (`/internal/*`, MUL-462).
+ * container probe uses, the peer channel (`/internal/*`, MUL-462), and the
+ * two B5 trace read paths (MUL-402 ruling (l)).
  *
  * An allowlist of exact paths and prefixes rather than a prefix sweep, so
  * `/api/cloud-runtime/healthz` (a browser route) is not mistaken for `/healthz`.
@@ -74,6 +75,8 @@ export function isRuntimeAllowedPath(pathname: string): boolean {
   // backs `remi platform health`.
   if (pathname === "/api/multiremi/health") return true;
   if (pathname === "/internal" || pathname.startsWith("/internal/")) return true;
+  if (/^\/api\/tasks\/[^/]+\/trace$/.test(pathname)) return true;
+  if (/^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname)) return true;
   return false;
 }
 
