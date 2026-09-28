@@ -584,6 +584,10 @@
     "confirm": "确认"
   },
   "modelGateway": {
+    "context_title": "1M 上下文",
+    "context_label": "{{model}} 的 1M 上下文",
+    "context_warning": "Claude Code 不校验模型是否支持 1M，打开前请确认。",
+    "context_save_failed": "上下文窗口保存失败。",
     "description": "用于全部智能体任务的工作区网关策略。daemon 会在隔离的 Provider Home 中重建无密配置，Token 只注入子进程环境。",
     "discovery_title": "自动发现模型",
     "discovery_desc": "查询网关的 /v1/models 与 /models，让创建 agent 的模型下拉框显示网关真实模型。两个引擎统一。",
