@@ -26,7 +26,8 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
-import { locksForRole, resolveHubRole, startHubRoleGuard } from "@multiremi/api/hub/hub-role-guard.js";
+import { locksForRole, startHubRoleGuard } from "@multiremi/api/hub/hub-role-guard.js";
+import { resolveApiRole } from "@multiremi/config/api-role.js";
 import { createLogger, setLogLevel } from "@shared/logger.js";
 
 const log = createLogger("multiremi-cli");
@@ -193,12 +194,12 @@ async function serve(options: CliOptions): Promise<void> {
   // await the 30s retry; a process that cannot take its lock exits non-zero, and
   // compose's `restart: unless-stopped` starts a fresh attempt. The local SQLite
   // arm has no cross-process fan-out, so the guard is a no-op there.
-  const role = resolveHubRole(process.env.MULTIREMI_API_ROLE);
+  const apiRole = resolveApiRole();
   const roleGuard = await startHubRoleGuard({
     databaseUrl: process.env.MULTIREMI_DATABASE_URL,
-    locks: locksForRole(role, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
+    locks: locksForRole(apiRole, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
   });
-  const server = startMultiremiServer({ port, hostname: host, authToken: token, role });
+  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRole });
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
   await waitForShutdown(async () => {
     server.stop(true);

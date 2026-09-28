@@ -48,6 +48,11 @@ trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts]
 
 ## 订阅鉴权
 
+`startMultiremiServer` 的两个 socket handler 与健康路由使用同一个真实 `HubImpl`。
+调用方可通过 `liveHub`（兼容别名 `hub`）注入共享实例；默认不会构造空 Hub。
+`apiRole` 同时决定路由守卫、健康响应和 Hub 角色，具体接入见
+[Live Hub 对接说明](live-hub-a6-integration.md)。
+
 实现在 [hub/stream-auth.ts](../../packages/server/src/api/hub/stream-auth.ts)，规则只写一次，两种后端各自提供事实：
 
 - `log:` 按会话归属。chat 会话只允许 `creatorId` 本人；issue 会话要求请求者是该会话所属工作区的成员。socket 的 workspace 绑定仍然生效，跨工作区一律拒绝。

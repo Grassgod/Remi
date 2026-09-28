@@ -14,9 +14,14 @@ Hub，并从 Hub 取订阅喂给浏览器 trace socket（C3）和飞书 CoT。�
 
 ## 1. Hub 在哪、谁构造
 
-`createMultiremiApp` 默认构造一个 `HubImpl`（本地 transport），`api/server.ts` 与测试
-共用这一条构造路径；`startMultiremiServer` 额外把它标注成当前进程角色。A-6 不自己
-`new` 一个 Hub：从 app 的 `deps` 或启动参数里取，否则健康指标和订阅会分属两个对象。
+`startMultiremiServer` 默认构造一个 `HubImpl`（本地 transport），把同一实例传给
+健康路由、human request feed、浏览器 log 和 trace socket。独立调用
+`createMultiremiApp` 也使用同一构造规则。角色由 MUL-461 的 `apiRole` 决定，
+CLI 的角色锁、路由守卫、指标和 Hub 都使用它。
+
+A-6 需要在启动组合处持有 Hub，并用 `liveHub`（或兼容别名 `hub`）注入服务端，
+不要另建一个对象。`EmptyLiveHub` 只用于显式测试注入；`hub: null` 仅用于不启动
+socket 的 app 测试，健康路由此时保持不含 Hub 字段。
 
 trace 流的家**只在 daemon 所连的进程**（`runtime`）。浏览器经 `/api/trace/ws`（C3，
 nginx 路由到 runtime）直连，不跨进程。

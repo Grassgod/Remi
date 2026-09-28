@@ -71,10 +71,8 @@ import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js"
 import {
   createHub,
   type HubImpl,
-  type HubSnapshot,
   type ObservableLiveHub,
 } from "./hub/hub-core.js";
-import { resolveHubRole, type HubRole } from "./hub/hub-role-guard.js";
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
@@ -196,7 +194,6 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
-import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
 import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import {
@@ -278,21 +275,13 @@ export interface MultiremiApiOptions {
    *
    * Undefined builds the real one (`HubImpl` over the local transport) so every
    * entry point — `startMultiremiServer`, the snapshot harness, tests — gets a hub
-   * without a second wiring path. Pass a prepared hub to share one instance, or
-   * `null` to leave the app without one (the health routes then omit the `hub.*`
-   * fields rather than reporting zeros for something that does not exist).
+   * without a second wiring path. This is an alias of `liveHub`. Pass a prepared
+   * hub to share one instance, or `null` to leave the app without one (the health
+   * routes then omit the `hub.*` fields rather than reporting zeros).
    */
   hub?: LiveHub | ObservableLiveHub | null;
   /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
   hubRingLimits?: Partial<HubRingLimits>;
-  /**
-   * MUL-403 C1: the API process role this app reports.
-   *
-   * Undefined reads `MULTIREMI_API_ROLE` (MUL-461's knob; until that module lands,
-   * {@link resolveHubRole} parses it). The *lock* is not taken here — see
-   * `startHubRoleGuard`, which the CLI's `serve` awaits before this function runs.
-   */
-  role?: HubRole;
   /**
    * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
@@ -300,9 +289,8 @@ export interface MultiremiApiOptions {
    */
   apiRole?: ApiRole;
   /**
-   * MUL-438: the Live Hub this process fans streams out through. Undefined builds
-   * the C0 empty hub over the local transport, which is what the browser socket
-   * needs while C1 (MUL-436) is still in flight. Tests inject a real or fake hub.
+   * The shared Hub for browser sockets, health and human requests. Undefined
+   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
    */
   liveHub?: LiveHub;
   /**
@@ -317,7 +305,25 @@ export interface MultiremiApiOptions {
   readPool?: ReturnType<typeof createReadPool> | null;
 }
 
+function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole): LiveHub | null {
+  if (options.liveHub !== undefined) return options.liveHub;
+  if (options.hub !== undefined) return options.hub;
+  return createHub({
+    transport: createLocalHubTransport(),
+    role: apiRole,
+    ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
+  });
+}
+
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
+  return createAppForRole(
+    options,
+    options.apiRole ?? resolveApiRole(),
+    options.apiRole !== undefined || isApiRoleConfigured(),
+  );
+}
+
+function createAppForRole(options: MultiremiApiOptions, effectiveApiRole: ApiRole, apiRoleConfigured: boolean): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
@@ -336,16 +342,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
-  // MUL-461: the process's ONE effective role. The guard middleware, the health
-  // payloads and the metrics lines all read this value, so nothing downstream can
-  // disagree with it.
-  const effectiveApiRole = options.apiRole ?? resolveApiRole();
   // With the knob unset (and no injected role) the process IS main: one role, no
   // routing decision to report. The health payloads only grow `role` once a role was
   // actually configured, which is what keeps `snapshot-api-routes.ts --check`
   // byte-identical to main for the default deployment (MUL-461 acceptance ①) while
   // still answering `role:"runtime"` in a split container.
-  const apiRoleConfigured = options.apiRole !== undefined || isApiRoleConfigured();
   // The metrics role is stamped LAST, and from `effectiveApiRole`: an injected
   // `requestMetrics` object is a transport/tuning override, never a statement about
   // which process this is. Without the trailing spread a caller that passed
@@ -363,13 +364,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
   // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
   // an explicitly injected hub is shared rather than rebuilt.
-  const hub: LiveHub | ObservableLiveHub | null = options.hub === undefined
-    ? createHub({
-        transport: createLocalHubTransport(),
-        role: options.role ?? resolveHubRole(process.env.MULTIREMI_API_ROLE),
-        ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
-      })
-    : options.hub;
+  const hub = resolveAppHub(options, effectiveApiRole);
 
   // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
   // detach handle, but an app has no shutdown hook — the listener lives exactly as
@@ -855,6 +850,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
+  const liveHub = resolveAppHub(options, effectiveApiRole);
+  if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
   log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
@@ -865,12 +862,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const store = options.store ?? new MultiremiStore();
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
-  // MUL-403 C1: which role this process plays. The advisory lock that makes the
-  // role exclusive is taken by the process entry point (`serve` in the CLI), which
-  // is the only place allowed to await a 30s retry before `Bun.serve` starts; this
-  // function stays synchronous so every existing caller keeps working. The value is
-  // read here as well because `/health` and `/readyz` report it.
-  const apiRole = options.role ?? resolveHubRole(process.env.MULTIREMI_API_ROLE);
   const scheduler = backgroundJobs
     ? (options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler)
     : null;
@@ -928,17 +919,18 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
   // could not simply wait for the next explicit action is repaired once, here.
   if (backgroundJobs) refreshPreNativeCodexSnapshots(store);
-  const app = createMultiremiApp({
+  // Pin the role once without turning an unset role into a configured health field.
+  const app = createAppForRole({
     ...options,
     store,
-    role: apiRole,
+    liveHub,
     scheduler,
     realtimeState,
     sessionArchives,
     messagingProviders,
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
-  });
+  }, effectiveApiRole, options.apiRole !== undefined || isApiRoleConfigured(startupEnv));
   // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
   // build apps with `createMultiremiApp` and must not inherit a timer.
   const requestMetricsSummary = startRequestMetricsSummary(requestMetricsOptions);
@@ -948,14 +940,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
-  // MUL-438: the process's Live Hub and the browser socket's v2 stream handler.
-  //
-  // The hub is C1's (MUL-436) and ships in the same release train; C3 is written
-  // against the C0 seam so this wiring does not wait for it. `EmptyLiveHub` is
-  // the C0 implementation and answers honestly ("I hold nothing") rather than
-  // fabricating a head, so a socket that subscribes today gets an ack with an
-  // empty range instead of frames that do not exist yet.
-  const liveHub: LiveHub = options.liveHub ?? createEmptyLiveHub(createLocalHubTransport());
   // A caller-supplied auth reader owns its pool; when this function builds the
   // Postgres one, it also owns closing it at shutdown.
   const ownedReadPool = options.streamAuth
@@ -1280,6 +1264,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     store.stopNotificationDeliverySweeper();
     bodyHtmlBackfill?.stop();
     closeOwnedReadPool();
+    if (options.liveHub === undefined && options.hub === undefined) (liveHub as HubImpl).shutdown();
     return stopServer(closeActiveConnections);
   };
   return serverWithResync;
