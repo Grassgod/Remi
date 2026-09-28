@@ -466,3 +466,22 @@ dependency PG 端到端、第五轮 task wakeups，以及 458 的 SQLite/PG 人�
 强制开工用例。事务帧 PG 证据仍是 D / W→D、最大深度 1。
 合并态 `bunx tsc --noEmit` 为 0 error；CLI capability checker 仍是
 **677 mapped / 92 exempt / 0 missing（769 routes）**，API route snapshot matches。
+
+### 交付前再合 MUL-474
+
+按父单补充要求再次 fetch，合入 `origin/main = 58bf5cc0`（MUL-474），
+合并提交为 `5667c1fa`，没有文本冲突。`context.ts` 自动合并后同时保留
+六字段 `TaskMessageFanoutSubject`、新增 Task identity/status 读接口，以及
+本单的最外层 `afterCommit` 事件队列。`access-tokens-repo.ts` 相对 main
+没有 diff；60 秒 last-used 节流保持 MUL-474 的实现。
+
+在该合并态重跑本单/409/458 的八个定向文件，并增加 MUL-474 的 daemon
+task-poll 和 token-throttle 两文件，真实 PG、哨兵开启、启动前清理
+`MULTIREMI_TOKEN`：**243 pass / 0 fail / 0 skip（81.85s）**。
+tsc 0 error，架构 92 pass，docs:check 通过，CLI checker 仍为
+**677 mapped / 92 exempt / 0 missing（769 routes）**，API route snapshot matches。
+
+前一次完整 PG 目录运行（`e5583b2a`，含 main 到 `b6bdcc51`）是
+**3679 pass / 0 fail / 0 违例（828.25s）**；MUL-301 PG audit 实测
+**11.32s**，本次没有复现第四轮超时。合 MUL-474 后再次顺序运行 PG 和
+SQLite 完整目录，最终结果、20 轮手册和最新 head CI 见第五轮交付评论。
