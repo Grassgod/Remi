@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 773,
+    "routeCount": 775,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 545,
+      "compat": 547,
       "root": 16
     },
-    "getRoutes": 328,
-    "getRoutesWithBody": 325,
+    "getRoutes": 329,
+    "getRoutesWithBody": 326,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 445,
+    "mutationRoutes": 446,
     "mutationRoutesCovered": 282,
     "flows": [
       "agents-compat",
@@ -180,6 +180,7 @@
     "GET /api/daemon/agent-plugin-artifacts/:digest",
     "GET /api/daemon/autopilot-runs/:runId/gc-check",
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+    "GET /api/daemon/issues/:issueId/decisions/:decisionId",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
@@ -533,6 +534,7 @@
     "POST /api/contact-sales",
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
+    "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer",
     "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
@@ -936,6 +938,7 @@
     "GET /api/daemon/agent-plugin-artifacts/:digest",
     "GET /api/daemon/autopilot-runs/:runId/gc-check",
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+    "GET /api/daemon/issues/:issueId/decisions/:decisionId",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
@@ -2024,7 +2027,7 @@
       "status": 200,
       "body": {
         "attachment": {
-          "id": "att_000000000000",
+          "id": "att_00000000000040008000000000000003",
           "workspaceId": "local",
           "issueId": null,
           "commentId": null,
@@ -2033,12 +2036,12 @@
           "uploaderType": "member",
           "uploaderId": "local",
           "filename": "snapshot.txt",
-          "url": "/api/attachments/att_000000000000/content",
+          "url": "/api/attachments/att_00000000000040008000000000000003/content",
           "contentType": "text/plain;charset=utf-8",
           "sizeBytes": 18,
           "createdAt": "<timestamp>"
         },
-        "id": "att_000000000000",
+        "id": "att_00000000000040008000000000000003",
         "workspace_id": "local",
         "workspaceId": "local",
         "issue_id": null,
@@ -2054,9 +2057,9 @@
         "uploader_id": "local",
         "uploaderId": "local",
         "filename": "snapshot.txt",
-        "url": "/api/attachments/att_000000000000/content",
-        "download_url": "/api/attachments/att_000000000000/download",
-        "downloadUrl": "/api/attachments/att_000000000000/download",
+        "url": "/api/attachments/att_00000000000040008000000000000003/content",
+        "download_url": "/api/attachments/att_00000000000040008000000000000003/download",
+        "downloadUrl": "/api/attachments/att_00000000000040008000000000000003/download",
         "content_type": "text/plain;charset=utf-8",
         "contentType": "text/plain;charset=utf-8",
         "size_bytes": 18,
@@ -13991,6 +13994,58 @@
       "body": {
         "status": "active",
         "updated_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/issues/:issueId/decisions/:decisionId",
+      "route": "GET /api/daemon/issues/:issueId/decisions/:decisionId",
+      "path": "/api/daemon/issues/iss_snapshot/decisions/dcs_snapshot",
+      "status": 200,
+      "body": {
+        "decision": {
+          "id": "dcs_snapshot",
+          "workspaceId": "local",
+          "issueId": "iss_snapshot",
+          "sourceIssueId": "iss_snapshot",
+          "sourceTaskId": "tsk_snapshot",
+          "kind": "merge",
+          "title": "Snapshot merge decision",
+          "body": "Snapshot decision body",
+          "options": null,
+          "status": "answered",
+          "answer": {
+            "answererType": "member",
+            "answererId": "mem_snapshot_one",
+            "answer": "Hold for QA",
+            "reason": "Human review",
+            "overturn": null,
+            "answeredAt": "<timestamp>"
+          },
+          "answeredByMemberId": "mem_snapshot_one",
+          "answeredAt": "<timestamp>",
+          "history": [
+            {
+              "answererType": "agent",
+              "answererId": "agt_snapshot",
+              "answer": "Merge after CI",
+              "reason": "Checks passed",
+              "overturn": "A member can reverse this if QA fails",
+              "answeredAt": "<timestamp>"
+            },
+            {
+              "answererType": "member",
+              "answererId": "mem_snapshot_one",
+              "answer": "Hold for QA",
+              "reason": "Human review",
+              "overturn": null,
+              "answeredAt": "<timestamp>"
+            }
+          ],
+          "ownerAgentId": "agt_snapshot",
+          "createdByAgentId": "agt_snapshot",
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
       }
     },
     {

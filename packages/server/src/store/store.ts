@@ -84,6 +84,7 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  type AnswerIssueDecisionOptions,
   IssueDependencyError,
   ParentStatusGuardError,
   type IssueTimelineCursor,
@@ -1930,6 +1931,26 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueDecision(workspaceId, daemonId, issueId);
+  }
+
+  supportsFeishuIssueDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
+    return this.feishuBot.supportsIssueDecisionCard(workspaceId, runtimeId);
+  }
+
+  resolveFeishuDecisionOperatorMember(workspaceId: string, appId: string, openId: string | null | undefined) {
+    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
+  }
+
+  listFeishuIssueDecisionCards(workspaceId: string, runtimeId: string) {
+    return this.feishuBot.listLiveIssueDecisionCards(workspaceId, runtimeId);
+  }
+
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string) {
+    return this.feishuBot.getIssueDecisionCardContext(workspaceId, decisionId);
+  }
+
   listFeishuBotLiveDecisionCards(
     workspaceId: string,
     runtimeId: string,
@@ -1980,6 +2001,21 @@ runMigrations(this.db);
 
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
+  }
+
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.prepareIssueDecisionCardWithinTransaction(issue, decision, deferredEvents);
+  }
+
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.enqueueIssueDecisionCardPatchWithinTransaction(decision, deferredEvents);
   }
 
   prepareFeishuBotHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
@@ -2794,6 +2830,10 @@ runMigrations(this.db);
     return this.runtimes.listRuntimes();
   }
 
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
+    return this.runtimes.listRuntimesForWorkspace(workspaceId);
+  }
+
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {
     return this.agents.listActiveAgentsByRuntime(runtimeId);
   }
@@ -3123,6 +3163,7 @@ runMigrations(this.db);
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -3156,6 +3197,10 @@ runMigrations(this.db);
     return this.issues.getIssueDecision(issueId, decisionId);
   }
 
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecisionAnywhere(decisionId);
+  }
+
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
     return this.issues.listIssueDecisions(issueId);
   }
@@ -3168,8 +3213,14 @@ runMigrations(this.db);
     return this.issues.createIssueDecision(sourceIssueId, input, actor);
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
-    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor, options);
   }
 
   escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
