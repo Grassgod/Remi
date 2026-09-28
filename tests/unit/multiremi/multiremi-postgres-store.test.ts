@@ -3062,16 +3062,18 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // QA's injection point: the activity write that happens AFTER the round was
     // inserted. Pre-fix this left `backlog` + a queued round.
-    type Ctx = { appendIssueActivity(issueId: string, input: { type: string }): void };
+    type Ctx = {
+      appendIssueActivity(issueId: string, input: { type: string }, ...rest: unknown[]): void;
+    };
     const ctx = (store as unknown as { ctx: Ctx }).ctx;
     const original = ctx.appendIssueActivity.bind(ctx);
     let fired = false;
-    ctx.appendIssueActivity = (issueId: string, input: { type: string }) => {
+    ctx.appendIssueActivity = (issueId: string, input: { type: string }, ...rest: unknown[]) => {
       if (!fired && input.type === "issue_assigned") {
         fired = true;
         throw new Error("injected activity failure");
       }
-      original(issueId, input);
+      original(issueId, input, ...rest);
     };
 
     db.resetTransactionDepthStats();
@@ -3248,6 +3250,49 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // satisfy it.
     expect(store.getIssue(prereq.id)?.status).toBe("in_progress");
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  }, 60_000);
+
+  it("keeps the gate-open member start record when the process dies after COMMIT (PG)", async () => {
+    const runtime = store.registerRuntime({ id: "rt_gate_open_after", name: "Gate-open worker", provider: "claude", maxConcurrency: 4 });
+    const owner = store.createAgent({ name: "Gate-open owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Gate-open prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({
+      title: "Gate-open dependent",
+      status: "backlog",
+      blockedBy: [prereq.id],
+      assigneeType: "agent",
+      assigneeId: owner.id,
+    });
+
+    // Open the gate without running the automatic-start hook. The child then
+    // exits immediately after the member update's owner transaction commits,
+    // before `runIssueUpdatePostCommit` can publish the queued events.
+    db.run("UPDATE multiremi_issues SET status = 'done' WHERE id = ?", [prereq.id]);
+    expect(store.listUnmetPrerequisites(dependent.id)).toEqual([]);
+    const probe = Bun.spawn([
+      "bun", "run", new URL("./fixtures/postgres-force-start-crash-probe.ts", import.meta.url).pathname,
+      pgDatabaseUrl(TEST_DB), dependent.id, "after-gate-open-commit", "19",
+    ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: process.env.HOME } });
+    const { stdout, exitCode } = await waitForProbeExit(probe, "after-gate-open-commit");
+    expect(stdout).toContain("after-gate-open-commit");
+    expect(exitCode).toBe(19);
+
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(db.query(
+      "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(dependent.id)).toEqual([{ status: "queued" }]);
+    const activities = store.listIssueActivity(dependent.id);
+    expect(activities.filter((entry) => entry.type === "issue_assigned")).toHaveLength(1);
+    expect(activities.filter((entry) => entry.type === "dependency_auto_started")).toEqual([]);
+    expect(activities.filter((entry) => entry.type === "dependency_force_started")).toEqual([]);
+    const memberUpdates = activities.filter((entry) => entry.type === "issue_updated"
+      && (entry.data as Record<string, unknown> | null)?.status === "todo"
+      && (entry.data as Record<string, unknown> | null)?.force === true);
+    expect(memberUpdates).toHaveLength(1);
+    expect(memberUpdates[0]!.data).toMatchObject({
+      actorType: "member",
+      actorId: "mem_local",
+    });
   }, 60_000);
 
   it.each(["status update", "task insert", "issue_assigned", "dependency_force_started"] as const)(
