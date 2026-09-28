@@ -92,7 +92,8 @@ describe("A-4 native pending delivery", () => {
         socket.addEventListener("error", () => reject(new Error("Socket failed")), { once: true }); });
       socket.send(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "dmn_downlinks",
         cli_version: DAEMON_MIN_CLI_VERSION, caps: [], runtimes: [{ runtime_id: rt, provider: "claude",
-          max_concurrency: 1, active_task_ids: [] }] } }));
+          max_concurrency: 1, active_task_ids: [],
+          capabilities: { supports_bot_menu: true, agent_plugin_protocol: 1 } }] } }));
       await waitFor(() => frames.some(frame => frame.t === "welcome"));
       return { socket, frames };
     };

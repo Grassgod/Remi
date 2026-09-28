@@ -4,13 +4,21 @@ import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-inp
 import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "@multiremi/api/daemon-protocol/task-input-rpcs.js";
 import type { DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
-import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
-import type { MultiremiDaemonRuntimeInput } from "@multiremi/contracts/types.js";
+import { DAEMON_MIN_CLI_VERSION, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+import {
+  FEISHU_CONCIERGE_CONFIG_CAPABILITY,
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_CAPABILITY,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_ISSUE_DECISION_CARD_CAPABILITY,
+  FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+  type MultiremiDaemonRuntimeInput,
+} from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { normalizeDaemonRuntimeInput } from "@multiremi/worker/client.js";
 
 export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: string,
-  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[] } = {}) {
+  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; capabilities?: DaemonRuntimeCapabilities } = {}) {
   const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) throw new Error("Runtime not found");
   const layer = new DaemonProtocolLayer({ store });
@@ -24,7 +32,8 @@ export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: str
     options.identity ?? { accessToken: null, masterToken: true });
   await session.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2,
     daemon_id: runtime.daemonId ?? "dmn_downlinks_unit", cli_version: DAEMON_MIN_CLI_VERSION, caps: [],
-    runtimes: [{ runtime_id: runtimeId, provider: runtime.provider, max_concurrency: 1, active_task_ids: options.activeTaskIds ?? [] }] } }));
+    runtimes: [{ runtime_id: runtimeId, provider: runtime.provider, max_concurrency: 1,
+      active_task_ids: options.activeTaskIds ?? [], capabilities: options.capabilities }] } }));
   await layer.drain();
   let rpcId = 0;
   return { frames, layer, session, downlinks,
@@ -49,9 +58,24 @@ export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: str
 /** Encoded v2 delivery and ACK, without calling the daemon business handler. */
 export async function receiveRuntimeInputs(store: MultiremiStore, runtimeId: string,
   options: { identity?: DaemonProtocolIdentity } = {}): Promise<MultiremiDaemonRuntimeInput> {
-  store.heartbeatRuntime(runtimeId, { claimPending: false, agentPluginProtocol: 1,
-    supportsBatchImport: true, supportsDirectoryScan: true, supportsSkillDirectory: true, supportsBotMenu: true });
-  const connection = await openRuntimeDownlinks(store, runtimeId, options);
+  const metadata = store.getRuntimeLite(runtimeId)?.metadata ?? {};
+  // This fixture models a capable daemon. The hello is its first heartbeat;
+  // a separate store heartbeat would advance plugin reconciliation twice.
+  // Bare openRuntimeDownlinks still omits capabilities for missing-field tests.
+  const capabilities: DaemonRuntimeCapabilities = {
+    supports_batch_import: true,
+    supports_directory_scan: true,
+    supports_skill_directory: true,
+    supports_bot_menu: true,
+    agent_plugin_protocol: 1,
+    feishu_concierge_protocol: metadata[FEISHU_CONCIERGE_CONFIG_CAPABILITY] === true
+      ? FEISHU_CONCIERGE_PROTOCOL_VERSION : 0,
+    feishu_decision_card: metadata[FEISHU_DECISION_CARD_CAPABILITY] === 1
+      ? FEISHU_DECISION_CARD_PROTOCOL_VERSION : 0,
+    feishu_issue_decision_card: metadata[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] === 1
+      ? FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION : 0,
+  };
+  const connection = await openRuntimeDownlinks(store, runtimeId, { ...options, capabilities });
   const fields: Record<string, string> = { "runtime.update": "pending_update", "runtime.model_list": "pending_model_list",
     "runtime.local_skills": "pending_local_skills", "runtime.directory_scan": "pending_directory_scan",
     "runtime.local_skill_import": "pending_local_skill_import", "runtime.command": "pending_command",
