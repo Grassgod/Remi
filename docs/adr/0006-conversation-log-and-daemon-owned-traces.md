@@ -108,11 +108,17 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    the reply stays a threadable `message`), `summary`, `tool_call_count`,
    `event_count`, `type_histogram` bucketed by `(type, tool)` (matching what the
    organizer computes today; `tool` is null outside `tool_use`/`tool_result`),
-   `usage` and `model`. `final_reply_md` comes from a shared `deriveFinalReply`
-   helper, which the historical backfill reuses so old and new cards reconcile.
-   The figures arrive in the daemon's completion report; the server never derives
-   them from the trace. The terminal lifecycle events keep their own names and
-   seq, as decision 2 requires.
+   `usage` and `model`. `final_reply_md` is the task's result text as the
+   daemon reports it in `output` (every `text` event concatenated,
+   `Task completed.` when empty), the same text today's chat message and the
+   auto-posted Issue reply carry; the historical backfill copies the assistant
+   message body verbatim. `deriveFinalReply` is the Feishu CoT timeline's answer
+   rule and is not a card field; the `final_reply_md` on `task.complete` /
+   `task.fail` is not written to any card. The four trace figures on historical
+   cards are recomputed from `task_messages` with the same `trace-derive`
+   functions the daemon uses. The figures arrive in the daemon's completion
+   report; the server never derives them from the trace. The terminal lifecycle
+   events keep their own names and seq, as decision 2 requires.
 5. **Traces have one owner at a time.** While hot, the daemon appends a
    normalised JSONL file
    `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`
