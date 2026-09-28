@@ -2,7 +2,7 @@
 
 Baseline: main `1653b038289f9eae79b426f1b8cd0577ce4d31ae` plus parent
 `a4b913c2cc8a132d2159a70cd486dbe9eda9b848`. No later main is merged.
-B5 dependency `3cb1114dd0092ef5407f5bb140236782611a37a4` is merged per
+B5 dependency `bf9338e4a9b5e7db3130a4c33f6ff725abf3fa80` is merged per
 `cmt_fw3taja4h9un` (v); (l) runtime trace allowlist is a separate commit.
 Authority: `cmt_gestk2r6imjh` (e)-(h), `cmt_o1oocq58vsbg` (s),
 `cmt_9z7t6hwo3xuh` (u). This is the first published W inventory;

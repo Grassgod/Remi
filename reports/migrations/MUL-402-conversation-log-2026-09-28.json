@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-28T13:04:13.804Z",
+  "generatedAt": "2026-09-28T13:26:47.097Z",
   "scope": "Synthetic fixtures and cold-start qualification on Bun 1.3.14. No production data or credentials. Scale: 15,000 events, 5,106 live comments (6 missing-Issue orphans), 250 tombstones, 4,500 messages in 191 chats; 2 KiB synthetic bodies. Timings include the full Store startup, not fixture generation or reconciliation.",
   "runs": [
     {
@@ -34,13 +34,13 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_9owjn74lg5hp",
+            "issueId": "iss_o4j608ssiy9r",
             "disposition": "appended"
           }
         ],
         "chatSequenceConflicts": [
           {
-            "sessionId": "chat_86f1xgu9s2tu",
+            "sessionId": "chat_9e0glq5el799",
             "messages": [
               {
                 "id": "msg_history_assistant",
@@ -92,7 +92,7 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_9owjn74lg5hp",
+            "issueId": "iss_o4j608ssiy9r",
             "disposition": "appended"
           }
         ],
@@ -100,36 +100,36 @@
         "mismatches": [],
         "sessions": [
           {
-            "sessionId": "ises_okoc1reyzkbv",
+            "sessionId": "ises_gd2479jy6qj2",
             "kind": "issue",
             "expectedCount": 19,
             "actualCount": 19,
-            "sourceDigest": "7b54eced361ba734b8d13fd73f742dcc240561aabe95cca453a1cfcbe74efbc7",
-            "logDigest": "7b54eced361ba734b8d13fd73f742dcc240561aabe95cca453a1cfcbe74efbc7"
+            "sourceDigest": "42288c4d4412cb692c48d4701bdaa544cce4b08cc5181da944af64f57b8533fa",
+            "logDigest": "42288c4d4412cb692c48d4701bdaa544cce4b08cc5181da944af64f57b8533fa"
           },
           {
-            "sessionId": "chat_86f1xgu9s2tu",
-            "kind": "chat",
-            "expectedCount": 4,
-            "actualCount": 4,
-            "sourceDigest": "f785c5049e83f286d6f17edf6ab1c93d2dcc2552935d3261b428076d5b65d1d6",
-            "logDigest": "f785c5049e83f286d6f17edf6ab1c93d2dcc2552935d3261b428076d5b65d1d6"
-          },
-          {
-            "sessionId": "chat_u2ct2k1w7idv",
+            "sessionId": "chat_3bjwclo7xfly",
             "kind": "chat",
             "expectedCount": 2,
             "actualCount": 2,
-            "sourceDigest": "9c8001f6ecaeb54b43dd5b58f667a1536e918567f8fee53cb9565b93f520d64b",
-            "logDigest": "9c8001f6ecaeb54b43dd5b58f667a1536e918567f8fee53cb9565b93f520d64b"
+            "sourceDigest": "e3f2196d9ab92efd8cc7850ea562f98f8b77025e6ba8bef527e003f76cedae8c",
+            "logDigest": "e3f2196d9ab92efd8cc7850ea562f98f8b77025e6ba8bef527e003f76cedae8c"
+          },
+          {
+            "sessionId": "chat_9e0glq5el799",
+            "kind": "chat",
+            "expectedCount": 4,
+            "actualCount": 4,
+            "sourceDigest": "a9a040ca08af937a279daabf21ae563648389da83dd569641758f4878bc2c4ee",
+            "logDigest": "a9a040ca08af937a279daabf21ae563648389da83dd569641758f4878bc2c4ee"
           }
         ]
       }
     },
     {
       "label": "sqlite cold startup",
-      "startupMs": 748.712182,
-      "secondStartupMs": 31.454960999999912,
+      "startupMs": 810.784768,
+      "secondStartupMs": 33.088068999999905,
       "reconciliation": {
         "counts": {
           "issueSessions": 128,
@@ -2774,13 +2774,13 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_gycz5l89cev6",
+            "issueId": "iss_kuvleodpbgsw",
             "disposition": "appended"
           }
         ],
         "chatSequenceConflicts": [
           {
-            "sessionId": "chat_rasbjpvenig2",
+            "sessionId": "chat_01txuwfj8vwt",
             "messages": [
               {
                 "id": "msg_history_assistant",
@@ -2832,7 +2832,7 @@
           },
           {
             "id": "cmt_orphan_valid",
-            "issueId": "iss_gycz5l89cev6",
+            "issueId": "iss_kuvleodpbgsw",
             "disposition": "appended"
           }
         ],
@@ -2840,36 +2840,36 @@
         "mismatches": [],
         "sessions": [
           {
-            "sessionId": "ises_tf3zq5tdp6ad",
+            "sessionId": "ises_zyiib265wvlk",
             "kind": "issue",
             "expectedCount": 19,
             "actualCount": 19,
-            "sourceDigest": "75fab33f66f2370d4cc7ff73e7a39dc40a0f16c45611d8b3e6623d0ea1842e69",
-            "logDigest": "75fab33f66f2370d4cc7ff73e7a39dc40a0f16c45611d8b3e6623d0ea1842e69"
+            "sourceDigest": "6a80865186f81eb8bf527e52af1b45500168c8d51480e1b41193f1ed430c01f2",
+            "logDigest": "6a80865186f81eb8bf527e52af1b45500168c8d51480e1b41193f1ed430c01f2"
           },
           {
-            "sessionId": "chat_ia858hc0wnjg",
-            "kind": "chat",
-            "expectedCount": 2,
-            "actualCount": 2,
-            "sourceDigest": "c085c65e8382579eb75b9225fece6c83b1a0d0dcddc89ad294e3d4256b27640d",
-            "logDigest": "c085c65e8382579eb75b9225fece6c83b1a0d0dcddc89ad294e3d4256b27640d"
-          },
-          {
-            "sessionId": "chat_rasbjpvenig2",
+            "sessionId": "chat_01txuwfj8vwt",
             "kind": "chat",
             "expectedCount": 4,
             "actualCount": 4,
-            "sourceDigest": "f90f105ec0b5cbbe81fc48a56623c931b442bd00a8aec9dea5bda0cab434cba2",
-            "logDigest": "f90f105ec0b5cbbe81fc48a56623c931b442bd00a8aec9dea5bda0cab434cba2"
+            "sourceDigest": "d3616089e56ec951261712abae4cac6388284e7d8c763595c41de55cf90fc101",
+            "logDigest": "d3616089e56ec951261712abae4cac6388284e7d8c763595c41de55cf90fc101"
+          },
+          {
+            "sessionId": "chat_jtgq5v0gpaal",
+            "kind": "chat",
+            "expectedCount": 2,
+            "actualCount": 2,
+            "sourceDigest": "b9bcb8aa2bf0068fcd0011860f57234d58d55092c7c34d51f58c66168b78ef0e",
+            "logDigest": "b9bcb8aa2bf0068fcd0011860f57234d58d55092c7c34d51f58c66168b78ef0e"
           }
         ]
       }
     },
     {
       "label": "pg cold startup",
-      "startupMs": 6566.514521,
-      "secondStartupMs": 1041.980259,
+      "startupMs": 6936.211089,
+      "secondStartupMs": 1019.4814249999981,
       "reconciliation": {
         "counts": {
           "issueSessions": 128,
