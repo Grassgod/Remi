@@ -1,4 +1,5 @@
 import { issueKeys } from "../../issues/queries";
+import { getCurrentWsId } from "../../platform/workspace-storage";
 import {
   markIssueTimelineDirty,
   refreshActiveIssueTimelineLatestPages,
@@ -88,8 +89,19 @@ export function createTimelineHandlers({ qc }: SyncContext): SyncModule {
       },
 
       "activity:created": (p) => {
-        const { issue_id } = p as ActivityCreatedPayload;
-        if (issue_id) markTimelineForSync(issue_id);
+        const { issue_id, entry } = p as ActivityCreatedPayload;
+        if (!issue_id) return;
+        markTimelineForSync(issue_id);
+        // Grant/revoke currently publish their committed activity but no
+        // issue:updated frame. Treat those activities as the authoritative
+        // cross-tab signal and re-read the server-derived grant view.
+        if (
+          entry?.action === "parent_done_grant_created"
+          || entry?.action === "parent_done_grant_revoked"
+        ) {
+          const wsId = getCurrentWsId();
+          if (wsId) void qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issue_id) });
+        }
       },
 
       "reaction:added": (p) => {

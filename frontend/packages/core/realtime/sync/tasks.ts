@@ -1,5 +1,5 @@
 import { normalizeTaskMessage } from "../../chat/normalize-message";
-import { appendTaskMessagesToHydratedCache } from "../../chat/queries";
+import { appendTaskMessagesToHydratedCache, chatKeys, isTaskMessageTaskId } from "../../chat/queries";
 import type { TaskMessagePayload } from "../../types";
 import type { SyncContext, SyncModule } from "./types";
 
@@ -29,6 +29,14 @@ export function createTaskHandlers({ qc }: SyncContext): SyncModule {
   return {
     handlers: {
       "task:message": (p) => {
+        if (p && typeof p === "object" && "degraded" in p && p.degraded === true) {
+          if (!("task_id" in p) || typeof p.task_id !== "string" || !isTaskMessageTaskId(p.task_id)
+            || !("seq_start" in p) || !Number.isSafeInteger(p.seq_start) || Number(p.seq_start) < 1
+            || !("seq_end" in p) || !Number.isSafeInteger(p.seq_end) || Number(p.seq_end) < Number(p.seq_start)) return;
+          taskMessageBuffer.delete(p.task_id);
+          void qc.invalidateQueries({ queryKey: chatKeys.taskMessages(p.task_id) });
+          return;
+        }
         const payload = normalizeTaskMessage(p);
         const pending = taskMessageBuffer.get(payload.task_id) ?? [];
         pending.push(payload);

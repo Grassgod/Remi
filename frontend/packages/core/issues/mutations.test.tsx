@@ -12,6 +12,8 @@ import {
   useLoadMoreArchivedIssues,
   useLoadMoreByAssigneeGroup,
   useLoadMoreByStatus,
+  useGrantParentDone,
+  useRevokeParentDone,
   useRestoreIssue,
 } from "./mutations";
 import {
@@ -383,5 +385,55 @@ describe("archived issue mutations", () => {
     expect(
       qc.getQueryData<ListIssuesCache>(issueKeys.listSorted(WS_ID, undefined))?.byStatus.done?.issues,
     ).toEqual([restored]);
+  });
+});
+
+describe("parent done grant mutations", () => {
+  let qc: QueryClient;
+  let grantParentDone: ReturnType<typeof vi.fn>;
+  let revokeParentDone: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    grantParentDone = vi.fn().mockResolvedValue({
+      granted_at: "2026-09-28T00:00:00.000Z",
+      granted_by: "member-1",
+      agent_id: "agent-1",
+      effective: true,
+      ineffective_reason: null,
+    });
+    revokeParentDone = vi.fn().mockResolvedValue(null);
+    setApiInstance({ grantParentDone, revokeParentDone } as unknown as ApiClient);
+  });
+
+  afterEach(() => {
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("grants and invalidates the server-derived detail state", async () => {
+    const detailKey = issueKeys.detail(WS_ID, "issue-1");
+    qc.setQueryData(detailKey, makeIssue(1));
+    const { result } = renderHook(() => useGrantParentDone(), {
+      wrapper: createWrapper(qc),
+    });
+
+    await act(async () => result.current.mutateAsync("issue-1"));
+
+    expect(grantParentDone).toHaveBeenCalledWith("issue-1");
+    expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+  });
+
+  it("revokes and invalidates the server-derived detail state", async () => {
+    const detailKey = issueKeys.detail(WS_ID, "issue-1");
+    qc.setQueryData(detailKey, makeIssue(1));
+    const { result } = renderHook(() => useRevokeParentDone(), {
+      wrapper: createWrapper(qc),
+    });
+
+    await act(async () => result.current.mutateAsync("issue-1"));
+
+    expect(revokeParentDone).toHaveBeenCalledWith("issue-1");
+    expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
   });
 });

@@ -265,9 +265,9 @@ export function tableHeaders(output: string): string[] {
   return output.split("\n")[0]?.trim().split(/\s{2,}/) ?? [];
 }
 
-export function nextWebSocketMessage(socket: WebSocket): Promise<any> {
+export function nextWebSocketMessage(socket: WebSocket, timeoutMs = 2000): Promise<any> {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), 2000);
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), timeoutMs);
     socket.addEventListener("message", (event) => {
       clearTimeout(timeout);
       resolve(JSON.parse(String(event.data)));
@@ -320,13 +320,13 @@ export function expectWebSocketRejected(socket: WebSocket): Promise<void> {
   });
 }
 
-export function waitWebSocketOpen(socket: WebSocket): Promise<void> {
+export function waitWebSocketOpen(socket: WebSocket, timeoutMs = 2000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (socket.readyState === WebSocket.OPEN) {
       resolve();
       return;
     }
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 2000);
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), timeoutMs);
     const done = (fn: () => void) => {
       clearTimeout(timeout);
       socket.removeEventListener("open", onOpen);

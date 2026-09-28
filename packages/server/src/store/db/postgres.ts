@@ -226,6 +226,12 @@ function dbReplyMaxBytes(): number {
   return cachedReplyMaxBytes;
 }
 
+/** The effective ceiling shared by the bridge and bounded-read callers. */
+export function postgresReplyMaxBytes(): number {
+  const limit = dbReplyMaxBytes();
+  return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
+}
+
 /** Test seam: drop the cached limit so the next query re-reads the environment. */
 export function resetDbReplyLimitForTest(): void {
   cachedReplyMaxBytes = null;

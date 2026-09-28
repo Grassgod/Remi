@@ -104,6 +104,16 @@ export function onIssueUpdated(
   qc.setQueryData<Issue>(issueKeys.detail(wsId, issue.id), (old) =>
     old ? { ...old, ...issue } : old,
   );
+  if (
+    Object.prototype.hasOwnProperty.call(issue, "parent_done_grant_at") ||
+    Object.prototype.hasOwnProperty.call(issue, "parent_done_grant_by") ||
+    Object.prototype.hasOwnProperty.call(issue, "parent_done_grant_agent_id")
+  ) {
+    // These event fields are raw storage columns. The detail endpoint owns
+    // `effective` and `ineffective_reason`, so always refresh instead of
+    // deriving either value in the browser.
+    qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issue.id) });
+  }
 
   // Invalidate old parent's children (issue was removed from it)
   if (oldParentId) {

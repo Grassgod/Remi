@@ -130,6 +130,9 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("delegation_return_triggered"), t)).toBe(
       "activity.delegation_return_triggered",
     );
+    expect(formatActivity(activity("delegation_return_triggered", {
+      details: { sourceIssueId: "child", sourceIssueKey: "MUL-456", returnIssueId: "parent" },
+    }), t)).toBe('activity.delegation_return_triggered_cross_issue {"key":"MUL-456"}');
     expect(
       formatActivity(
         activity("delegation_return_skipped", { details: { reason: "already_covered" } }),
@@ -142,6 +145,15 @@ describe("formatActivity", () => {
       "coalesced_into_pending_return",
       "covered_by_queued_task",
       "deferred_lane_busy",
+      "source_not_issue_task",
+      "source_side_session",
+      "source_not_squad_leader",
+      "target_not_squad_member",
+      "cross_issue_no_lineage",
+      "self_dispatch",
+      "covered_by_delegate_wakeup",
+      "delegator_issue_closed",
+      "delegator_session_missing",
     ]) {
       expect(
         formatActivity(activity("delegation_return_skipped", { details: { reason } }), t),
@@ -397,5 +409,39 @@ describe("formatActivity — dependency activities", () => {
 
   it("falls back to ? when the satisfying key is missing", () => {
     expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
+  });
+});
+
+describe("formatActivity — decision activities", () => {
+  const actions = [
+    "decision_requested",
+    "decision_answered",
+    "decision_received",
+    "decision_escalated",
+    "decision_reminder",
+    "decision_card_skipped",
+    "decision_card_queued",
+    "decision_card_reminder",
+    "decision_card_degraded",
+  ] as const;
+
+  it.each(actions)("localizes %s instead of exposing the raw action", (action) => {
+    expect(formatActivity(activity(action), t)).toBe(`activity.${action}`);
+  });
+
+  it("ships copy for every decision activity in all four locales", async () => {
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"),
+      import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"),
+      import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) {
+      const copy = bundle.default.activity as Record<string, string>;
+      for (const action of actions) {
+        expect(copy[action]).toBeTruthy();
+        expect(copy[action]).not.toBe(action);
+      }
+    }
   });
 });

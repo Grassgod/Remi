@@ -9,6 +9,7 @@ import { SetParentIssueModal } from "./set-parent-issue";
 import { AddChildIssueModal } from "./add-child-issue";
 import { DeleteIssueConfirmModal } from "./delete-issue-confirm";
 import { BacklogAgentHintModal } from "./backlog-agent-hint";
+import { ForceIssueStatusModal } from "./force-issue-status";
 
 export function ModalRegistry() {
   const modal = useModalStore((s) => s.modal);
@@ -36,6 +37,8 @@ export function ModalRegistry() {
       return <DeleteIssueConfirmModal onClose={close} data={data} />;
     case "issue-backlog-agent-hint":
       return <BacklogAgentHintModal onClose={close} data={data} />;
+    case "issue-force-status":
+      return <ForceIssueStatusModal onClose={close} data={data} />;
     default:
       return null;
   }

@@ -51,6 +51,8 @@ services:
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-1}
       MULTIREMI_SSH_MESH_CONTROL_PLANE: 0
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
+      MULTIREMI_API_ROLE: ${REMI_API_ROLE:-}
+      MULTIREMI_PEER_URL: ${REMI_API_PEER_URL:-}
     volumes:
       - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
@@ -68,6 +70,51 @@ services:
       retries: 12
     ports:
       - 127.0.0.1:${REMI_API_BIND_PORT:-6120}:6120
+
+  # Second API container for the split-role deployment. Same image, env file,
+  # and mounts as `api`; daemon runtime surface only, with no background jobs
+  # and no SSH Mesh lease. The `split` profile keeps the default stack
+  # (postgres, openviking, api, ssh-mesh-control-plane, web) unchanged.
+  api-runtime:
+    image: ${REMI_API_IMAGE:?set REMI_API_IMAGE to an immutable digest}
+    restart: unless-stopped
+    profiles: ["split"]
+    env_file:
+      - ${REMI_API_ENV_FILE:?set REMI_API_ENV_FILE}
+    environment:
+      HOME: /srv/multiremi
+      REMI_RUNTIME_UID: ${REMI_RUNTIME_UID:-1000}
+      REMI_RUNTIME_GID: ${REMI_RUNTIME_GID:-1000}
+      MULTIREMI_HOST: 0.0.0.0
+      MULTIREMI_PORT: 6120
+      MULTIREMI_DATABASE_URL: postgresql://${POSTGRES_USER:-multiremi}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-multiremi}
+      MULTIREMI_OPENVIKING_URL: http://openviking:1933
+      MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
+      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
+      # Explicit "0": an unset value enables background jobs, which would make
+      # this container a second scheduler.
+      MULTIREMI_BACKGROUND_JOBS: "0"
+      MULTIREMI_SSH_MESH_CONTROL_PLANE: "0"
+      MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
+      MULTIREMI_API_ROLE: runtime
+      MULTIREMI_PEER_URL: http://api:6120
+    volumes:
+      - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
+      - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
+      - ${REMI_SESSION_ARCHIVE_ROOT:?set REMI_SESSION_ARCHIVE_ROOT}:/srv/multiremi/session-archives
+      - ${REMI_SSH_MESH_ROOT:?set REMI_SSH_MESH_ROOT}:/srv/multiremi/ssh-mesh
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openviking:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:6120/readyz');process.exit(r.ok?0:1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    ports:
+      - 127.0.0.1:${REMI_API_RUNTIME_BIND_PORT:-16121}:6120
 
   ssh-mesh-control-plane:
     image: ${REMI_API_IMAGE:?set REMI_API_IMAGE to an immutable digest}
