@@ -5329,52 +5329,63 @@ export class IssuesRepo {
     const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
     const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
 
-    // The summary deliberately avoids Issue hydration and large message bodies. Only successful
-    // automation rows need details so their existing UI grouping by autopilot can be preserved.
-    const rows = this.ctx.db.query(
-      `SELECT id, issue_id, type, severity, read, created_at,
-              CASE WHEN type = 'autopilot_run_completed' THEN details ELSE NULL END AS details
-       FROM multiremi_inbox_items
-       WHERE member_id = ?${workspaceFilter} AND archived = 0
+    // MUL-473: the counts come back as one aggregate instead of pulling every
+    // unarchived row across the bridge to count it in JavaScript.
+    //
+    // A row belongs to a *selection key*: all of one Issue's rows collapse into
+    // a single candidate unless the type is an inbox ledger entry or the row has
+    // no Issue, in which case the key is the row itself. Only the newest row per
+    // key is visible. The window function ranks inside the key and the outer
+    // aggregate counts the winners; no Issue body, title or message column is
+    // read here.
+    const ledgerTypes = INBOX_LEDGER_TYPES.map((type) => `'${type.replace(/'/g, "''")}'`).join(", ");
+    const selectionKey = `CASE WHEN type IN (${ledgerTypes}) OR NULLIF(issue_id, '') IS NULL
+                          THEN 'item:' || id ELSE 'issue:' || issue_id END`;
+    const totals = this.ctx.db.query(
+      `WITH ranked AS (
+         SELECT read, severity, type,
+                ${selectionKey} AS selection_key,
+                ROW_NUMBER() OVER (PARTITION BY ${selectionKey} ORDER BY created_at DESC, id DESC) AS selection_rank
+         FROM multiremi_inbox_items
+         WHERE member_id = ?${workspaceFilter} AND archived = 0
+       ),
+       visible AS (SELECT read, severity, type, selection_key FROM ranked WHERE selection_rank = 1)
+       SELECT
+         COUNT(DISTINCT CASE WHEN read = 0 AND (severity = 'attention' OR severity = 'action_required')
+                             THEN selection_key END) AS attention,
+         COUNT(DISTINCT CASE WHEN read = 0 AND type != 'autopilot_run_completed'
+                             THEN selection_key END) AS unread_plain
+       FROM visible`,
+    ).get(...params) as Row | null;
+    const attention = Number(totals?.attention ?? 0);
+    let unread = Number(totals?.unread_plain ?? 0);
+
+    // Successful automation runs are the one type the UI merges by autopilot
+    // within a day bucket, so they are the only rows whose payload this route
+    // still reads. Ledger rows are already keyed by row id, so "one row per
+    // selection" is simply "every row" for this type; the filter keeps the
+    // bridge payload proportional to the completed runs, not to the inbox.
+    const runRows = this.ctx.db.query(
+      `SELECT read, created_at, details FROM multiremi_inbox_items
+       WHERE member_id = ?${workspaceFilter} AND archived = 0 AND type = 'autopilot_run_completed'
        ORDER BY created_at DESC, id DESC`,
     ).all(...params) as Row[];
-
-    const visible: Row[] = [];
-    const selectionKeys = new Set<string>();
-    for (const row of rows) {
-      const issueId = nullableString(row.issue_id);
-      const type = String(row.type);
-      const key = isInboxLedgerType(type) || !issueId ? `item:${row.id}` : `issue:${issueId}`;
-      if (selectionKeys.has(key)) continue;
-      selectionKeys.add(key);
-      visible.push(row);
-    }
-
-    const attention = visible.filter((row) =>
-      Number(row.read ?? 0) === 0
-      && (row.severity === "attention" || row.severity === "action_required")
-    ).length;
     const now = new Date();
     const mergedSuccessfulRuns = new Map<string, { unread: boolean }>();
-    let unread = 0;
-    for (const row of visible) {
+    for (const row of runRows) {
       const isUnread = Number(row.read ?? 0) === 0;
-      const details = row.type === "autopilot_run_completed"
-        ? parseJson<Record<string, unknown> | null>(row.details, null)
-        : null;
+      const details = parseJson<Record<string, unknown> | null>(row.details, null);
       const autopilotId = typeof details?.autopilot_id === "string" ? details.autopilot_id : null;
+      // A completed run without an autopilot id has nothing to merge with, so it
+      // counts as its own unread row — the same branch the old loop took.
       if (!autopilotId) {
         if (isUnread) unread += 1;
         continue;
       }
-      const dateGroup = inboxDateGroup(String(row.created_at), now, timezoneOffsetMinutes);
-      const mergeKey = `${dateGroup}:${autopilotId}`;
+      const mergeKey = `${inboxDateGroup(String(row.created_at), now, timezoneOffsetMinutes)}:${autopilotId}`;
       const merged = mergedSuccessfulRuns.get(mergeKey);
-      if (merged) {
-        merged.unread ||= isUnread;
-      } else {
-        mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
-      }
+      if (merged) merged.unread ||= isUnread;
+      else mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
     }
     unread += [...mergedSuccessfulRuns.values()].filter((entry) => entry.unread).length;
     return { unread, attention };

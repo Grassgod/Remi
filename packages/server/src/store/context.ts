@@ -16,6 +16,8 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
+export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -200,21 +202,6 @@ export type CreateIssueCommentOptions =
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
-/**
- * The Task fields one message batch's fan-out reads: routing (`workspaceId`,
- * `agentId`), Chat scoping, and the wire payload's `issue_id` /
- * `issue_session_id` / `chat_session_id`. MUL-474 narrowed this from the whole
- * `MultiremiTask` so appending a message no longer has to load the prompt.
- */
-export interface TaskMessageFanoutSubject {
-  id: string;
-  workspaceId: string;
-  agentId: string;
-  chatSessionId: string | null;
-  issueId: string | null;
-  issueSessionId: string | null;
-}
-
 export type TaskMessagesListener = (
   event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] },
 ) => void;
@@ -670,6 +657,11 @@ export interface RuntimesSurface {
   /** The Runtime row without the derived usage / model / execution-group reads. */
   getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
+  /**
+   * One workspace's Runtimes with the same hydration `listRuntimes` adds, but
+   * with the workspace filter in SQL and the derived reads batched (MUL-473).
+   */
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;
