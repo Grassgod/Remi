@@ -1,0 +1,61 @@
+{
+  "database": "sqlite",
+  "bun": "1.3.14",
+  "fixture": {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 306,
+    "runtimes": 20,
+    "foreignRuntimes": 30,
+    "attachmentBytes": 262144
+  },
+  "bytesMethod": "nonempty rows: UTF-8 JSON.stringify({ rows, count }); empty replies excluded",
+  "warmups": 5,
+  "samples": 20,
+  "results": [
+    {
+      "label": "inbox summary",
+      "status": 200,
+      "dbq": 6,
+      "dbBytes": 55292,
+      "responseBytes": 28,
+      "responseSha256": "bf2c08fcbe24e8e1167d00db486cce838032835eb8ae9139f10b6ae3056c8dae",
+      "dbMs": 0.3898500000001377,
+      "p50Ms": 1.1659160000000384,
+      "p95Ms": 2.9775000000000773
+    },
+    {
+      "label": "attachment cold",
+      "status": 200,
+      "dbq": 4,
+      "dbBytes": 1566,
+      "responseBytes": 262144,
+      "responseSha256": "3637bbb97e98d009f2be4d0d4a50e73431d6b07b3ede39829e09bbf566a972a0",
+      "dbMs": 0.07458499999995638,
+      "p50Ms": 0.9004909999999882,
+      "p95Ms": 2.862594999999942
+    },
+    {
+      "label": "attachment conditional",
+      "status": 200,
+      "dbq": 4,
+      "dbBytes": 1566,
+      "responseBytes": 262144,
+      "responseSha256": "3637bbb97e98d009f2be4d0d4a50e73431d6b07b3ede39829e09bbf566a972a0",
+      "dbMs": 0.06903699999998025,
+      "p50Ms": 0.6931880000000774,
+      "p95Ms": 0.9266219999999521
+    },
+    {
+      "label": "runtimes",
+      "status": 200,
+      "dbq": 154,
+      "dbBytes": 55148,
+      "responseBytes": 9875,
+      "responseSha256": "4e9fa8059121b3d4f3cd893579477a7ee66d6b80dcde58de03b75db385c88c68",
+      "dbMs": 0.778316000000018,
+      "p50Ms": 2.996662000000015,
+      "p95Ms": 5.05958899999996
+    }
+  ]
+}

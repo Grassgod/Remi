@@ -541,15 +541,9 @@ export class RuntimesRepo {
    * The same list, narrowed to one workspace in SQL, with the three derived
    * reads batched per table instead of per Runtime (MUL-473).
    *
-   * `listRuntimes()` reads every Runtime in the deployment and the caller then
-   * discards the other workspaces; `hydrateRuntime` then spends three queries on
-   * each survivor — the task-usage summary, the execution-group membership and
-   * the model catalog. On a deployment with 30 Runtimes in other workspaces that
-   * is the whole cost of the request for nothing. The workspaces are resolved
-   * through the same `workspace_id` normalisation the callers use (a NULL column
-   * means `local`), so the returned set is identical; the row order
-   * (`updated_at DESC`) is preserved, and that order is also what the batched
-   * rows are re-attached in.
+   * The old list hydrates all deployment rows before the caller filters them.
+   * Narrowing first avoids derived reads for foreign workspaces. A NULL
+   * workspace still means `local`, and `updated_at DESC` order is preserved.
    */
   listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
     const rows = this.ctx.db.query(

@@ -312,40 +312,25 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // a user id, an Agent *named* like a user id, and a name that matches an
     // Agent. Each is constant in the Issue count (measured 1 / 60 / 300).
     for (const issues of [1, 60, 300]) {
-    const harness = await createHarness({ issues, sessions: 1, inboxRows: 0 });
-    const fixture = harness.fixture;
-    // Give one Agent a name shaped like a user id, which is QA's counterexample.
-    const lookalike = harness.store.createAgent({
-      id: "agt_lookalike_name",
-      name: "usr_lookalike_agent_name",
-      provider: "codex",
-      workspaceId: fixture.workspaceId,
-      ownerId: fixture.ownerUserId,
-      visibility: "workspace",
-    });
-    harness.store.createIssue({
-      id: "iss_lookalike_assigned",
-      workspaceId: fixture.workspaceId,
-      title: "Assigned to the usr_-named agent",
-      status: "in_progress",
-      assigneeType: "agent",
-      assigneeId: lookalike.id,
-      createdBy: fixture.readerUserId,
-    });
-
-    // 8 when the filter matches nothing (no label hydrate), 9 when it matches
-    // rows: auth 3 + Agent list + Member list + Squad list + page + labels +
-    // count. The three lists are not reducible without dropping a kind from the
-    // search, which is exactly the regression being fixed.
-    for (const [ref, budget] of [
-      [fixture.readerUserId, 9],
-      ["usr_lookalike_agent_name", 9],
-      ["Hotspot agent 7", 9],
-      ["usr_does_not_exist_at_all", 8],
-    ] as const) {
-      const measured = await getJson(harness, `/api/issues?assignee_id=${encodeURIComponent(ref)}&limit=50`);
-      expect(measured.statements).toBeLessThanOrEqual(budget);
-    }
+      const harness = await createHarness({ issues, sessions: 1, inboxRows: 0 });
+      const fixture = harness.fixture;
+      const lookalike = harness.store.createAgent({
+        id: "agt_lookalike_name", name: "usr_lookalike_agent_name", provider: "codex",
+        workspaceId: fixture.workspaceId, ownerId: fixture.ownerUserId, visibility: "workspace",
+      });
+      // Keep exactly N issues and ensure every hit has a nonempty page, even at N=1.
+      for (const [ref, budget, type, assigneeId] of [
+        [fixture.readerUserId, 9, "member", fixture.readerMemberId],
+        ["usr_lookalike_agent_name", 9, "agent", lookalike.id],
+        ["Hotspot agent 7", 9, "agent", fixture.agentIds[7]!],
+        ["usr_does_not_exist_at_all", 8, "agent", fixture.agentIds[7]!],
+      ] as const) {
+        harness.db.run("UPDATE multiremi_issues SET assignee_type = ?, assignee_id = ? WHERE id = ?",
+          [type, assigneeId, fixture.issueIds[0]!]);
+        const measured = await getJson(harness, `/api/issues?assignee_id=${encodeURIComponent(ref)}&limit=50`);
+        expect(measured.statements).toBeLessThanOrEqual(budget);
+        expect((measured.body as { total: number }).total > 0).toBe(budget === 9);
+      }
     }
   });
 

@@ -129,9 +129,10 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
 
 export type Pr2Harness = Awaited<ReturnType<typeof createPr2Harness>>;
 
-export async function capturePr2QueryCounts() {
+export async function capturePr2QueryCounts(point?: number) {
   const observations = [];
-  for (const [inboxRows, runtimes, foreignRuntimes] of [[300, 1, 1], [600, 20, 30], [900, 60, 100]]) {
+  const scales = [[300, 1, 1], [600, 20, 30], [900, 60, 100]];
+  for (const [inboxRows, runtimes, foreignRuntimes] of point === undefined ? scales : [scales[point]!]) {
     const harness = await createPr2Harness({ inboxRows, runtimes, foreignRuntimes });
     try {
       const routes: Record<string, number> = {};

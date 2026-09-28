@@ -9,14 +9,16 @@ it("matches the pre-PR2 wire response golden byte for byte", async () => {
     .toBe(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-golden.json`, "utf8"));
 });
 
-it("matches the dbq golden with constant queries at three scales", async () => {
-  const observed = await capturePr2QueryCounts();
-  expect(`${JSON.stringify(observed, null, 2)}\n`)
-    .toBe(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-dbq-golden.json`, "utf8"));
-  for (const route of Object.keys(observed[0]!.routes)) {
-    expect(observed.map(point => point.routes[route])).toEqual(Array(3).fill(observed[0]!.routes[route]));
-  }
-}, 20000);
+const dbqGolden = JSON.parse(readFileSync(`${fixtureDir}/first-screen-hotspots-pr2-dbq-golden.json`, "utf8"));
+for (const point of [0, 1, 2]) {
+  it(`matches the dbq golden at scale ${point + 1}, with constant queries`, async () => {
+    const observed = await capturePr2QueryCounts(point);
+    expect(`${JSON.stringify(observed, null, 2)}\n`).toBe(`${JSON.stringify([dbqGolden[point]], null, 2)}\n`);
+    for (const route of Object.keys(observed[0]!.routes)) {
+      expect(observed[0]!.routes[route]).toBe(dbqGolden[0].routes[route]);
+    }
+  }, 20000);
+}
 
 it("authorizes private attachments before comparing even a correct ETag", async () => {
   const harness = await createPr2Harness();
