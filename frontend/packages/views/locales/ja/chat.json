@@ -178,8 +178,6 @@
     "copied": "コピーしました",
     "new_messages_other": "新着メッセージ {{count}} 件",
     "new_messages_overflow": "新着メッセージ 99+ 件",
-    "new_messages_jump": "最新のメッセージへ移動",
-    "load_failed": "セッションログを読み込めませんでした",
-    "empty": "まだメッセージがありません"
+    "new_messages_jump": "末尾へ移動、新着メッセージ {{count}} 件"
   }
 }

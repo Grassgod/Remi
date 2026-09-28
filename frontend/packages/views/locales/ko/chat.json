@@ -181,8 +181,6 @@
     "copied": "복사됨",
     "new_messages_other": "새 메시지 {{count}}개",
     "new_messages_overflow": "새 메시지 99+개",
-    "new_messages_jump": "최신 메시지로 이동",
-    "load_failed": "세션 로그를 불러오지 못했습니다",
-    "empty": "아직 메시지가 없습니다"
+    "new_messages_jump": "끝으로 이동, 새 메시지 {{count}}개"
   }
 }

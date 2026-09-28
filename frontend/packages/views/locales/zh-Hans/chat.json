@@ -178,8 +178,6 @@
     "copied": "已复制",
     "new_messages_other": "{{count}} 条新消息",
     "new_messages_overflow": "99+ 条新消息",
-    "new_messages_jump": "跳到最新消息",
-    "load_failed": "会话记录加载失败",
-    "empty": "还没有消息"
+    "new_messages_jump": "回到末尾，{{count}} 条新消息"
   }
 }

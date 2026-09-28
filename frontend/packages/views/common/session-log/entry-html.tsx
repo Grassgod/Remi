@@ -3,8 +3,8 @@
 /**
  * EntryHtml — one log row whose body is already rendered (MUL-403 plan 3/6 §3).
  *
- * The component's whole job is `dangerouslySetInnerHTML` plus the post-mount
- * enhancement `enhance.ts` performs. Two rules keep it from moving the page:
+ * The component's whole job is to put `body_html` into the DOM and then attach
+ * the enhancement `enhance.ts` produces. Two rules keep it from moving the page:
  *
  * 1. **The HTML is final.** It was sanitized by `renderMarkdown` on the server
  *    with the same schema the client uses, so nothing here re-parses markdown or
@@ -15,11 +15,17 @@
  *    positioned or a fixed-height slot; a preview therefore never resizes the
  *    row it lives in, however slowly Mermaid or the iframe resolves.
  *
- * `body_html` empty is the degrade path (`degraded_render` on the replica, per
- * plan 3/6 §3): the row falls back to the client renderer, which is slower but
- * renders the same content. That fallback is owned by the caller, since only it
- * knows which markdown component to reach for; this component just reports the
- * condition through `onDegradedRender`.
+ * The body is assigned through the ref rather than through
+ * `dangerouslySetInnerHTML`, and that is deliberate: React re-applies
+ * `dangerouslySetInnerHTML` on every re-render of this component (React 19
+ * restores the markup, discarding any node a layout effect added inside it).
+ * Mounting the preview portals is exactly such a re-render, so rendering the
+ * HTML declaratively would erase the enhancement as soon as it appeared. React
+ * therefore owns only the host element, and this component owns its children.
+ *
+ * `body_html` empty is the degrade path the plan names (`degraded_render`): the
+ * row reports it through `onDegradedRender` and renders `fallback`, which the
+ * caller supplies because only it knows which client renderer to reach for.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -73,33 +79,36 @@ export function EntryHtml({
   const [slots, setSlots] = useState<readonly EntryPreviewSlot[]>([]);
   const degraded = !html;
 
-  // The enhancement returns DOM nodes that the portals above mount into. They
-  // are produced in a layout effect and cleared on every teardown, so a row that
-  // is recycled by the window never inherits another row's diagrams.
   const copyLabel = t(($) => $.session_log.copy_code);
   const copiedLabel = t(($) => $.session_log.copied);
 
+  // Mount, then enhance: the height a preview slot copies is the height the
+  // row's block already has, so the body has to be laid out before this runs.
+  // A layout effect is what guarantees that, and it runs before paint.
   useLayoutEffect(() => {
     const host = hostRef.current;
-    if (!host || degraded) {
-      setSlots([]);
-      return;
-    }
+    if (!host) return;
+    host.replaceChildren();
+    setSlots([]);
+    if (degraded) return;
+
+    host.innerHTML = html ?? "";
     const enhanced: EnhancedEntryHtml = enhanceEntryHtml(host, {
       markdown,
       copyLabel,
       copiedLabel,
     });
     setSlots(enhanced.slots);
+
     return () => {
       enhanced.dispose();
+      host.replaceChildren();
       setSlots([]);
     };
   }, [html, markdown, copyLabel, copiedLabel, degraded]);
 
   // Reported from an effect rather than during render: the consumer increments a
-  // counter, and a render-phase callback would fire twice under StrictMode and
-  // once per re-render of an unchanged row.
+  // counter, and a render-phase callback would fire twice under StrictMode.
   const reported = useRef(false);
   useEffect(() => {
     if (!degraded) {
@@ -112,10 +121,10 @@ export function EntryHtml({
   }, [degraded, onDegradedRender]);
 
   const portals = useMemo(
-    () => slots.map((slot) => (
+    () => slots.map((slot, index) => (
       slot.kind === "mermaid"
-        ? <MermaidSlot key={`mermaid:${slot.heightPx}:${slot.source.length}`} slot={slot} />
-        : <HtmlSlot key={`html:${slot.heightPx}:${slot.source.length}`} slot={slot} />
+        ? <MermaidSlot key={`mermaid:${index}`} slot={slot} />
+        : <HtmlSlot key={`html:${index}`} slot={slot} />
     )),
     [slots],
   );
@@ -124,13 +133,10 @@ export function EntryHtml({
 
   return (
     <>
-      <div
-        ref={hostRef}
-        className={className}
-        data-entry-html=""
-        // eslint-disable-next-line react/no-danger -- body_html is server-sanitized by renderMarkdown
-        dangerouslySetInnerHTML={{ __html: html ?? "" }}
-      />
+      {/* React owns this element only; its children are mounted by the layout
+          effect above, which is what keeps the enhancement from being discarded
+          on the re-render that mounting the portals causes. */}
+      <div ref={hostRef} className={className} data-entry-html="" />
       {portals}
     </>
   );
