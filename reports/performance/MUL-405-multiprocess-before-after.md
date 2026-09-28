@@ -306,3 +306,163 @@ MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给�
 - 合入 main（`bda58bd9`）：`01ceef3b`
 - 两条反序 + lockLifecycle + 哨兵 + 逐路径断言：`75d32b73`
 - `afterCommit` 语义注释 + CI 默认开启哨兵：`7f76c07a`
+
+## 第五轮：合入 MUL-409 并验证新增事务路径
+
+本轮续跑先盘点：分支仍为 `agent/MUL-405`，`eaadbd14` 已推送，父提交为
+`386907f5` 和 `bbc964c9`；没有未推送提交或 stash。唯一未提交成果是逐路径测试，
+在其基础上完成，而不是重新合并。新增测试提交为 `65a471e3`。
+随后再合 `origin/main = 7bd32800`（含 MUL-473 的 `c7be1916`），无冲突，
+得到 `3c640acf`。
+推送报告前 main 又到 `b6bdcc51`（MUL-458，人类强制开工入口），
+再次无冲突合入得到 `027ae998`。因为涉及同一套依赖/派发代码，停止了
+本轮自己刚启动的 PG 全量进程组，再在新合并态运行定向和完整门禁；
+被中止的部分运行不计作一次完整结果。
+
+### 五处冲突的语义合并
+
+| 文件 | MUL-405 一侧 | MUL-409 一侧 | 合并结果及理由 |
+|---|---|---|---|
+| `store/db/postgres.ts` | SAVEPOINT 嵌套、after-commit 帧、语句执行时哨兵记账 | `inTransaction`、`maxTransactionDepth` 和峰值统计 | 保留嵌套/回滚/最外层提交语义，同时在每层 transaction 更新峰值；统计接口不创建 SQL 旁路。409 要求其路径深度为 1，405 对真正嵌套路径继续提供 SAVEPOINT |
+| `store/context.ts` | `emitCommitEvents` 经 `afterCommit`，最外层提交后排空 | `CommitEventQueue.issueActivities`、提交后活动写入，以及 transaction-internal 调用所需的 host surface | 保留三种队列及新增 surface；活动、workspace events、task wakeups 的 drain 全放入既有 `afterCommit` 回调，外层回滚时一起丢弃 |
+| `store/repos/issues-repo.ts` | 共享建单 body 先 W、后编号 N；事件在提交后发布 | 显式 `IssueCreationTransactionOwner`，caller-owned 写入需要 collector 和队列，新增 force/auto 原子路径 | 使用 409 的 owner API 和事务边界，在共享 `createIssueWithinTransaction` body 保留 W→N。嵌套回滚测试传完整 owner，并由 owner 安排队列 drain |
+| `messaging/outcomes.ts` | 在 message 行 UPDATE 前取 W、N | 同一 owner 传 `childStatusChanges`，调用 `recordOutcomeWithinTransaction` | 保留 W→N prelude，collector/queue 传到底；Issue、outcome 和消息状态共用一个事务，提交后 replay/drain |
+| `store/repos/feishu-ingest-repo.ts` | direct/approval 的 message 行写入前取 W、N | caller-owned 建单的 collector/queue | 两者同时保留；审批、Issue 和消息状态仍原子提交，锁序为 W→N→D |
+
+`eaadbd14` 的 merge resolution 另修一个哨兵实际报出的新路径：
+`IssueSessionsRepo.createSessionTask` 原为 participant INSERT(D)→Task writer 首次取 W。
+现在在同一个原有事务开头取 W，再写 participant/lane/task，成为 W→D；
+没有拆分或合并 MUL-409 的事务边界。
+
+### PostgreSQL 的全部语句入口
+
+`PostgresSyncDatabase.query` 创建 `SentinelPgStatement`；`prepare` 委托给 `query`。
+返回语句的 `get`、`all`、`run`、`values` 都在真正执行前调用
+`lockOrderSentinelNoteStatement(sourceSql)`。直接 `run` 同样先记账；
+`exec` 对 `splitStatements` 的每一段分别记账。`advisoryXactLock` 先记 N，
+再调用 bridge。事务控制语句由 `transaction` 的最外层 begin/end 记账管理；
+迁移会话 advisory lock 不属于编号 N。
+
+409 的 `get/reset maxTransactionDepth` 只是读写计数器；它新增的
+`query(... FOR UPDATE).get(...)` 也返回上述语句包装，并未直接调用 bridge。
+哨兵规则、开关、CI 默认开启、afterCommit 行为均保持第四轮实现。
+
+409 的 “keep the force lock order” 是 `4a75ee87`：可能 dispatch 的请求，
+先锁 workspace 行，再锁 Issue 行。该路径不取 N，与本单 W→D 一致。
+它还保留一笔事务中只作一次 dispatch decision 的规则。
+
+### 自动 start：真实 PG 的事务边界证据
+
+新增 `MUL-409 real PG: automatic start and dependency transaction frames` 用例：
+记录器代理真实 `PostgresSyncDatabase`，保留 `instanceof`/dialect，所以运行到
+自动 start 的 PG `FOR UPDATE` 分支。每个最外层事务单独成帧，每条锁记录带
+实际 callback 深度；同时断言 PG 原生 `maxTransactionDepth === 1`。
+
+执行实际入口得到：
+
+```text
+createIssueDependency:
+  frame 1, depth 1: D INSERT INTO multiremi_issue_dependencies
+
+updateIssue(prerequisite, {status: done}):
+  frame 1, depth 1: D UPDATE multiremi_issues SET id = id
+  COMMIT
+  frame 2, depth 1: W workspace-lifecycle
+                  D UPDATE multiremi_issues SET status = 'todo' ...
+  COMMIT
+  maxTransactionDepth = 1
+```
+
+自动 start 是前置 Issue 更新提交后的独立事务，不是外层事务里的 D→W。
+用例断言 dependent 真正变成 todo，且恰好有一条 Task，避免只测到空事务。
+上一轮的未完成用例先启动 dependent，再给已启动的 Issue 加另一条依赖，
+没有再次触发自动 start；本轮改成从 backlog 首次自动启动。
+
+独立 `createIssueDependency` 只写依赖和活动行，不分配编号、不写 audit、
+不操作 workspace/Runtime 生命周期，也没有继续取得 W/N 的调用链。
+`advisory-locks.ts` 的契约是“事务取多类锁时必须排序”，不要求每个 D-only
+事务凭空加 W；与既有 grant/revoke 的 D-only 断言一致。因此不新增 W，
+按实际 `{D}` 断言，并明确禁止 W、N 出现。
+
+记录器改为事务分帧，并在语句执行而非 prepare 时分类。路径的所有事务都
+断言首次顺序单调；原有 16 条必需锁断言保留。多事务入口另外精确断言
+每帧的锁集合、帧数和深度，不把不匹配的事务从顺序检查里过滤掉。
+
+### 新增逐路径表
+
+| # | 入口 | 必需锁 | 实际首次顺序 |
+|---|---|---|---|
+| 17 | forced start (`updateIssue` member force) | W,D | W→D，N 不出现 |
+| 18 | automatic start (`updateIssue` prerequisite done) | 更新帧 D；自动 start 帧 W,D | 独立两个事务：D / W→D，N 不出现 |
+| 19 | `createSessionTask` | W,D | W→participant/lane/task D，N 不出现 |
+| 20 | 独立 `createIssueDependency` | D | D，W/N 均不出现 |
+| 21 | messaging direct owner 中的 `recordOutcomeWithinTransaction` | W,N,D | W→N→D；outcome writer 深度 1，只有一个事务帧 |
+
+第 17~20 条不创建 Issue、不分配 audit 序号，因此不取 N。
+第 21 条的 outcome writer 本身不取 N，但其 owner 创建 Issue，故整个事务
+必须取 Issue 编号 N；用例断言 outcome writer 加入同一帧，没有开启新事务。
+
+### 本轮验证记录
+
+合 MUL-409 后、再合新 main 前的定向真实 PG：六个文件共 **200 pass / 0 fail**，
+覆盖本单三文件、409 的 PG 七入口探针、dependency PG 端到端和第五轮任务唤醒测试。
+新增逐路径及 PG 帧证据为 **22 pass / 0 fail**，无 skip。
+PG 版本为 18.4，Bun 为固定的 1.3.14；独立端口和数据目录。
+
+`3c640acf` 上：架构 **92 pass / 0 fail**，docs:test **13 pass**，
+docs:check 通过，CLI capability checker **677 mapped / 92 exempt / 0 missing
+(769 routes)**，API route snapshot matches。
+
+### 新路径变异：完整目录门禁
+
+临时删除 `createSessionTask` 事务开头的 W，恢复 409 合并前的
+participant INSERT(D)→Task writer 首次取 W。在开启原哨兵的完整
+`bun test tests/unit/multiremi/ --timeout 20000`（SQLite）里得到：
+**3385 pass / 216 skip / 77 fail，547.01s**。
+
+原哨兵在既有用例中实际报出：
+
+```text
+MUL-405 lock order violated: first W acquisition comes after a higher class
+Trace:
+  D INSERT INTO multiremi_session_participants (...)
+  W UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?
+Stack: createTaskWithinTransaction -> createSessionTask -> calling test
+```
+
+报错用例包括：
+
+- `Feishu bot standard Task bridge > wakes once after a lead round and durably retries the proactive topic reply`
+- `MUL-405 per-path lock order > MUL-409 session task creation: W -> participant row -> task, no number lock`
+- `MUL-409 — fix round 5: a refused session task leaves no participant or lane > answers 409 dependencies_unmet and leaves participants, lanes and tasks unchanged`
+- 同组 `still creates the participant, the lane and the round for an ordinary issue`
+- `MUL-409 QA round 5 task wakeups on SQLite > SQLite: keeps ordinary and session task wakeups at one each`
+
+每次变异仅移除一行 W；完整运行结束后用 patch 还原，
+`git diff --exit-code -- packages/server/src/store/repos/issue-sessions-repo.ts`
+确认与已提交的合并结果完全一致。没有改哨兵规则，也没有跳过或放宽业务断言。
+
+还原后的 PG/SQLite 全量、多进程 harness 及最新 head 的 CI 数字，
+以 MUL-405 第五轮交付评论为准；本节保留可由提交中用例复现的锁序与变异证据。
+
+### 合入 MUL-458 后的 Worker 环境发现
+
+`multiremi-dependency-human-force-pg.test.ts` 的两个双连接 Worker HTTP 用例
+在本环境原启动方式下均返回 401：八文件定向运行是 218 pass / 2 fail，
+单文件复跑也是 5 pass / 2 fail（11.70s）。这发生在鉴权阶段，没有哨兵违例。
+Worker 没有显式 authToken，读取的是启动环境中继承的 `MULTIREMI_TOKEN`；
+主测试进程的 hermetic preload 清理并未覆盖这个 Worker 的初始环境。
+
+在启动 Bun 前用 `env -u MULTIREMI_TOKEN` 清理宿主凭证，完全相同的 PG
+文件成为 **7 pass / 0 fail（11.25s）**，包括两个真实双连接 race。
+后续本地验证使用该隔离方式；没有修改任何鉴权、业务断言或 skip 条件，
+也没有关闭哨兵。CI 本来就没有该宿主凭证。
+建议这类 Worker 统一显式采用清理后的环境或复用 hermetic preload；
+这个新环境问题列入交付，由父单决定归属，本轮不新开子单。
+
+在 `027ae998` 的合并态、上述隔离环境中，八文件定向真实 PG 回归为
+**220 pass / 0 fail / 0 skip（68.10s）**：本单三文件、409 PG 七入口探针、
+dependency PG 端到端、第五轮 task wakeups，以及 458 的 SQLite/PG 人类
+强制开工用例。事务帧 PG 证据仍是 D / W→D、最大深度 1。
+合并态 `bunx tsc --noEmit` 为 0 error；CLI capability checker 仍是
+**677 mapped / 92 exempt / 0 missing（769 routes）**，API route snapshot matches。
