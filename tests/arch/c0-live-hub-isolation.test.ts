@@ -63,15 +63,31 @@ const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
 function hasLiveHubValueImport(src: string): boolean {
   const file = ts.createSourceFile("replica.ts", src, ts.ScriptTarget.Latest, true);
-  return file.statements.some((node) => {
-    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) return false;
-    if (!/^@multiremi\/contracts\/live-hub(?:\.js)?$/.test(node.moduleSpecifier.text)) return false;
-    const clause = node.importClause;
-    if (!clause) return true;
-    if (clause.isTypeOnly) return false;
-    if (clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)) return true;
-    return clause.namedBindings.elements.some((element) => !element.isTypeOnly);
-  });
+  const isLiveHub = (node: ts.Node | undefined) => node !== undefined
+    && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    && /^@multiremi\/contracts\/live-hub(?:\.js)?$/.test(node.text);
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (ts.isImportDeclaration(node) && isLiveHub(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      if (!clause) found = true;
+      else if (!clause.isTypeOnly) {
+        found = !!clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)
+          || clause.namedBindings.elements.length === 0
+          || clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+      }
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      found = !node.isTypeOnly && isLiveHub(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const runtimeImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === "require");
+      found = runtimeImport && isLiveHub(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return found;
 }
 
 describe("C0 live-hub modules are not yet wired into runtime code", () => {
@@ -83,6 +99,11 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
     ['import { type HubFrame, parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
     ['import * as hub from "@multiremi/contracts/live-hub.js";', true],
     ['import "@multiremi/contracts/live-hub";', true],
+    ['import {} from "@multiremi/contracts/live-hub";', true],
+    ['const hub = await import("@multiremi/contracts/live-hub");', true],
+    ['const hub = require("@multiremi/contracts/live-hub");', true],
+    ['import hub = require("@multiremi/contracts/live-hub");', true],
+    ['type Frame = import("@multiremi/contracts/live-hub").HubFrame;', false],
   ])("classifies each individual contract import: %s", (source, expected) => {
     expect(hasLiveHubValueImport(source)).toBe(expected);
   });
