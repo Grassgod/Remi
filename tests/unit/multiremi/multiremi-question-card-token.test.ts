@@ -313,6 +313,43 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       expect((await f.respond(newToken, changedRecipient)).status).toBe(200);
     });
 
+    it("fr: only the selected bot host can mint and answer cards for a bound Chat on another provider", async () => {
+      const f = await setup("fr");
+      const executorId = `rt_native_executor_${f.n}`;
+      store.registerRuntime({ id: executorId, name: "Other provider", provider: "claude", workspaceId: f.workspaceId,
+        daemonId: `daemon_native_executor_${f.n}` });
+      store.updateAgent(f.task.agentId, { provider: "claude" });
+      const submitted = store.submitFeishuBotMessage(f.workspaceId, f.runtimeId, {
+        revision: 1, externalSessionKey: `oc_native_${f.n}`, externalMessageId: `om_native_${f.n}`,
+        chatId: `oc_native_${f.n}`, chatType: "p2p", text: "Question", deliveryMode: "native_cot_v1",
+      });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
+      const request = store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
+        payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
+      const path = `/api/daemon/tasks/${submitted.taskId}/human-requests/${request.id}`;
+      const cardInput = JSON.stringify({ recipient_open_id: f.recipient });
+      const headers = { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" };
+      const minted = await f.api.request(`${path}/card`, { method: "POST", headers, body: cardInput });
+      expect(minted.status).toBe(200);
+      const credential = questionCardAction((await minted.json() as any).card);
+      expect(typeof credential?.t).toBe("string");
+      const other = await store.createAccessToken({ name: "Not the bot host", type: "daemon", workspaceId: f.workspaceId,
+        daemonId: `daemon_other_${f.n}` });
+      const answer = JSON.stringify({ token: credential!.t, operator_open_id: f.recipient, response: { answers: { "Continue?": "Yes" } } });
+      for (const [suffix, body] of [["card", cardInput], ["respond", answer]]) {
+        expect((await f.api.request(`${path}/${suffix}`, { method: "POST",
+          headers: { ...headers, Authorization: `Bearer ${other.token}` }, body })).status).toBe(403);
+      }
+      const privateChat = store.createChatSession({ agentId: f.task.agentId, workspaceId: f.workspaceId, creatorId: f.user.id });
+      const privateTask = store.createTask({ agentId: f.task.agentId, workspaceId: f.workspaceId, chatSessionId: privateChat.id, prompt: "Private" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
+      const privateRequest = store.createTaskHumanRequest({ taskId: privateTask.id, kind: "question", payload: {} });
+      expect((await f.api.request(`/api/daemon/tasks/${privateTask.id}/human-requests/${privateRequest.id}/card`, {
+        method: "POST", headers, body: cardInput,
+      })).status).toBe(403);
+      expect((await f.api.request(`${path}/respond`, { method: "POST", headers, body: answer })).status).toBe(200);
+    });
+
     it("fr: native send retries mint a new credential and delivery key without persisting plaintext in checkpoints", async () => {
       const f = await setup("fr");
       const h = nativeHarness();
