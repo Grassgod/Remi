@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -72,7 +72,7 @@ self.onmessage = (event: MessageEvent<
       database = new PostgresSyncDatabase(url.toString());
       database.exec("SET lock_timeout = '5s'; SET statement_timeout = '10s'");
     } else {
-      database = new Database(input.location);
+      database = openSqliteDatabase(input.location);
       database.exec("PRAGMA busy_timeout = 0");
     }
     store = new MultiremiStore(database);
