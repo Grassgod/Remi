@@ -23,6 +23,11 @@ class OfferUpgradeRejected extends Error {
 export async function receiveTaskOffer(store: MultiremiStore, runtimeId: string, options: TaskOfferFixtureOptions = {}): Promise<Record<string, any> | null> {
   const runtime = store.getRuntime(runtimeId);
   if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+  // Versionless unit runtimes used the in-process parallel-execution default.
+  // A real v2 hello records its version, so advertise the same capability first.
+  if (!(runtime.metadata.cli_version ?? runtime.metadata.cliVersion) && runtime.metadata.parallel_agent_execution === undefined) {
+    store.updateRuntime(runtimeId, { metadata: { ...runtime.metadata, parallel_agent_execution: 1 } });
+  }
   const layer = new DaemonProtocolLayer({ store });
   const project = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const wiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
