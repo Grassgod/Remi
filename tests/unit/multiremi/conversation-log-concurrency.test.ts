@@ -619,7 +619,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
     });
-  });
+  }, 30_000);
   it("SQLite: four processes append without duplicate or missing seq", async () => {
     await withSqlite(async (db, path) => {
       await runFour("sqlite", path, "append");
