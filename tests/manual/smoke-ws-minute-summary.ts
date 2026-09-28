@@ -50,6 +50,7 @@ const server = startMultiremiServer({
   authToken: "smoke-root",
   backgroundJobs: false,
   requestMetrics: {
+    role: "all",
     enabled: true,
     slowRequestMs: 500,
     summaryIntervalMs: SUMMARY_INTERVAL_MS,
