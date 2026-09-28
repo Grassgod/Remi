@@ -97,6 +97,17 @@ describe("MUL-438 browser stream endpoints", () => {
         payload: { chat_session_id: chat.id, title: "Renamed privately" },
       });
       await expectNoWebSocketMessage(peer, 250);
+
+      // A deleted session no longer resolves through the store, so this is the
+      // case where the event's own actor has to carry the creator. It must still
+      // reach the creator and still not reach the peer.
+      store.deleteChatSession(chat.id);
+      const deleted = await nextWebSocketMessage(creator);
+      expect(deleted).toMatchObject({
+        type: "chat:session_deleted",
+        payload: { chat_session_id: chat.id },
+      });
+      await expectNoWebSocketMessage(peer, 250);
     } finally {
       creator.close();
       peer.close();
