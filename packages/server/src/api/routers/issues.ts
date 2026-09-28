@@ -86,6 +86,7 @@ import {
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
+import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -115,7 +116,6 @@ import {
   MULTIREMI_ISSUE_ARCHIVE_MIN_TTL_MS,
 } from "@multiremi/contracts/types.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
-import { resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
 
@@ -637,13 +637,20 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
+  function validateIssueWorkspaceMove(c: Context, issue: MultiremiIssue, updates: UpdateIssueInput): Response | null {
+    const workspaceId = resolveOptionalStringField(updates, "workspaceId", "workspace_id", issue.workspaceId) ?? "local";
+    if (!workspaceId) return c.json({ error: "workspace not found" }, 404);
+    return workspaceId === issue.workspaceId ? null : denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  }
+
   function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
     const updates = input.updates;
-    if (!updates || !("runtimeWorkspaceId" in updates || "runtime_workspace_id" in updates)) return null;
+    if (!updates || !hasAnyField(updates, "workspaceId", "workspace_id", "runtimeWorkspaceId", "runtime_workspace_id")) return null;
     for (const id of input.issueIds ?? input.issue_ids ?? []) {
       const issue = store.getIssue(id);
       if (!issue) continue;
-      const workspaceId = updates.workspaceId ?? updates.workspace_id ?? issue.workspaceId;
+      const workspaceId = resolveOptionalStringField(updates, "workspaceId", "workspace_id", issue.workspaceId) ?? "local";
+      if (!workspaceId) return c.json({ error: "workspace not found" }, 404);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId)
         ?? denyCurrentUserWorkspaceAccess(c, store, workspaceId);
       if (denied) return denied;
@@ -663,18 +670,24 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // The batch writer needs the same attribution the PATCH routes stamp, or
     // guards that branch on `actorType` (A4) silently do not apply.
     const { actorType, actorId } = issueMutationActor(c);
-    const result = store.batchUpdateIssues({
-      ...body,
-      updates: body.updates
-        ? {
-          ...stripServerOwnedIssueUpdateFields(body.updates),
-          actorType,
-          actorId,
-          parentTaskId: currentTaskParentId(c),
-        }
-        : body.updates,
-    });
-    return c.json(result);
+    try {
+      const result = store.batchUpdateIssues({
+        ...body,
+        updates: body.updates
+          ? {
+            ...stripServerOwnedIssueUpdateFields(body.updates),
+            actorType,
+            actorId,
+            parentTaskId: currentTaskParentId(c),
+          }
+          : body.updates,
+      });
+      return c.json(result);
+    } catch (err) {
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
@@ -703,6 +716,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         : c.json({ updated: result.updated });
     } catch (err) {
       if (err instanceof Error && err.message === "issue_ids is required") return c.json({ error: err.message }, 400);
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
       throw err;
     }
   });
@@ -1388,6 +1403,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
+    const moveDenied = validateIssueWorkspaceMove(c, issue, body);
+    if (moveDenied) return moveDenied;
     // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
     // any other validation so the guard cannot be bypassed by an agent.
     const forceDenied = denyTaskIdentityIssueForce(c, body);
@@ -1450,6 +1467,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       actorId,
       parentTaskId: currentTaskParentId(c),
     };
+    const moveDenied = validateIssueWorkspaceMove(c, issue, input);
+    if (moveDenied) return moveDenied;
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
     try {

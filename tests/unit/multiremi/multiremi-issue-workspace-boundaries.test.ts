@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
@@ -51,6 +52,24 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         return err as IssueWorkspaceMoveError;
       }
       throw new Error("Expected workspace_move_blocked");
+    }
+
+    async function credentials(source: string, target: string) {
+      const app = createMultiremiApp({ store, authToken: "mul476-test-root" });
+      async function member(both: boolean) {
+        const user = store.getOrCreateUser({ email: `${source}-${both}@example.test`, name: both ? "Both workspaces" : "Source only" });
+        for (const workspaceId of both ? [source, target] : [source]) {
+          store.createWorkspaceMember({ workspaceId, userId: user.id, name: user.name, role: "member" });
+        }
+        return (await store.createAccessToken({ type: "pat", workspaceId: source, userId: user.id, name: "Workspace boundary test" })).token;
+      }
+      const sourceOnly = await member(false);
+      const both = await member(true);
+      const request = (token: string, path: string, method: string, body?: unknown) => app.request(path, {
+        method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { app, sourceOnly, both, root: "mul476-test-root", request };
     }
 
     for (const reverse of [false, true]) {
@@ -131,6 +150,98 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const parentError = moveError(() => store.updateIssue(parent.id, { workspaceId: source }));
         expect(parentError.relations).toEqual({ parent: null, children: [], dependencies: [], hidden: 1 });
         expect(store.getIssue(child.id)?.workspaceId).toBe(source);
+      });
+
+      for (const [method, prefix] of [["PATCH", "/api/multiremi/issues"], ["PATCH", "/api/issues"], ["PUT", "/api/issues"]]) {
+        it(`${direction}: HTTP ${method} ${prefix} authorizes the target before refusing parent/child moves`, async () => {
+          const { source, target } = workspaces(reverse);
+          const auth = await credentials(source, target);
+          const parent = store.createIssue({ title: "HTTP parent", workspaceId: source });
+          const children = Array.from({ length: 5 }, (_, i) => store.createIssue({
+            title: `HTTP child ${i}`, workspaceId: source, parentIssueId: parent.id,
+          }));
+          for (const issue of [parent, children[0]!]) {
+            const denied = await auth.request(auth.sourceOnly, `${prefix}/${issue.id}`, method!, { workspace_id: target });
+            expect(denied.status).toBe(404);
+            expect(await denied.json()).not.toHaveProperty("relations");
+            for (const token of [auth.both, auth.root]) {
+              const refused = await auth.request(token, `${prefix}/${issue.id}`, method!, { workspace_id: target });
+              expect(refused.status).toBe(409);
+              const body = await refused.json();
+              expect(body.code).toBe("workspace_move_blocked");
+              if (issue.id === parent.id) expect(body.relations.children.sort()).toEqual(children.map((child) => child.key).sort());
+              else expect(body.relations.parent).toBe(parent.key);
+            }
+            expect(store.getIssue(issue.id)?.workspaceId).toBe(source);
+          }
+        });
+      }
+
+      it(`${direction}: HTTP detachment must precede a move and leaf moves require target membership`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const parent = store.createIssue({ title: "Detach parent", workspaceId: source });
+        const child = store.createIssue({ title: "Detach child", workspaceId: source, parentIssueId: parent.id });
+        expect((await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, "PATCH", { workspace_id: target, parent_issue_id: null })).status).toBe(404);
+        expect((await auth.request(auth.both, `/api/issues/${child.id}`, "PATCH", { workspace_id: target, parent_issue_id: null })).status).toBe(409);
+        expect((await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, "PATCH", { parent_issue_id: null })).status).toBe(200);
+        expect((await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, "PATCH", { workspace_id: target })).status).toBe(404);
+        expect(store.getIssue(child.id)?.workspaceId).toBe(source);
+        expect((await auth.request(auth.both, `/api/issues/${child.id}`, "PATCH", { workspace_id: target })).status).toBe(200);
+        expect(store.getIssue(child.id)).toMatchObject({ workspaceId: target, parentIssueId: null });
+      });
+
+      for (const prefix of ["/api/issues", "/api/multiremi/issues"]) {
+        it(`${direction}: HTTP ${prefix} batch preflight rejects without runtime binding and leaves all rows unchanged`, async () => {
+          const { source, target } = workspaces(reverse);
+          const auth = await credentials(source, target);
+          const parent = store.createIssue({ title: "Batch parent", workspaceId: source });
+          store.createIssue({ title: "Batch child", workspaceId: source, parentIssueId: parent.id });
+          const leaf = store.createIssue({ title: "Batch leaf first", workspaceId: source });
+          const body = { issue_ids: [leaf.id, parent.id], updates: { workspace_id: target } };
+          expect((await auth.request(auth.sourceOnly, `${prefix}/batch-update`, "POST", body)).status).toBe(404);
+          for (const token of [auth.both, auth.root]) {
+            const response = await auth.request(token, `${prefix}/batch-update`, "POST", body);
+            expect(response.status).toBe(409);
+            expect(await response.json()).toMatchObject({ code: "workspace_move_blocked", issue_ids: [parent.id] });
+          }
+          expect(store.getIssue(leaf.id)?.workspaceId).toBe(source);
+          expect(store.getIssue(parent.id)?.workspaceId).toBe(source);
+        });
+      }
+
+      it(`${direction}: HTTP moves refuse either dependency endpoint, including related, after target authorization`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        for (const type of ["blocked_by", "related"] as const) {
+          const issue = store.createIssue({ title: "HTTP dependency", workspaceId: source });
+          const other = store.createIssue({ title: "HTTP counterpart", workspaceId: source });
+          const dependency = store.createIssueDependency(issue.id, { dependsOnIssueId: other.id, type });
+          for (const [endpoint, peer] of [[issue, other], [other, issue]]) {
+            for (const prefix of ["/api/issues", "/api/multiremi/issues"]) {
+              expect((await auth.request(auth.sourceOnly, `${prefix}/${endpoint!.id}`, "PATCH", { workspace_id: target })).status).toBe(404);
+              for (const token of [auth.both, auth.root]) {
+                const response = await auth.request(token, `${prefix}/${endpoint!.id}`, "PATCH", { workspace_id: target });
+                expect(response.status).toBe(409);
+                expect((await response.json()).relations.dependencies).toEqual([{ id: dependency.id, key: peer!.key, type }]);
+              }
+            }
+            expect(store.getIssue(endpoint!.id)?.workspaceId).toBe(source);
+          }
+        }
+      });
+
+      it(`${direction}: HTTP null and empty workspace inputs cannot bypass local target authorization`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const leaf = store.createIssue({ title: "Implicit local target", workspaceId: source });
+        for (const workspace_id of [null, ""]) {
+          expect((await auth.request(auth.sourceOnly, `/api/issues/${leaf.id}`, "PATCH", { workspace_id })).status).toBe(404);
+          expect((await auth.request(auth.sourceOnly, "/api/issues/batch-update", "POST", {
+            issue_ids: [leaf.id], updates: { workspace_id },
+          })).status).toBe(404);
+          expect(store.getIssue(leaf.id)?.workspaceId).toBe(source);
+        }
       });
     }
   });

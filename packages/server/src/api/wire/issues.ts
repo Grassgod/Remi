@@ -27,6 +27,7 @@ import type {
 import {
   BatchParentStatusGuardError,
   IssueDependencyError,
+  IssueWorkspaceMoveError,
   ParentStatusGuardError,
 } from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
@@ -259,6 +260,14 @@ function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: s
 
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // Moving a connected issue requires an explicit detach first. Foreign
+  // relationships are represented by a count, never another workspace's keys.
+  if (err instanceof IssueWorkspaceMoveError) {
+    return c.json({
+      error: err.message, code: err.code, relations: err.relations,
+      ...(err.issueIds ? { issue_ids: err.issueIds } : {}),
+    }, 409);
+  }
   // MUL-400 E1: the parent-status guard is a conflict, and the client needs the
   // machine-readable code plus `open_children` to show the reason and to offer
   // the member-only override.
