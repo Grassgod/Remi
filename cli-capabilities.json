@@ -564,6 +564,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.relay.context-window.update": {
+      "command": "remi workspace relay context-window update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.context-window.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "aliases": [],
@@ -12562,6 +12579,9 @@
     },
     "PUT /api/workspaces/:id/relay-config/:engine": {
       "command": "workspace.relay.update"
+    },
+    "PUT /api/workspaces/:id/relay-config/:engine/context-window": {
+      "command": "workspace.relay.context-window.update"
     },
     "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels": {
       "command": "workspace.relay.reasoning-levels.update"

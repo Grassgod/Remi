@@ -420,7 +420,10 @@ rl.on("line", (line) => {
 // `requiredDefaultOnError` raises "Required value is missing" for an omitted
 // `mcpServers` rather than defaulting it, so the load fails with -32602.
 describe("AcpClient loadSession", () => {
-  it("sends cwd and mcpServers on session/load", async () => {
+  it.each([
+    undefined,
+    { _meta: { claudeCode: { options: { model: "claude-opus-5", env: { ANTHROPIC_CUSTOM_MODEL_OPTION: "claude-opus-5[1m]" } } } } },
+  ])("sends cwd, mcpServers and optional metadata on session/load: %j", async extra => {
     const executable = fakeAgent(
       `#!/usr/bin/env node
 const readline = require("node:readline");
@@ -442,7 +445,7 @@ rl.on("line", (line) => {
     await client.start();
     await client.initialize();
     const servers = [{ name: "recall", command: "/bin/recall", args: [], env: [] }];
-    const result = await client.loadSession("sess_1", "/work/repo", servers);
+    const result = await client.loadSession("sess_1", "/work/repo", servers, extra);
     await client.stop();
 
     expect(result.sessionId).toBe("sess_1");
@@ -450,6 +453,7 @@ rl.on("line", (line) => {
       sessionId: "sess_1",
       cwd: "/work/repo",
       mcpServers: servers,
+      ...(extra ? { _meta: extra._meta } : {}),
     });
   });
 });

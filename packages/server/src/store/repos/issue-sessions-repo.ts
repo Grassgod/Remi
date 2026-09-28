@@ -706,6 +706,11 @@ export class IssueSessionsRepo {
     let task: MultiremiTask;
     try {
       task = this.ctx.db.transaction(() => {
+        // Global lock order (MUL-405): W before this transaction's first domain
+        // write. `addSessionParticipant` inserts a participant row (D) and the
+        // Task writer below takes W again for free; taking W here is what keeps
+        // the order W -> D instead of the D -> W the sentinel caught.
+        this.ctx.lockWorkspaceRuntimeLifecycle(session.workspaceId);
         this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
         return this.ctx.tasks().createTaskWithinTransaction({
           agentId,

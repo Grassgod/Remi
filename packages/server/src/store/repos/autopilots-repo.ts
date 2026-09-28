@@ -14,6 +14,8 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { SCM_PROVIDER_CAPABILITIES } from "@multiremi/scm/capabilities.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import type {
@@ -393,10 +395,18 @@ export class AutopilotsRepo {
   }
 
   private enqueueScheduleTargets(trigger: MultiremiAutopilotTrigger, input: RunAutopilotStoreInput): MultiremiAutopilotRunRecord {
+    const triggerWorkspaceId = this.getAutopilot(trigger.autopilotId)?.workspaceId ?? null;
     const firstId = this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): workspace lifecycle row lock first, then
+      // the per-autopilot row lock. `advanceScheduledTargetRuns` follows the
+      // same order because dispatch ends in `createTaskWithinTransaction`.
+      if (triggerWorkspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(triggerWorkspaceId);
       // Serialize expansion and dispatch across scheduler/API processes.
       this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [trigger.autopilotId]);
-      const autopilot = this.getAutopilot(trigger.autopilotId)!;
+      const autopilot = this.getAutopilot(trigger.autopilotId);
+      if (!autopilot || (triggerWorkspaceId && autopilot.workspaceId !== triggerWorkspaceId)) {
+        throw new Error(`Autopilot not found: ${trigger.autopilotId}`);
+      }
       const current = this.getAutopilotTrigger(trigger.id);
       if (!current?.enabled || !current.scheduleTargets || autopilot.status !== "active") {
         throw new Error("schedule_targets trigger is not active");
@@ -446,9 +456,14 @@ export class AutopilotsRepo {
     ).all() as Array<{ autopilot_id: string }>;
     for (const { autopilot_id: autopilotId } of autopilots) {
       for (;;) {
+        const dispatchWorkspaceId = this.getAutopilot(autopilotId)?.workspaceId ?? null;
         const scheduledChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
         const scheduledEvents = createCommitEventQueue();
         const task = this.ctx.db.transaction(() => {
+          // Global lock order (MUL-405): the workspace row lock precedes the
+          // autopilot row lock, matching `runAutopilot`; dispatch ends in
+          // `createTaskWithinTransaction`, which takes the same row lock.
+          if (dispatchWorkspaceId) this.ctx.lockWorkspaceRuntimeLifecycle(dispatchWorkspaceId);
           this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
           const autopilot = this.getAutopilot(autopilotId);
           if (!autopilot || autopilot.status === "archived") {
@@ -1323,12 +1338,30 @@ export class AutopilotsRepo {
     let taskToNotify: MultiremiTask | null = null;
     let createdRun = false;
     let startedAutopilot: MultiremiAutopilot | null = null;
+    const autopilotWorkspaceId = this.getAutopilot(autopilotId)?.workspaceId ?? null;
+    if (!autopilotWorkspaceId) throw new Error(`Autopilot not found: ${autopilotId}`);
     const autopilotChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const autopilotEvents = createCommitEventQueue();
     const run = this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+      // lifecycle row lock is always taken before any number-allocation lock.
+      // `create_issue` runs call `createIssue` (issue number lock) and then
+      // `createTaskWithinTransaction` (this same workspace row lock), so taking
+      // the row lock only later would reverse the order Feishu ingest uses and
+      // deadlock the two paths against each other.
+      this.ctx.lockWorkspaceRuntimeLifecycle(autopilotWorkspaceId);
+      // Global lock order (MUL-405): W then N, before the autopilot row lock.
+      // The create_issue mode reaches N again inside createIssue; taking it here
+      // first is what keeps every mode of this method on one order. run_only
+      // modes do not need it, but the lock is per workspace and cheap, and a
+      // conditional form would let the order depend on the execution mode.
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${autopilotWorkspaceId}`));
       this.ctx.db.run("UPDATE multiremi_autopilots SET updated_at = updated_at WHERE id = ?", [autopilotId]);
       const autopilot = this.getAutopilot(autopilotId);
       if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+      if (autopilot.workspaceId !== autopilotWorkspaceId) {
+        throw new Error(`Autopilot workspace changed while starting run: ${autopilotId}`);
+      }
       this.assertRepositoryWikiBuildScope(autopilot, repositoryId, dedupeKey);
       let trigger: MultiremiAutopilotTrigger | null = null;
       if (triggerId) {
