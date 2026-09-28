@@ -15,7 +15,7 @@
       "GET /ws"
     ],
     "mutationRoutes": 444,
-    "mutationRoutesCovered": 282,
+    "mutationRoutesCovered": 283,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -36,6 +36,7 @@
       "issue-relations-native",
       "issue-sessions",
       "issue-shares",
+      "issue-topics-invalid-stored",
       "issues-compat",
       "issues-native",
       "labels",
@@ -1447,6 +1448,7 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/feishu-bot",
+    "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery"
   ],
@@ -26266,6 +26268,68 @@
       "path": "/api/issues/iss_snapshot/share",
       "status": 204,
       "body": ""
+    },
+    {
+      "key": "issue-topics-invalid-stored#000 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "person",
+          "notify_open_id": null
+        },
+        "invalid": {
+          "code": "issue_topic_config_invalid",
+          "message": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person"
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#001 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 400,
+      "body": {
+        "error": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+        "code": "issue_topic_config_invalid"
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#002 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#003 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
     },
     {
       "key": "issues-compat#000 POST /api/issues",
