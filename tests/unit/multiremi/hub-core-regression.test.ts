@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   createHub,
   type HubImpl,
+  type HubFillReader,
   type HubOptions,
   type HubSubscriberSink,
 } from "@multiremi/api/hub/hub-core.js";
@@ -53,6 +54,15 @@ class RecordingSink implements HubSubscriberSink {
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 12; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function reader(head: number, seqs: number[]): HubFillReader {
+  return {
+    logHead: async () => ({ head, log_version: 19 }),
+    traceHead: async () => null,
+    readRange: async (_key, after, to) => seqs.filter((seq) => after < seq && seq <= to)
+      .map((seq) => ({ seq, kind: "entry", payload: { seq, body_md: `read-${seq}` } })),
+  };
 }
 
 describe("MUL-436 regression 1: patch bases and stale replay", () => {
@@ -211,5 +221,57 @@ describe("MUL-436 regression 5: ordinary flush boundaries", () => {
     for (let seq = 4; seq <= 8; seq++) row(hub, seq);
     hub.flushNow(); hub.flushNow(); hub.flushNow();
     expect(out.order).toEqual(["data:1", "gap:1,5", "data:6", "data:7", "data:8"]);
+  });
+});
+
+describe("MUL-436 regression 6: sparse cold warm-up", () => {
+  it("preserves the authoritative head and reports both prefix and suffix gaps", async () => {
+    const hub = make({ fill: reader(200, Array.from({ length: 54 }, (_, i) => i + 137)) });
+    const out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    await hub.warmUpSettled(); hub.flushNow();
+    expect(sub.head).toBe(200);
+    expect(sub.log_version).toBe(19);
+    expect(out.gaps).toEqual([{ from: 0, to: 136 }, { from: 190, to: 200 }]);
+    expect(out.frames.map((frame) => frame.seq)).toEqual(Array.from({ length: 54 }, (_, i) => i + 137));
+    expect(out.order.at(-1)).toBe("gap:190,200");
+    const late = new RecordingSink();
+    hub.subscribeWithSink("log:s", 190, late); hub.flushNow();
+    expect(late.order).toEqual(["gap:190,200"]);
+    row(hub, 201); hub.flushNow();
+    expect(sub.head).toBe(201);
+    expect(out.frames.at(-1)?.seq).toBe(201);
+  });
+
+  it("reports an empty warm-up through both the sink and subscription getters", async () => {
+    const hub = make({ fill: reader(30, []) }), out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    await hub.warmUpSettled(); hub.flushNow();
+    expect(sub.head).toBe(30);
+    expect(sub.first_seq).toBe(31);
+    expect(sub.gap).toEqual({ from: 0, to: 30 });
+    expect(out.gaps).toEqual([{ from: 0, to: 30 }]);
+    row(hub, 31); hub.flushNow();
+    expect(out.frames.map((frame) => frame.seq)).toEqual([31]);
+  });
+
+  it("delivers every readable segment with separate gaps for internal holes", async () => {
+    const hub = make({ fill: reader(8, [3, 4, 6, 8]) }), out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    await hub.warmUpSettled();
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    expect(sub.head).toBe(8);
+    expect(out.order).toEqual(["gap:0,2", "data:3,4", "gap:4,5", "data:6", "gap:6,7", "data:8"]);
+    const late = new RecordingSink();
+    hub.subscribeWithSink("log:s", 5, late); hub.flushNow(); hub.flushNow();
+    expect(late.order).toEqual(["data:6", "gap:6,7", "data:8"]);
+  });
+
+  it("reports prefix, internal and suffix gaps independently in one cold window", async () => {
+    const hub = make({ fill: reader(10, [3, 4, 6, 7]) }), out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    await hub.warmUpSettled(); hub.flushNow(); hub.flushNow();
+    expect(sub.head).toBe(10);
+    expect(out.order).toEqual(["gap:0,2", "data:3,4", "gap:4,5", "data:6,7", "gap:7,10"]);
   });
 });

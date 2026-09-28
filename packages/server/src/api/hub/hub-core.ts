@@ -855,9 +855,10 @@ export class HubImpl implements ObservableLiveHub {
       if (!current) return pushed;
       if (frame.seq <= current.headSeq) continue;
       if (frame.seq !== current.headSeq + 1) {
-        if (bootstrap && pushed === 0 && current.entries.length === 0 && current.headSeq === 0) {
-          // Nothing was ever accepted for this stream, so this frame is the base.
-          this.ring.refound(current, frame.seq);
+        if (bootstrap) {
+          // A cold reader may return several readable segments. Retain each one;
+          // replay checks every discontinuity and reports the intervening gap.
+          current.headSeq = frame.seq - 1;
         } else {
           // A sparse answer: stop rather than open a second hole behind this one.
           break;
@@ -966,18 +967,30 @@ export class HubImpl implements ObservableLiveHub {
       this.reportGap(subscriber, firstServableSeq(stream) - 1);
     }
     const entries = this.ring.entriesAfter(stream, subscriber.cursor);
-    if (entries.length === 0) return false;
+    if (entries.length === 0) {
+      if (subscriber.cursor < stream.headSeq) this.reportGap(subscriber, stream.headSeq);
+      return false;
+    }
+    if (entries[0]!.frame.seq > subscriber.cursor + 1) {
+      this.reportGap(subscriber, entries[0]!.frame.seq - 1);
+    }
     const batch: HubFrame[] = [];
     let bytes = 0;
     let index = 0;
     for (; index < entries.length; index += 1) {
       const entry = entries[index]!;
+      const previous = batch.at(-1)?.seq ?? subscriber.cursor;
+      if (entry.frame.seq !== previous + 1) break;
       if (batch.length > 0 && bytes + entry.bytes > this.limits.batchBytes) break;
       batch.push(entry.frame);
       bytes += entry.bytes;
     }
     subscriber.cursor = batch[batch.length - 1]!.seq;
     this.send(subscriber, batch);
+    if (subscriber.lagging) return false;
+    const next = entries[index];
+    const gapEnd = next ? next.frame.seq - 1 : stream.headSeq;
+    if (gapEnd > subscriber.cursor) this.reportGap(subscriber, gapEnd);
     return index < entries.length;
   }
 
@@ -1172,6 +1185,10 @@ export class HubImpl implements ObservableLiveHub {
     const pushed = await this.fillFrom(key, from - 1, known.head, true);
     const after = this.ring.get(key);
     if (!after) return;
+    // A partial/empty read must not lower the authoritative head. Unreadable
+    // sequences stay explicit gaps, and the next live write follows this head.
+    after.headSeq = Math.max(after.headSeq, known.head);
+    after.tailSeq = after.entries[0]?.frame.seq ?? after.headSeq + 1;
     this.stampLogVersion(after, known.head, known.log_version);
     // A prefill that starts above the requested range is a gap for whoever is
     // already subscribed: the ack they sent before the warm-up finished could not
