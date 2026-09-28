@@ -169,8 +169,9 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
 
   // Over-approximate same-file string bindings across scopes and assignments. This pruning is sound only
   // for concatenation: every piece of a possible bun:sqlite specifier must be one of its substrings.
-  // Arrays, object properties, function returns, for-of values, join(), cross-file constants, and eval()
-  // remain outside this static scan; slice(), replace(), or other transforms would require a new analysis.
+  // Arrays, object properties, function returns, for-of values, enum members, tagged templates such as
+  // String.raw, join(), concat(), cross-file constants, and eval() remain outside this static scan;
+  // slice(), replace(), or other transforms would require a new analysis.
   const declarations: ts.VariableDeclaration[] = [];
   const bindings = new Map<string, { expression: ts.Expression; append: boolean }[]>();
   const addBinding = (name: string, expression: ts.Expression, append = false): void => {
@@ -185,13 +186,18 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
     } else if ((ts.isParameter(node) || ts.isBindingElement(node))
       && ts.isIdentifier(node.name) && node.initializer) {
       addBinding(node.name.text, node.initializer);
-    } else if (ts.isBinaryExpression(node) && ts.isIdentifier(node.left)) {
-      const operator = node.operatorToken.kind;
-      if (operator === ts.SyntaxKind.EqualsToken || operator === ts.SyntaxKind.BarBarEqualsToken
-        || operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken
-        || operator === ts.SyntaxKind.QuestionQuestionEqualsToken || operator === ts.SyntaxKind.PlusEqualsToken) {
-        addBinding(node.left.text, node.right, operator === ts.SyntaxKind.PlusEqualsToken);
+    } else if (ts.isBinaryExpression(node)) {
+      const left = unwrap(node.left);
+      if (ts.isIdentifier(left)) {
+        const operator = node.operatorToken.kind;
+        if (operator === ts.SyntaxKind.EqualsToken || operator === ts.SyntaxKind.BarBarEqualsToken
+          || operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken
+          || operator === ts.SyntaxKind.QuestionQuestionEqualsToken || operator === ts.SyntaxKind.PlusEqualsToken) {
+          addBinding(left.text, node.right, operator === ts.SyntaxKind.PlusEqualsToken);
+        }
       }
+    } else if (ts.isShorthandPropertyAssignment(node) && node.objectAssignmentInitializer) {
+      addBinding(node.name.text, node.objectAssignmentInitializer);
     }
     ts.forEachChild(node, gather);
   };
@@ -452,12 +458,18 @@ describe("SQLite handle entry", () => {
       ['const m = "node:fs";', '{ const m = "bun:sqlite";', '  await import(m);', '}'], ["A:3"]],
     ["late assignment",
       ['let m = "node:fs";', 'm = "bun:sqlite";', 'await import(m);'], ["A:3"]],
+    ["parenthesized assignment",
+      ['let m;', '(m) = "bun:sqlite";', 'import(m);'], ["A:3"]],
     ["append assignment",
       ['let m = "bun";', 'm += ":";', 'm += "sqlite";', 'require(m);'], ["A:4"]],
+    ["parenthesized append assignment",
+      ['let m = "bun";', '(m) += ":";', '(m) += "sqlite";', 'import(m);'], ["A:4"]],
     ["parameter default",
       ['function load(m = "bun:sqlite") { return import(m); }'], ["A:1"]],
     ["binding default",
       ['const { m = "bun:sqlite" } = {};', 'import(m);'], ["A:2"]],
+    ["shorthand destructuring assignment default",
+      ['let m;', '({ m = "bun:sqlite" } = {});', 'import(m);'], ["A:3"]],
     ["nullish assignment",
       ['let m;', 'm ??= "bun:sqlite";', 'import(m);'], ["A:3"]],
     ["logical-or assignment",
@@ -475,6 +487,21 @@ describe("SQLite handle entry", () => {
   for (const [title, lines, expected] of outside) {
     test(`scanner flags ${title}`, () => {
       for (const extension of extensions) expect(summary(scanSqliteUse(lines.join("\n"), `probe.${extension}`))).toEqual(expected);
+    });
+  }
+
+  const typedAssignments: [string, string, string[]][] = [
+    ["as assertion", '(m as string) = "bun:sqlite";', ["ts", "tsx"]],
+    ["non-null assertion", 'm! = "bun:sqlite";', ["ts", "tsx"]],
+    ["satisfies assertion", '(m satisfies string) = "bun:sqlite";', ["ts", "tsx"]],
+    ["angle-bracket assertion", '(<string>m) = "bun:sqlite";', ["ts"]],
+  ];
+  for (const [title, assignment, typeExtensions] of typedAssignments) {
+    test(`scanner flags ${title} on an assignment target`, () => {
+      for (const extension of typeExtensions) {
+        const source = `let m: string | undefined;\n${assignment}\nimport(m);`;
+        expect(summary(scanSqliteUse(source, `probe.${extension}`))).toEqual(["A:3"]);
+      }
     });
   }
 
