@@ -115,6 +115,41 @@ describe("MUL-438 browser stream endpoints", () => {
     }
   });
 
+  it("does not hand a chat invalidation to the creator's socket in another workspace (MUL-438)", async () => {
+    const store = createStore();
+    const first = store.ensureLocalWorkspace();
+    const second = store.createWorkspace({ id: "ws_stream_second", name: "Second", slug: "stream-second" });
+    // The same person, a member of both workspaces.
+    store.createWorkspaceMember({ workspaceId: first.id, userId: "creator", name: "Creator", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: second.id, userId: "creator", name: "Creator", role: "owner" });
+    const agent = store.createAgent({ name: "Chatty", provider: "codex", workspaceId: first.id });
+    const chat = store.createChatSession({ agentId: agent.id, workspaceId: first.id, creatorId: "creator", title: "First-workspace chat" });
+    const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: first.id, userId: "creator" });
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+
+    const inFirst = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${first.id}`);
+    const inSecond = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${second.id}`);
+    try {
+      await authenticateBrowserWebSocket(inFirst, token.token);
+      await authenticateBrowserWebSocket(inSecond, token.token);
+
+      store.updateChatSession(chat.id, { title: "Renamed in the first workspace" });
+
+      expect(await nextWebSocketMessage(inFirst)).toMatchObject({
+        type: "chat:session_updated",
+        payload: { chat_session_id: chat.id, title: "Renamed in the first workspace" },
+      });
+      // The user registry is keyed by user, so without the workspace filter the
+      // other tab would receive a session id and title from a workspace it is
+      // not looking at.
+      await expectNoWebSocketMessage(inSecond, 250);
+    } finally {
+      inFirst.close();
+      inSecond.close();
+      server.stop(true);
+    }
+  });
+
   it("broadcasts resync to the sockets this process holds", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();

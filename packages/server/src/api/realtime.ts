@@ -392,7 +392,9 @@ export function notifyBrowserWorkspaceEvent(
     // until C12 (plan 2/6 §2's compatibility rule).
     if (CHAT_CREATOR_ROUTED_EVENTS.has(event.type)) {
       const creatorId = chatEventCreatorId(options.store, event);
-      if (creatorId) notifyBrowserUserEventByAudience(userRegistry, creatorId, frames);
+      if (creatorId) {
+        notifyBrowserUserEventByAudience(userRegistry, creatorId, frames, undefined, event.workspaceId);
+      }
       return;
     }
     if (chatSessionId) notifyBrowserScopeClientsByAudience(scopeRegistry, "chat", chatSessionId, frames);
@@ -508,11 +510,21 @@ function notifyBrowserUserEventByAudience(
   userId: string,
   frames: BrowserWorkspaceEventFrames,
   excludeWorkspaceId?: string,
+  /**
+   * MUL-438: when set, only sockets bound to this workspace receive the frame.
+   *
+   * The user registry is keyed by user, and one user can hold a socket in every
+   * workspace they belong to; a private chat invalidation belongs to exactly one
+   * of them. Without this a workspace-B tab would be handed a workspace-A
+   * session's title.
+   */
+  onlyWorkspaceId?: string,
 ): void {
   const clients = registry.get(userId);
   if (!clients?.size) return;
   for (const client of [...clients]) {
     if (client.data.kind === "browser" && excludeWorkspaceId && client.data.workspaceId === excludeWorkspaceId) continue;
+    if (client.data.kind === "browser" && onlyWorkspaceId && client.data.workspaceId !== onlyWorkspaceId) continue;
     try {
       client.sendText(browserWorkspaceEventFrame(client, frames));
     } catch {
