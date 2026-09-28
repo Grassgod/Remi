@@ -591,6 +591,7 @@ describe("SQLite handle entry", () => {
   }
 
   test("scanner accepts types, the factory, and unrelated code", () => {
+    const genericInstantiation = 'const f = <T,>(x: T) => x; const g = f<string>; g("node:fs");';
     const allowed = [
       'import type { Database } from "bun:sqlite";\nlet db: Database;',
       'import { type Database, type SQLQueryBindings } from "bun:sqlite";\nlet db: Database;',
@@ -604,11 +605,16 @@ describe("SQLite handle entry", () => {
       'import(flag ? "node:fs" : "node:path");',
       'const m = x || "node:fs"; import(m);',
       'check(name === "bun:sqlite");',
-      'const f = <T>(x: T) => x; const g = f<string>; g("node:fs");',
+      genericInstantiation,
       `db.exec(${JSON.stringify(`CREATE TABLE example (${"column TEXT, ".repeat(30)}id TEXT)`)})`,
     ];
     for (const text of allowed) {
       for (const extension of extensions) expect(summary(scanSqliteUse(text, `probe.${extension}`))).toEqual([]);
+    }
+    for (const extension of ["ts", "tsx"]) {
+      const source = ts.createSourceFile(`probe.${extension}`, genericInstantiation, ts.ScriptTarget.Latest, true);
+      const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
+      expect(diagnostics.map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))).toEqual([]);
     }
   });
 
