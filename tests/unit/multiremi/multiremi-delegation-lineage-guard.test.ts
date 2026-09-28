@@ -273,9 +273,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
           expect(response.status, spelling).toBe(201);
           const created = store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
           expect(created.parentTaskId, spelling).toBeNull();
-          // The trigger comment is still recorded for the transcript (it really
-          // is the trigger); only its lineage fallback must not apply.
-          expect(created.triggerCommentId, spelling).toBe(workerComment.id);
+          // MUL-448 made the trigger itself server-owned too. The public body
+          // cannot retain the comment pointer or use its task link as lineage.
+          expect(created.triggerCommentId, spelling).toBeNull();
         }
       });
     }, PG_TEST_TIMEOUT);
@@ -330,11 +330,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
 
     it("pins the anonymous compatibility behaviour of every creation route", async () => {
       // Anonymous = auth disabled (no `authToken`) or the deployment master
-      // token. Both leave the request without a verified identity, and the fix
-      // deliberately leaves their historical trust-the-body behaviour alone:
-      // the routes stamp camelCase `parentTaskId`, so only a body-supplied
-      // snake_case alias reaches the store's read. These cases pin exactly that
-      // so a later change cannot silently widen or narrow it.
+      // token. MUL-448 made both lineage spellings server-owned for every caller,
+      // so the merge must not re-open the snake_case alias in either mode.
       for (const [mode, authToken] of [["auth-disabled", undefined], ["master-token", "lineage-guard-root"]] as const) {
         await withStore(backend, async (store) => {
           const f = await fixture(store, authToken);
@@ -347,7 +344,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           });
           expect(snakeResponse.status, mode).toBe(201);
           const snakeTask = store.getTask(((await snakeResponse.json()) as { id: string }).id)!;
-          expect(snakeTask.parentTaskId, mode).toBe(f.delegatedTask.id);
+          expect(snakeTask.parentTaskId, mode).toBeNull();
 
           const camelResponse = await f.app.request(`/api/issues/${f.parent.id}/sessions/${f.leaderSessionId}/tasks`, {
             method: "POST", headers,

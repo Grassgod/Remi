@@ -50,14 +50,33 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 3. **The final-summary signal (A1)** for `done` is: after the last child closes,
    the parent owner completed a round whose `result` carries non-empty output.
    It is skipped for member-owned parents (a human closing the Issue *is* the
-   summary). The check reads the owner's tasks on the parent, so it needs no new
-   column and no migration.
+   summary). An authorized owner agent can also satisfy A1 by posting a non-empty
+   `comment` on that parent after the final child closes. The same alternative
+   applies to SCM merge completion; member closure retains the completed-round
+   rule. The check reads tasks and comments on the parent.
+
+   The author identity of a (b) comment comes from the credential, never the
+   request body: a task token resolves to that agent, a user JWT or PAT resolves
+   to a member. Deployments using the master credential, and deployments with
+   auth disabled, trust the identity fields in the request body; that is an
+   administrator capability and is outside (b)'s protection, because such a
+   caller can already close the parent as a member (with `force`). (b) is a
+   process constraint on the authorized agent, not an authorization boundary —
+   the boundary is the member-only grant plus the token-derived agent identity
+   checked when the parent is closed.
 4. **`force` is member-only.** `UpdateIssueInput.force` passes the guards and
    records `issue_status_forced` (with the child count it overrode). A task
    identity sending `force` gets 403 on all three status writers (both PATCH
-   routes and batch update), and A4 additionally rejects a task identity closing
-   any Issue that has children (`parent_done_requires_member`). Workflow:
-   attempt without `--force` to see the reason, then repeat with it.
+   routes and batch update). A4 rejects a task identity closing an Issue with
+   children unless a member granted this parent to its current owner agent.
+   The grant stores that agent id; reassignment makes it ineffective until a
+   member grants again. Grant creation and revocation are member-only, audited
+   actions. The grant check trusts the agent id in the task token.
+   `force` is a MEMBER-only override: a member retries the same write with
+   `--force` after reading the refusal reason. A task identity that sends
+   `force` gets 403 `issue_force_requires_member` on both PATCH routes and on
+   batch update — there is no task-side retry with `force`, and the grant does
+   not change that.
    The system-only bypass is deliberately NOT a field on `UpdateIssueInput`: it
    is an `UpdateIssueOptions` argument passed positionally by the store, because
    the wire layer builds `UpdateIssueInput` straight from the request body, and
@@ -80,21 +99,17 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `child_status_after_parent_closed` activity (child id, key and outcome) and
    nothing else — no comment, no round, no status change. Silence would be the
    one outcome E2 forbids.
-6. **The merge-completion path respects the child count instead of bypassing it.**
-   The SCM merge effect closes a linked Issue when the merge lands, and a merge
-   that a human authorized is the confirmation guard A exists to obtain — so A1
-   and A4 do not apply and no `issue_status_forced` row is written. But that
-   authorization covers *the merge*, not the closure of a parent whose children
-   are still running, so the effect branches on `open_children`:
-   - **children still open** — the parent's status does not move. The effect
-     records `parent_status_held` (with `requested: "done"`, `source:
-     "scm_merge"`, and the change request's number and url) and marks itself
-     applied. A hold is a settled outcome, not a retry, and it never re-closes
-     the parent later: when the last child finishes, `done` is the human's call
-     under E1. Without this branch, a *child's* PR — which routinely names the
-     parent key in its title, and which auto-link matches by key word boundary —
-     would close a parent with live children the moment that child merged.
-   - **children all finished, or none** — the Issue closes, as before.
+6. **The merge-completion path treats parent closure as an agent decision.**
+   A linked Issue with no children still closes on merge. For a parent, the SCM
+   effect checks in order: every child finished, the current owner agent has an
+   effective grant, and A1 has a completed result-bearing round or a qualifying
+   owner-agent comment. The first failed check records `parent_status_held` with
+   `reason: children_open | grant_missing | final_summary_missing`, `source:
+   "scm_merge"`, and the change request number and URL. The effect is marked
+   applied; a hold is settled and is never retried. When all checks pass, the
+   Issue closes and `parent_done_grant_used(source: scm_merge)` is audited.
+   A child's PR routinely names the parent key, so the merge itself cannot
+   supply the parent's summary or closure authorization.
 
    The exemption itself never travels through the wire: it is a server-only
    argument on `updateIssue`, so no request body can reach it.
@@ -156,6 +171,10 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      `parent_status_held`, `child_done_parent_triggered`,
      `child_status_parent_coalesced`, the system-comment wrapper, and the task
      terminal activities/wakeups on a queue-carrying path.
+     `TasksRepo.resetSessionAgentLane` also requires the owner's queue. A claim
+     owns that queue through `snapshotTaskExecution`, flushes after its claim
+     transaction commits, and drops it on rollback. The store's standalone lane
+     reset wrapper owns a separate transaction and flushes after that commit.
    - `notifyChildStatusChange` opens the single transaction for a child report.
      The notification comment (with its Session event) and the parent's queued
      round are written inside it; the round is created through
@@ -212,9 +231,8 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      every outward event published while a real `PostgresSyncDatabase` is in a
      transaction ("transaction-internal emission"). On the branch the scan of
      `tests/unit/multiremi/` reports **0** such emissions; on a clean
-     `4248ef07` archive the same scan reports **30** hits, all at call sites
-     that already existed on `main` and that have no commit-event queue on the
-     path:
+     `4248ef07` archive the same scan reports **30** hits from exercised paths
+     that already existed on `main`:
        - `TasksRepo.afterTaskTerminal`'s `chat:done` (`tasks-repo.ts`,
          `emitWorkspaceEvent`) and the `task_<status>` activity it writes through
          `StoreContext.appendIssueActivity`;
@@ -226,13 +244,30 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
          `delegation_return_triggered` activity on the non-queue entry point;
        - `afterTaskTerminal`'s cancel-path activity when reached from
          `cancelTaskWithinWorkspaceLock`.
-     The rule above ("a function that already receives the queue routes every
-     outward event through it") fixes these on the queue-carrying S1 paths, and
-     the S1-introduced emissions are gone; the remainder are the main-existing
-     sites where no queue is passed at all. They are listed for a separate
-     issue rather than fixed here, exactly as the two nesting sites are.
-     Coverage boundary: the scan only sees paths a test executes, so a clean run
-     proves nothing about a branch no case reaches. The scan must be repeated
+     A stale provider Session/cursor on an Issue lane adds one more main-existing
+     hit when claim calls `snapshotTaskExecution` and resets that lane. The
+     original full scan did not execute this branch. This forward fix queues its
+     `session_agent_lane_reset` audit event until the claim commits. It also
+     queues the `parent_status_held` audit inside `updateIssueWithOutcome` and
+     the `issue_unassigned`/`task_cancelled` audits inside its unassign path or
+     `assignIssue`'s transaction. The deletion transaction passes the same queue
+     to the shared task-cancellation writer. Autopilot, Feishu ingest, and Feishu
+     bot creation transactions call `createIssueWithinTransaction` with their
+     owner queue for `issue_created`; Feishu ingest's two owners flush after
+     commit. Messaging outcome direct creation and proposal approval do the
+     same from their own transactions. The standalone `createIssue` path still
+     emits directly. These
+     entries describe historical main behavior and the forward repairs; the
+     two nesting sites remain separate work.
+     Coverage boundary: the scan's **0** only describes branches the tests
+     executed; it is not proof for optional queue parameters. Their evidence is
+     the all-caller table in the MUL-406 fifth fix-round comment, based on
+     `rg` and transaction-owner tracing. `CreateIssueCommentOptions` already
+     requires the queue for `withinTransaction: true`; its optional arm is for
+     the standalone path. The two generic activity APIs remain optional because
+     splitting their many public, standalone call sites would broaden this
+     repair; each current transaction-owned call is classified in that table.
+     The scan must be repeated
      after adding cases that reach a new branch (that is how QA round 3's
      closed-parent and re-derivation emissions were missed).
    - S2's dependency gate lives in this same hook. Its automatic start

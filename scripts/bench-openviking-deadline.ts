@@ -83,7 +83,9 @@ process.env.MULTIREMI_OPENVIKING_API_KEY = "bench-placeholder";
 if (timeoutMs) process.env.MULTIREMI_OPENVIKING_TIMEOUT_MS = timeoutMs;
 if (maxRetries) process.env.MULTIREMI_OPENVIKING_MAX_RETRIES = maxRetries;
 
-const store = new MultiremiStore(new Database(":memory:"));
+// Declare the backend so migrations cannot be misread as Postgres when the
+// surrounding shell exports MULTIREMI_DATABASE_URL (MUL-407).
+const store = new MultiremiStore(Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }));
 const app = createMultiremiApp({ store, projectKnowledge: createProjectKnowledgeServiceFromEnv(store), backgroundJobs: false });
 const project = store.createProject({ title: "MUL-388 bench" });
 const headers = { "Content-Type": "application/json" };

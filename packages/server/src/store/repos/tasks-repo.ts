@@ -708,7 +708,16 @@ export class TasksRepo {
     if (!dependencyGateEnabled() || issue.status !== "backlog") return null;
     const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
     if (unmet.length === 0) return null;
-    const previousTaskId = parentTask?.id ?? cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id);
+    // MUL-409 (QA round 4, blocker 3): `continuedFromTaskId` names the round this
+    // one continues, and it must win over `parentTaskId`. A leader-token
+    // continuation (`continueTaskId` on POST /api/multiremi/tasks) carries BOTH:
+    // the delegating leader's task as the parent, and the delegated task being
+    // continued. Reading `parentTask` first recorded the leader's id as the
+    // previous round, so the audit pointed at the wrong task.
+    const continuedFromTaskId = cleanOptionalString(
+      input.continuedFromTaskId ?? input.continued_from_task_id,
+    );
+    const previousTaskId = continuedFromTaskId ?? parentTask?.id ?? null;
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
     let source: string | null = null;
@@ -716,7 +725,7 @@ export class TasksRepo {
     else if (input.preserveIssueStatus === true || input.preserve_issue_status === true) source = "parent_wakeup";
     else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "cancelled") source = "redispatch";
     else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "failed") source = "retry";
-    else if (cleanOptionalString(input.continuedFromTaskId ?? input.continued_from_task_id)) source = "continuation";
+    else if (continuedFromTaskId) source = "continuation";
     else if (normalizePositiveInt(input.attempt, 1) > 1) source = "retry";
     if (source) return { source, unmet, previousTaskId };
     throw new IssueDependencyError(
@@ -1188,14 +1197,8 @@ export class TasksRepo {
     sessionId: string,
     agentId: string,
     executionScope = "",
-    audit?: { reason: string; taskId?: string | null },
-    /**
-     * Optional on purpose: this writer has no `...WithinTransaction` variant and
-     * main-existing callers (dispatch/claim) run it without an owner queue. The
-     * task-terminal path — which does own a queue — passes it, and then the
-     * audit activity is published after COMMIT (MUL-400 S1 QA round 4).
-     */
-    deferredEvents?: CommitEventQueue,
+    audit: { reason: string; taskId?: string | null } | undefined,
+    deferredEvents: CommitEventQueue,
   ): MultiremiSessionAgentLane | null {
     const lane = this.ctx.issueSessions().getSessionAgentLane(sessionId, agentId, executionScope);
     // A legacy task can predate lane creation, and an agent may already have
@@ -1891,7 +1894,7 @@ export class TasksRepo {
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
     const excludedAgentIds = new Set<string>();
     const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();
-    const tx = this.ctx.db.transaction(() => {
+    const claimWithinTransaction = (deferredEvents: CommitEventQueue) => this.ctx.db.transaction(() => {
       const runtime = this.ctx.runtimes().getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
       // Serialize concurrent claims per workspace. Postgres evaluates each
@@ -1988,7 +1991,7 @@ export class TasksRepo {
       // expensive parts — Skills, Skill files, Project context and the Wiki indexes — are read
       // once here and carried through the snapshot into the response.
       const hydrated = this.withHydratedAgent(candidate);
-      const task = this.snapshotTaskExecution(hydrated, lockedRuntime);
+      const task = this.snapshotTaskExecution(hydrated, lockedRuntime, deferredEvents);
       // Check the actual hydrated payload, including both linked and legacy
       // inline skills. Older daemons ignore encoding and would write base64
       // as text. Unknown encodings also require the newer daemon's validator.
@@ -2001,9 +2004,10 @@ export class TasksRepo {
     });
     let unsupported: BinarySkillFilesUnsupportedError | null = null;
     for (;;) {
-      let result: ReturnType<typeof tx>;
+      const deferredEvents = createCommitEventQueue();
+      let result: ReturnType<ReturnType<typeof claimWithinTransaction>>;
       try {
-        result = tx();
+        result = claimWithinTransaction(deferredEvents)();
       } catch (error) {
         // Roll back the candidate's dispatch and snapshot, then try another
         // Agent so a binary Skill does not block later text-only tasks.
@@ -2027,6 +2031,7 @@ export class TasksRepo {
         if (error instanceof AgentPluginReadinessChangedError) return null;
         throw error;
       }
+      this.ctx.emitCommitEvents(deferredEvents);
       if (!result && unsupported) throw unsupported;
       // Only publish a dispatch once the compatible claim has committed.
       if (result?.dispatched) this.ctx.notifyTaskEvent("task:dispatch", result.task);
@@ -2040,7 +2045,11 @@ export class TasksRepo {
    * provider is right now. The promoted session's engine (session_provider)
    * comes from this snapshot, not the agent's later-mutable provider.
    */
-  private snapshotTaskExecution(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
+  private snapshotTaskExecution(
+    task: MultiremiTaskWithAgent,
+    runtime: MultiremiRuntime,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiTaskWithAgent {
     // Serialize the final snapshot with provider/archival mutations. If an
     // Agent update committed first we observe it below; if it starts later it
     // waits until this claim commits, then its rescheduler can cancel/re-home
@@ -2161,7 +2170,7 @@ export class TasksRepo {
               resetRequested: false,
             }),
             taskId: task.id,
-          }) ?? lane;
+          }, deferredEvents) ?? lane;
         }
         issueProviderSessionId = null;
         issueWorkDir = null;
@@ -2778,10 +2787,11 @@ export class TasksRepo {
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
       const now = nowIso();
+      const expiresAt = new Date(Date.now() + resolveHumanRequestTimeoutMs(input.timeoutMs)).toISOString();
       this.ctx.db.run(
-        `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at)
-         VALUES (?, ?, ?, ?, 'pending', ?)`,
-        [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now],
+        `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+        [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now, expiresAt],
       );
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
       const transition = this.ctx.db.run(
@@ -5513,6 +5523,14 @@ const TASK_MESSAGE_TOOL_MAX = 512;
 const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
 const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
 const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
+
+/**
+ * A daemon that predates `timeout_ms` (MUL-407) still gets a reminder lane and
+ * a terminal card, so the server records its own hour-long deadline instead of
+ * leaving `expires_at` NULL. The executing daemon remains the only authority
+ * that may expire the request.
+ */
+const DEFAULT_HUMAN_REQUEST_TIMEOUT_MS = 60 * 60 * 1000;
 const TASK_MESSAGE_META_MAX = 64 * 1024;
 const TASK_MESSAGE_JSON_MAX_DEPTH = 8;
 const TASK_MESSAGE_JSON_MAX_ARRAY = 256;
@@ -5572,7 +5590,15 @@ function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
     respondedBy: nullableString(row.responded_by),
     createdAt: String(row.created_at),
     respondedAt: nullableString(row.responded_at),
+    expiresAt: nullableString(row.expires_at),
   };
+}
+
+/** Clamp a requested lifetime; a daemon may not ask for an unbounded wait. */
+export function resolveHumanRequestTimeoutMs(value: unknown): number {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_HUMAN_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(requested), 60_000), 24 * 60 * 60 * 1000);
 }
 
 function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {

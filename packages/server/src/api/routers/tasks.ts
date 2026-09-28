@@ -20,7 +20,6 @@ import {
   cleanString,
   currentTaskAccessToken,
   parseOptionalInt,
-  requestStrippedParentTaskLineage,
   taskCompatibilityResponse,
   taskListResponse,
   taskPublicResponse,
@@ -155,6 +154,15 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // Execution snapshots are minted only by the server's claim/retry path.
     // Never trust these internal fields from a dashboard or PAT request: a
     // forged empty/ready snapshot would bypass the Agent's real Plugin gate.
+    //
+    // MUL-448 extends the same rule to the provenance and attribution of the
+    // task itself. `triggerCommentId`, `triggerSummary`, `requestingUserName`
+    // and `requestingUserProfileDescription` describe who asked for the work
+    // and what asked for it; `assignmentEventId` names the session event the
+    // assignment replaces, and `assignmentAuthorType` / `assignmentAuthorId`
+    // name its author. All of them are derived by the server, so every HTTP
+    // caller — member, PAT, task credential or master token — has them
+    // stripped here and cannot write another run's lineage into the task.
     const {
       provider: _provider,
       codexProfile: _codexProfile,
@@ -204,6 +212,20 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       max_attempts: _maxAttemptsSnake,
       preserveIssueStatus: _preserveIssueStatus,
       preserve_issue_status: _preserveIssueStatusSnake,
+      assignmentEventId: _assignmentEventId,
+      assignment_event_id: _assignmentEventIdSnake,
+      assignmentAuthorType: _assignmentAuthorType,
+      assignment_author_type: _assignmentAuthorTypeSnake,
+      assignmentAuthorId: _assignmentAuthorId,
+      assignment_author_id: _assignmentAuthorIdSnake,
+      triggerCommentId: _triggerCommentId,
+      trigger_comment_id: _triggerCommentIdSnake,
+      triggerSummary: _triggerSummary,
+      trigger_summary: _triggerSummarySnake,
+      requestingUserName: _requestingUserName,
+      requesting_user_name: _requestingUserNameSnake,
+      requestingUserProfileDescription: _requestingUserProfileDescription,
+      requesting_user_profile_description: _requestingUserProfileDescriptionSnake,
       ...publicInput
     } = body;
     const issueId = cleanString(publicInput.issueId);
@@ -251,16 +273,24 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // drainDelegationReturnsWithinWorkspaceLock. This is a new requested round,
     // so every completed child Task must remain independently returnable.
     //
-    // MUL-456 fix round 1: `parentTaskId` / `parent_task_id` are server-owned
-    // lineage. The destructure above drops both spellings from `publicInput`;
-    // this override supplies the credential's own task id (or an explicit null
-    // for a member PAT), which also forbids the store's trigger-comment
-    // fallback from being steered by the body. Anonymous compatibility keeps
-    // the historical alias/fallback behaviour.
-    const lineage = requestStrippedParentTaskLineage(c);
+    // MUL-448: the assignment author of the `task_assigned` session event (and
+    // of the ledger row it becomes) is derived from the credential, never from
+    // the body. A run must not be able to record itself as the member that
+    // asked for the work; a member must not be able to name another author.
+    const requestingUserId = authenticatedRequestUserId(c);
+    const assignmentAuthor = taskToken?.agentId
+      ? { authorType: "agent", authorId: taskToken.agentId }
+      : requestingUserId
+      ? { authorType: "member", authorId: requestingUserId }
+      // Master token / auth-disabled carry no login identity, so the store's
+      // historical "system" default stays in charge there.
+      : null;
     const createInput: CreateTaskInput = {
       ...publicInput,
-      ...lineage,
+      parentTaskId: currentTaskParentId(c),
+      ...(assignmentAuthor
+        ? { assignmentAuthorType: assignmentAuthor.authorType, assignmentAuthorId: assignmentAuthor.authorId }
+        : {}),
       ...(continuedTask
         ? {
           issueId: continuedTask.issueId,

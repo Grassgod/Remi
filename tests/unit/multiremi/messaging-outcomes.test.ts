@@ -249,6 +249,96 @@ describe("messaging outcomes", () => {
       .toThrow("title is required");
   });
 
+  for (const path of ["direct", "approved proposal"] as const) {
+    function setup() {
+      const { store, ownerId } = seed();
+      const proposalId = path === "approved proposal"
+        ? store.messagingOutcomes.proposeIssue(REF, {
+          workspaceId: "local",
+          recipientId: ownerId,
+          actorType: "member",
+          actorId: ownerId,
+          title: "Queued message issue",
+        }).outcome.id
+        : null;
+      const run = () => proposalId
+        ? store.messagingOutcomes.approveProposal(proposalId, { workspaceId: "local", approvedBy: ownerId })
+        : store.messagingOutcomes.createIssue(REF, {
+          workspaceId: "local",
+          title: "Queued message issue",
+          createdBy: ownerId,
+        });
+      return { store, proposalId, run };
+    }
+
+    it(`${path} emits issue_created only after commit`, () => {
+      const { store, run } = setup();
+      const events: boolean[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string }).action === "issue_created") {
+          events.push(db!.inTransaction);
+        }
+      });
+      let issueId: string;
+      try {
+        issueId = run().issue!.id;
+      } finally {
+        unsubscribe();
+      }
+      expect(store.listIssueActivity(issueId).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+      expect(store.messaging.listOutcomes(REF.connectionId, REF.externalMessageId)
+        .filter((outcome) => outcome.outcomeKind === "issue_created")).toHaveLength(1);
+      expect(events).toEqual([false]);
+    });
+
+    it(`${path} rolls back a late failure in the transaction owner`, () => {
+      const { store, proposalId, run } = setup();
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string }).action === "issue_created") {
+          events.push(event.type);
+        }
+      });
+      const originalRecord = store.messaging.recordOutcomeWithinTransaction;
+      const originalResolve = store.messaging.resolveProposal;
+      const injectedError = path === "direct"
+        ? "message outcome rollback injection"
+        : "message proposal resolution rollback injection";
+      if (path === "direct") {
+        store.messaging.recordOutcomeWithinTransaction = (input) => {
+          const outcome = originalRecord.call(store.messaging, input);
+          if (input.outcomeKind === "issue_created") {
+            expect(db!.inTransaction).toBe(true);
+            throw new Error(injectedError);
+          }
+          return outcome;
+        };
+      } else {
+        store.messaging.resolveProposal = (input) => {
+          const proposal = originalResolve.call(store.messaging, input);
+          if (input.id === proposalId && input.status === "approved") {
+            expect(db!.inTransaction).toBe(true);
+            throw new Error(injectedError);
+          }
+          return proposal;
+        };
+      }
+      try {
+        expect(run).toThrow(injectedError);
+      } finally {
+        store.messaging.recordOutcomeWithinTransaction = originalRecord;
+        store.messaging.resolveProposal = originalResolve;
+        unsubscribe();
+      }
+      expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issues WHERE title = 'Queued message issue'").get()).toEqual({ count: 0 });
+      expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issue_activity WHERE type = 'issue_created'").get()).toEqual({ count: 0 });
+      expect(store.messaging.listOutcomes(REF.connectionId, REF.externalMessageId)
+        .filter((outcome) => outcome.outcomeKind === "issue_created")).toHaveLength(0);
+      if (proposalId) expect(store.messaging.getOutcome(proposalId)?.proposalStatus).toBe("pending");
+      expect(events).toEqual([]);
+    });
+  }
+
   it("refuses a task id that belongs to another workspace", () => {
     const { store } = seed();
     expect(() => store.messagingOutcomes.record(REF, {

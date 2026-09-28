@@ -9,7 +9,6 @@ import {
   currentRequestUserId,
   currentTaskAccessToken,
   hasRequestField,
-  hasVerifiedRequestIdentity,
   parseOptionalInt,
 } from "../wire/index.js";
 import type { CompatibilityQueryMode } from "../wire/index.js";
@@ -71,9 +70,21 @@ export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStor
   }, 403);
 }
 
+/**
+ * MUL-448 B1: who the request is acting as, in credential order.
+ *
+ * A task token speaks for its agent; a verified member identity speaks for that
+ * member; only the anonymous compatibility mode (master token or auth-disabled)
+ * may name an agent through `X-Agent-ID`. The route-level callers below turn
+ * this into subscriber rows, session-task `task_assigned` authors, session
+ * creators and published results, so reading the header first let any member
+ * PAT write another agent's id into those durable records.
+ */
 export function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; actorId: string } {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) return { actorType: "agent", actorId: taskToken.agentId };
+  const userId = authenticatedRequestUserId(c);
+  if (userId) return { actorType: "member", actorId: userId };
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { actorType: "agent", actorId: agentId };
   return { actorType: "member", actorId: currentRequestUserId(c) };
@@ -103,17 +114,18 @@ export function issueCommentCreateInput(
       taskId: taskToken.taskId ?? null,
     };
   }
-  // MUL-456 fix round 1: with a verified credential, no branch below may name
-  // the run a comment belongs to. `comment.task_id` is read back as trusted
-  // lineage — the mention dispatcher turns it into `sourceTask`, and
-  // `createTask` inherits that as `parent_task_id`, which is exactly the field
-  // D4 reads as "this task was created by the delegating run". A member PAT (or
-  // a login JWT) could otherwise plant a wake-up that swallows the real return.
-  // Only the task-token branch above sets the link, and it takes it from the
-  // token. Anonymous compatibility (auth disabled / master token) is untouched.
-  const publicInput = hasVerifiedRequestIdentity(c) ? stripCommentTaskLink(input) : input;
+  // MUL-448: no credential path below may name the run a comment belongs to.
+  // `comment.taskId` is read back as trusted lineage — the mention dispatcher
+  // uses it as the `sourceTask` for delegation returns and `createTask` inherits
+  // it as `parentTaskId` — so a member (or an anonymous caller) could otherwise
+  // borrow another run's lane by putting `task_id` in the body. Only the task
+  // token branch above sets it, and it takes it from the token.
+  const publicInput = stripCommentTaskLink(input);
   const userId = authenticatedRequestUserId(c);
   if (userId) return { ...publicInput, authorType: "member", authorId: userId };
+  // MUL-448 B1: everything below runs only for the anonymous compatibility mode
+  // (master token / auth disabled), which keeps its historical behaviour; a
+  // request with a credential never reaches the header or the body identity.
   if (cleanString(publicInput.authorType) || cleanString(publicInput.authorId)) return publicInput;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { ...publicInput, authorType: "agent", authorId: agentId };
@@ -121,21 +133,14 @@ export function issueCommentCreateInput(
   return { ...publicInput, authorType: "member", authorId: currentRequestUserId(c) };
 }
 
-/**
- * MUL-456 fix round 1: drop both spellings of the run link from a comment body.
- *
- * The task token branch of {@link issueCommentCreateInput} is the only caller
- * allowed to supply `taskId`; every other surface must not be able to write
- * another run's lineage into a comment that the mention dispatcher and the
- * assignee auto-response then trust as `sourceTask` lineage.
- */
+/** Drop both spellings of the run link from a comment body. */
 export function stripCommentTaskLink<T extends { taskId?: string | null; task_id?: string | null }>(
   input: T,
-): T {
-  const out = { ...(input as Record<string, unknown>) };
+): Omit<T, "taskId" | "task_id"> {
+  const out = { ...input };
   delete out.taskId;
   delete out.task_id;
-  return out as T;
+  return out;
 }
 
 export function issueSubscriberTarget(
