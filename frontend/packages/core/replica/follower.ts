@@ -127,8 +127,6 @@ export class ReplicaFollower implements SessionReplicaPort {
   invalidate(): void {
     for (const pending of this.pending.values()) pending.resolve();
     this.pending.clear();
-    for (const sessionId of this.requested) this.closed.add(sessionId);
-    this.requested.clear();
     this.options.view.dropAll();
   }
 

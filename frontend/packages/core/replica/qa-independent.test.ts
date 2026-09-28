@@ -135,18 +135,18 @@ describe("QA independent leader lifecycle", () => {
     leader.close(sid);expect(unsubs).toEqual([sid]);
   });
   test("worker open completed after close cannot create an orphan subscription", () => {
-    const {leader,subscriptions}=harness();leader.open(sid);leader.close(sid);
-    leader.handleWorkerMessage({type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
+    const {leader,subscriptions,requests}=harness();leader.open(sid);leader.close(sid);
+    leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
     expect(subscriptions).toHaveLength(0);
   });
   test("disposed leader ignores late worker response", () => {
-    const {leader,subscriptions}=harness();leader.open(sid);leader.dispose();
-    leader.handleWorkerMessage({type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
+    const {leader,subscriptions,requests}=harness();leader.open(sid);leader.dispose();
+    leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
     expect(subscriptions).toHaveLength(0);
   });
   test("a persisted head is the subscription cursor", () => {
-    const {leader,subscriptions}=harness();leader.open(sid);
-    leader.handleWorkerMessage({type:"opened",sessionId:sid,fromSeq:43,head:42,fresh:false,cleared:null,entries:[row(42)]});
+    const {leader,subscriptions,requests}=harness();leader.open(sid);
+    leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:43,head:42,fresh:false,cleared:null,entries:[row(42)]});
     expect(subscriptions).toEqual([[sid,43]]);
   });
   test("two holes in one batch both backfill without another frame", async () => {

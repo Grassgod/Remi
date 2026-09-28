@@ -254,7 +254,7 @@ export class ReplicaLeader {
   private async onWorkerMessage(message: ReplicaWorkerResponse): Promise<void> {
     if (this.disposed) return;
     if (message.epoch !== undefined && message.epoch !== this.epoch) return;
-    if ("sessionId" in message && !this.isCurrent(message.sessionId, message.token)) return;
+    if ("sessionId" in message && (!message.token || !this.isCurrent(message.sessionId, message.token))) return;
     switch (message.type) {
       case "ready": {
         // The fallback is logged once, per plan 3/6 §1: no user-visible prompt.
@@ -372,14 +372,14 @@ export class ReplicaLeader {
     this.options.view.dropAll();
     this.options.onCleared?.(reason);
     this.options.broadcast({ type: "replica:cleared", reason });
+    if (reason !== "logout") {
+      for (const sessionId of this.openCounts.keys()) this.resubscribe(sessionId);
+    }
   }
 
   private invalidateDatabase(): void {
     this.epoch += 1;
-    for (const sessionId of this.openCounts.keys()) this.options.subscription.unsubscribe(sessionId);
-    this.openCounts.clear();
-    this.owners.clear();
-    this.tokens.clear();
+    for (const sessionId of this.openCounts.keys()) this.tokens.set(sessionId, `${this.options.tabId}:${++this.generation}`);
     this.pendingOpens.clear();
     this.cancelWrites();
     this.options.view.dropAll();

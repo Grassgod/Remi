@@ -24,6 +24,26 @@ function leaderHarness() {
 }
 
 describe("page and subscription lifetimes", () => {
+  test("Worker responses need the current request token", () => {
+    const h = leaderHarness(); h.leader.open("session");
+    const request = h.requests.at(-1)!;
+    h.leader.handleWorkerMessage({ ...h.opened(request, 4), token: undefined });
+    expect(h.subscriptions).toEqual([]);
+    h.leader.handleWorkerMessage(h.opened(request, 8));
+    expect(h.subscriptions).toEqual([8]);
+  });
+
+  test("clear preserves a mounted page's interest for data in the new database lifetime", () => {
+    const h = leaderHarness(); h.leader.open("session");
+    h.leader.handleWorkerMessage(h.opened(h.requests.at(-1)!));
+    h.leader.clear("logout");
+    h.leader.frames("session", [{ seq: 9, kind: "entry", payload: { session_id: "session", seq: 9, revision: 1 } }]);
+    expect(h.requests.at(-1)?.type).toBe("frames");
+    expect(h.leader.sessions).toEqual(["session"]);
+    h.leader.close("session");
+    expect(h.unsubs).toEqual(["session"]);
+  });
+
   test("a window read completes after the worker has published the write", async () => {
     const h = leaderHarness(); h.leader.open("session");
     h.leader.handleWorkerMessage(h.opened(h.requests.at(-1)!));

@@ -173,7 +173,7 @@ class ReplicaFacade implements BrowserReplica {
       view,
       broadcast: (message) => this.broadcast(message),
       requestWindow: (input) => this.broadcast({ type: "replica:query", ...input }),
-      onCleared: (reason) => { this.wanted.clear(); options.onCleared?.(reason); },
+      onCleared: options.onCleared,
       nextRequestId: () => `${options.tabId}:${++this.requestCounter}`,
     });
     if (channel) {
@@ -273,7 +273,7 @@ class ReplicaFacade implements BrowserReplica {
 
   private async becomeLeader(): Promise<void> {
     const session = await startLeader({ ...this.options, onCleared: (reason) => {
-      this.wanted.clear(); this.follower.invalidate(); this.options.onCleared?.(reason);
+      this.follower.invalidate(); this.options.onCleared?.(reason);
     } }, this.env, this.view, (message) => this.broadcast(message), this.wanted);
     if (this.disposed) {
       session.leader.dispose();
@@ -393,7 +393,7 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
   const leader = new ReplicaLeader({
     ...options, view, worker: bridge, broadcast: () => {},
     subscription: { subscribe: options.subscribe, unsubscribe: options.unsubscribe },
-    onCleared: (reason) => { openSessions.clear(); options.onCleared?.(reason); },
+    onCleared: options.onCleared,
   });
   bridge.onMessage((message) => leader.handleWorkerMessage(message));
   bridge.postMessage({ type: "init", userId: options.userId, workspaceId: options.workspaceId, storage: "memory" });
