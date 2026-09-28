@@ -13,6 +13,7 @@ import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
+import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -3359,6 +3360,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+  runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
+    backfillConversationLogWithinTransaction(db);
+  });
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
