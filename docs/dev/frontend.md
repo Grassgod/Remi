@@ -78,6 +78,14 @@ Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../.
 
 ## 验证入口
 
+浏览器本地副本在 [replica/browser.ts](../../frontend/packages/core/replica/browser.ts)。Web Lock、BroadcastChannel、OPFS SAH pool 名和目录都使用同一个 `(user_id, workspace_id)` 分区键；频道消息再核对该键。leader 持有 Worker 和 socket，follower 通过频道查询；没有 OPFS 或 Web Locks 时，每页的 Memory 副本复用同一个 leader 请求队列和同步语义。
+
+页面句柄显式 open/close，每个 tab 对同一 session 只声明一次兴趣；leader 按 tab 去重，最后一个 close 才退订。新 leader 宣告接管后，各存活页面重新声明，cursor 来自数据库的连续 head。dispose 终止 Worker 并结束 Web Lock 回调，使下一页可以接管。
+
+副本 schema v2 增加 `revision_watermarks`，Memory 也保存同样的 `(session_id, seq) → revision` 水位。删除或隐藏只移除展示行，不移除水位；流帧和 HTTP 窗口都拒绝不高于水位的 revision，交接重开后仍有效。水位随删除行数增长，不按 coverage 回收；session/log_version 重置、身份切换和整库清除同时删除水位。v1 缓存无法还原已丢失的删除 revision，因此按既有 schema_upgrade 路径清库并重新同步。
+
+Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯一请求 ID。close、dispose、clear 使旧请求失效；清库从任意页转给 leader，删除全部表内容及旧 meta，并广播 cleared。仍挂载页面的引用计数保持连续，清后新数据可以重建副本；logout 的授权和 socket 退出由调用方处理。ack 的新鲜度传到所有页面，版本改变从重置后的 cursor 同步；逐洞补读等 Worker 写入确认后再响应。原夹具及 [QA 回归](../../tests/integration/replica-fixture/qa-run.ts)使用 C0 mock socket 和真实浏览器资源；离线场景在服务端订阅数为零之后追加数据。
+
 统一命令维护在[根开发入口](../../CLAUDE.md)和[根 package.json](../../package.json)；针对某个文件运行时，使用所属包的 `test` 脚本传入测试路径，确保加载正确的 Vitest 配置。
 
 | 范围 | 当前配置与用途 |

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
@@ -20,6 +21,10 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * `LiveHub`, and `server.ts` builds the hub over the transport adapter, so those
  * three modules (`contracts/live-hub`, `api/hub/live-hub`, `api/hub/hub-transport`)
  * are reachable from the request path now.
+ *
+ * C7's narrower constraint remains independent: replica modules may reference
+ * the contract only as types, even though C3's runtime now imports its values.
+ * The AST guard below rejects value imports and re-exports in the replica.
  */
 const C0_MODULES = [
   { specifier: "@multiremi/contracts/live-hub", wired: true },
@@ -65,7 +70,65 @@ const C0_SOURCES = new Set([
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
+function hasLiveHubValueImport(src: string): boolean {
+  const file = ts.createSourceFile("replica.ts", src, ts.ScriptTarget.Latest, true);
+  const isLiveHub = (node: ts.Node | undefined) => node !== undefined
+    && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    && /^@multiremi\/contracts\/live-hub(?:\.js)?$/.test(node.text);
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (ts.isImportDeclaration(node) && isLiveHub(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      if (!clause) found = true;
+      else if (!clause.isTypeOnly) {
+        found = !!clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)
+          || clause.namedBindings.elements.length === 0
+          || clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+      }
+    } else if (ts.isExportDeclaration(node) && isLiveHub(node.moduleSpecifier) && !node.isTypeOnly) {
+      const clause = node.exportClause;
+      found = !clause || ts.isNamespaceExport(clause) || clause.elements.length === 0
+        || clause.elements.some(element => !element.isTypeOnly);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      found = !node.isTypeOnly && isLiveHub(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const runtimeImport = node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === "require");
+      found = runtimeImport && isLiveHub(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return found;
+}
+
 describe("C0 live-hub modules are not yet wired into runtime code", () => {
+  it.each([
+    ['import type { HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['import { type HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['import { parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['import type { HubFrame } from "@multiremi/contracts/live-hub"; import { parseHubStreamKey } from "@multiremi/contracts/live-hub"; export const parse = parseHubStreamKey;', true],
+    ['import { type HubFrame, parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['import * as hub from "@multiremi/contracts/live-hub.js";', true],
+    ['import "@multiremi/contracts/live-hub";', true],
+    ['import {} from "@multiremi/contracts/live-hub";', true],
+    ['const hub = await import("@multiremi/contracts/live-hub");', true],
+    ['const hub = require("@multiremi/contracts/live-hub");', true],
+    ['import hub = require("@multiremi/contracts/live-hub");', true],
+    ['type Frame = import("@multiremi/contracts/live-hub").HubFrame;', false],
+    ['export { parseHubStreamKey as qaR1Parse } from "@multiremi/contracts/live-hub";', true],
+    ['export { type HubFrame, parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['export * from "@multiremi/contracts/live-hub";', true],
+    ['export * as hub from "@multiremi/contracts/live-hub.js";', true],
+    ['export {} from "@multiremi/contracts/live-hub";', true],
+    ['export type { HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['export { type HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['export type * from "@multiremi/contracts/live-hub";', false],
+    ['export type * as hub from "@multiremi/contracts/live-hub";', false],
+  ])("classifies each individual contract import: %s", (source, expected) => {
+    expect(hasLiveHubValueImport(source)).toBe(expected);
+  });
   for (const { specifier, wired } of C0_MODULES) {
     it(`${specifier} is imported by ${wired ? "runtime code" : "nothing but tests"}`, () => {
       const consumers: string[] = [];
@@ -92,6 +155,32 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
       }
     });
   }
+
+  it("the replica references the v2 frames as types, never as runtime values", () => {
+    // Why this replaces the removed C0_MODULES entry rather than dropping the
+    // check: a *value* import from this module is what broke `next build` twice,
+    // and it is the shape a later edit would reach for by accident (importing
+    // `parseHubStreamKey` into a client module). `import type` is erased, so the
+    // reference costs nothing at runtime; a value import fails here.
+    const replicaDir = join(REPO_ROOT, "frontend/packages/core/replica");
+    const files = listTsFiles(replicaDir).filter((file) => !file.endsWith(".test.ts"));
+    expect(files.length, "no replica modules to scan").toBeGreaterThan(5);
+    const valueImports: string[] = [];
+    const consumers: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(file, "utf8");
+      if (hasLiveHubValueImport(src)) valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
+      for (const match of src.matchAll(IMPORT_RE)) {
+        const spec = match[1]!;
+        if (spec !== "@multiremi/contracts/live-hub" && spec !== "@multiremi/contracts/live-hub.js") continue;
+        consumers.push(file.replace(`${REPO_ROOT}/`, ""));
+      }
+    }
+    // Positive control: the scan has to see the imports it is judging, or a typo
+    // in the specifier would make this test a permanent green no-op.
+    expect(consumers.length, "the replica no longer imports the v2 frame contract").toBeGreaterThan(0);
+    expect(valueImports, "these files must use `import type` for the v2 frames").toEqual([]);
+  });
 
   it("scans a root set broad enough to catch a real wiring", () => {
     const server = listTsFiles(join(REPO_ROOT, "packages/server/src"));
