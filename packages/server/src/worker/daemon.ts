@@ -1761,6 +1761,7 @@ export class MultiremiDaemon {
     if (ack.pending_feishu_outbound) {
       this.queueFeishuBotOutbound(runtimeId, ack.pending_feishu_outbound);
     }
+    for (const delivery of ack.pending_feishu_outbounds ?? []) this.queueFeishuBotOutbound(runtimeId, delivery);
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -2054,9 +2055,14 @@ export class MultiremiDaemon {
         ),
         uploadImage: async (image) => (await supervisor.uploadImage(image.buffer)).imageKey,
       });
-      const body = await rewriteMarkdownImages(delivery.body, resolveImage, {
-        publicUrl: this.options.serverUrl,
-      });
+      let body = delivery.body;
+      if (delivery.kind === "result_card") {
+        const card = JSON.parse(body);
+        card.text = await rewriteMarkdownImages(card.text, resolveImage, { publicUrl: this.options.serverUrl });
+        body = JSON.stringify(card);
+      } else {
+        body = await rewriteMarkdownImages(body, resolveImage, { publicUrl: this.options.serverUrl });
+      }
       await deliverFeishuOutbound(delivery, {
         signal,
         prepareMention: openId => this.client.prepareFeishuBotOutboundMention(runtimeId, delivery.id, delivery.claimToken, openId),

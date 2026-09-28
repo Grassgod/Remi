@@ -43,7 +43,8 @@ import { bootFeishuChannel, type FeishuChannelHandle } from "./agent.js";
 import { feishuTransportError } from "@connectors/feishu/native-cot.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import { formatMentionForCard } from "@connectors/feishu/mention.js";
-import { registerDecisionCardInteraction } from "@connectors/feishu/task-interaction.js";
+import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
+import { registerDecisionCardInteraction, registerTaskInteraction, buildTaskInteractionCard } from "@connectors/feishu/task-interaction.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { DECISION_RECIPIENT_SENTINEL, decodeDecisionCardBody } from "@shared/feishu-task-card.js";
 import {
@@ -651,7 +652,10 @@ export function controlPlaneConciergeHost(deps: {
     async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
-      if (delivery.kind) {
+      if (delivery.kind === "receipt") return sendReceiptLane(handle, delivery, options);
+      if (delivery.kind === "result_card") return sendResultCardLane(handle, delivery, options);
+      if (delivery.kind === "interaction_card") return sendInteractionCardLane(handle, delivery, options, deps.daemon(), displayName);
+      if (delivery.kind && delivery.kind !== "cot") {
         return sendDecisionLane(handle, delivery, options, deps.daemon());
       }
       if (delivery.attachments?.length) {
@@ -701,6 +705,7 @@ export function controlPlaneConciergeHost(deps: {
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
             respondHumanRequest: (requestId, response) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response),
           }, {
+            ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
             receiptMessageIds: delivery.receiptMessageIds,
             mentionOpenId: mentionOpenId ?? undefined,
@@ -724,6 +729,72 @@ export function controlPlaneConciergeHost(deps: {
       return handle.uploadImage(image);
     },
   };
+}
+
+export async function sendReceiptLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
+  if (!handle.sendProactiveReceipt || !delivery.targetMessageId || !delivery.receiptState) {
+    throw new FeishuDeliveryError("Receipt delivery is missing its target or state", false);
+  }
+  options?.signal.throwIfAborted();
+  await handle.sendProactiveReceipt(delivery.targetMessageId, delivery.receiptState, options?.signal);
+  return { messageId: delivery.targetMessageId };
+}
+
+export async function sendResultCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions): Promise<{ messageId: string }> {
+  options?.signal.throwIfAborted();
+  let mentionOpenId = delivery.mention?.resolvedOpenId;
+  if (delivery.mention && mentionOpenId === undefined) {
+    if (!options?.prepareMention) throw new Error("Feishu mention checkpoint is unavailable");
+    mentionOpenId = await options.prepareMention(await handle.resolveProactiveMention(delivery.chatId, delivery.mention, options.signal));
+  }
+  const cardInput = JSON.parse(delivery.body) as Parameters<typeof buildFinalCard>[0];
+  const sent = await handle.sendProactiveCard({ chatId: delivery.chatId, replyToMessageId: delivery.replyToMessageId ?? undefined,
+    card: buildFinalCard({ ...cardInput, mentionOpenId: mentionOpenId ?? undefined }), idempotencyKey: delivery.idempotencyKey });
+  if (!sent.messageId || sent.messageId === "unknown") throw new FeishuDeliveryError("Result acknowledgement missing", true);
+  return sent;
+}
+
+export async function sendInteractionCardLane(handle: FeishuChannelHandle, delivery: MultiremiFeishuBotOutboundDelivery,
+  options?: FeishuOutboundOptions, daemon?: MultiremiDaemon, displayName?: string): Promise<{ messageId: string }> {
+  const taskId = delivery.taskId, requestId = delivery.humanRequestId;
+  if (!daemon || !options || !taskId || !requestId) throw new FeishuDeliveryError("Interaction transport is unavailable", false);
+  options.signal.throwIfAborted();
+  let request = await daemon.getFeishuBotHumanRequest(taskId, requestId);
+  if (!request) throw new FeishuDeliveryError("Interaction request is unavailable", true);
+  if (!delivery.resumeMessageId && request.status !== "pending") return { messageId: "" };
+  const recipientOpenId = delivery.interactionOpenId
+    ?? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) ?? undefined;
+  const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
+  const agentName = cardInput.agentName ?? displayName;
+  const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
+  const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
+    replyToMessageId: delivery.replyToMessageId ?? undefined,
+    card: buildTaskInteractionCard(request, { agentName, sessionId, recipientOpenId }),
+    idempotencyKey: delivery.idempotencyKey })).messageId;
+  if (!messageId || messageId === "unknown") throw new FeishuDeliveryError("Interaction acknowledgement missing", true);
+  await options.onStarted?.(messageId);
+  const registration = registerTaskInteraction({ appId: handle.appId, chatId: delivery.chatId, messageId,
+    recipientOpenId, request, agentName, sessionId,
+    submit: async response => {
+      options.signal.throwIfAborted();
+      try { return await daemon.respondFeishuBotHumanRequest(taskId, requestId, response); }
+      catch (error) {
+        const latest = await daemon.getFeishuBotHumanRequest(taskId, requestId);
+        if (latest && latest.status !== "pending") return latest;
+        throw error;
+      }
+    } });
+  try {
+    while (request.status === "pending") {
+      await sleep(750);
+      options.signal.throwIfAborted();
+      request = registration.current() ?? await daemon.getFeishuBotHumanRequest(taskId, requestId) ?? request;
+    }
+    await handle.updateProactiveCard(messageId, buildTaskInteractionCard(request, { agentName, sessionId, receipt: true }));
+    return { messageId };
+  } finally { registration.dispose(); }
 }
 
 /**
