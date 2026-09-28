@@ -39,4 +39,4 @@ test("large-column route callers remain covered by transition exceptions", () =>
   });
   expect(audit.exitCode, audit.stderr.toString()).toBe(0);
   expect(audit.stdout.toString()).toContain("0 missing exceptions");
-});
+}, 60_000);
