@@ -24,11 +24,12 @@ function sqliteConstructions(text: string, filename = "probe.ts"): Construction[
   const collect = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
       && node.moduleSpecifier.text === "bun:sqlite" && node.importClause && !node.importClause.isTypeOnly) {
+      if (node.importClause.name) constructors.add(node.importClause.name.text);
       const bindings = node.importClause.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) modules.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) {
         for (const binding of bindings.elements) {
-          if (!binding.isTypeOnly && (binding.propertyName ?? binding.name).text === "Database") {
+          if (!binding.isTypeOnly && ["Database", "default"].includes((binding.propertyName ?? binding.name).text)) {
             constructors.add(binding.name.text);
           }
         }
@@ -65,7 +66,7 @@ function sqliteConstructions(text: string, filename = "probe.ts"): Construction[
     expression = unwrap(expression);
     if (ts.isIdentifier(expression)) return constructors.has(expression.text);
     const property = member(expression);
-    return property?.name === "Database" && isSqliteModule(property.object);
+    return property !== undefined && ["Database", "default"].includes(property.name) && isSqliteModule(property.object);
   };
 
   // Follow local aliases and destructured dynamic imports, regardless of declaration order.
@@ -80,7 +81,7 @@ function sqliteConstructions(text: string, filename = "probe.ts"): Construction[
       } else if (ts.isObjectBindingPattern(declaration.name) && isSqliteModule(declaration.initializer)) {
         for (const binding of declaration.name.elements) {
           if (!binding.dotDotDotToken && ts.isIdentifier(binding.name)
-            && (binding.propertyName ?? binding.name).getText(source).replace(/["']/g, "") === "Database") {
+            && ["Database", "default"].includes((binding.propertyName ?? binding.name).getText(source).replace(/["']/g, ""))) {
             constructors.add(binding.name.text);
           }
         }
@@ -131,6 +132,8 @@ describe("SQLite handle entry", () => {
   const forbidden = [
     ['import { Database } from "bun:sqlite";', 'new Database(":memory:");'],
     ['import { Database as X } from "bun:sqlite";', 'new X(":memory:");'],
+    ['import X from "bun:sqlite";', 'new X(":memory:");'],
+    ['import { default as X } from "bun:sqlite";', 'X.open(":memory:");'],
     ['import { Database as X } from "bun:sqlite";', 'X.open(":memory:");'],
     ['import { Database } from "bun:sqlite";', 'Database.deserialize(bytes);'],
     ['import { Database } from "bun:sqlite";', 'Database.open(":memory:");'],
@@ -138,6 +141,7 @@ describe("SQLite handle entry", () => {
     ['', 'new (await import("bun:sqlite")).Database(":memory:");'],
     ['', '(await import("bun:sqlite")).Database(":memory:");'],
     ['', '(await import("bun:sqlite")).Database.open(":memory:");'],
+    ['', 'new (await import("bun:sqlite")).default(":memory:");'],
     ['const { Database: X } = await import("bun:sqlite");', 'new X(":memory:");'],
     ['const sqlite = await import("bun:sqlite");', 'sqlite.Database.deserialize(bytes);'],
     ['const sqlite = require("bun:sqlite");', 'new sqlite["Database"](":memory:");'],

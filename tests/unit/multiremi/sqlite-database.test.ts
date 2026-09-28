@@ -50,7 +50,7 @@ describe("SQLite database entry", () => {
     const wrapper = { query: () => "unchanged" };
     expect(wrapper).toBe(markSqliteDialect(wrapper));
     expect(markSqliteDialect(wrapper).query()).toBe("unchanged");
-    const proxy = new Proxy(wrapper, {});
+    const proxy = new Proxy({ query: wrapper.query }, {});
     expect(proxy).toBe(markSqliteDialect(proxy));
     expect(markSqliteDialect(proxy).dialect).toBe("sqlite");
   });
