@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -166,7 +165,16 @@ describe("messaging outcomes", () => {
     expect(again.outcome.id).toBe(proposed.outcome.id);
 
     const proposalId = proposed.outcome.id;
+    const createdEventTransactionStates: boolean[] = [];
+    const stop = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created"
+        && (event.payload.entry as { action?: string })?.action === "issue_created") {
+        createdEventTransactionStates.push(db!.inTransaction);
+      }
+    });
     const approved = outcomes.approveProposal(proposalId, { workspaceId: "local", approvedBy: ownerId });
+    stop();
+    expect(createdEventTransactionStates).toEqual([false]);
     expect(approved.created).toBe(true);
     expect(approved.proposal.proposalStatus).toBe("approved");
     expect(approved.issue?.title).toBe("API outage reported in chat");
@@ -278,10 +286,12 @@ describe("messaging outcomes", () => {
         unsubscribe();
       }
       expect(store.listIssueActivity(issueId).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+      expect(store.messaging.listOutcomes(REF.connectionId, REF.externalMessageId)
+        .filter((outcome) => outcome.outcomeKind === "issue_created")).toHaveLength(1);
       expect(events).toEqual([false]);
     });
 
-    it(`${path} drops issue_created when the transaction rolls back`, () => {
+    it(`${path} rolls back a late failure in the transaction owner`, () => {
       const { store, proposalId, run } = setup();
       const events: string[] = [];
       const unsubscribe = store.onWorkspaceEvent((event) => {
@@ -289,22 +299,41 @@ describe("messaging outcomes", () => {
           events.push(event.type);
         }
       });
-      const original = StoreContext.prototype.appendIssueActivity;
-      StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
-        original.call(this, issueId, input, queue);
-        if (input.type === "issue_created") {
-          expect(db!.inTransaction).toBe(true);
-          throw new Error("message issue rollback injection");
-        }
-      };
+      const originalRecord = store.messaging.recordOutcomeWithinTransaction;
+      const originalResolve = store.messaging.resolveProposal;
+      const injectedError = path === "direct"
+        ? "message outcome rollback injection"
+        : "message proposal resolution rollback injection";
+      if (path === "direct") {
+        store.messaging.recordOutcomeWithinTransaction = (input) => {
+          const outcome = originalRecord.call(store.messaging, input);
+          if (input.outcomeKind === "issue_created") {
+            expect(db!.inTransaction).toBe(true);
+            throw new Error(injectedError);
+          }
+          return outcome;
+        };
+      } else {
+        store.messaging.resolveProposal = (input) => {
+          const proposal = originalResolve.call(store.messaging, input);
+          if (input.id === proposalId && input.status === "approved") {
+            expect(db!.inTransaction).toBe(true);
+            throw new Error(injectedError);
+          }
+          return proposal;
+        };
+      }
       try {
-        expect(run).toThrow("message issue rollback injection");
+        expect(run).toThrow(injectedError);
       } finally {
-        StoreContext.prototype.appendIssueActivity = original;
+        store.messaging.recordOutcomeWithinTransaction = originalRecord;
+        store.messaging.resolveProposal = originalResolve;
         unsubscribe();
       }
       expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issues WHERE title = 'Queued message issue'").get()).toEqual({ count: 0 });
       expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issue_activity WHERE type = 'issue_created'").get()).toEqual({ count: 0 });
+      expect(store.messaging.listOutcomes(REF.connectionId, REF.externalMessageId)
+        .filter((outcome) => outcome.outcomeKind === "issue_created")).toHaveLength(0);
       if (proposalId) expect(store.messaging.getOutcome(proposalId)?.proposalStatus).toBe("pending");
       expect(events).toEqual([]);
     });
