@@ -2192,7 +2192,10 @@ export class IssuesRepo {
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
-      const workspaceId = this.ctx.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
+      const workspaceId = this.ctx.db.inTransaction
+        ? this.ctx.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
         type: "comment:created",
