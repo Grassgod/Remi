@@ -558,7 +558,7 @@ describe("Claude 1M session negotiation", () => {
   it("falls back from a non-1M selection and re-reads effort", async () => {
     const agent = fakeAgent({
       ...profile(), selectedModelOverride: "haiku",
-      configOptions: [profile().configOptions[0]!, { ...CLAUDE_CONFIG_OPTIONS[1]!, currentValue: "high" }],
+      configOptions: [profile().configOptions[0]!, { ...CLAUDE_CONFIG_OPTIONS[1]!, type: "select", currentValue: "high", options: [{ value: "default", name: "Default" }, { value: "high", name: "High" }] }],
       effortAfterModel: { "claude-haiku-4-5-20251001[1m]": "default" },
     });
     const provider = new AcpProvider({

@@ -564,6 +564,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "workspace.relay.context-window.update": {
+      "command": "remi workspace relay context-window update",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.relay.context-window.update",
+      "mutation": "write",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "workspace.bot-menu.get": {
       "command": "remi workspace bot-menu get",
       "aliases": [],
