@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, jest } from "bun:test";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
+import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker/daemon-protocol-client.js";
 import type { FeishuBotRuntimeState } from "@multiremi/contracts/types.js";
 
 interface LoopProbe {
@@ -28,6 +30,7 @@ function createLoopDaemon(options: {
   desired?: (state: { heartbeats: number; claims: number; desiredGets: number }) => unknown;
   claims?: (state: { heartbeats: number; claims: number; desiredGets: number }) => unknown;
   once?: boolean;
+  startLoop?: boolean;
   client?: Record<string, unknown>;
   pluginDesiredRefreshMs?: number;
   /**
@@ -75,6 +78,8 @@ function createLoopDaemon(options: {
     workspaceOwnershipLost: false,
     runtimeRegistrationGeneration: 0,
     runtimeGoneInflight: new Set<string>(),
+    runtimeCodexProfile: null,
+    runtimeClaudeProfile: null,
     runtimeModelRefreshTask: null,
     runtimeModelListRequests: new Map(),
     runtimeModelRetryWake: null,
@@ -178,7 +183,7 @@ function createLoopDaemon(options: {
   });
 
   probe.daemon = daemon;
-  probe.run = daemon.start();
+  probe.run = options.startLoop === false ? Promise.resolve() : daemon.start();
   probe.stop = async () => {
     daemon.stop();
     await probe.run.catch(() => {});
@@ -246,6 +251,83 @@ function track(probe: LoopProbe): LoopProbe {
 }
 
 describe("daemon poll cadence", () => {
+  it("skips the desired GET while the ack revision is unchanged", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({ startLoop: false }));
+    for (let round = 0; round <= 6; round++) {
+      jest.setSystemTime(1_000_000 + round * 10_000);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+    }
+    expect(probe.desiredGets).toBe(1);
+    expect(probe.reconciles).toBeGreaterThanOrEqual(7);
+  });
+
+  it("re-fetches desired state and drops the report baseline after a re-registration", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({ startLoop: false }));
+    jest.setSystemTime(1_000_000);
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+    const internal = probe.daemon as unknown as {
+      lastDesired: unknown; desiredFetchedAt: number; lastDesiredRefreshAt: number;
+      agentPluginReconciler: { clearReportedStates(): void }; clearDesiredAgentPlugins(): void;
+    };
+    expect(probe.desiredGets).toBe(1);
+    expect(internal.lastDesired).not.toBeNull();
+    let cleared = 0;
+    const originalClear = internal.agentPluginReconciler.clearReportedStates.bind(internal.agentPluginReconciler);
+    internal.agentPluginReconciler.clearReportedStates = () => { cleared++; originalClear(); };
+    internal.clearDesiredAgentPlugins();
+    expect(internal.lastDesired).toBeNull();
+    expect(internal.desiredFetchedAt).toBe(0);
+    expect(internal.lastDesiredRefreshAt).toBe(0);
+    expect(cleared).toBe(1);
+    jest.setSystemTime(1_030_000);
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+    expect(probe.desiredGets).toBe(2);
+  }, 20_000);
+
+  it("re-fetches desired state when the ack revision moves", async () => {
+    jest.useFakeTimers();
+    let revision = "rev-1";
+    const probe = track(createLoopDaemon({ startLoop: false, desired: () => ({ runtime_id: "rt_cadence", revision, plugins: [] }) }));
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision } } });
+    const initialGets = probe.desiredGets;
+    expect(initialGets).toBe(1);
+    revision = "rev-2";
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision } } });
+    expect(probe.desiredGets).toBe(initialGets + 1);
+  });
+
+  it("keeps an old server on the fallback refresh and always refreshes every 10 minutes", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({ startLoop: false, pluginDesiredRefreshMs: 30_000 }));
+    for (let round = 0; round <= 15; round++) {
+      jest.setSystemTime(1_000_000 + round * 10_000);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok" } });
+    }
+    expect(probe.desiredGets).toBeGreaterThanOrEqual(4);
+    expect(probe.desiredGets).toBeLessThanOrEqual(6);
+    expect(probe.desiredGets).toBeLessThan(16);
+  });
+
+  it("forces a refresh even when a matching revision never moves", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon({ startLoop: false }));
+    for (const offset of [0, 60_000, 9 * 60_000, 11 * 60_000 + 30_000]) {
+      jest.setSystemTime(1_000_000 + offset);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+      if (offset <= 9 * 60_000) expect(probe.desiredGets).toBe(1);
+    }
+    expect(probe.desiredGets).toBe(2);
+  });
+
   it("keeps HTTP heartbeat out of the main loop while plugin fallback remains", async () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon());
@@ -395,10 +477,55 @@ describe("daemon poll cadence", () => {
 
     // And a drain returning to normal does the same through the ack path.
     internal.claimIdleMs = 30_000;
+    internal.claimsPaused = true;
     (probe.daemon as unknown as { serverDrainActive: boolean }).serverDrainActive = true;
-    await (probe.daemon as unknown as {
-      handleHeartbeatAck(runtimeId: string, ack: unknown): Promise<boolean>;
-    }).handleHeartbeatAck("rt_cadence", { status: "ok", drain: { mode: "normal", generation: 2 } });
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
     expect(internal.claimIdleMs).toBe(3000);
+  }, 20_000);
+
+  it("resets the idle backoff when a business input resumes the claim lane", async () => {
+    jest.useFakeTimers();
+    const probe = track(createLoopDaemon());
+    await flushMicrotasks();
+    await advance(5);
+    for (let round = 0; round < 6; round++) await advanceToNextClaim(probe);
+    const internal = probe.daemon as unknown as { claimIdleMs: number; serverDrainActive: boolean };
+    expect(internal.claimIdleMs).toBe(30_000);
+    internal.serverDrainActive = true;
+    const claimsBefore = probe.claimTimes.length;
+    const queuedAt = Date.now();
+    // MUL-419: 换回真实 v2 下发
+    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
+    await flushMicrotasks();
+    await advance(20);
+    expect(probe.claimTimes.length).toBe(claimsBefore + 1);
+    expect(probe.claimTimes.at(-1)! - queuedAt).toBeLessThanOrEqual(1000);
+    expect(probe.claimIdleLadder.at(-1)).toBe(3000);
+  }, 20_000);
+
+  it("keeps the claim backoff running when the protocol channel is unavailable", async () => {
+    jest.useFakeTimers();
+    const client = new DaemonProtocolClient({
+      serverUrl: "http://127.0.0.1:1", daemonId: "offline", cliVersion: "0.2.83",
+      connect: () => { throw new Error("Expected 101 status code"); },
+    });
+    const lane: DaemonProtocolLane = {
+      runtime: () => ({ runtime_id: "rt_cadence", provider: "claude", max_concurrency: 1, active_task_ids: [] }),
+      heartbeat: () => ({ active_task_count: 0 }), onHeartbeatAck: async () => {},
+      probeUpgrade: async () => {}, onTerminal: async () => {},
+    };
+    client.addLane(lane);
+    client.startLane(lane);
+    running.push(async () => { client.close(); await client.drain(); });
+    const probe = track(createLoopDaemon());
+    (probe.daemon as unknown as { protocolClient: { allowsClaims(): boolean } }).protocolClient.allowsClaims = () => client.allowsClaims();
+    await flushMicrotasks();
+    expect(client.connectionState()).toBe("disconnected");
+    await advance(10 * 60_000);
+    expect(probe.claims).toBeGreaterThanOrEqual(5);
+    expect(probe.heartbeats).toBe(0);
+    expect(client.health().state).toBe("disconnected");
+    expect(client.diagnostics().timers).toBe(1);
   }, 20_000);
 });

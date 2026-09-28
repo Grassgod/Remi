@@ -18,10 +18,11 @@ import {
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
+import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
@@ -2562,10 +2563,14 @@ describe("Bun Multiremi daemon smoke", () => {
       await waitForCondition(() => store.listRuntimes().length > 0, 5_000);
       const runtime = store.listRuntimes()[0]!;
       const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: selectedRoot });
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitForCondition(() => store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)?.status === "completed", 10_000);
       const discovered = store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)!;
       expect(discovered.skills.map((candidate) => candidate.key)).toEqual(["helper"]);
       const request = store.createRuntimeLocalSkillImportRequest(runtime.id, { scan_request_id: scan.id, skill_key: "helper" });
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitForCondition(() => ["completed", "failed"].includes(store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)?.status ?? ""), 10_000);
       const imported = store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)!;
       expect(imported.error).toBeNull();
@@ -2683,6 +2688,8 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(updateTargets).toEqual(["v9.9.9"]);
@@ -2820,6 +2827,8 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
@@ -2887,6 +2896,8 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
@@ -2936,6 +2947,8 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       const failed = store.getRuntimeUpdateRequest(runtimeId, updateRequest.id)!;
@@ -3123,6 +3136,8 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(injectedRuntimeGone).toBe(true);
@@ -3433,10 +3448,12 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
     let modelProbeCount = 0;
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       runtimeId: oldRuntimeId,
+      protocolClientOptions: { clock: protocolClock },
       daemonId: "daemon-runtime-gone-models",
       runtimeName: "runtime-gone-models",
       provider: "claude",
@@ -3486,6 +3503,10 @@ describe("Bun Multiremi daemon smoke", () => {
     let daemonRun: Promise<void> | null = null;
     try {
       daemonRun = daemon.start();
+      await waitForCondition(() => daemon.daemonProtocolClient().connectionState() === "connected", 5_000);
+      await waitForCondition(() => daemon.daemonProtocolClient().diagnostics().pending_rpcs === 0 && daemon.daemonProtocolClient().diagnostics().background === 0, 5_000);
+      await waitForCondition(() => injectedRuntimeGone || store.listRuntimeModels(oldRuntimeId).some(model => model.id === "claude-cached"), 5_000);
+      protocolClock.advance(15_000);
       await waitForCondition(() => {
         if (!injectedRuntimeGone || !store.getRuntime(newRuntimeId)) return false;
         return store.listRuntimeModels(newRuntimeId).some((model) => model.id === "claude-cached");

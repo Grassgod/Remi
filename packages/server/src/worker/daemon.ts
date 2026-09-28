@@ -1062,7 +1062,8 @@ export class MultiremiDaemon {
       }),
       onHeartbeatAck: async ack => {
         if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;
-        await this.handleHeartbeatAck(ack.runtime_id, ack);
+        // A v2 runtime ack is not a full HTTP configuration snapshot.
+        if (ack.status === "runtime_gone" || ack.runtime_gone) await this.handleHeartbeatAck(ack.runtime_id, ack);
         this.wakeClaim();
       },
       probeUpgrade: async () => {

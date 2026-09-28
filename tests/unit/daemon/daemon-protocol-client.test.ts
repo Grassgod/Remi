@@ -41,6 +41,7 @@ function bed(options: Partial<DaemonProtocolClientOptions> = {}) {
   const clock = new ManualDaemonProtocolClock();
   const sockets: Socket[] = [];
   const urls: string[] = [];
+  const headers: Record<string, string>[] = [];
   const errors: Error[] = [];
   const logs: string[] = [];
   const terminal: number[] = [];
@@ -54,13 +55,13 @@ function bed(options: Partial<DaemonProtocolClientOptions> = {}) {
   const client = new DaemonProtocolClient({
     serverUrl: "https://api.example", daemonId: "dmn_unit", cliVersion: "0.2.83", clock,
     random: () => 0.5, log: { warn: line => logs.push(line) }, onError: error => errors.push(error),
-    connect: (url) => { urls.push(url); const socket = new Socket(); sockets.push(socket); return socket; },
+    connect: (url, init) => { urls.push(url); headers.push(init.headers); const socket = new Socket(); sockets.push(socket); return socket; },
     ...options,
   });
   clients.push(client);
   client.addLane(lane);
   client.startLane(lane);
-  return { client, clock, sockets, urls, errors, logs, terminal, lane, probes: () => probes };
+  return { client, clock, sockets, urls, headers, errors, logs, terminal, lane, probes: () => probes };
 }
 
 afterEach(async () => {
@@ -68,6 +69,61 @@ afterEach(async () => {
 });
 
 describe("daemon protocol v2 client", () => {
+  it("sends the daemon token in an Authorization header, not in the URL", () => {
+    const b = bed({ token: "test-daemon-credential" });
+    expect(b.headers).toEqual([{ Authorization: "Bearer test-daemon-credential" }]);
+    expect(b.urls[0]).not.toContain("test-daemon-credential");
+    expect(daemonProtocolUrl("http://127.0.0.1:6120")).toBe("ws://127.0.0.1:6120/api/daemon/ws?protocol=2");
+  });
+
+  it("reports connecting until the protocol welcome completes the handshake", () => {
+    const b = bed();
+    expect(b.client.connectionState()).toBe("connecting");
+    b.sockets[0]!.emit("open");
+    expect(b.client.connectionState()).toBe("connecting");
+    b.sockets[0]!.handshake();
+    expect(b.client.connectionState()).toBe("connected");
+  });
+
+  it("does not reconnect during authority suspension and starts again after an explicit restart", () => {
+    const b = bed();
+    b.sockets[0]!.handshake();
+    b.client.suspendAuthority();
+    b.clock.advance(60_000);
+    expect(b.client.connectionState()).toBe("terminal");
+    expect(b.sockets).toHaveLength(1);
+    b.client.stopLane(b.lane);
+    b.client.startLane(b.lane);
+    expect(b.sockets).toHaveLength(2);
+    b.sockets[1]!.handshake();
+    expect(b.client.connectionState()).toBe("connected");
+  });
+
+  it("ignores a superseded socket close after a runtime change", () => {
+    const b = bed();
+    b.sockets[0]!.handshake();
+    const lateClose = [...b.sockets[0]!.listeners.get("close")!][0]!;
+    b.client.runtimesChanged();
+    b.sockets[1]!.handshake();
+    lateClose({ code: 4001 });
+    expect(b.client.connectionState()).toBe("connected");
+    b.clock.advance(5_000);
+    expect(b.sockets).toHaveLength(2);
+  });
+
+  it("spreads reconnects with jitter instead of a fixed first delay", () => {
+    const low = bed({ random: () => 0 });
+    const high = bed({ random: () => 1 });
+    low.sockets[0]!.emit("close", { code: 4001 });
+    high.sockets[0]!.emit("close", { code: 4001 });
+    low.clock.advance(800);
+    high.clock.advance(800);
+    expect(low.sockets).toHaveLength(2);
+    expect(high.sockets).toHaveLength(1);
+    high.clock.advance(400);
+    expect(high.sockets).toHaveLength(2);
+  });
+
   it("uses the protocol marker and advertises every co-resident runtime on one socket", async () => {
     expect(daemonProtocolUrl("https://api.example/base/?old=1")).toBe("wss://api.example/base/api/daemon/ws?protocol=2");
     const b = bed();
