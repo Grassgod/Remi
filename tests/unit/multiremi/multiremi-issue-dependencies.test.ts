@@ -159,6 +159,27 @@ describe("MUL-452 E3 replay", () => {
       .toMatchObject({ dependency_check_event_id: check.id });
   });
 
+  it("U1 passes the task-terminal check id to the normal post-commit start", () => {
+    const { store, runtime, agent } = storeWithAgent("Terminal check owner");
+    const prerequisite = store.createIssue({ title: "Terminal check prerequisite", status: "todo", issueKind: "intake" });
+    store.createIssue({ title: "Terminal generated work", sourceIssueId: prerequisite.id });
+    const dependent = store.createIssue({ title: "Terminal check dependent", status: "backlog",
+      blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: agent.id });
+    const task = store.createTask({ agentId: agent.id, issueId: prerequisite.id, prompt: "Finish intake" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "Generated work" });
+
+    const check = checkEvent(store, prerequisite.id);
+    expect(store.getIssue(prerequisite.id)?.status).toBe("done");
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(allTaskRows(store, dependent.id)).toHaveLength(1);
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")[0]?.data)
+      .toMatchObject({ dependency_check_event_id: check.id });
+    expect(allActivityRows(store, dependent.id, "dependency_auto_started")[0]?.data)
+      .not.toHaveProperty("replayed");
+  });
+
   it("U1 rolls back done and both outbox rows if writing the delayed check fails", () => {
     const { store, prerequisite } = chain();
     const run = db!.run.bind(db!);

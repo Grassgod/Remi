@@ -3261,6 +3261,29 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       try { fn(); } finally { hook.mockRestore(); }
     }
 
+    it("passes the task-terminal check id to the normal post-commit start (PG)", () => {
+      drainIdentityEvents();
+      const runtime = store.registerRuntime({ name: `Terminal check PG ${++wsCounter}`, provider: "claude" });
+      const owner = store.createAgent({ name: `Terminal check PG ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+      const prerequisite = store.createIssue({ title: `Terminal check prerequisite PG ${wsCounter}`, status: "todo", issueKind: "intake" });
+      store.createIssue({ title: `Terminal generated PG ${wsCounter}`, sourceIssueId: prerequisite.id });
+      const dependent = store.createIssue({ title: `Terminal check dependent PG ${wsCounter}`, status: "backlog",
+        blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: owner.id });
+      const task = store.createTask({ agentId: owner.id, issueId: prerequisite.id, prompt: "Finish intake" });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      store.startTask(task.id);
+      store.completeTask(task.id, { output: "Generated work" });
+
+      const check = checks(prerequisite.id)[0]!;
+      expect(store.getIssue(prerequisite.id)?.status).toBe("done");
+      expect(store.getIssue(dependent.id)?.status).toBe("todo");
+      expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+      expect(activities(dependent.id, "dependency_auto_started")[0]?.data)
+        .toMatchObject({ dependency_check_event_id: check.id });
+      expect(activities(dependent.id, "dependency_auto_started")[0]?.data)
+        .not.toHaveProperty("replayed");
+    });
+
     it.each([
       ["reopened later", "later"],
       ["U11 same millisecond", "same millisecond"],
