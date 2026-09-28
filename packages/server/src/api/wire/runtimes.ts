@@ -50,6 +50,7 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
     status: runtime.status,
     device_info: runtime.deviceInfo,
     metadata: runtime.metadata,
+    ...(runtime.protocol ? { protocol: runtime.protocol } : {}),
     owner_id: runtime.ownerId,
     visibility: runtime.visibility,
     last_seen_at: runtime.lastHeartbeatAt,

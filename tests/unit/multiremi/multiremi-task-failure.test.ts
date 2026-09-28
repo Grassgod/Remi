@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { captureReports } from "../../fixtures/report-session.js";
 import {
   classifyDaemonTaskFailure,
   classifyPoisonedError,
@@ -98,14 +99,10 @@ describe("Multiremi task failure classification", () => {
   });
 
   it("sends explicit failure_reason from the daemon client", async () => {
-    const calls: Array<{ url: string; body: any; headers: HeadersInit | undefined }> = [];
+    const requests: string[] = [];
     previousFetch = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({
-        url: String(input),
-        body: JSON.parse(String(init?.body ?? "{}")),
-        headers: init?.headers,
-      });
+      requests.push(String(input));
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -113,16 +110,17 @@ describe("Multiremi task failure classification", () => {
     }) as typeof globalThis.fetch;
 
     const client = new MultiremiDaemonClient("https://remi.example", "tok_123");
+    const calls = captureReports(client);
     await client.failTask("task_1", "API Error: 401 Unauthorized", "sess_1", "/tmp/work", TaskFailureReason.AgentProviderAuthOrAccess);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://remi.example/api/daemon/tasks/task_1/fail");
-    expect(calls[0]?.body).toMatchObject({
+    expect(calls[0]).toMatchObject({ type: "task.fail", partition: "task_1" });
+    expect(calls[0]?.payload).toMatchObject({
       error: "API Error: 401 Unauthorized",
       session_id: "sess_1",
       work_dir: "/tmp/work",
       failure_reason: TaskFailureReason.AgentProviderAuthOrAccess,
     });
-    expect((calls[0]?.headers as Record<string, string>).Authorization).toBe("Bearer tok_123");
+    expect(requests).toEqual([]);
   });
 });

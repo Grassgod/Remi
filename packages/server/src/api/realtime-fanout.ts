@@ -11,16 +11,13 @@
  * wiring, named and testable. It subscribes to the store once and does two
  * things per event:
  *
- *   - deliver locally, by role — `ui`/`all` to the browser registries,
- *     `runtime`/`all` to the daemon registry;
+ *   - deliver locally, by role — `ui`/`all` to the browser registries;
  *   - hand the raw event to the peer channel, which forwards it to the other
  *     process (see `peer/peer-channel.ts`).
  *
  * Events that arrive *from* the peer take the local-delivery path only and are
  * never forwarded again — that is what stops two processes echoing one event.
- * A peer-delivered `task_enqueued` still calls `notifyDaemonTaskAvailable`, which
- * is what lets the daemon-facing process wake a runtime for a task created in
- * the browser-facing one.
+ * Daemon v2 owns its socket separately; A-2 removed the v1 wake-up registry.
  *
  * `MULTIREMI_PEER_URL` unset means `peer` is null: local delivery only, and no
  * envelope is even built — exactly the pre-split behaviour.
@@ -46,15 +43,12 @@ import type {
   BrowserScopeWebSocketRegistry,
   BrowserUserWebSocketRegistry,
   BrowserWebSocketRegistry,
-  DaemonWebSocketRegistry,
 } from "./helpers/realtime-types.js";
 import {
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
   notifyBrowserTaskMessageReadFailed,
   notifyBrowserWorkspaceEvent,
-  notifyDaemonTaskAvailable,
-  notifyDaemonTaskEvent,
 } from "./realtime.js";
 import {
   PEER_REALTIME_TOPIC,
@@ -73,7 +67,6 @@ import {
 export type LocalRealtimeRole = ApiRole;
 
 export interface RealtimeFanoutRegistries {
-  daemon: DaemonWebSocketRegistry;
   browser: BrowserWebSocketRegistry;
   browserUser: BrowserUserWebSocketRegistry;
   browserScope: BrowserScopeWebSocketRegistry;
@@ -101,21 +94,16 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   const peer = options.peer ?? null;
 
   const deliversToBrowser = role === "ui" || role === "all";
-  const deliversToDaemon = role === "runtime" || role === "all";
 
   // Local delivery only. `forward` is the switch that separates "this process
   // wrote it" from "the peer wrote it"; there is no third case.
   const deliverTaskEnqueued = (task: MultiremiTask): void => {
-    if (deliversToDaemon) notifyDaemonTaskAvailable(registries.daemon, store, task);
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserScope, "task:queued", task);
     }
   };
 
   const deliverTaskEvent = (event: { type: string; task: MultiremiTask }): void => {
-    if (deliversToDaemon && event.type === "task:waiting_local_directory") {
-      notifyDaemonTaskEvent(registries.daemon, event.type, event.task);
-    }
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserScope, event.type, event.task);
     }

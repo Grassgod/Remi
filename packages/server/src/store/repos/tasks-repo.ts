@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
+import { normalizeTraceStatus } from "@shared/trace-sanitize.js";
 import {
   ACTIVE_TASK_STATUSES,
   CHAT_ISSUE_DECOUPLED_FINGERPRINT,
@@ -4228,7 +4229,7 @@ ${placementAfter.sql}
           message.input == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.input)), TASK_MESSAGE_INPUT_MAX),
           truncateUtf8(cleanTaskMessageField(message.output), TASK_MESSAGE_OUTPUT_MAX),
           cleanTaskMessageField(message.toolCallId),
-          normalizeTaskMessageStatus(message.status),
+          normalizeTraceStatus(message.status),
           message.meta == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.meta)), TASK_MESSAGE_META_MAX),
           persistedAt,
         );
@@ -6654,7 +6655,6 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
 // caps total request size. Byte counts, not code-point counts, because SQLite
 // TEXT is bytes and that's what actually bloats the DB / WS frames.
 
-const TASK_MESSAGE_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
 const TASK_MESSAGE_TOOL_MAX = 512;
 const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
 const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
@@ -6675,11 +6675,6 @@ function cleanTaskMessageField(value: unknown): string | null {
   if (value == null) return null;
   const s = String(value);
   return s.length > 0 ? s : null;
-}
-
-function normalizeTaskMessageStatus(value: unknown): string | null {
-  const s = cleanTaskMessageField(value);
-  return s && TASK_MESSAGE_STATUSES.has(s) ? s : null;
 }
 
 function truncateUtf8(value: string | null, maxBytes: number): string | null {

@@ -39,17 +39,8 @@ const TASKS_REPO = join(REPO_ROOT, "packages/server/src/store/repos/tasks-repo.t
  *     `"assistant"` / `"thinking"` / `"tool"` vocabulary that never reaches a task
  *     message.
  *
- * So the scan is scoped by what a file can do:
- *
- *   1. find the files that can publish a trace event at all, by looking for a write
- *      call into a message sink (`messageBatcher.push`, the `messages` outbox
- *      report, the human-request reporter, the trace store). That set is small and
- *      is derived, not listed;
- *   2. within those files only, read the `type:` literals.
- *
- * A new producer therefore has to be in a file that writes to a sink to be a
- * producer at all, and if it writes to a sink without going through one of those
- * calls it cannot publish anything either.
+ * Scan sink callers anywhere, plus all worker and ACP producer sources. A pure
+ * producer need not reference a sink or TaskMessageInput to be in scope.
  */
 
 /** Every source file under the given roots, tests and build output excluded. */
@@ -106,11 +97,11 @@ const WRITE_SINK_PATTERNS: Array<{ label: string; re: RegExp }> = [
  * This closes the gap the call-site rule leaves: a producer can be written as a
  * pure "event -> message[]" function and handed to a sink by its caller, so it
  * would carry a `type:` literal without naming any sink. `worker/` is where every
- * task-message producer lives today, and it is also where a reviewer would expect a
- * fourteenth type to appear. `packages/daemon/src` is deliberately absent: it holds
+ * task-message producer lives today; ACP adapters can also produce messages without
+ * calling a sink themselves. `packages/daemon/src` is deliberately absent: it holds
  * the provider-agnostic runtime and never builds a `TaskMessageInput`.
  */
-const MESSAGE_PRODUCER_DIRS = [join(REPO_ROOT, "packages/server/src/worker")];
+const MESSAGE_PRODUCER_DIRS = [join(REPO_ROOT, "packages/server/src/worker"), join(REPO_ROOT, "packages/acp/src")];
 
 /**
  * Files inside a producer directory that speak a different type space, with the
@@ -118,8 +109,16 @@ const MESSAGE_PRODUCER_DIRS = [join(REPO_ROOT, "packages/server/src/worker")];
  * visible decision rather than a silently widened regex.
  */
 const NON_EVENT_FILES: Record<string, string> = {
-  "packages/server/src/worker/daemon-websocket.ts":
-    "the wake-up socket's own control frames ({type: \"ping\"}), never a task message",
+  "packages/server/src/worker/daemon-protocol-client.ts":
+    "protocol control frames use t and ts, never a TaskMessageInput",
+  "packages/acp/src/client.ts":
+    "ACP prompt input content uses text/image, not the outgoing task trace type space",
+  "packages/acp/src/provider.ts":
+    "ACP config select types and prompt image attachments are not outgoing trace events",
+  "packages/acp/src/adapters/claude-code/index.ts":
+    "Claude plugin configuration uses local as a plugin source type, not an event type",
+  "packages/acp/src/antigravity.ts":
+    "ACP content/text wrapper types belong to SessionUpdate content, mapped by acp-event-mapper",
 };
 
 /** The files to read the type inventory from, and why each is in scope. */
@@ -218,9 +217,9 @@ describe("trace contract drift guards", () => {
     const inScope = new Set(producerFiles().map(({ file }) => rel(file)));
     for (const file of sourceFiles()) {
       const path = rel(file);
-      if (!path.startsWith("packages/server/src/worker/")) continue;
+      if (!MESSAGE_PRODUCER_DIRS.some(dir => file.startsWith(`${dir}/`))) continue;
       if (NON_EVENT_FILES[path]) continue;
-      expect(inScope, `${path} is in worker/ but not scanned`).toContain(path);
+      expect(inScope, `${path} is in a message-production directory but not scanned`).toContain(path);
     }
   });
 
@@ -228,7 +227,8 @@ describe("trace contract drift guards", () => {
     // An exclusion is a hole in the guard, so each one must name a real file and a
     // reason. This is the only place a producer directory may be skipped.
     const excluded = Object.keys(NON_EVENT_FILES);
-    expect(excluded).toContain("packages/server/src/worker/daemon-websocket.ts");
+    expect(excluded.length).toBeLessThanOrEqual(5);
+    expect(excluded).toContain("packages/server/src/worker/daemon-protocol-client.ts");
     for (const [path, reason] of Object.entries(NON_EVENT_FILES)) {
       expect(sourceFiles().map(rel), `${path} no longer exists`).toContain(path);
       expect(reason.length, `${path} has no justification`).toBeGreaterThan(20);
@@ -328,14 +328,6 @@ describe("trace contract drift guards", () => {
     expect(TRACE_STATUSES.size).toBe(TRACE_EVENT_STATUSES.length);
     // And nothing outside the contract set is accepted.
     expect(normalizeTraceStatus("cancelled")).toBeNull();
-  });
-
-  it("keeps the status set in step with the write path", () => {
-    const src = readFileSync(TASKS_REPO, "utf8");
-    const match = /const TASK_MESSAGE_STATUSES = new Set\(\[([^\]]+)\]\)/.exec(src);
-    expect(match).not.toBeNull();
-    const statuses = match![1]!.split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean).sort();
-    expect(statuses).toEqual(["completed", "failed", "in_progress", "pending"]);
   });
 
   it("round-trips a TaskMessageInput without losing a field", () => {

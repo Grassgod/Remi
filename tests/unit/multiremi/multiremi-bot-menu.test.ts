@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -229,22 +230,14 @@ describe("workspace bot menu API", () => {
     ]);
     expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("timeout");
 
-    const late = await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
-      method: "POST",
-      headers: MASTER,
-      body: JSON.stringify({ status: "failed", error: "Bot menu sync failed: no permission to bot menu" }),
-    });
-    expect(late.status).toBe(200);
+    const late = await reportFrame(store, "runtime.bot_menu_result", { runtime_id: "rt_concierge", request_id: request.id, status: "failed", error: "Bot menu sync failed: no permission to bot menu" }, { headers: MASTER, authToken: "MASTER" });
+    expect(late.ok).toBe(true);
     const settled = store.getBotMenuPublishRequest("rt_concierge", request.id);
     expect(settled?.status).toBe("failed");
     expect(settled?.error).toBe("Bot menu sync failed: no permission to bot menu");
 
     // A recorded answer stays put: a duplicate report cannot flip it.
-    await app.request(`/api/daemon/runtimes/rt_concierge/bot-menu/${request.id}/result`, {
-      method: "POST",
-      headers: MASTER,
-      body: JSON.stringify({ status: "completed", result: { dryRun: false, defaultPublished: true, userMenuCount: 0 } }),
-    });
+    await reportFrame(store, "runtime.bot_menu_result", { runtime_id: "rt_concierge", request_id: request.id, status: "completed", result: { dryRun: false, defaultPublished: true, userMenuCount: 0 } }, { headers: MASTER, authToken: "MASTER" });
     expect(store.getBotMenuPublishRequest("rt_concierge", request.id)?.status).toBe("failed");
   });
 

@@ -26,7 +26,6 @@ import {
   type LocalRealtimeRole,
   type RealtimeFanoutOptions,
 } from "../../../packages/server/src/api/realtime-fanout.js";
-import type { DaemonWebSocketRegistry } from "../../../packages/server/src/api/helpers/realtime-types.js";
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import * as apiRoleConfig from "@multiremi/config/api-role.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
@@ -114,7 +113,7 @@ function registries() {
     browserFrames,
     daemonFrames,
     registries: {
-      daemon: new Map([["rt_role", new Set([daemon])]]) as DaemonWebSocketRegistry,
+      daemon: new Map([["rt_role", new Set([daemon])]]),
       browser: new Map([["local", new Set([browser])]]) as any,
       browserUser: new Map([["local", new Set([browser])]]) as any,
       browserScope: new Map() as any,
@@ -179,7 +178,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       // resolved `all`, and would fan out browser frames this process refuses.
       expect(spy.roles).toEqual(["runtime"]);
       // And that role really means daemon-only delivery.
-      expect(fanoutDelivery("runtime")).toMatchObject({ browser: 0, daemon: 1 });
+      expect(fanoutDelivery("runtime")).toMatchObject({ browser: 0, daemon: 0 });
     } finally {
       server.stop(true);
       db.close();
@@ -210,7 +209,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       expect(await (await fetch(`${base}/health/realtime`)).json()).toMatchObject({ role: "runtime" });
       // The injected role wins over the conflicting env var in the fanout too.
       expect(spy.roles).toEqual(["runtime"]);
-      expect(fanoutDelivery("runtime")).toMatchObject({ browser: 0, daemon: 1 });
+      expect(fanoutDelivery("runtime")).toMatchObject({ browser: 0, daemon: 0 });
     } finally {
       server.stop(true);
       db.close();
@@ -245,7 +244,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       // `configured=false` but the effective role is still `all`, and that is what
       // the fanout got: both registries, exactly main's behaviour.
       expect(spy.roles).toEqual(["all"]);
-      expect(fanoutDelivery("all")).toMatchObject({ browser: 1, daemon: 1 });
+      expect(fanoutDelivery("all")).toMatchObject({ browser: 1, daemon: 0 });
     } finally {
       server.stop(true);
       db.close();

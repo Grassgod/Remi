@@ -26,6 +26,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { IncomingMessage, TaskStreamingHandler, TaskStreamEvent } from "@connectors/base.js";
 import { MultiremiCliUpdateCoordinator } from "@multiremi/worker/cli-update-coordinator.js";
+import { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { createLogger, setLogLevel } from "@shared/logger.js";
 
 const log = createLogger("multiremi-cli");
@@ -406,12 +407,25 @@ export function instantiateCoResidentWorkerDaemons(
     ? new MultiremiCliUpdateCoordinator()
     : null;
   const readyProviders = new Set<number>();
+  const first = options[0];
+  const protocolClient = first?.protocolClient ?? (first ? new DaemonProtocolClient({
+    serverUrl: first.serverUrl,
+    token: first.token ?? process.env.MULTIREMI_TOKEN,
+    daemonId: first.daemonId ?? process.env.MULTIREMI_DAEMON_ID
+      ?? first.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID
+      ?? first.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`,
+    cliVersion: multiremiVersion,
+    launchedBy: first.launchedBy,
+    log,
+    ...first.protocolClientOptions,
+  }) : undefined);
   const gcLeaderIndex = options.findIndex((daemonOptions) => daemonOptions.gcEnabled !== false);
   return options.map((daemonOptions, index) => {
     const extraReadyCheck = daemonOptions.supervisorReady;
     const notifyReadyChange = daemonOptions.onReadyChange;
     return new MultiremiDaemon({
       ...daemonOptions,
+      protocolClient,
       issueWorkspaceLifecycleLocker,
       ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
       // Provider lanes share one Issue workspace tree. A single lane owns its

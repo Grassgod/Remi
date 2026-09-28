@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {
   const root = mkdtempSync(join(tmpdir(), "remi-profile-daemon-"));
@@ -60,6 +60,8 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
       const saved = await fetch(`http://127.0.0.1:${server.port}/api/runtimes/${runtime.id}/claude-profile`, { method: "PUT", headers: { Authorization: "Bearer profile-test-master", "Content-Type": "application/json" }, body: JSON.stringify(config) });
       expect(saved.status).toBe(200);
       expect(await saved.text()).not.toContain(config.api_key);
+      // MUL-419: 换回真实 v2 下发
+      await injectDaemonHeartbeatInput(daemon);
       await waitFor(() => store.listRuntimeModels(runtime.id).some(model => model.id === config.profile.model && model.thinking?.supportedLevels.some(level => level.value === "high")));
       const task = store.sendChatMessage(chat.id, { body: `Run ${version}` }).task;
       await waitFor(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""));
@@ -81,7 +83,9 @@ it("delivers encrypted Runtime profile keys to task execution while preserving t
   } finally {
     daemon.stop();
     await run.catch(() => {});
-    await server.stop(true);
+    await daemon.daemonProtocolClient().drain();
+    // Bun 1.3.14 can retain closed WebSockets in the stop promise.
+    server.stop(true);
     db.close();
     if (originalKey === undefined) delete process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY; else process.env.MULTIREMI_PROVIDER_ENCRYPTION_KEY = originalKey;
     if (originalHome === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = originalHome;

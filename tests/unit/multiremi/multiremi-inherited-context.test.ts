@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -265,10 +266,8 @@ describe("persisted inherited context diagnostics", () => {
     expect((await (await app.request(path, { headers })).json()).diagnostics).toEqual(expected);
 
     setSystemTime(new Date(progressAt));
-    const progress = await app.request(`/api/daemon/tasks/${firstTask.id}/progress`, {
-      method: "POST", headers, body: JSON.stringify({ summary: "Earlier task is still making progress", step: 1, total: 2 }),
-    });
-    expect(progress.status).toBe(200);
+    const progress = await reportFrame(store, "task.progress", { task_id: firstTask.id, summary: "Earlier task is still making progress", step: 1, total: 2 }, { headers, authToken: "MASTER" });
+    expect(progress.ok).toBe(true);
     const updatedFirst = store.getTask(firstTask.id)!;
     const storedSecond = store.getTask(secondTask.id)!;
     expect(updatedFirst.updatedAt).toBe(progressAt);

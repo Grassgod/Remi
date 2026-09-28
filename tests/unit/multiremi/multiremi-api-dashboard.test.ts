@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 // The JSON data endpoints the Next.js frontend reads (D11 removed the
 // server-rendered HTML dashboard; only this contract survived).
 //
@@ -165,11 +166,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_e2e", inputTokens: 0, outputTokens: 0 });
 
     // The daemon client posts snake_case usage entries (worker/client.ts).
-    const report = await app.request(`/api/daemon/tasks/${seeded.taskId}/usage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        usage: [{
+    const report = await reportFrame(store, "task.usage", { task_id: seeded.taskId, usage: [{
           provider: "claude",
           model: "sonnet",
           input_tokens: 1200,
@@ -177,10 +174,8 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
           cache_read_tokens: 5600,
           cache_write_tokens: 780,
           total_tokens: 7920,
-        }],
-      }),
-    });
-    expect(report.status).toBe(200);
+        }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(report.ok).toBe(true);
 
     const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local")).json();
     expect(daily).toHaveLength(1);

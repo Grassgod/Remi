@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonClaimSkillResponse, skillFileCompatibilityResponse } from "@multiremi/api/wire/skills.js";
@@ -129,11 +130,8 @@ describe("Skill file encoding", () => {
     });
     const imported = store.createRuntimeLocalSkillImportRequest(runtime.id, { scanRequestId: scan.id, skillKey: "helper" });
     const app = createMultiremiApp({ store });
-    const report = await app.request(`/api/daemon/runtimes/${runtime.id}/local-skills/import/${imported.id}/result`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "completed", skill: { name: "helper", content: "# Skill", source_path: "/skills/helper", files: [pngFile, textFile] } }),
-    });
-    expect(report.status).toBe(200);
+    const report = await reportFrame(store, "runtime.local_skill_import_result", { runtime_id: runtime.id, request_id: imported.id, status: "completed", skill: { name: "helper", content: "# Skill", source_path: "/skills/helper", files: [pngFile, textFile] } }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(report.ok).toBe(true);
     const response = await (await app.request(`/api/runtimes/${runtime.id}/local-skills/import/${imported.id}`)).json();
     expect(response.status).toBe("completed");
     expect(response.skill.files[0]).toMatchObject(pngFile);

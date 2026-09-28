@@ -6,6 +6,7 @@ import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSteerInjectionPrompt, mergeTaskUsageEntries, TaskSteerFeed } from "@multiremi/worker/steer.js";
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { reportFrame } from "../../fixtures/report-session.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -182,21 +183,15 @@ describe("task steer API", () => {
     expect(store.listTaskSteerMessages(task.id)).toHaveLength(0);
   });
 
-  it("daemon complete returns 409 steer_pending while unconsumed steers exist", async () => {
+  it("daemon complete returns non-retryable steer_pending while unconsumed steers exist", async () => {
     const store = createStore();
     const task = createRunningTask(store);
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
 
     const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "pending" });
-    const refused = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ output: "old answer" }),
-    });
-    expect(refused.status).toBe(409);
-    const refusedBody = await refused.json();
-    expect(refusedBody.code).toBe("steer_pending");
+    const refused = await reportFrame(store, "task.complete", { task_id: task.id, output: "old answer" });
+    expect(refused).toEqual({ ok: false, code: "steer_pending", retryable: false });
     expect(store.getTaskStatus(task.id)).toBe("running");
 
     const consume = await app.request(`/api/daemon/tasks/${task.id}/steer/consume`, {
@@ -205,12 +200,8 @@ describe("task steer API", () => {
       body: JSON.stringify({ ids: [message.id] }),
     });
     expect(consume.status).toBe(200);
-    const completed = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ output: "steered answer" }),
-    });
-    expect(completed.status).toBe(200);
+    const completed = await reportFrame(store, "task.complete", { task_id: task.id, output: "steered answer" });
+    expect(completed).toEqual({ ok: true });
     expect(store.getTaskStatus(task.id)).toBe("completed");
   });
 

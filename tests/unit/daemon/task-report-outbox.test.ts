@@ -2,10 +2,13 @@
 // durable restart recovery, permanent-error blocking, droppable-kind
 // tolerance, and the "terminal events are never dropped" size-cap rule.
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
+import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
+import { outboxRecordBytes } from "@multiremi/worker/report-frames.js";
 import {
   MultiremiTaskReportOutbox,
   type MultiremiOutboxRecord,
@@ -87,10 +90,11 @@ describe("MultiremiTaskReportOutbox", () => {
         delivered.push(`${record.taskId}:${record.seq}`);
       },
     }));
-    outbox.enqueue("tsk_stuck", "messages", { messages: [] });
-    outbox.enqueue("tsk_ok", "complete", { output: "done" });
+    const stuckId = outbox.enqueue("tsk_stuck", "messages", { messages: [] });
+    const okId = outbox.enqueue("tsk_ok", "complete", { output: "done" });
+    expect([stuckId, okId]).toEqual([1, 2]);
     expect(await outbox.waitForTaskDrain("tsk_ok")).toBe("delivered");
-    expect(delivered).toEqual(["tsk_ok:1"]);
+    expect(delivered).toEqual([`tsk_ok:${okId}`]);
   });
 
   it("does not let new token reports bypass retry backoff", async () => {
@@ -343,6 +347,305 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(await outbox.waitForTaskDrain("tsk_race")).toBe("delivered");
     expect(delivered).toEqual(["complete:2"]);
     expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+  });
+  it("limits the single pump to 64 unacknowledged frames and deletes only acknowledged rows", async () => {
+    const gates = new Map<number, ReturnType<typeof deferred<void>>>();
+    const delivered: number[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
+      delivered.push(record.id);
+      const gate = deferred<void>(); gates.set(record.id, gate);
+      await gate.promise;
+      return { ok: true };
+    } }));
+    for (let i = 0; i < 70; i++) outbox.enqueue(`task-${i}`, "progress", {});
+    await until(() => delivered.length === 64);
+    expect(delivered).toEqual(Array.from({ length: 64 }, (_, i) => i + 1));
+    expect(outbox.stats().pending).toBe(70);
+    gates.get(1)!.resolve();
+    await until(() => delivered.length === 65);
+    expect(outbox.stats().pending).toBe(69);
+    gates.forEach(gate => gate.resolve());
+    await until(() => delivered.length === 70);
+    gates.forEach(gate => gate.resolve());
+    await outbox.flushAll();
+    expect(outbox.stats().pending).toBe(0);
+  });
+
+  it("bounds in-flight bytes to 1 MiB and pauses delivery under backpressure", async () => {
+    let ready = false;
+    let bytes = 0;
+    let peak = 0;
+    const delivered: number[] = [];
+    const gates: Array<ReturnType<typeof deferred<void>>> = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", canSend: () => ready,
+      deliver: async record => {
+        delivered.push(record.id);
+        bytes += outboxRecordBytes(record); peak = Math.max(peak, bytes);
+        const gate = deferred<void>(); gates.push(gate);
+        await gate.promise; bytes -= outboxRecordBytes(record);
+      } }));
+    outbox.enqueue("task", "complete", { output: "x".repeat(600 * 1024) });
+    outbox.enqueue("rt:runtime", "runtime.command_result", { output: "x".repeat(600 * 1024) });
+    await Bun.sleep(10);
+    expect(delivered).toEqual([]);
+    ready = true; outbox.pumpAll();
+    await until(() => delivered.length === 1);
+    await Bun.sleep(10);
+    expect(delivered).toEqual([1]);
+    gates[0]!.resolve();
+    await until(() => delivered.length === 2);
+    gates[1]!.resolve();
+    await outbox.flushAll();
+    expect(peak).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("blocks oversized complete before sending, survives restart, and leaves other partitions running", async () => {
+    const path = tempPath();
+    const delivered: string[] = [];
+    const options = { path, deliver: async (record: MultiremiOutboxRecord) => { delivered.push(record.taskId); } };
+    const first = track(new MultiremiTaskReportOutbox(options));
+    first.enqueue("large", "complete", { runtime_id: "runtime", output: "x".repeat(1024 * 1024) });
+    first.enqueue("ok", "complete", { runtime_id: "runtime", output: "done" });
+    first.enqueue("rt:runtime", "runtime.command_result", { output: "done" });
+    expect(await first.waitForTaskDrain("large")).toBe("blocked");
+    await first.flushAll();
+    expect(delivered).toEqual(["ok", "rt:runtime"]);
+    expect(first.taskIdsWithPendingTerminal("runtime")).toEqual([]);
+    await first.close();
+    const second = track(new MultiremiTaskReportOutbox(options));
+    second.enqueue("large", "progress", {});
+    expect(await second.waitForTaskDrain("large")).toBe("blocked");
+    expect(second.stats().blocked).toBe(2);
+    expect(delivered).toEqual(["ok", "rt:runtime"]);
+  });
+
+  it("accounts for legacy wire adaptation before applying the in-flight byte window", async () => {
+    let ready = false;
+    let bytes = 0;
+    let peak = 0;
+    const delivered: number[] = [];
+    const gates: Array<ReturnType<typeof deferred<void>>> = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", canSend: () => ready,
+      prepareDelivery: record => ({ ...record, payload: { ...record.payload, output: "x".repeat(600 * 1024) } }),
+      deliver: async record => {
+        delivered.push(record.id);
+        expect(record.payload.output).toHaveLength(600 * 1024);
+        bytes += outboxRecordBytes(record); peak = Math.max(peak, bytes);
+        const gate = deferred<void>(); gates.push(gate);
+        await gate.promise; bytes -= outboxRecordBytes(record);
+      } }));
+    outbox.enqueue("first", "complete", {});
+    outbox.enqueue("second", "complete", {});
+    ready = true; outbox.pumpAll();
+    await until(() => delivered.length === 1);
+    await Bun.sleep(10);
+    expect(delivered).toEqual([1]);
+    gates[0]!.resolve();
+    await until(() => delivered.length === 2);
+    gates[1]!.resolve();
+    await outbox.flushAll();
+    expect(peak).toBeLessThanOrEqual(1024 * 1024);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+  });
+
+  it("blocks a row that exceeds the frame limit after legacy wire adaptation", async () => {
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:",
+      prepareDelivery: record => record.taskId === "large"
+        ? { ...record, payload: { output: "x".repeat(1024 * 1024) } } : record,
+      deliver: async record => { delivered.push(record.taskId); } }));
+    outbox.enqueue("large", "complete", {});
+    outbox.enqueue("ok", "progress", {});
+    await outbox.flushAll();
+    expect(await outbox.waitForTaskDrain("large")).toBe("blocked");
+    expect(delivered).toEqual(["ok"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+  });
+
+  it("purges a deleted task's entire partition instead of blocking or replaying it", async () => {
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
+      if (record.taskId === "deleted") throw new DaemonProtocolRpcError("task_not_found", false);
+      delivered.push(record.taskId);
+    } }));
+    outbox.enqueue("deleted", "progress", {});
+    const completion = outbox.enqueueAndWait("deleted", "complete", {});
+    outbox.enqueue("ok", "complete", {});
+    await outbox.flushAll();
+    expect(await completion).toMatchObject({ ok: true, discarded: true });
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+    expect(delivered).toEqual(["ok"]);
+    expect(outbox.enqueue("deleted", "complete", {})).toBeNull();
+  });
+
+  it("returns an online steer conflict to its executor and unblocks later progress", async () => {
+    const delivered: string[] = [];
+    let steerPending = true;
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
+      if (record.kind === "complete" && steerPending) throw new DaemonProtocolRpcError("steer_pending", false);
+      delivered.push(record.kind);
+    } }));
+    const completion = outbox.enqueueAndWait("task", "complete", { output: "before steer" });
+    outbox.enqueue("task", "progress", { summary: "steer turn" });
+    await expect(completion).rejects.toMatchObject({ code: "steer_pending", retryable: false });
+    await outbox.waitForTaskDrain("task");
+    steerPending = false;
+    await outbox.enqueueAndWait("task", "complete", { output: "after steer" });
+    expect(delivered).toEqual(["progress", "complete"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+  });
+
+  it("turns a replayed steer conflict into runtime_recovery failure without blocking", async () => {
+    const delivered: MultiremiOutboxRecord[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
+      if (record.kind === "complete") throw new DaemonProtocolRpcError("steer_pending", false);
+      delivered.push(record);
+    } }));
+    outbox.enqueue("task", "complete", { runtime_id: "runtime", output: "old" });
+    outbox.enqueue("task", "progress", { summary: "next" });
+    await outbox.waitForTaskDrain("task");
+    expect(delivered.map(record => record.kind)).toEqual(["progress", "fail"]);
+    expect(delivered[1]?.payload).toMatchObject({ runtime_id: "runtime", failure_reason: "runtime_recovery" });
+    expect(outbox.stats().blocked).toBe(0);
+  });
+
+  it("times out the executor wait but retains complete and handles a later steer rejection", async () => {
+    const gate = deferred<void>();
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
+      if (record.kind === "complete") { await gate.promise; throw new DaemonProtocolRpcError("steer_pending", false); }
+      delivered.push(record.kind);
+    } }));
+    expect(await outbox.enqueueAndWait("task", "complete", {}, 5)).toEqual({ ok: true, queued: true });
+    expect(outbox.stats().pendingTerminal).toBe(1);
+    gate.resolve();
+    await outbox.waitForTaskDrain("task");
+    expect(delivered).toEqual(["fail"]);
+    expect(outbox.stats().blocked).toBe(0);
+  });
+
+  it("filters pending terminal activity by runtime and excludes blocked partitions", async () => {
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", canSend: () => false, deliver: async () => {} }));
+    outbox.enqueue("claude", "complete", { runtime_id: "claude-runtime" });
+    outbox.enqueue("codex", "fail", { runtime_id: "codex-runtime" });
+    outbox.enqueue("blocked", "complete", { runtime_id: "claude-runtime", output: "x".repeat(1024 * 1024) });
+    expect(outbox.taskIdsWithPendingTerminal("claude-runtime")).toEqual(["claude"]);
+    expect(outbox.taskIdsWithPendingTerminal("codex-runtime")).toEqual(["codex"]);
+  });
+
+  it("releases a terminal result wait on shutdown while retaining the row for replay", async () => {
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", canSend: () => false, deliver: async () => {} }));
+    const stop = new AbortController();
+    const waiting = outbox.enqueueAndWait("task", "complete", { output: "finished" }, 30_000, stop.signal);
+    stop.abort();
+    expect(await waiting).toEqual({ ok: true, queued: true });
+    expect(outbox.stats()).toMatchObject({ pending: 1, pendingTerminal: 1, blocked: 0 });
+  });
+
+  it("imports two legacy provider files exactly once and preserves renamed sources", async () => {
+    const paths = [tempPath(), tempPath()];
+    for (const [i, path] of paths.entries()) {
+      const old = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+      old.enqueue(`provider-${i}`, "complete", { output: "done" });
+      await old.close();
+    }
+    const sharedPath = tempPath();
+    const delivered: MultiremiOutboxRecord[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: sharedPath, deliver: async record => { delivered.push(record); } }));
+    paths.forEach((path, i) => outbox.importLegacy(path, `runtime-${i}`));
+    await outbox.flushAll();
+    expect(delivered.map(record => [record.id, record.payload.runtime_id])).toEqual([[1, "runtime-0"], [2, "runtime-1"]]);
+    for (const path of paths) {
+      expect(existsSync(path)).toBe(false);
+      expect(existsSync(`${path}.migrated-v2`)).toBe(true);
+    }
+  });
+
+  it("rolls back data and import markers together after a mid-import failure", async () => {
+    const sourcePath = tempPath();
+    const old = track(new MultiremiTaskReportOutbox({ path: sourcePath, canSend: () => false, deliver: async () => {} }));
+    old.enqueue("task", "progress", {}); old.enqueue("task", "complete", {});
+    await old.close();
+    const path = tempPath();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    const db = new Database(path);
+    db.exec("CREATE TRIGGER crash_import BEFORE INSERT ON outbox_events WHEN NEW.kind = 'complete' BEGIN SELECT RAISE(ABORT, 'injected crash'); END");
+    expect(() => first.importLegacy(sourcePath, "runtime")).toThrow("injected crash");
+    expect(first.stats().pending).toBe(0);
+    expect(existsSync(sourcePath)).toBe(true);
+    db.exec("DROP TRIGGER crash_import"); db.close(); await first.close();
+    const delivered: number[] = [];
+    const second = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { delivered.push(record.id); } }));
+    second.importLegacy(sourcePath, "runtime");
+    await second.flushAll();
+    expect(delivered).toEqual([1, 2]);
+    expect(existsSync(`${sourcePath}.migrated-v2`)).toBe(true);
+  });
+
+  it("preserves a crashed legacy WAL alongside its recoverable renamed database", async () => {
+    const sourcePath = tempPath();
+    const module = new URL("../../../packages/server/src/worker/outbox.ts", import.meta.url).href;
+    const writer = Bun.spawn([process.execPath, "-e", `
+      const { MultiremiTaskReportOutbox } = await import(Bun.argv.at(-2));
+      const old = new MultiremiTaskReportOutbox({ path: Bun.argv.at(-1), canSend: () => false, deliver: async () => {} });
+      old.enqueue("task", "progress", { progress: "before crash" });
+      old.enqueue("task", "complete", { output: "after crash" });
+      console.log("ready");
+      setInterval(() => {}, 1000);
+    `, module, sourcePath], { stdout: "pipe", stderr: "pipe" });
+    try {
+      const ready = await writer.stdout.getReader().read();
+      expect(Buffer.from(ready.value ?? []).toString()).toContain("ready");
+    } finally {
+      writer.kill("SIGKILL");
+      await writer.exited;
+    }
+    expect(existsSync(`${sourcePath}-wal`)).toBe(true);
+    const delivered: string[] = [];
+    const shared = track(new MultiremiTaskReportOutbox({ path: tempPath(),
+      deliver: async record => { delivered.push(record.kind); } }));
+    shared.importLegacy(sourcePath, "runtime");
+    const backupPath = `${sourcePath}.migrated-v2`;
+    expect(existsSync(`${backupPath}-wal`)).toBe(true);
+    expect(existsSync(`${sourcePath}-wal`)).toBe(false);
+    const backup = new Database(backupPath, { readonly: true });
+    try {
+      expect(backup.query("SELECT kind FROM outbox_events ORDER BY id").all()).toEqual([
+        { kind: "progress" }, { kind: "complete" },
+      ]);
+    } finally { backup.close(); }
+    await shared.flushAll();
+    expect(delivered).toEqual(["progress", "complete"]);
+    expect(shared.stats().pending).toBe(0);
+  });
+
+  it("skips a committed import after a pre-rename crash and does not lose a v1 rollback generation", async () => {
+    const sourcePath = tempPath();
+    const path = tempPath();
+    const old = track(new MultiremiTaskReportOutbox({ path: sourcePath, canSend: () => false, deliver: async () => {} }));
+    old.enqueue("first", "complete", {}); await old.close();
+    const first = track(new MultiremiTaskReportOutbox({ path, canSend: () => false, deliver: async () => {} }));
+    first.importLegacy(sourcePath, "runtime");
+    const backup = `${sourcePath}.migrated-v2`;
+    const preserved = readFileSync(backup);
+    await first.close();
+    copyFileSync(backup, sourcePath);
+    const delivered: string[] = [];
+    const restarted = track(new MultiremiTaskReportOutbox({ path, canSend: () => false,
+      deliver: async record => { delivered.push(record.taskId); } }));
+    restarted.importLegacy(sourcePath, "runtime");
+    expect(restarted.stats().pending).toBe(1);
+    const rollback = track(new MultiremiTaskReportOutbox({ path: sourcePath, canSend: () => false, deliver: async () => {} }));
+    expect(rollback.enqueue("second", "complete", {})).toBe(1);
+    await rollback.close();
+    restarted.importLegacy(sourcePath, "runtime");
+    expect(restarted.stats().pending).toBe(2);
+    expect(readFileSync(backup)).toEqual(preserved);
+    expect(readdirSync(join(sourcePath, "..")).filter(name => name.endsWith(".migrated-v2"))).toHaveLength(3);
+    await restarted.close();
+    const pump = track(new MultiremiTaskReportOutbox({ path, deliver: async record => { delivered.push(record.taskId); } }));
+    await pump.flushAll();
+    expect(delivered).toEqual(["first", "second"]);
   });
 });
 
