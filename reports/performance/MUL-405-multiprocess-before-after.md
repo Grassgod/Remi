@@ -505,7 +505,9 @@ QA `cmt_rhu9radskp6o` 的负控证明原哨兵漏记真实行锁：原生 PG
 取锁与提交后事件队列。没有修改已由 QA 确认的业务路径事务边界。
 
 `store/lock-order-sentinel.ts` 导出共用 `classifyLockOrderStatement`，
-逐路径记录器直接调用它。分类器按 token 与查询作用域解析锁定 SELECT，
+逐路径记录器直接调用它；双连接交错回放 helper 的 W/N 投影也复用该
+函数，删掉独立的 W 正则，并在 get/all/run/values 执行时记账。
+分类器按 token 与查询作用域解析锁定 SELECT，
 处理四种锁强度、OF 列表/别名、NOWAIT/SKIP LOCKED、大小写、换行、
 FROM/JOIN、CTE 与子查询；跳过字面量和注释。workspace 行锁记 W，其他
 表的行锁记 D，N 仍由 advisory API 记账。既有写语句的分类保持不变；

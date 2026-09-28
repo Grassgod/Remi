@@ -30,6 +30,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
+import { classifyLockOrderStatement } from "@multiremi/store/lock-order-sentinel.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createId } from "@multiremi/ids.js";
 
@@ -64,8 +65,6 @@ function firstTouchOrder(locks: LockName[]): LockName[] {
 
 // ────────────────────────── deriving each path's order ──────────────────────────
 
-const WORKSPACE_ROW_LOCK = /UPDATE\s+multiremi_workspaces\s+SET\s+updated_at\s*=\s*updated_at/i;
-
 /**
  * A real SQLite store plus a recording wrapper.
  *
@@ -82,20 +81,37 @@ class LockRecordingDatabase implements SqlDatabase {
     if (this.locks[this.locks.length - 1] !== lock) this.locks.push(lock);
   }
 
+  private recordSql(sql: string): void {
+    if (classifyLockOrderStatement(sql).includes("W")) this.record("workspace");
+  }
+
+  private statement(sql: string, statement: SqlStatement): SqlStatement {
+    return new Proxy(statement, {
+      get: (target, property) => {
+        const value = Reflect.get(target, property, target);
+        if (["get", "all", "run", "values"].includes(String(property))) {
+          return (...args: unknown[]) => {
+            this.recordSql(sql);
+            return value.apply(target, args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
   query(sql: string): SqlStatement {
-    if (WORKSPACE_ROW_LOCK.test(sql)) this.record("workspace");
-    return this.inner.query(sql);
+    return this.statement(sql, this.inner.query(sql));
   }
   prepare(sql: string): SqlStatement {
-    if (WORKSPACE_ROW_LOCK.test(sql)) this.record("workspace");
-    return this.inner.prepare(sql);
+    return this.statement(sql, this.inner.prepare(sql));
   }
   run(sql: string, ...params: unknown[]) {
-    if (WORKSPACE_ROW_LOCK.test(sql)) this.record("workspace");
+    this.recordSql(sql);
     return this.inner.run(sql, ...params as never[]);
   }
   exec(sql: string): void {
-    if (WORKSPACE_ROW_LOCK.test(sql)) this.record("workspace");
+    this.recordSql(sql);
     this.inner.exec(sql);
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
