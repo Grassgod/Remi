@@ -635,11 +635,16 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     parentIssueId: issue.id,
     createdBy: member.id,
   });
+  // MUL-400 E3: the snapshot's `blocks` row means the blocked issue waits on
+  // `issue`, so this one carries the unmet prerequisite. The assignment below
+  // must therefore stay a plain owner change (gate 1 records it and skips the
+  // dispatch), and the progress/children rows exercise the waiting buckets.
   const blockedIssue = store.createIssue({
     id: "iss_snapshot_blocked",
     title: "Snapshot blocked issue",
     workspaceId,
     createdBy: member.id,
+    status: "backlog",
   });
   store.attachLabelToIssue(issue.id, label.id);
   store.setIssueMetadataKey(issue.id, "snapshot_key", "snapshot_value");
@@ -686,6 +691,40 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     kind: "permission",
     payload: { tool: "Bash", command: "ls" },
   });
+  // MUL-410: an answered decision with a revision trail. Inserted directly so
+  // the fixture stays deterministic: `createIssueDecision` would queue a round
+  // and notify, and this row only exercises the read model.
+  const decisionHistory = [
+    { answererType: "agent", answererId: agent.id, answer: "Merge after CI", reason: "Checks passed",
+      overturn: "A member can reverse this if QA fails", answeredAt: "2026-01-01T00:00:01.000Z" },
+    { answererType: "member", answererId: member.id, answer: "Hold for QA", reason: "Human review",
+      overturn: null, answeredAt: "2026-01-01T00:00:02.000Z" },
+  ];
+  db.run(
+    `INSERT INTO multiremi_issue_decisions (
+      id, workspace_id, issue_id, source_issue_id, source_task_id, kind, title, body, options,
+      status, answer, answered_by_member_id, answered_at, history, owner_agent_id, created_by_agent_id,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'answered', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      "dcs_snapshot",
+      workspaceId,
+      issue.id,
+      issue.id,
+      task.id,
+      "merge",
+      "Snapshot merge decision",
+      "Snapshot decision body",
+      JSON.stringify(decisionHistory[1]),
+      member.id,
+      decisionHistory[1]!.answeredAt,
+      JSON.stringify(decisionHistory),
+      agent.id,
+      agent.id,
+      "2026-01-01T00:00:00.000Z",
+      decisionHistory[1]!.answeredAt,
+    ],
+  );
   store.completeTask(task.id, { result: "done", summary: "Snapshot task complete" } as any);
 
   // Created after the task above: the issue is assigned to `agent`, so this
@@ -1113,7 +1152,10 @@ class Recorder {
 }
 
 async function buildApp(
-  db: Database = new Database(":memory:"),
+  // Declare the backend: the store runs migrations immediately, and an
+  // inherited MULTIREMI_DATABASE_URL must not turn this SQLite fixture into a
+  // Postgres migration (MUL-407).
+  db: Database = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }),
 ): Promise<{ app: any; store: MultiremiStore; db: Database; refs: SeedRefs }> {
   const store = new MultiremiStore(db);
   const refs = await seedStore(store, db);

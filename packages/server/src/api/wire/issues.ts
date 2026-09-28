@@ -2,6 +2,7 @@
 // Go-compat (`*Compatibility*`) and native shapers sit side by side on purpose:
 // the two route prefixes are intentionally divergent and must stay diffable.
 import type {
+  AssignIssueInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   MultiremiAttachment,
@@ -9,6 +10,7 @@ import type {
   MultiremiIssue,
   MultiremiIssueComment,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
   MultiremiIssueSession,
@@ -18,13 +20,19 @@ import type {
   MultiremiSessionResult,
   MultiremiTimelineEntry,
   MultiremiTimelinePage,
+  CreateSessionTaskInput,
   QuickCreateIssueInput,
   UpdateIssueInput,
 } from "@multiremi/contracts/types.js";
+import {
+  BatchParentStatusGuardError,
+  IssueDependencyError,
+  ParentStatusGuardError,
+} from "@multiremi/store/repos/issues-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
-import { cleanString, hasRequestField } from "./context.js";
+import { cleanString, currentTaskAccessToken, hasRequestField } from "./context.js";
 import { labelCompatibilityResponse } from "./projects.js";
 
 export function issueCompatibilityResponse(
@@ -45,6 +53,9 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    parent_done_grant_at: issue.parentDoneGrantAt,
+    parent_done_grant_by: issue.parentDoneGrantBy,
+    parent_done_grant_agent_id: issue.parentDoneGrantAgentId,
     issue_kind: issue.issueKind,
     source_issue_id: issue.sourceIssueId,
     project_id: issue.projectId,
@@ -218,13 +229,14 @@ export function issueSubscriberTargetErrorResponse(c: Context, error: unknown): 
   return c.json({ error: message }, 400);
 }
 
-export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependency): Record<string, unknown> {
+export function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependencyView): Record<string, unknown> {
   return {
     id: dependency.id,
     workspace_id: dependency.workspaceId,
     issue_id: dependency.issueId,
     depends_on_issue_id: dependency.dependsOnIssueId,
     type: dependency.type,
+    direction: dependency.direction,
     issue: dependency.issue ? issueCompatibilityResponse(dependency.issue) : null,
     depends_on_issue: dependency.dependsOnIssue ? issueCompatibilityResponse(dependency.dependsOnIssue) : null,
     created_at: dependency.createdAt,
@@ -237,8 +249,50 @@ export function issueSearchErrorResponse(c: Context, err: unknown): Response | n
   return null;
 }
 
+/**
+ * MUL-400 S1: a refused batch names every row the pre-flight rejected, so a
+ * caller can tell "this batch was refused" from "these particular rows were".
+ */
+function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: string[] } {
+  return err instanceof BatchParentStatusGuardError ? { rejected_issue_ids: err.rejectedIssueIds } : {};
+}
+
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // MUL-400 E1: the parent-status guard is a conflict, and the client needs the
+  // machine-readable code plus `open_children` to show the reason and to offer
+  // the member-only override.
+  if (err instanceof ParentStatusGuardError) {
+    if (err.code === "parent_done_requires_member") {
+      return c.json({
+        error: err.message,
+        code: err.code,
+        reason: err.details.reason ?? "grant_missing",
+        ...rejectedIssueIds(err),
+      }, 403);
+    }
+    return c.json({
+      error: err.message,
+      code: err.code,
+      reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
+      open_children: err.details.openChildren ?? 0,
+      // MUL-400 S1c (QA round 1): same shape as the native route — the guard's
+      // structured detail rides under `data.lastChildClosedAt`.
+      ...(err.details.lastChildClosedAt !== undefined
+        ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
+        : {}),
+      ...rejectedIssueIds(err),
+    }, 409);
+  }
+  // MUL-400 E3 gate 2: leaving backlog with unmet prerequisites is a conflict,
+  // and the body names the prerequisites so the client can explain the hold.
+  if (err instanceof IssueDependencyError) {
+    return c.json({
+      error: err.message,
+      code: err.code,
+      unmet: err.details.unmet ?? [],
+    }, 409);
+  }
   if (err.message === "auto_title is reserved for system metadata") {
     return c.json({ error: err.message }, 400);
   }
@@ -272,6 +326,14 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
 
 export function issueDependencyErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
+  // MUL-400 E3: cycles and ancestor dependencies are 409 with the offending key
+  // path; the console turns `path` into the readable chain.
+  if (err instanceof IssueDependencyError) {
+    if (err.code === "dependency_cycle" || err.code === "dependency_on_ancestor") {
+      return c.json({ error: err.message, code: err.code, path: err.details.path ?? [] }, 409);
+    }
+    return c.json({ error: err.message, code: err.code, unmet: err.details.unmet ?? [] }, 409);
+  }
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Dependent issue not found:")) return c.json({ error: "dependent issue not found" }, 400);
   if (err.message === "An issue cannot depend on itself") return c.json({ error: "an issue cannot depend on itself" }, 400);
@@ -279,6 +341,129 @@ export function issueDependencyErrorResponse(c: Context, err: unknown): Response
   if (err.message.includes("dependency type must be one of")) return c.json({ error: err.message }, 400);
   if (err.message.startsWith("Dependency not found for issue:")) return c.json({ error: "dependency not found" }, 404);
   return null;
+}
+
+/**
+ * MUL-400 E1: `force` is a member-only escape hatch for the parent-status guard.
+ * A task identity (a run) must never be able to bypass the guard on its own, so
+ * both PATCH routes funnel through here and get a 403 instead of the field.
+ */
+export function denyTaskIdentityIssueForce(c: Context, input: UpdateIssueInput): Response | null {
+  if (input.force !== true) return null;
+  if (!currentTaskAccessToken(c)) return null;
+  return c.json({
+    error: "force is a member-only override; a task cannot bypass the parent-status guard",
+    code: "issue_force_requires_member",
+  }, 403);
+}
+
+/**
+ * MUL-400 S1: fields the server owns and stamps from the authenticated request.
+ *
+ * The routes overwrite the camelCase spelling, but the store reads several of
+ * these as `input.foo ?? input.foo_snake` (the `issue_status_forced` audit's
+ * source task, the parent wakeup's `parentTaskId`, and A4's `actorType`). A body
+ * that sends BOTH spellings would therefore leave the snake_case alias behind
+ * to win the `??`. Strip both spellings before stamping, and strip the actor
+ * fields too so a body can never pick the identity the guard branches on.
+ */
+const SERVER_OWNED_ISSUE_UPDATE_FIELDS = [
+  "actorType",
+  "actor_type",
+  "actorId",
+  "actor_id",
+  "parentTaskId",
+  "parent_task_id",
+] as const;
+
+export function stripServerOwnedIssueUpdateFields(input: UpdateIssueInput = {}): UpdateIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_UPDATE_FIELDS);
+}
+
+/**
+ * MUL-448: lineage the assignment route stamps from the authenticated request.
+ *
+ * Same `??` hazard as above: the route overwrites `parentTaskId`, but a body
+ * that also sends `parent_task_id` leaves the alias to win when the credential
+ * carries no lineage (a member PAT has no source task, so the camelCase stamp
+ * is null and `null ?? body.parent_task_id` picks the forged value up).
+ */
+const SERVER_OWNED_ASSIGN_FIELDS = ["parentTaskId", "parent_task_id"] as const;
+
+export function stripServerOwnedAssignFields(input: AssignIssueInput = {}): AssignIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_ASSIGN_FIELDS);
+}
+
+/**
+ * MUL-448: what the Session task route derives for itself.
+ *
+ * `parentTaskId` comes from the caller's task credential and `sourceEventId`
+ * names the SCM event that authorizes repository scope; neither is a
+ * caller-selectable input on this surface.
+ */
+const SERVER_OWNED_SESSION_TASK_FIELDS = [
+  "parentTaskId",
+  "parent_task_id",
+  "sourceEventId",
+  "source_event_id",
+] as const;
+
+export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput): CreateSessionTaskInput {
+  return stripRequestFields(input, SERVER_OWNED_SESSION_TASK_FIELDS);
+}
+
+/**
+ * MUL-448 B4: caller-supplied creator/requester identities are not accepted.
+ *
+ * The native create route strips `createdBy` / `created_by`, and both
+ * quick-create routes strip `requesterId` / `requester_id`. These routes do not
+ * stamp a credentialed identity, so their result stays aligned with main. The
+ * compatibility `POST /api/issues` route still stamps the credentialed caller
+ * through `withIssueCreateRequestContext`.
+ */
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+
+export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
+}
+
+/**
+ * MUL-448 B3: provenance a credentialed create must not take from the body.
+ *
+ * `sourceIssueId` + `issueKind` are what the compatibility create route matches
+ * on (`findGeneratedIssueByTitle`) to hand back an existing issue instead of
+ * creating one, and `issueKind` alone flips the intake/execution semantics the
+ * generated-issue cache keys on. A member could therefore file an "execution"
+ * naming someone else's intake with the title a real run would use, and the
+ * run's own create would then return that forged issue with no task dispatched.
+ *
+ * The credentialed paths derive both fields from the credential: the compat
+ * route through `withIssueCreateRequestContext` (intake task token only), and
+ * the native route by simply not accepting them. The anonymous compatibility
+ * mode (master token / auth disabled) keeps passing the body through.
+ */
+const SERVER_OWNED_ISSUE_SOURCE_FIELDS = [
+  "sourceIssueId",
+  "source_issue_id",
+  "issueKind",
+  "issue_kind",
+] as const;
+
+export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T {
+  return stripRequestFields(input, SERVER_OWNED_ISSUE_SOURCE_FIELDS);
+}
+
+/** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+
+export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
+  return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);
+}
+
+function stripRequestFields<T extends object>(input: T, fields: readonly string[]): T {
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const field of fields) delete out[field];
+  return out as T;
 }
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
@@ -298,6 +483,11 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
+  // MUL-400 E1/E3: `force` survives the compatibility projection because the
+  // batch route needs it to select the parent-status override (the store moves
+  // it into a server-internal option that the dependency gate ignores). The
+  // routes strip it for task identities, so reaching the store means a member.
+  if (hasRequestField(input, "force")) out.force = input.force === true;
   return out;
 }
 
@@ -364,6 +554,7 @@ export function issueDetailCompatibilityResponse(
     ? issue.labels
     : store.listLabelsForExistingIssue(issue.id);
   const response = issueCompatibilityResponse({ ...issue, labels }, { includeLabels: true });
+  response.parent_done_grant = store.issueParentDoneGrantView(issue);
   // `getIssueWithTasks` hangs reactions/attachments off the object; a plain
   // hydrated issue does not, so read them from the store when absent.
   const withExtras = issue as MultiremiIssue & {
@@ -374,6 +565,10 @@ export function issueDetailCompatibilityResponse(
   const attachments = withExtras.attachments ?? store.listAttachmentsForExistingIssue(issue.id);
   if (reactions.length) response.reactions = reactions.map(issueReactionCompatibilityResponse);
   if (attachments.length) response.attachments = attachments.map(issueDetailAttachmentCompatibilityResponse);
+  // MUL-400 E1's `child_count` is deliberately NOT added here: MUL-385 pins this
+  // route at exactly four statements and forbids a parent_issue_id read. The
+  // native `/api/multiremi/issues/:id` route carries it instead, where the child
+  // progress it counts is already loaded.
   return response;
 }
 

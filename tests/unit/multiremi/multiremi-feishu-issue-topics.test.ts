@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -81,12 +82,54 @@ function prepareReport(store: MultiremiStore) {
   expect(root.mention).toBeUndefined();
   store.reportFeishuBotOutbound("local", "rt_bot", root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${issue.id}` });
   const leader = store.createTask({ agentId: agent, issueId: issue.id, prompt: "Work on Issue" });
-  const wake = store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: leader });
+  const wake = store.prepareFeishuIssueRoundPushes({ issue, leaderTask: leader });
   expect(wake).toHaveLength(1);
   return wake[0]!;
 }
 
 describe("Feishu Issue topics", () => {
+  for (const rollback of [false, true]) {
+    it(`publishes group Issue creation ${rollback ? "never on rollback" : "after commit"}`, () => {
+      const { store, revision } = scaffold();
+      configureTopics(store);
+      store.submitFeishuBotMessage("local", "rt_bot", {
+        revision, externalSessionKey: "oc_audit_discovery", externalMessageId: "om_audit_discovery",
+        senderOpenId: "ou_issue_topic_owner", text: "Hello",
+      });
+      store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
+      const events: boolean[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "issue_created") {
+          events.push(db!.inTransaction);
+        }
+      });
+      const original = StoreContext.prototype.appendIssueActivity;
+      if (rollback) StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+        original.call(this, issueId, input, queue);
+        if (input.type === "issue_created") throw new Error("Feishu group rollback injection");
+      };
+      try {
+        const send = () => store.submitFeishuBotMessage("local", "rt_bot", {
+          revision, chatType: "group", chatId: "oc_issue_topics",
+          externalSessionKey: "oc_issue_topics:thread:om_audit_root",
+          externalMessageId: "om_audit_root", senderOpenId: "ou_issue_topic_owner",
+          text: "Audit Feishu group Issue",
+        });
+        if (rollback) expect(send).toThrow("Feishu group rollback injection");
+        else {
+          const created = send();
+          const issueId = store.getFeishuIssueIdForChatSession(created.chatSessionId)!;
+          expect(store.listIssueActivity(issueId).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+        }
+      } finally {
+        StoreContext.prototype.appendIssueActivity = original;
+        unsubscribe();
+      }
+      expect(events).toEqual(rollback ? [] : [false]);
+      if (rollback) expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
+    });
+  }
+
   for (const kind of ["round", "human-request"] as const) {
     for (const legacyPin of [false, true]) {
       it(`schedules ${kind} notifications on the changed provider (legacy pin=${legacyPin})`, () => {
@@ -104,7 +147,7 @@ describe("Feishu Issue topics", () => {
         store.registerRuntime({ id: "rt_claude", name: "Claude", provider: "claude", workspaceId: "local" });
         store.updateAgent(botAgentId, { provider: "claude" });
         const wake = kind === "round"
-          ? store.prepareFeishuIssueRoundPushesWithinTransaction({ issue, leaderTask: sourceTask })[0]!
+          ? store.prepareFeishuIssueRoundPushes({ issue, leaderTask: sourceTask })[0]!
           : store.prepareFeishuBotHumanRequestPush(store.createTaskHumanRequest({
             taskId: sourceTask.id, kind: "question", payload: { message: "Continue?" },
           }))!;

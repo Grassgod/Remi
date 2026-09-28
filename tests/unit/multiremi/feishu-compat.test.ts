@@ -11,6 +11,7 @@ import type {
 import { MessageProviderError } from "@multiremi/contracts/messaging.js";
 import { MessageProviderRegistry } from "@multiremi/messaging/index.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
@@ -170,6 +171,52 @@ function migratedStore(): { store: MultiremiStore; sourceId: string } {
 }
 
 describe("legacy /feishu API on the Messaging Core", () => {
+  for (const path of ["direct", "approved proposal"] as const) {
+    for (const rollback of [false, true]) {
+      it(`${path} Issue activity ${rollback ? "rolls back without broadcast" : "publishes after commit"}`, () => {
+        const { store } = migratedStore();
+        let run: () => { issue: { id: string } };
+        if (path === "direct") {
+          run = () => store.createFeishuIssueOutcome("om_kept", {
+            workspaceId: "local", title: "Feishu direct audit",
+          });
+        } else {
+          const member = store.createWorkspaceMember({ name: "Feishu reviewer" });
+          const proposal = store.createFeishuIssueProposal("om_kept", {
+            workspaceId: "local", title: "Feishu proposal audit",
+            recipientId: member.id, actorType: "member", actorId: member.id,
+          });
+          run = () => store.approveFeishuIssueProposal(proposal.proposal!.id, {
+            workspaceId: "local", approvedBy: member.id,
+          }) as { issue: { id: string } };
+        }
+        const events: boolean[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => {
+          if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "issue_created") {
+            events.push(db!.inTransaction);
+          }
+        });
+        const original = StoreContext.prototype.appendIssueActivity;
+        if (rollback) StoreContext.prototype.appendIssueActivity = function patched(this: StoreContext, issueId, input, queue) {
+          original.call(this, issueId, input, queue);
+          if (input.type === "issue_created") throw new Error("Feishu issue rollback injection");
+        };
+        try {
+          if (rollback) expect(run).toThrow("Feishu issue rollback injection");
+          else {
+            const result = run();
+            expect(store.listIssueActivity(result.issue.id).filter((entry) => entry.type === "issue_created")).toHaveLength(1);
+          }
+        } finally {
+          StoreContext.prototype.appendIssueActivity = original;
+          unsubscribe();
+        }
+        expect(events).toEqual(rollback ? [] : [false]);
+        if (rollback) expect(store.listIssues().filter((issue) => issue.title.startsWith("Feishu "))).toHaveLength(0);
+      });
+    }
+  }
+
   it("serves migrated data to an old client under the field names it knows", async () => {
     const { store, sourceId } = migratedStore();
     const app = createApp(store);

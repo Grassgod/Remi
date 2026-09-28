@@ -32,10 +32,24 @@ function childDoneParentReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.child_done_parent_reason_agent_unavailable);
     case "squad_leader_unavailable":
       return t(($) => $.activity.child_done_parent_reason_squad_leader_unavailable);
-    case "active_task_exists":
-      return t(($) => $.activity.child_done_parent_reason_active_task_exists);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
+  }
+}
+
+/** MUL-400 E2: the four child endings, in the activity copy's vocabulary. */
+function childOutcomeLabel(outcome: string | undefined, t: IssuesT): string {
+  switch (outcome) {
+    case "done":
+      return t(($) => $.activity.child_outcome_done);
+    case "failed":
+      return t(($) => $.activity.child_outcome_failed);
+    case "blocked":
+      return t(($) => $.activity.child_outcome_blocked);
+    case "cancelled":
+      return t(($) => $.activity.child_outcome_cancelled);
+    default:
+      return outcome?.trim() || t(($) => $.activity.reason_unknown);
   }
 }
 
@@ -49,6 +63,9 @@ function commentMentionReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.comment_mention_reason_unlinked_agent_comment);
     case "target_unavailable":
       return t(($) => $.activity.comment_mention_reason_target_unavailable);
+    case "dependencies_unmet":
+      // MUL-400 E3 gate 3: the mention landed but the issue is still waiting.
+      return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }
@@ -127,6 +144,68 @@ export function formatActivity(
       });
     case "child_done_parent_triggered":
       return t(($) => $.activity.child_done_parent_triggered);
+    case "child_status_parent_coalesced":
+      return t(($) => $.activity.child_status_parent_coalesced);
+    case "parent_status_held":
+      return t(($) => details.reason === "grant_missing"
+        ? $.activity.parent_status_held_grant_missing
+        : details.reason === "final_summary_missing"
+          ? $.activity.parent_status_held_final_summary_missing
+          : $.activity.parent_status_held, {
+        status: statusLabel(details.requested ?? details.status ?? "?", t),
+      });
+    case "parent_done_grant_created":
+      return t(($) => $.activity.parent_done_grant_created, {
+        agent: details.agentId && resolveActorName ? resolveActorName("agent", details.agentId) : details.agentId ?? "?",
+      });
+    case "parent_done_grant_revoked":
+      return t(($) => $.activity.parent_done_grant_revoked);
+    case "parent_done_grant_used":
+      return t(($) => $.activity.parent_done_grant_used, {
+        source: details.source === "scm_merge"
+          ? t(($) => $.activity.parent_done_grant_source_scm_merge)
+          : t(($) => $.activity.parent_done_grant_source_api),
+      });
+    case "parent_status_derived":
+      return t(($) => $.activity.parent_status_derived);
+    case "child_status_after_parent_closed":
+      return t(($) => $.activity.child_status_after_parent_closed, {
+        key: details.childIssueKey ?? details.child_issue_key ?? "?",
+        outcome: childOutcomeLabel(details.outcome, t),
+      });
+    case "issue_status_forced":
+      return t(($) => $.activity.issue_status_forced, {
+        status: statusLabel(details.status ?? "?", t),
+      });
+    // MUL-400 E3: dependency gate and automatic start.
+    case "dependency_auto_started":
+      return t(($) => $.activity.dependency_auto_started, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_gate_exempted": {
+      const sourceLabels: Record<string, string> = {
+        redispatch: t(($) => $.activity.dependency_gate_exempted_redispatch),
+        retry: t(($) => $.activity.dependency_gate_exempted_retry),
+        continuation: t(($) => $.activity.dependency_gate_exempted_continuation),
+        delegation_return: t(($) => $.activity.dependency_gate_exempted_delegation_return),
+        parent_wakeup: t(($) => $.activity.dependency_gate_exempted_parent_wakeup),
+      };
+      return t(($) => $.activity.dependency_gate_exempted, {
+        source: sourceLabels[String(details.source)] ?? String(details.source ?? "?"),
+      });
+    }
+    case "dependency_satisfied":
+      return t(($) => $.activity.dependency_satisfied, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_auto_start_skipped":
+      return t(($) => $.activity.dependency_auto_start_skipped, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_prerequisite_failed":
+      return t(($) => $.activity.dependency_prerequisite_failed, {
+        key: details.prerequisiteKey ?? details.prerequisite_key ?? "?",
+      });
+    case "dependency_waiting":
+      return t(($) => $.activity.dependency_waiting);
+    case "dependency_force_started":
+      return t(($) => $.activity.dependency_force_started);
+    case "dependency_satisfied_coalesced":
+      return t(($) => $.activity.dependency_satisfied_coalesced);
     case "child_done_parent_skipped":
       return t(($) => $.activity.child_done_parent_skipped, {
         reason: childDoneParentReason(details.reason, t),
@@ -138,6 +217,17 @@ export function formatActivity(
     case "dispatch_skipped": {
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
+      }
+      if (details.reason === "member_assignee") {
+        return t(($) => $.activity.dispatch_skipped_member_assignee);
+      }
+      if (details.reason === "no_assignee") {
+        return t(($) => $.activity.dispatch_skipped_no_assignee);
+      }
+      // MUL-400 E3: the dependency hold has its own copy instead of showing the
+      // raw reason string.
+      if (details.reason === "dependencies_unmet") {
+        return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
       }
       const error = details.error?.trim();
       return error

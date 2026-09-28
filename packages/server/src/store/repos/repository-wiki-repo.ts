@@ -4,6 +4,7 @@ import type { StoreContext } from "@multiremi/store/context.js";
 import type {
   CreateRepositoryWikiDocInput,
   MultiremiProjectDocRef,
+  MultiremiKnowledgeDocSummary,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
   MultiremiRepositoryWikiStatus,
@@ -13,6 +14,18 @@ import type {
 import { normalizeWikiPath } from "@multiremi/contracts/wiki-path";
 
 type Row = Record<string, unknown>;
+
+/**
+ * Columns the summary projection reads. `body` is deliberately absent: it is the
+ * only unbounded column in this table and no summary caller reads it. Selecting
+ * it would also disable any index-only access on the workspace/updated_at index.
+ */
+const REPOSITORY_WIKI_DOC_PROJECTION = `SELECT id, repository_id, workspace_id, path, title, summary, tags, refs,
+         source_task_id, source_issue_id, author_type, author_id, updated_by_type, updated_by_id,
+         source_revision, status, status_message, version, storage_backend, content_uri,
+         content_sha256, sync_status, sync_error, snapshot_oid, compilation_run_id,
+         created_at, updated_at
+       FROM multiremi_repository_wiki_docs`;
 
 export interface RepositoryWikiWriteControl {
   contentUri: string;
@@ -88,11 +101,46 @@ export class RepositoryWikiRepo {
     ).all(workspaceId, repositoryId) as Row[]).map(toRepositoryWikiDoc);
   }
 
+  /**
+   * Workspace-wide metadata for the repository summary route (MUL-398 A2).
+   *
+   * The summary needs `repository_id`, `updated_at`, `status`,
+   * `status_message` and `source_revision` per page and nothing else, but the
+   * old `SELECT *` also carried `body`. Pages backed by OpenViking keep an empty
+   * row body, so this was cheap on 209 for now; a project in SQL mode stores the
+   * full text in the row, and this statement is workspace-wide, so the column is
+   * dropped here rather than relying on the storage mode.
+   *
+   * `body` is therefore always `""` in the returned records. Read a page's text
+   * through `RepositoryWikiService.get()` / `readBodies()`, which hydrate from
+   * the canonical store.
+   */
   listWorkspace(workspaceId: string): MultiremiRepositoryWikiDoc[] {
     return (this.ctx.db.query(
-      `SELECT * FROM multiremi_repository_wiki_docs
+      `${REPOSITORY_WIKI_DOC_PROJECTION}
        WHERE workspace_id = ? ORDER BY updated_at DESC`,
     ).all(workspaceId) as Row[]).map(toRepositoryWikiDoc);
+  }
+
+  /**
+   * Id/title/path for a bounded set of docs (MUL-386 C.2).
+   *
+   * Run-list responses only need `artifact{id,title,path}`, but the old path
+   * read every doc in the repository — `body` included — so 100 runs shipped
+   * megabytes of unrelated content. Bounded by the caller's id list.
+   */
+  listSummariesByIds(workspaceId: string, ids: readonly string[]): MultiremiKnowledgeDocSummary[] {
+    const unique = [...new Set(ids.map((id) => String(id ?? "").trim()).filter(Boolean))];
+    if (!unique.length) return [];
+    const placeholders = unique.map(() => "?").join(", ");
+    return (this.ctx.db.query(
+      `SELECT id, title, path FROM multiremi_repository_wiki_docs
+       WHERE workspace_id = ? AND id IN (${placeholders})`,
+    ).all(workspaceId, ...unique) as Row[]).map((row) => ({
+      id: String(row.id),
+      title: String(row.title ?? ""),
+      path: String(row.path ?? ""),
+    }));
   }
 
   getByRef(workspaceId: string, repositoryId: string, ref: string): MultiremiRepositoryWikiDoc | null {

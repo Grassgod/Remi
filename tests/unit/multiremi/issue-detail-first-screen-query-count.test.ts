@@ -5,7 +5,7 @@
 // pins two properties that a future refactor could quietly break:
 //
 //   1. the response shape does not drift — each route's body is compared
-//      against a golden captured from the pre-optimization implementation
+//      against a pinned golden (including S4's pending decision count)
 //      (`tests/fixtures/multiremi/issue-detail-first-screen-golden.json`), and
 //      a `bun run scripts/snapshot-api-routes.ts --check` run covers the same
 //      ground for the whole route table;
@@ -63,6 +63,10 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     },
   });
   return {
+    // Forward the backend: the store runs migrations on construction, and an
+    // inherited MULTIREMI_DATABASE_URL must not make this SQLite fixture take
+    // the Postgres migration branch (MUL-407).
+    dialect: "sqlite" as const,
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -79,7 +83,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
 }
 
 function createCountedStore(): { store: MultiremiStore; db: Database; probe: Probe } {
-  const db = new Database(":memory:");
+  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
   databases.push(db);
   const probe: Probe = {
     statements: 0,
@@ -93,13 +97,13 @@ function createCountedStore(): { store: MultiremiStore; db: Database; probe: Pro
 }
 
 function createStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
   databases.push(db);
   return { store: new MultiremiStore(db), db };
 }
 
 describe("MUL-385 issue detail first-screen response shape", () => {
-  it("matches the pre-optimization golden for all three routes", async () => {
+  it("matches the pinned golden for all three routes", async () => {
     // The golden was captured with the same PRNG + clock pin, so ids and page
     // cursors line up and only a genuine shape change can fail this comparison.
     const restoreIds = installDeterministicIds();
@@ -145,7 +149,7 @@ describe("MUL-385 issue detail first-screen response shape", () => {
 });
 
 describe("MUL-385 issue detail first-screen query counts", () => {
-  it("keeps /api/issues/:id at exactly four statements", async () => {
+  it("adds only one aggregate query for the pending decision count", async () => {
     const { store, db, probe } = createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const fixture = seedIssueDetailFirstScreenFixture(store, {
@@ -156,12 +160,11 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     const response = await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS });
     expect(response.status).toBe(200);
 
-    // `SELECT *` for the issue, the label join, its reactions and its
-    // attachments. Tasks, children, child progress and dependencies belong to
-    // `/api/multiremi/issues/:id`, which must keep loading them.
-    expect(probe.statements).toBe(4);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_tasks"))).toBe(false);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("parent_issue_id"))).toBe(false);
+    // The original four reads remain; S4 adds one aggregate over escalated
+    // decisions and pending human requests on this Issue and direct children.
+    expect(probe.statements).toBe(5);
+    expect([...probe.bySql.keys()].filter((sql) => sql.includes("multiremi_issue_decisions"))).toHaveLength(1);
+    expect([...probe.bySql.keys()].some((sql) => sql.includes("SELECT * FROM multiremi_tasks"))).toBe(false);
     expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_issue_dependencies"))).toBe(false);
   });
 
@@ -208,5 +211,93 @@ describe("MUL-385 issue detail first-screen query counts", () => {
 
     // An empty input must not issue a statement and must not invent sessions.
     expect(store.listSessionParticipantsForSessions([]).size).toBe(0);
+  });
+});
+
+/**
+ * MUL-386: the golden scrubber rewrites the wall clock inside a timeline page
+ * cursor (`base64url([createdAt, id])`), but only for that exact shape. The id
+ * has to stay in the comparison, and a payload of any other shape has to survive
+ * untouched — otherwise the guard would silently accept a real shape change.
+ */
+describe("MUL-386 cursor normalization", () => {
+  const encodeCursor = (payload: unknown): string =>
+    Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const decodeCursor = (cursor: string): unknown =>
+    JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  const normalizeCursorField = (cursor: string): string => {
+    const out = normalizeIssueDetailResponse({ next_cursor: cursor }) as { next_cursor: string };
+    return out.next_cursor;
+  };
+
+  it("scrubs the timestamp and keeps the id verbatim", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_8yh955wqxxjs"]);
+    expect(decodeCursor(normalizeCursorField(cursor))).toEqual(["<timestamp>", "cmt_8yh955wqxxjs"]);
+  });
+
+  it("scrubs prev_cursor the same way", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.187Z", "cmt_8yh955wqxxjs"]);
+    const out = normalizeIssueDetailResponse({ prev_cursor: cursor }) as { prev_cursor: string };
+    expect(decodeCursor(out.prev_cursor)).toEqual(["<timestamp>", "cmt_8yh955wqxxjs"]);
+  });
+
+  it("keeps the id participating in the comparison", () => {
+    const first = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_first"]));
+    const second = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_second"]));
+    expect(first).not.toBe(second);
+  });
+
+  it("absorbs a millisecond shift and is idempotent", () => {
+    const earlier = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.187Z", "cmt_x"]));
+    const later = normalizeCursorField(encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_x"]));
+    expect(later).toBe(earlier);
+    expect(normalizeCursorField(later)).toBe(later);
+  });
+
+  it("leaves a single-element payload untouched", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z"]);
+    expect(normalizeCursorField(cursor)).toBe(cursor);
+  });
+
+  it("leaves a payload whose id is not a string untouched", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", 123]);
+    expect(normalizeCursorField(cursor)).toBe(cursor);
+  });
+
+  it("keeps an id that merely looks like a timestamp", () => {
+    const cursor = encodeCursor(["2026-09-20T12:00:00.188Z", "cmt_2026-09-20T12:00:00.188Z"]);
+    expect(decodeCursor(normalizeCursorField(cursor))).toEqual([
+      "<timestamp>",
+      "cmt_2026-09-20T12:00:00.188Z",
+    ]);
+  });
+
+  it("leaves payloads of other arities or shapes untouched", () => {
+    for (const payload of [
+      ["2026-09-20T12:00:00.188Z", "cmt_x", "extra"],
+      [123, "2026-09-20T12:00:00.188Z"],
+      ["see 2026-09-20T12:00:00.188Z", "cmt_x"],
+      { createdAt: "2026-09-20T12:00:00.188Z", id: "cmt_x" },
+      "2026-09-20T12:00:00.188Z",
+      null,
+    ]) {
+      const cursor = encodeCursor(payload);
+      expect(normalizeCursorField(cursor)).toBe(cursor);
+    }
+  });
+
+  it("leaves an undecodable cursor untouched", () => {
+    for (const cursor of ["not-json", "!!!", "YWJj"]) {
+      expect(normalizeCursorField(cursor)).toBe(cursor);
+    }
+  });
+
+  it("still replaces plain timestamps outside cursors", () => {
+    const out = normalizeIssueDetailResponse({
+      created_at: "2026-09-20T12:00:00.188Z",
+      id: "cmt_8yh955wqxxjs",
+      next_cursor: null,
+    }) as Record<string, unknown>;
+    expect(out).toEqual({ created_at: "<timestamp>", id: "cmt_8yh955wqxxjs", next_cursor: null });
   });
 });

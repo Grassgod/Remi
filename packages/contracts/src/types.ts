@@ -1260,6 +1260,126 @@ export interface MultiremiTaskHumanRequest {
   respondedBy: string | null;
   createdAt: string;
   respondedAt: string | null;
+  /**
+   * Deadline the executing daemon asked for (MUL-407). The server defaults it
+   * to an hour when an older daemon omits `timeout_ms`; the reminder lane and
+   * the terminal card both read it. The daemon still owns the actual timeout
+   * decision, so this is a scheduling hint rather than a second authority.
+   */
+  expiresAt?: string | null;
+}
+
+/**
+ * MUL-400 E4: one "waiting for your decision" item recorded on a parent Issue.
+ *
+ * A child run raises it instead of blocking: the parent owner either answers it
+ * itself (`answered`) or hands it to a human (`escalated`). Only escalated rows
+ * enter the human "waiting for you" list. This is deliberately a light row, not
+ * a scoped grant object: there is no scope, expiry or revocation.
+ */
+export type MultiremiIssueDecisionKind = "merge" | "production_change" | "criteria" | "question" | "permission" | "other";
+
+export type MultiremiIssueDecisionStatus = "pending" | "escalated" | "answered" | "withdrawn";
+
+/** Who answered: a human (`member`) or the parent's owner agent (`agent`). */
+export type MultiremiIssueDecisionAnswererType = "member" | "agent";
+
+export interface MultiremiIssueDecisionAnswer {
+  answererType: MultiremiIssueDecisionAnswererType;
+  answererId: string;
+  /** The answer itself: the chosen option(s) or free text. */
+  answer: string;
+  /** Why this is the right call. Required for an agent answer. */
+  reason: string;
+  /** How to overturn it. Required when the parent's owner agent answers. */
+  overturn: string | null;
+  answeredAt: string;
+}
+
+export interface MultiremiIssueDecision {
+  id: string;
+  workspaceId: string;
+  /** The Issue the row hangs on: the source Issue's parent, or the source itself. */
+  issueId: string;
+  /** The child Issue (or the run's own Issue) that raised it. */
+  sourceIssueId: string;
+  sourceTaskId: string | null;
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string;
+  options: string[] | null;
+  status: MultiremiIssueDecisionStatus;
+  /** Latest answer; earlier answers stay in {@link history}. */
+  answer: MultiremiIssueDecisionAnswer | null;
+  answeredByMemberId: string | null;
+  answeredAt: string | null;
+  /** Every answer in order, so a human re-answer keeps the previous record. */
+  history: MultiremiIssueDecisionAnswer[];
+  /** The parent owner agent expected to answer a `pending` row, when one exists. */
+  ownerAgentId: string | null;
+  createdByAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MultiremiIssueDecisionBucket = "waiting_on_human" | "pending_owner" | "answered";
+
+/**
+ * MUL-400 E4 read model: the two groups the parent page renders. The waiting
+ * group mixes escalated decisions with the subtree's pending human requests, so
+ * it is a union view rather than a mirror table.
+ */
+export interface MultiremiIssueDecisionEntry {
+  id: string;
+  bucket: MultiremiIssueDecisionBucket;
+  type: "decision" | "human_request";
+  kind: MultiremiIssueDecisionKind;
+  title: string;
+  body: string | null;
+  status: string;
+  issueId: string;
+  sourceIssueId: string | null;
+  sourceTaskId: string | null;
+  options: string[] | null;
+  /** Original payload for the existing human-request cards. */
+  payload?: Record<string, unknown>;
+  answer: MultiremiIssueDecisionAnswer | null;
+  /**
+   * Every answer in chronological order, oldest first. Present on `decision`
+   * entries (and `[]` when never answered) so a member revision does not hide
+   * the owner's original call; human-request entries omit the key.
+   */
+  history?: MultiremiIssueDecisionAnswer[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiIssueDecisionList {
+  waiting_on_human: MultiremiIssueDecisionEntry[];
+  owner_and_answered: {
+    pending: MultiremiIssueDecisionEntry[];
+    answered: MultiremiIssueDecisionEntry[];
+  };
+  count: number;
+}
+
+export interface IssueDecisionActor {
+  type: "member" | "agent";
+  id: string;
+  taskId: string | null;
+}
+
+export interface CreateIssueDecisionInput {
+  kind: string;
+  title: string;
+  body?: string | null;
+  options?: string[] | null;
+}
+
+export interface AnswerIssueDecisionInput {
+  answer: string;
+  reason: string;
+  overturn?: string | null;
 }
 
 export type MultiremiTaskPromptMode = "bootstrap" | "delta";
@@ -1283,6 +1403,8 @@ export interface CreateTaskHumanRequestInput {
   taskId: string;
   kind: MultiremiTaskHumanRequestKind;
   payload: Record<string, unknown>;
+  /** Requested lifetime in milliseconds; omitted by daemons that predate it. */
+  timeoutMs?: number;
 }
 
 export type MultiremiTaskSteerKind = "steer" | "force_answer";
@@ -1684,6 +1806,20 @@ export interface CreateTaskInput {
   /** Server-internal lane generation. Public task creation strips this field. */
   issueSessionGeneration?: number | null;
   issue_session_generation?: number | null;
+  /**
+   * Server-internal: do not let this task's creation park its Issue at `todo`.
+   * MUL-400 E2 uses it for the round that wakes a parent owner after a child
+   * ends, so a manual child edit cannot knock the parent out of `in_review`.
+   */
+  preserveIssueStatus?: boolean;
+  preserve_issue_status?: boolean;
+  /**
+   * Server-internal: exempt this task's Issue transition from guard B.
+   * `createTaskHumanRequest` parks the Issue at `in_review` while its owner waits
+   * for an answer; that transient is deliberately outside the guard.
+   */
+  exemptFromParentStatusGuard?: boolean;
+  exempt_from_parent_status_guard?: boolean;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -1700,6 +1836,7 @@ export interface CreateTaskInput {
   sessionId?: string | null;
   attempt?: number | null;
   maxAttempts?: number | null;
+  max_attempts?: number | null;
   /** Server-internal retry level used to shrink Session projection budgets. */
   projectionDegradeLevel?: number | null;
   projection_degrade_level?: number | null;
@@ -1801,11 +1938,40 @@ export interface MultiremiIssue {
   labels: MultiremiLabel[];
   /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
   attachments?: MultiremiAttachment[];
+  /**
+   * MUL-400 S1c (A4): the raw `parent_done_grant` columns. All three are null
+   * when no member has authorized the owner agent, which is the default for
+   * every existing row. The derived shape the detail routes expose is
+   * {@link MultiremiIssueParentDoneGrant}.
+   */
+  parentDoneGrantAt: string | null;
+  parentDoneGrantBy: string | null;
+  parentDoneGrantAgentId: string | null;
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * MUL-400 S1c (A4): why a stored grant does or does not authorize the CURRENT
+ * owner agent to close the parent. `grant_missing` is "nobody granted";
+ * `assignee_changed` is "the grant still names a different agent" (D1: a grant
+ * never follows a re-assignment); `owner_not_agent` is "the owner resolves to no
+ * runnable agent at all", which is also what a member-owned parent reports.
+ */
+export type MultiremiIssueParentDoneGrantIneffectiveReason =
+  | "grant_missing"
+  | "assignee_changed"
+  | "owner_not_agent";
+
+export interface MultiremiIssueParentDoneGrant {
+  granted_at: string;
+  granted_by: string;
+  agent_id: string;
+  effective: boolean;
+  ineffective_reason: MultiremiIssueParentDoneGrantIneffectiveReason | null;
 }
 
 export interface MultiremiIssueWithTasks extends MultiremiIssue {
@@ -1814,7 +1980,7 @@ export interface MultiremiIssueWithTasks extends MultiremiIssue {
   attachments: MultiremiAttachment[];
   children: MultiremiIssue[];
   childProgress: MultiremiIssueChildProgress;
-  dependencies: MultiremiIssueDependency[];
+  dependencies: MultiremiIssueDependencyView[];
 }
 
 export interface MultiremiIssueShare {
@@ -1978,7 +2144,25 @@ export interface MultiremiIssueChildProgress {
   parentIssueId: string;
   total: number;
   done: number;
+  /**
+   * Child buckets used by the issue surfaces (MUL-400 E1/E3). `cancelled` and
+   * `blocked` are terminal/parked states, `active` counts children with work in
+   * flight, and `waiting` counts children parked in `backlog` with at least one
+   * unmet `blocked_by` prerequisite.
+   */
+  cancelled: number;
+  blocked: number;
+  waiting: number;
+  active: number;
 }
+
+/**
+ * MUL-400 E3: which side of the relation the caller is on. `blocked_by` means
+ * the caller waits for the other issue, `blocks` means the other issue waits
+ * for the caller, and `null` is `related`, which carries no direction at all —
+ * it is neither a prerequisite nor a dependent.
+ */
+export type MultiremiIssueDependencyDirection = "blocked_by" | "blocks" | null;
 
 export interface MultiremiIssueDependency {
   id: string;
@@ -1989,6 +2173,43 @@ export interface MultiremiIssueDependency {
   issue: MultiremiIssue | null;
   dependsOnIssue: MultiremiIssue | null;
   createdAt: string;
+}
+
+/**
+ * MUL-400 E3: one dependency row as read from a single issue's point of view.
+ * `direction` is computed relative to the requested issue: `blocked_by` means
+ * this issue waits on `issue`, `blocks` means `issue` waits on this one. Rows
+ * stored as `blocks` are read back reversed, so no migration is needed.
+ */
+export interface MultiremiIssueDependencyView {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  dependsOnIssueId: string;
+  type: MultiremiIssueDependencyType;
+  /** `null` for `related`, which has no direction. */
+  direction: MultiremiIssueDependencyDirection;
+  /** The issue on the other side of the relation, relative to the queried issue. */
+  issue: MultiremiIssue | null;
+  dependsOnIssue: MultiremiIssue | null;
+  createdAt: string;
+}
+
+/** MUL-400 E3: one unmet prerequisite of an issue, for gates and page data. */
+export interface MultiremiIssuePrerequisite {
+  issueId: string;
+  dependsOnIssueId: string;
+  key: string;
+  title: string;
+  status: string;
+  dependencyId: string;
+}
+
+export interface MultiremiIssueWaitingOn {
+  /** Direct prerequisites that are not `done` yet. */
+  unmet: MultiremiIssuePrerequisite[];
+  /** The full direct prerequisite list, met or not. */
+  prerequisites: MultiremiIssuePrerequisite[];
 }
 
 export interface MultiremiIssueComment {
@@ -2109,6 +2330,15 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
+  /**
+   * MUL-400 E3: prerequisite issues this one waits on, as keys or ids. Created
+   * with the issue in the same transaction, with cycle and ancestor checks.
+   * When any prerequisite is unmet the issue parks at `backlog` whatever
+   * `status` asked for, and the create response reports
+   * `dispatch_skipped_reason: dependencies_unmet`.
+   */
+  blockedBy?: string[];
+  blocked_by?: string[];
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   id?: string;
@@ -2180,6 +2410,66 @@ export interface UpdateIssueInput {
   /** Server-internal creator lineage for assignment/status-triggered tasks. */
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /**
+   * Member-only override for the parent-status guard (MUL-400 E1) and for the
+   * dependency gate (MUL-400 E3). A parent issue with unfinished children cannot
+   * enter `in_review`/`done`, and an issue with unmet prerequisites cannot leave
+   * `backlog`, unless the caller is a member and passes `force: true`; task
+   * identities always get a 403 from the routes, so a run can never bypass
+   * either guard on its own.
+   */
+  force?: boolean;
+}
+
+/**
+ * Server-internal options for {@link UpdateIssueInput} writes. These deliberately
+ * live OUTSIDE the input object: the wire layer builds `UpdateIssueInput` straight
+ * from the request body, so anything on that shape is client-reachable. The SCM
+ * merge effect is the only caller and passes this positionally on the server.
+ */
+export interface UpdateIssueOptions {
+  /**
+   * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
+   * Issue after a merge that already required a human authorization carries the
+   * same decision the guard exists to protect. A parent with unfinished children
+   * is still held — the effect handles that itself, with `parent_status_held`.
+   */
+  allowParentStatusGuardBypass?: boolean;
+  /** Record `parent_status_held` instead of applying the requested status. */
+  holdParentStatus?: boolean;
+  /** Extra fields for the `parent_status_held` activity, e.g. the merge source. */
+  holdParentStatusData?: Record<string, unknown> | null;
+  /**
+   * MUL-400 E3 (QA round 2, blocker 5): batch update keeps S1's member override
+   * for the *parent-status* guard, but it must not become a second way to cross
+   * the dependency gate - the plan allows exactly one (the member PATCH status
+   * write) so an override always leaves `dependency_force_started`. The batch
+   * route moves the request's `force` here, where only the parent-status guard
+   * reads it.
+   */
+  parentStatusForce?: boolean;
+  /**
+   * MUL-400 S1c (QA round 1): where the `parent_done_grant_used` audit row came
+   * from. The SCM merge effect closes the parent through the same in-transaction
+   * writer as the API, so the row must still distinguish the two. Server-only —
+   * `UpdateIssueOptions` is passed positionally by the store and is never built
+   * from the request body.
+   */
+  parentDoneGrantSource?: "api" | "scm_merge";
+  /** Extra audit fields for the merge-sourced grant use (PR number and URL). */
+  parentDoneGrantData?: Record<string, unknown> | null;
+}
+
+/**
+ * MUL-400 E3: server-internal dispatch options. The dependency override is
+ * deliberately NOT part of {@link AssignIssueInput}: that type is bound straight
+ * from request bodies, and a body-reachable bypass would let a caller start a
+ * waiting issue without the `dependency_force_started` record the plan requires.
+ * Only `IssuesRepo.dispatchForcedStart` passes it, after the member-only status
+ * write has already been validated and audited.
+ */
+export interface AssignIssueOptions {
+  force?: boolean;
 }
 
 export interface BatchUpdateIssuesInput {
@@ -2211,6 +2501,12 @@ export interface ListIssuesInput {
   projectIds?: string[];
   project_ids?: string[];
   metadata?: Record<string, string | number | boolean> | null;
+  /** MUL-400 E3: only direct children of this issue (key or id). */
+  parentId?: string | null;
+  parent_id?: string | null;
+  /** MUL-400 E3: only issues without a parent. Takes precedence over `parentId`. */
+  topLevelOnly?: boolean;
+  top_level_only?: boolean;
   includeNoAssignee?: boolean;
   includeNoProject?: boolean;
   includeArchived?: boolean;
@@ -2265,9 +2561,21 @@ export interface QuickCreateIssueResult {
 
 export interface CreateIssueDependencyInput {
   id?: string;
+  /**
+   * MUL-400 E3: a key (`MUL-12`) or an id, resolved server-side. Stored rows are
+   * always `blocked_by`; when `type: blocks` is requested the pair is flipped so
+   * the table keeps exactly one direction.
+   */
   dependsOnIssueId?: string;
   depends_on_issue_id?: string;
   type?: MultiremiIssueDependencyType | string;
+  /** Server-internal attribution for the `issue_dependency_added` activity. */
+  actorType?: string;
+  actor_type?: string;
+  actorId?: string | null;
+  actor_id?: string | null;
+  parentTaskId?: string | null;
+  parent_task_id?: string | null;
 }
 
 export interface CreateIssueCommentInput {
@@ -3109,6 +3417,26 @@ export interface MultiremiKnowledgeSubmission {
   updatedAt: string;
 }
 
+/**
+ * Submission as it appears in a list page (MUL-386 C.2).
+ *
+ * The list route deliberately stops reading `body` and `patch`: 100 raw bodies
+ * plus patches were 11.8–14 MB of `db_bytes` per request. `bodyExcerpt` is the
+ * SQL-side prefix that keeps the one-line list preview working; the full text is
+ * fetched per id when a row is actually opened.
+ */
+export interface MultiremiKnowledgeSubmissionListItem
+  extends Omit<MultiremiKnowledgeSubmission, "body" | "patch"> {
+  bodyExcerpt: string;
+}
+
+/** Id/title/path only — the fields an `artifact` summary in a run list uses. */
+export interface MultiremiKnowledgeDocSummary {
+  id: string;
+  title: string;
+  path: string;
+}
+
 export interface MultiremiKnowledgeCompilationRun {
   id: string;
   workspaceId: string;
@@ -3131,6 +3459,8 @@ export interface MultiremiKnowledgeSubmissionListInput {
   repositoryId?: string | null;
   scope?: string | null;
   status?: string | null;
+  /** Literal, case-insensitive substring match over body/id/path/slug/type/scope. */
+  q?: string | null;
   cursor?: string | null;
   limit?: number | null;
 }
@@ -3158,6 +3488,16 @@ export interface MultiremiKnowledgeCompilationRunSource {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+
+/**
+ * Run source without `metadata` (MUL-386 C.2).
+ *
+ * `metadata` is arbitrary JSON (SCM payloads with file lists); the runs list
+ * shipped up to 13.8 MB of it for 100 runs. Only the single-run route returns it.
+ */
+export type MultiremiKnowledgeCompilationRunSourceListItem =
+  Omit<MultiremiKnowledgeCompilationRunSource, "metadata">;
+
 
 export interface MultiremiKnowledgeCompilationOutput {
   id: string;
@@ -4040,6 +4380,17 @@ export interface ReportBotMenuPublishInput {
 /** Capability a Runtime must advertise before it can be selected to host the bot. */
 export const FEISHU_CONCIERGE_CONFIG_CAPABILITY = "feishu_concierge_config_v1";
 
+/**
+ * Metadata flag a bot host sets when it can render server-built decision cards
+ * (MUL-407). The control plane only writes a `decision_card` delivery for a host
+ * that reports it, so an older daemon keeps the previous "wake a relay Agent"
+ * behavior until it is upgraded.
+ */
+export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4076,6 +4427,47 @@ export interface FeishuBotOutboundMention {
   /** Omitted until prepared; null means a deliberate no-mention outcome. */
   resolvedOpenId?: string | null;
 }
+
+/**
+ * Feishu outbound lanes (MUL-407 / E5). The human-request lifecycle feeds only
+ * these; MUL-403 replaces the event source (Live Hub subscription) without
+ * changing the kinds or the checkpoint fields.
+ */
+export type FeishuBotOutboundDeliveryKind =
+  | "decision_card"
+  | "decision_card_patch"
+  | "decision_reminder";
+
+/**
+ * Lifecycle events a decision-card pipeline consumes, keyed by request id.
+ * Today the source is the request write plus bot-host polling; MUL-403 swaps in
+ * a subscription. Names are part of the interface with MUL-403.
+ */
+export type FeishuHumanRequestLifecycleEvent =
+  | "created"
+  | "reminder_due"
+  | "responded"
+  | "expired"
+  | "cancelled";
+
+/**
+ * Why a decision lane fell back to plain text (MUL-407). The first three mean
+ * "nobody could be identified as the person to ask", so the reminder must not
+ * @ anyone; `send_failed` keeps whatever recipient was already resolved.
+ */
+export type FeishuDecisionDegradeReason =
+  | "notify_none"
+  | "invalid_recipient"
+  | "unresolved_recipient"
+  | "send_failed";
+
+/** Reasons where no one was addressable, so a reminder must not @ anyone. */
+export const FEISHU_DECISION_NO_RECIPIENT_REASONS: readonly FeishuDecisionDegradeReason[] =
+  ["notify_none", "invalid_recipient", "unresolved_recipient"];
+
+/** Every reason a decision lane may report, accepted at the daemon boundary. */
+export const FEISHU_DECISION_DEGRADE_REASONS: readonly FeishuDecisionDegradeReason[] =
+  [...FEISHU_DECISION_NO_RECIPIENT_REASONS, "send_failed"];
 
 /** What the control plane wants the selected Runtime to do with the connector. */
 export type FeishuBotDesiredState = "running" | "stopped";
@@ -4133,6 +4525,38 @@ export interface MultiremiFeishuBotOutboundDelivery {
   presentation?: FeishuPresentationCheckpoint;
   /** The requester, including in private chats where the final card needs no @. */
   interactionOpenId?: string;
+  /**
+   * What the host should do with this delivery (MUL-407). Absent means the
+   * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
+   * `decision_card` carries a server-built card in `body` and posts it as a
+   * proactive thread reply; `decision_card_patch` edits the message named by
+   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   */
+  kind?: FeishuBotOutboundDeliveryKind;
+  /** Set on every decision-card lane so the host can poll the request. */
+  humanRequestId?: string;
+  human_request_id?: string;
+  /**
+   * The Task that asked. The host needs it to read and answer the request over
+   * the existing task-scoped routes, including after it restarts and has to
+   * re-register a card it no longer remembers sending.
+   */
+  humanRequestTaskId?: string;
+  human_request_task_id?: string;
+  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  targetMessageId?: string;
+  target_message_id?: string;
+  /**
+   * Set when a decision lane could not address the person who was asked
+   * (MUL-407). The host then sends `body` as plain text instead of rendering a
+   * card, and the control plane skips both the terminal patch and the reminder
+   * mention for this request.
+   */
+  degraded?: FeishuDecisionDegradeReason;
+  degradeReason?: FeishuDecisionDegradeReason;
+  /** Reminder deadline for `decision_card` / `decision_reminder`. */
+  expiresAt?: string | null;
+  expires_at?: string | null;
 }
 
 /**

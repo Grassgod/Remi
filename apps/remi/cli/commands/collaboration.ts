@@ -55,6 +55,9 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
   { name: "project", type: "string", valueName: "project", description: "Project filter" },
   { name: "offset", type: "integer", valueName: "n", description: "Legacy offset" },
   { name: "metadata", type: "string", valueName: "k=v", repeatable: true, description: "Metadata filter" },
+  // MUL-400 E3: hierarchy filters for the list surfaces.
+  { name: "parent", type: "string", valueName: "issue", description: "Only direct sub-issues of this issue" },
+  { name: "top-level-only", type: "boolean", description: "Only issues without a parent" },
   { name: "full-id", type: "boolean", description: "Show complete IDs" },
 ];
 
@@ -80,6 +83,10 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
 
 const ISSUE_CREATE_FIELDS: readonly CliOptionSpec[] = [
   ...ISSUE_FIELDS,
+  // MUL-400 E3: prerequisites declared at creation. An issue with an unmet
+  // prerequisite parks at backlog and the response says
+  // `dispatch_skipped_reason: dependencies_unmet`.
+  { name: "blocked-by", type: "string", valueName: "issue", repeatable: true, description: "Prerequisite issue (key or id) this issue waits for" },
   { name: "no-bind-topic", type: "boolean", description: "Create the Issue without moving the current Feishu topic workspace" },
   { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
 ];
@@ -143,13 +150,20 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     legacySpec("issue.bind-topic", ["issue", "bind-topic"], "Resume a local Feishu topic workspace migration", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
     ], ["issue", "bind-topic"]),
-    legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], ISSUE_FIELDS, ["issue", "update"]),
+    legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], [
+      ...ISSUE_FIELDS,
+      // MUL-400 E1: member-only override for the parent-status guard. A run
+      // (`task` identity) sending it is rejected by the server.
+      { name: "force", type: "boolean", description: "Force in_review/done with open sub-issues, or start a backlog issue with unmet prerequisites (members only)" },
+    ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
       { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
-    legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [], ["issue", "status"]),
+    legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [
+      { name: "force", type: "boolean", description: "Force the transition past the parent-status and dependency guards (members only)" },
+    ], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
     nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/restore`, {});
@@ -369,17 +383,62 @@ function issueExtendedSpecs(): CommandSpec[] {
     nativeSpec("issue.workspace", ["issue", "workspace"], "Show issue worktree state", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/workspace`);
     }),
+    nativeSpec("issue.decision.request", ["issue", "decision", "request"], "Record a non-blocking decision request", "write", HUMAN_TASK, [refPositional("issue")], [
+      { name: "kind", type: "string", valueName: "kind", description: "permission|merge|production_change|question|criteria|other" },
+      { name: "title", type: "string", valueName: "title", description: "Decision title" },
+      { name: "body", type: "string", valueName: "text", description: "Decision context" },
+      { name: "body-stdin", type: "boolean", description: "Read decision context from stdin" },
+      { name: "option", type: "string", valueName: "choice", repeatable: true, description: "Available choice" },
+    ], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "decisions"), {
+        kind: requiredOption(invocation, "kind"), title: requiredOption(invocation, "title"),
+        body: invocation.options["body-stdin"] === true ? readFileSync(0, "utf8") : stringOption(invocation, "body"),
+        options: stringOptions(invocation, "option"),
+      });
+    }),
+    nativeSpec("issue.decision.list", ["issue", "decision", "list"], "List decisions and pending human requests", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
+      await getAndRender(invocation, issueSubpath(invocation, "decisions"));
+    }),
+    nativeSpec("issue.decision.answer", ["issue", "decision", "answer"], "Answer or revise a decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [
+      { name: "text", type: "string", valueName: "answer", description: "Answer text" },
+      { name: "option", type: "string", valueName: "choice", description: "Chosen option" },
+      { name: "reason", type: "string", valueName: "text", description: "Reason for the answer (required for agents)" },
+      { name: "overturn", type: "string", valueName: "text", description: "How a human can overturn it (required for agents)" },
+    ], async (invocation) => {
+      const answer = stringOption(invocation, "text") ?? stringOption(invocation, "option");
+      if (!answer) throw new CliError("usage", "--text or --option is required");
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/answer`, {
+        answer, reason: stringOption(invocation, "reason"), overturn: stringOption(invocation, "overturn"),
+      });
+    }),
+    nativeSpec("issue.decision.escalate", ["issue", "decision", "escalate"], "Hand a pending decision to a member", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/escalate`, {});
+    }),
+    nativeSpec("issue.decision.withdraw", ["issue", "decision", "withdraw"], "Withdraw an unanswered decision", "write", HUMAN_TASK, [refPositional("issue"), refPositional("decision")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", `${issueSubpath(invocation, "decisions")}/${encodePath(positional(invocation, 1, "decision"))}/withdraw`, {});
+    }),
     nativeSpec("issue.dependency.list", ["issue", "dependency", "list"], "List issue dependencies", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "dependencies"), ["dependencies"]);
     }),
     nativeSpec("issue.dependency.add", ["issue", "dependency", "add"], "Add an issue dependency", "write", HUMAN_TASK, [refPositional("issue"), refPositional("dependency")], [
-      { name: "type", type: "string", valueName: "blocks|depends_on", description: "Dependency type" },
+      // MUL-400 E3: the server takes keys or ids, and normalizes `blocks` to the
+      // reverse `blocked_by` row so the table keeps a single direction.
+      { name: "type", type: "string", valueName: "blocked_by|blocks|related", description: "Dependency type (default blocked_by)" },
     ], async (invocation) => {
-      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "dependencies"), { dependency_id: positional(invocation, 1, "dependency"), dependency_type: stringOption(invocation, "type") ?? "depends_on" });
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "dependencies"), {
+        depends_on_issue_id: positional(invocation, 1, "dependency"),
+        type: stringOption(invocation, "type") ?? "blocked_by",
+      });
     }),
     nativeSpec("issue.dependency.remove", ["issue", "dependency", "remove"], "Remove an issue dependency", "destructive", HUMAN_TASK, [refPositional("issue"), refPositional("dependency")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${issueSubpath(invocation, "dependencies")}/${encodePath(positional(invocation, 1, "dependency"))}`);
+    }),
+    nativeSpec("issue.done-grant.add", ["issue", "done-grant", "add"], "Authorize the owner agent to close a parent issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "parent-done-grant"));
+    }),
+    nativeSpec("issue.done-grant.remove", ["issue", "done-grant", "remove"], "Revoke the owner agent's parent closure grant", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "DELETE", issueSubpath(invocation, "parent-done-grant"));
     }),
     nativeSpec("issue.reaction.list", ["issue", "reaction", "list"], "List issue reactions", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "reactions"), ["reactions"]);
@@ -765,6 +824,18 @@ function taskCommandSpecs(): CommandSpec[] {
       { name: "force-answer", type: "boolean", description: "Ask the agent to wrap up and deliver its best conclusion now" },
       { name: "reason", type: "string", valueName: "text", description: "Organizer action criterion" },
     ], async (invocation) => {
+      // MUL-468: `task steer <task>` is the only write path that is also a
+      // command prefix (`task steer list`). A bare invocation used to POST an
+      // empty steer; fail here instead, before any request leaves the CLI.
+      const hasSteerInput = ["content", "content-file", "content-stdin", "force-answer"]
+        .some((name) => invocation.options[name] !== undefined);
+      if (!hasSteerInput) {
+        throw new CliError(
+          "usage",
+          "remi task steer requires --content, --content-file, --content-stdin, or --force-answer; "
+            + "use remi task steer list <task> to read the directives already sent",
+        );
+      }
       await mutateAndRender(invocation, "POST", `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, {
         content: await contentOption(invocation),
         ...(invocation.options["force-answer"] === true ? { force_answer: true } : {}),

@@ -2516,6 +2516,71 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.decision.request": {
+      "command": "remi issue decision request",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.request",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.list": {
+      "command": "remi issue decision list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.answer": {
+      "command": "remi issue decision answer",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.answer",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.escalate": {
+      "command": "remi issue decision escalate",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.escalate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.decision.withdraw": {
+      "command": "remi issue decision withdraw",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.decision.withdraw",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.dependency.list": {
       "command": "remi issue dependency list",
       "auth": [
@@ -2549,6 +2614,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.dependency.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.done-grant.add": {
+      "command": "remi issue done-grant add",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.done-grant.remove": {
+      "command": "remi issue done-grant remove",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.remove",
       "output": [
         "table",
         "json",
@@ -4866,13 +4957,13 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "autopilot.run": {
-      "command": "remi autopilot run",
+    "autopilot.run-now": {
+      "command": "remi autopilot run-now",
       "auth": [
         "human",
         "task"
       ],
-      "capability": "autopilot.run",
+      "capability": "autopilot.run-now",
       "output": [
         "table",
         "json",
