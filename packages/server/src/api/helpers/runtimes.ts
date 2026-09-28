@@ -156,8 +156,10 @@ export function listRuntimesForCurrentUser(c: Context, store: MultiremiStore): {
     : denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
   const ownerFilter = c.req.query("owner") === "me" ? currentRequestUserId(c) : null;
-  const runtimes = store.listRuntimes().filter((runtime) => {
-    if (runtimeWorkspaceId(runtime) !== workspaceId) return false;
+  // MUL-473: the workspace filter is the SQL predicate now, so the other
+  // workspaces' Runtimes are neither read nor hydrated. The remaining filters
+  // are request-scoped (token binding, owner) and stay here.
+  const runtimes = store.listRuntimesForWorkspace(workspaceId).filter((runtime) => {
     const token = currentAccessToken(c);
     if (token?.type === "daemon" && (!token.daemonId || runtime.daemonId !== token.daemonId)) return false;
     return ownerFilter ? runtimeOwnerId(runtime) === ownerFilter : true;

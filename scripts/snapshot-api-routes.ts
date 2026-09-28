@@ -481,6 +481,7 @@ export interface SeedRefs {
   inboxItemId: string;
   inboxMemberId: string;
   humanRequestId: string;
+  decisionId: string;
   runtimeModelRequestId: string;
   dirScanRequestId: string;
   localSkillListRequestId: string;
@@ -695,6 +696,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   // MUL-410: an answered decision with a revision trail. Inserted directly so
   // the fixture stays deterministic: `createIssueDecision` would queue a round
   // and notify, and this row only exercises the read model.
+  const decisionId = "dcs_snapshot";
   const decisionHistory = [
     { answererType: "agent", answererId: agent.id, answer: "Merge after CI", reason: "Checks passed",
       overturn: "A member can reverse this if QA fails", answeredAt: "2026-01-01T00:00:01.000Z" },
@@ -708,7 +710,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
       created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'answered', ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      "dcs_snapshot",
+      decisionId,
       workspaceId,
       issue.id,
       issue.id,
@@ -899,6 +901,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     inboxItemId: inboxItem?.id ?? "inb_snapshot",
     inboxMemberId,
     humanRequestId: (humanRequest as any).id ?? (humanRequest as any).requestId ?? "hrq_snapshot",
+    decisionId,
     runtimeModelRequestId: (modelRequest as any).id ?? (modelRequest as any).requestId,
     dirScanRequestId: (dirScan as any).id ?? (dirScan as any).requestId,
     localSkillListRequestId: (localSkillList as any).id ?? (localSkillList as any).requestId,
@@ -945,6 +948,7 @@ const ID_BY_COLLECTION: Record<string, keyof SeedRefs> = {
 const BY_NAME: Record<string, keyof SeedRefs> = {
   attachmentId: "attachmentId",
   chatSessionId: "chatSessionId",
+  decisionId: "decisionId",
   dependencyId: "dependencyId",
   deliveryId: "deliveryId",
   invitationId: "invitationId",

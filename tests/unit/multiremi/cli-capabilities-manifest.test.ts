@@ -168,11 +168,18 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 677,
-      // A-5 removes 24 daemon routes; A-6 removes the remaining trace writer.
-      exempt: 67,
+      mapped: 678,
+      // MUL-407 adds one daemon-internal route (turning decision cards back into
+      // click handlers after a host restart), which the existing `/api/daemon/`
+      // rule exempts rather than mapping to a user command.
+      //
+      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
+      // channel), also exempt under `daemon_internal_protocol`: machine-to-server
+      // traffic between two API processes with no user-facing command.
+      // A-5/A-6 remove 25 daemon routes; MUL-412 keeps its two decision routes.
+      exempt: 71,
       missing: 0,
-      total: 744,
+      total: 749,
     });
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])

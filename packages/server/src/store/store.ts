@@ -84,6 +84,7 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
 import {
   IssuesRepo,
+  type AnswerIssueDecisionOptions,
   IssueDependencyError,
   ParentStatusGuardError,
   type IssueTimelineCursor,
@@ -1910,6 +1911,26 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueDecision(workspaceId, daemonId, issueId);
+  }
+
+  supportsFeishuIssueDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
+    return this.feishuBot.supportsIssueDecisionCard(workspaceId, runtimeId);
+  }
+
+  resolveFeishuDecisionOperatorMember(workspaceId: string, appId: string, openId: string | null | undefined) {
+    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
+  }
+
+  listFeishuIssueDecisionCards(workspaceId: string, runtimeId: string) {
+    return this.feishuBot.listLiveIssueDecisionCards(workspaceId, runtimeId);
+  }
+
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string) {
+    return this.feishuBot.getIssueDecisionCardContext(workspaceId, decisionId);
+  }
+
   listFeishuBotLiveDecisionCards(
     workspaceId: string,
     runtimeId: string,
@@ -1960,6 +1981,21 @@ runMigrations(this.db);
 
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
+  }
+
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.prepareIssueDecisionCardWithinTransaction(issue, decision, deferredEvents);
+  }
+
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.enqueueIssueDecisionCardPatchWithinTransaction(decision, deferredEvents);
   }
 
   prepareFeishuBotHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
@@ -2782,6 +2818,10 @@ runMigrations(this.db);
     return this.runtimes.listRuntimes();
   }
 
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
+    return this.runtimes.listRuntimesForWorkspace(workspaceId);
+  }
+
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {
     return this.agents.listActiveAgentsByRuntime(runtimeId);
   }
@@ -3111,6 +3151,7 @@ runMigrations(this.db);
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -3144,6 +3185,10 @@ runMigrations(this.db);
     return this.issues.getIssueDecision(issueId, decisionId);
   }
 
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecisionAnywhere(decisionId);
+  }
+
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
     return this.issues.listIssueDecisions(issueId);
   }
@@ -3156,8 +3201,14 @@ runMigrations(this.db);
     return this.issues.createIssueDecision(sourceIssueId, input, actor);
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
-    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor, options);
   }
 
   escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
@@ -3222,6 +3273,10 @@ runMigrations(this.db);
 
   countIssues(input: ListIssuesInput = {}): number {
     return this.issues.countIssues(input);
+  }
+
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false) {
+    return this.issues.listIssueStatusPages(input, includeArchivedTotal);
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -3913,7 +3968,7 @@ runMigrations(this.db);
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision {
     return this.issues.isSquadLeaderDelegation(input);
   }
 
@@ -4710,8 +4765,10 @@ runMigrations(this.db);
   }
 
   /** MUL-474: identity/status columns only, request-scoped. */
-  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
-    return this.tasks.getTaskIdentity(id);
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): import("@multiremi/store/context.js").TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout") {
+    return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
   }
 
   /** MUL-474: the `status` route's projection, without the prompt column. */
@@ -4995,8 +5052,12 @@ runMigrations(this.db);
     return this.tasks.appendTaskMessages(taskId, messages);
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
-    return this.tasks.listTaskMessages(taskId, sinceSeq);
+  getTaskMessagePageRows(): number {
+    return this.tasks.getTaskMessagePageRows();
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
+    return this.tasks.listTaskMessages(taskId, sinceSeq, throughSeq, limit);
   }
 
   recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {

@@ -3396,6 +3396,23 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "issue.status-pages": {
+      "command": "remi issue status-pages",
+      "aliases": [],
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.status-pages",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "issue.grouped": {
       "command": "remi issue grouped",
       "aliases": [],
@@ -10256,6 +10273,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/issues/:issueId/decisions/:decisionId": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "GET /api/daemon/runtimes/:id/claude-profile-key": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -10456,6 +10478,9 @@
     },
     "GET /api/issues/search": {
       "command": "issue.search"
+    },
+    "GET /api/issues/status-pages": {
+      "command": "issue.status-pages"
     },
     "GET /api/knowledge/runs": {
       "command": "knowledge.runs"
@@ -11121,6 +11146,11 @@
     "GET /healthz": {
       "command": "platform.health"
     },
+    "GET /internal/peer/health": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow."
+    },
     "GET /readyz": {
       "command": "platform.ready"
     },
@@ -11338,6 +11368,11 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "POST /api/daemon/heartbeat": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -12122,6 +12157,11 @@
     },
     "POST /auth/verify-code": {
       "command": "context.auth.verify-code"
+    },
+    "POST /internal/peer/events": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow."
     },
     "PUT /api/agents/:id": {
       "command": "agent.update"

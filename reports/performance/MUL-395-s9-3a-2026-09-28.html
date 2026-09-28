@@ -1,0 +1,124 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-395 S9-3a：issues 分组首页与归档计数</title><style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#172023;font:15px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:0}header{border-bottom:3px solid #16826b;background:#f4f8f7;padding:24px max(18px,calc((100% - 1080px)/2))}h1{font-size:25px;line-height:1.35;margin:0 0 6px}header p{margin:0;color:#425459}main{max-width:1116px;padding:16px 18px 36px;margin:auto}section{padding:18px 0;border-bottom:1px solid #dce3e4}h2{font-size:19px;margin:0 0 12px}p{margin:0 0 12px;overflow-wrap:anywhere}.table-scroll{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px 10px;border:1px solid #dce3e4;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#eef4f3;color:#223f39;white-space:nowrap}tbody tr:nth-child(even){background:#fafbfb}pre{margin:0;background:#f3f5f6;padding:12px;border-left:3px solid #b36f29;overflow-x:auto;max-width:100%;font-size:13px;line-height:1.55}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}@media(max-width:600px){h1{font-size:22px}h2{font-size:18px}th,td{padding:7px}header{padding:20px 18px}main{padding-top:8px}}@media print{header{padding:12px 0}main{padding:0}.table-scroll,pre{overflow:visible}section{break-inside:avoid}}
+</style></head><body><header><h1>MUL-395 S9-3a：issues 分组首页与归档计数</h1><p>服务端增量 · 2026-09-28 · 本地 PostgreSQL / SQLite fixture · Draft PR #311</p></header><main><section><h2>结论与范围</h2><p>新增 GET /api/issues/status-pages 和真实 CLI 命令 remi issue status-pages。旧列表接口保持原样，前端尚未调用新接口；页面请求收益将在 S9-3b 接线后生效。本次数字来自本地 fixture，不是生产页面测速。</p>
+<p>末次合并后的代码与性能采样基线：1b4921cfb2bc237357097cd5834ed38011e04c66，已合入 main 0c2b3865（包含 MUL-451、MUL-458、MUL-474、MUL-449）。58bf5cc0 合并无冲突；末次 0c2b3865 的唯一冲突在 CLI 测试文件，双方同时在 describe 开头新增 it，用两个独立 it 并排保留全部断言。逐项核对 listIssues 附近、共享 issueListQuery/resolveAssigneeFilterId 和 Store 委托；helpers/issues.ts、access-tokens-repo.ts 相对 main 无 diff。</p>
+<p>续跑盘点时工作区在 agent/MUL-395，HEAD c7be1916，stash 为空，无未提交实现和未推送独有提交。保留并沿用已合入的 S9-0 / S9-0.1。PR #311 保持 Draft：<a href="https://github.com/Grassgod/Remi/pull/311">PR #311</a>。</p></section>
+<section><h2>响应契约</h2><pre><code>{
+  &quot;groups&quot;: {
+    &quot;todo&quot;: { &quot;issues&quot;: [], &quot;total&quot;: 0, &quot;has_more&quot;: false }
+  },
+  &quot;archived_total&quot;: 21
+}</code></pre></section>
+<section><h2>字段与分页</h2><p>groups 的键是请求的规范化状态。每个状态 issues 和 total 与同条件 /api/issues?status=...&amp;limit=...&amp;offset=0 的结果逐字节一致；issues 完整沿用旧 compatibility Issue 字段、别名和 labels。空状态也保留。has_more = issues.length &lt; total。</p>
+<p>默认七个状态：backlog、todo、in_progress、in_review、done、blocked、cancelled。statuses/status 为逗号列表；open 规范化成 todo，重复状态去重。默认每状态 limit=50，上限 500，limit=0 返回空页及总数。仅支持 offset=0，非零 offset 返回 400；后续各状态继续调用旧 /api/issues。</p>
+<p>include_archived_total=true 才输出 archived_total，并且只增加一条 COUNT；不传时没有这个字段、没有这次查询。该值是当前工作区全部归档 issue 的数量，独立于状态、project、assignee 等筛选，保持 archivedIssueCountOptions 原口径。</p>
+<p>issues[] 的全部字段：id, workspace_id, number, identifier, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, parent_done_grant_at, parent_done_grant_by, parent_done_grant_agent_id, issue_kind, source_issue_id, project_id, runtime_workspace_id, position, start_date, due_date, completed_at, archived_at, created_at, updated_at, metadata, labels。labels[] 字段：id, workspace_id, name, color, created_at, updated_at。类型、空值和序列化均沿用 packages/server/src/api/wire/issues.ts 的 issueCompatibilityResponse。</p></section>
+<section><h2>全部查询参数</h2><div class="table-scroll"><table><thead><tr><th>参数</th><th>语义</th></tr></thead><tbody><tr><td>workspace_id</td><td>与旧列表相同的工作区解析和访问检查；也保留现有 X-Workspace-ID 上下文</td></tr>
+<tr><td>statuses / status</td><td>逗号分隔状态，默认全部七个；每状态独立第一页</td></tr>
+<tr><td>priorities / priority</td><td>逗号分隔优先级</td></tr>
+<tr><td>assignee_types, assignee_id, assignee_ids</td><td>类型列表、单个或多个引用；共用 resolveAssigneeFilterId，接受 usr_/mem_/agt_/无类型引用</td></tr>
+<tr><td>project_id, project_ids</td><td>单个或逗号分隔 project 筛选</td></tr>
+<tr><td>parent_id, top_level_only</td><td>父 issue 的 ID/编号与隐藏子单选项，完全沿用旧列表组合语义</td></tr>
+<tr><td>metadata</td><td>JSON 对象的字符串、数字、布尔值等值筛选；沿用旧列表 JS 筛选路径</td></tr>
+<tr><td>include_no_assignee, include_no_project</td><td>仅无 assignee / 无 project；true 开启</td></tr>
+<tr><td>include_archived, archived_only</td><td>包含归档 / 仅归档；true 开启，优先级沿用旧列表</td></tr>
+<tr><td>limit, offset</td><td>每状态数量，默认 50、上限 500；offset 仅 0</td></tr>
+<tr><td>include_archived_total</td><td>true 时输出工作区归档总数</td></tr></tbody></table></div></section>
+<section><h2>接口选择与一致快照</h2><p>独立 compatibility 路由使旧列表响应形状保持稳定，也避免复用按 assignee 分组的 /api/issues/grouped。每状态保留现有 ORDER BY updated_at DESC + LIMIT/OFFSET 子查询，再组成一条 UNION ALL；统计一次 GROUP BY status，labels 一次批量水合。生成 SQL 分支随状态数增加，但执行查询次数保持常数，没有逐状态数据库往返。</p>
+<p>选择 UNION ALL 是为了保留旧单状态 SELECT 的排序和截断，包括 updated_at 相同的记录；窗口排序可能改变相同时间戳时入选的记录。本轮没有为旧排序新增 ID tie-breaker。</p>
+<p>SQLite 使用同一个读事务；PG 在事务内首次读取前执行 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY。所有状态行、total、labels 与可选归档计数都在同一快照内。已有事务中的调用被拒绝，避免继承未知隔离级别。双连接 golden 在列表行读出后迁移状态、归档并删除标签，响应仍与变更前逐字节一致。</p></section>
+<section><h2>性能口径</h2><p>同一份 fixture 每状态 120 条，七个状态，limit=50，归档 21 条；my-issues 使用同一 project 与 usr_ assignee。先预热一次，再采五轮，下面是各指标中位数。七次旧单状态请求与新请求使用完全相同的筛选；另列加入原归档请求的完整首页。</p>
+<p>PG 的 dbq/db/dbb 直接读取真实 Server-Timing，包含鉴权、事务 BEGIN/COMMIT 和隔离级别设置；SQLite 的该计数器不计 SQL，故由驱动 probe 计实际语句（含 BEGIN/COMMIT）、驱动耗时和序列化结果字节。跨后端耗时不可直接比较。字节同时列 DB 返回字节和未压缩 HTTP JSON 字节。已包含 MUL-474 的 last_used_at 节流，不能拿节流合入前的数字混算。</p></section>
+<section><h2>postgres 同口径对比</h2><div class="table-scroll"><table><thead><tr><th>页面</th><th>请求</th><th>dbq</th><th>db ms</th><th>DB 字节</th><th>HTTP 字节</th></tr></thead><tbody><tr><td>issues</td><td>旧七次列表</td><td>35</td><td>33.600</td><td>480070</td><td>442058</td></tr>
+<tr><td>issues</td><td>新一次分组</td><td>8</td><td>10.000</td><td>474246</td><td>442261</td></tr>
+<tr><td>issues</td><td>旧七次列表 + 归档</td><td>39</td><td>37.700</td><td>481068</td><td>442082</td></tr>
+<tr><td>issues</td><td>新分组 + 归档</td><td>9</td><td>12.100</td><td>474281</td><td>442281</td></tr>
+<tr><td>issues</td><td>旧单状态</td><td>5</td><td>5.600</td><td>68510</td><td>63094</td></tr>
+<tr><td>my-issues</td><td>旧七次列表</td><td>56</td><td>51.200</td><td>490206</td><td>444221</td></tr>
+<tr><td>my-issues</td><td>新一次分组</td><td>11</td><td>13.300</td><td>477488</td><td>444424</td></tr>
+<tr><td>my-issues</td><td>旧七次列表 + 归档</td><td>60</td><td>54.800</td><td>491204</td><td>444245</td></tr>
+<tr><td>my-issues</td><td>新分组 + 归档</td><td>12</td><td>15.500</td><td>477523</td><td>444444</td></tr>
+<tr><td>my-issues</td><td>旧单状态</td><td>8</td><td>9.500</td><td>69958</td><td>63403</td></tr></tbody></table></div></section>
+<section><h2>sqlite 同口径对比</h2><div class="table-scroll"><table><thead><tr><th>页面</th><th>请求</th><th>dbq</th><th>db ms</th><th>DB 字节</th><th>HTTP 字节</th></tr></thead><tbody><tr><td>issues</td><td>旧七次列表</td><td>35</td><td>5.724</td><td>479349</td><td>442058</td></tr>
+<tr><td>issues</td><td>新一次分组</td><td>7</td><td>5.770</td><td>474068</td><td>442261</td></tr>
+<tr><td>issues</td><td>旧七次列表 + 归档</td><td>39</td><td>5.839</td><td>480265</td><td>442082</td></tr>
+<tr><td>issues</td><td>新分组 + 归档</td><td>8</td><td>5.675</td><td>474080</td><td>442281</td></tr>
+<tr><td>issues</td><td>旧单状态</td><td>5</td><td>0.849</td><td>68407</td><td>63094</td></tr>
+<tr><td>my-issues</td><td>旧七次列表</td><td>56</td><td>5.167</td><td>489086</td><td>444221</td></tr>
+<tr><td>my-issues</td><td>新一次分组</td><td>10</td><td>4.988</td><td>477253</td><td>444424</td></tr>
+<tr><td>my-issues</td><td>旧七次列表 + 归档</td><td>60</td><td>5.282</td><td>490002</td><td>444245</td></tr>
+<tr><td>my-issues</td><td>新分组 + 归档</td><td>11</td><td>4.874</td><td>477265</td><td>444444</td></tr>
+<tr><td>my-issues</td><td>旧单状态</td><td>8</td><td>0.771</td><td>69798</td><td>63403</td></tr></tbody></table></div></section>
+<section><h2>dbq golden 矩阵（含归档计数）</h2><div class="table-scroll"><table><thead><tr><th>每状态记录数</th><th>状态数</th><th>PG dbq</th><th>SQLite dbq</th></tr></thead><tbody><tr><td>1</td><td>1</td><td>9</td><td>8</td></tr>
+<tr><td>1</td><td>4</td><td>9</td><td>8</td></tr>
+<tr><td>1</td><td>7</td><td>9</td><td>8</td></tr>
+<tr><td>60</td><td>1</td><td>9</td><td>8</td></tr>
+<tr><td>60</td><td>4</td><td>9</td><td>8</td></tr>
+<tr><td>60</td><td>7</td><td>9</td><td>8</td></tr>
+<tr><td>300</td><td>1</td><td>9</td><td>8</td></tr>
+<tr><td>300</td><td>4</td><td>9</td><td>8</td></tr>
+<tr><td>300</td><td>7</td><td>9</td><td>8</td></tr></tbody></table></div></section>
+<section><h2>性能结果的边界</h2><p>PG 七状态分组（不含归档）的 issues dbq=8，对照单状态 5，为 1.60 倍；my-issues 为 11 / 8，即 1.375 倍。含归档分别为 9 / 5 和 12 / 8，也均小于两倍。1/4/7 状态 × 每状态 1/60/300 条，PG 九格均为 9，SQLite 九格均为 8。</p>
+<p>response 字节与旧七次列表合计几乎相同，新包装增加约 200 字节；这项改动减少请求和重复鉴权往返，并非响应裁剪。metadata 沿用旧实现的 JS 等值过滤，需要读取该筛选范围内的行，不承诺其读字节不随数据量增长。</p></section>
+<section><h2>验证结果</h2><div class="table-scroll"><table><thead><tr><th>检查</th><th>结果</th></tr></thead><tbody><tr><td>等价、dbq、可见性、双连接快照 golden</td><td>SQLite 11 pass / 0 fail，PG 11 pass / 0 fail；每后端 543 次断言</td></tr>
+<tr><td>末次合并后定向：SQLite golden + CLI 执行</td><td>57 pass / 0 fail，1458 次断言</td></tr>
+<tr><td>PG 全量 tests/unit/multiremi（58bf5cc0 合并态）</td><td>3658 pass / 0 fail，49283 次断言，291 文件，752.63 秒</td></tr>
+<tr><td>SQLite 全量 tests/unit/multiremi（58bf5cc0 合并态）</td><td>3467 pass / 219 skip / 0 fail，45800 次断言，291 文件，557.75 秒；现有 PG 专用检查在 SQLite 模式自动 skip</td></tr>
+<tr><td>末次合并后架构 tests/arch</td><td>92 pass / 0 fail，3727 次断言</td></tr>
+<tr><td>bunx tsc --noEmit</td><td>通过</td></tr>
+<tr><td>npm run docs:test / docs:check</td><td>13 pass / 0 fail；Development context validation passed</td></tr>
+<tr><td>npm run cli:capabilities:check</td><td>678 mapped / 92 exempt / 0 missing，770 routes</td></tr>
+<tr><td>snapshot-api-routes.ts --check</td><td>snapshot matches，770 routes</td></tr>
+<tr><td>HTML 报告桌面 / 手机验证</td><td>Chromium 1280×900 / 375×812；页面无水平溢出，长表格和代码块在自身区域滚动；无脚本、外部资源或存储依赖</td></tr>
+<tr><td>最新 head 的 PR CI</td><td>由交付评论记录；PR 保持 Draft，未合入、未转 Ready</td></tr></tbody></table></div></section>
+<section><h2>验证提交与末次增量复验</h2><p>两遍全量顺序运行的基线是 09879181（已合入 58bf5cc0）。末次 fetch 又遇到 0c2b3865，按补充要求完成语义合并，并重新运行 tsc、SQLite golden 与 CLI（57 pass）、PG golden（11 pass / 543 次断言）、架构、文档、CLI 清单、路由快照及两后端性能采样。新增主线变更未触及单状态列表或其筛选 helper；没有重复跑两遍本地全量。最终 head 的 CI 六项结果见交付评论。</p></section>
+<section><h2>首次 PG 回归与环境排除</h2><p>首次 PG 全量（合并新 main 前）3614 pass / 1 fail：旧双连接 Worker 返回 unexpected force response 401，约 1.8 秒，未贴近超时。任务分支单独重跑 401；纯 main 7bd32800 的只读归档副本同样 401。启动前 env -u MULTIREMI_TOKEN 后，30 轮竞态独立重跑通过。新 main 全量也使用这个启动方式，没有修改旧用例或断言。</p></section>
+<section><h2>复现命令</h2><pre><code># PG 环境变量只在内存中设置为自己启动的 55433 实例；不展示连接串。
+env -u MULTIREMI_TOKEN bun test tests/unit/multiremi/issue-status-pages.test.ts --timeout 20000
+env -u MULTIREMI_TOKEN bun test tests/unit/multiremi/ --timeout 20000
+# SQLite：先移除上述测试变量，再执行；两遍全量顺序运行。
+env -u MULTIREMI_TOKEN -u MULTIREMI_TEST_POSTGRES_URL bun test tests/unit/multiremi/issue-status-pages.test.ts --timeout 20000
+env -u MULTIREMI_TOKEN -u MULTIREMI_TEST_POSTGRES_URL bun test tests/unit/multiremi/ --timeout 20000
+env -u MULTIREMI_TOKEN bun run tests/manual/measure-issue-status-pages.ts
+env -u MULTIREMI_TOKEN -u MULTIREMI_TEST_POSTGRES_URL bun run tests/manual/measure-issue-status-pages.ts
+bun test tests/arch/
+bunx tsc --noEmit
+npm run docs:test
+npm run docs:check
+npm run cli:capabilities:check
+bun run scripts/snapshot-api-routes.ts --check</code></pre></section>
+<section><h2>临时变异结果（两后端）</h2><div class="table-scroll"><table><thead><tr><th>变异</th><th>失败断言</th><th>结果</th></tr></thead><tbody><tr><td>外层全局 LIMIT 覆盖各状态页</td><td>JSON.stringify({issues,total}) !== single.text；某桶预期 50 条，收到 []，total=120</td><td>SQLite / PG 各 1 fail</td></tr>
+<tr><td>移除 grouped 的 workspace 过滤</td><td>expect(bucket.issues.some(id.startsWith('iss_hidden'))).toBe(false)；Expected false，Received true</td><td>SQLite / PG 各 1 fail</td></tr>
+<tr><td>把 UNION 改为逐状态查询</td><td>expect(new Set(measurements).size).toBe(1)；Expected 1，Received 3</td><td>SQLite / PG 各 1 fail</td></tr></tbody></table></div></section>
+<section><h2>变异恢复</h2><p>每组临时改动都立即恢复，没有提交变异。还原后 git diff --exit-code -- packages/server/src 返回 0；正常 golden 通过。原始失败证据仅保留在本任务自己的 /tmp/mul395-mutation-* 日志。</p></section>
+<section><h2>自建 PG 的启动与清理</h2><p>上一轮临时目录在本轮运行环境中已不存在。本轮从公共 npm registry 获取 embedded PostgreSQL 18.4.0-beta.17（运行 PostgreSQL 18.4），在 /tmp/mul395-pg 下建立独立数据、socket、库文件目录；initdb 使用 trust，仅监听 127.0.0.1:55433。没有访问本机 5433 或任何别人的配置/环境。没有口令。</p>
+<p>本轮起的 PG 已用自己的数据目录和 pg_ctl fast stop 停掉。</p></section>
+<section><h2>PG 启停命令（本轮目录）</h2><pre><code># LIBS 由本轮自己的 ICU/libpq 文件组成。
+MUL395_PG_LIBS=/tmp/mul395-pg/libshim:/tmp/mul395-pg/icu/usr/lib/x86_64-linux-gnu:/tmp/mul395-pg/package/native/lib
+unshare --user --map-user=1000 --map-group=1000 env LD_LIBRARY_PATH=&quot;$MUL395_PG_LIBS&quot; /tmp/mul395-pg/package/native/bin/initdb -D /tmp/mul395-pg/data -U mul395 --auth=trust --encoding=UTF8 --locale=C
+unshare --user --map-user=1000 --map-group=1000 env LD_LIBRARY_PATH=&quot;$MUL395_PG_LIBS&quot; /tmp/mul395-pg/package/native/bin/pg_ctl -D /tmp/mul395-pg/data -l /tmp/mul395-pg/server.log -o '-p 55433 -k /tmp/mul395-pg/socket -h 127.0.0.1' -w start
+unshare --user --map-user=1000 --map-group=1000 env LD_LIBRARY_PATH=&quot;$MUL395_PG_LIBS&quot; /tmp/mul395-pg/package/native/bin/pg_ctl -D /tmp/mul395-pg/data -m fast -w stop</code></pre></section>
+<section><h2>S9-3b 需要知道的现有问题</h2><p>旧列表服务端忽略 sort_by、sort_order、creator_id、involves_user_id；本接口保持相同结果，本轮没有修这些行为。my-issues 的 created/all tab 过滤仍需负责人决定后续归属；不能把新端点理解为已实现 relation=any。</p>
+<p>当前前端实际分页六个状态（不含 cancelled）；七状态是服务端完整能力和本轮压力验证。前端应显式传自己的 PAGINATED_STATUSES。assigned tab 可七/六请求变一；all tab 现有三套筛选若原样接线则十八请求变三，尚不是一次 relation 并集。</p>
+<p>现有 request-metrics 路由归一化可能把 status-pages 等静态路径记作 /api/issues/:id，因为后注册动态路由也匹配 Hono 路由清单。实际响应及 Server-Timing 正常；本报告按实际请求 URL 区分，没有修改共享观测模块。该问题交负责人决定归属，未新开子单。</p></section>
+<section><h2>非 merge 提交文件清单</h2><pre><code>apps/remi/cli/commands/collaboration.ts
+cli-capabilities.json
+docs/cli-command-migration.md
+packages/contracts/src/types.ts
+packages/server/src/api/cli-capabilities-generated.ts
+packages/server/src/api/routers/issues.ts
+packages/server/src/store/repos/issues-repo.ts
+packages/server/src/store/store.ts
+scripts/api-routes.golden.json
+scripts/generate-cli-capabilities.ts
+tests/fixtures/multiremi/issue-status-pages-fixture.ts
+tests/manual/measure-issue-status-pages.ts
+tests/unit/multiremi/api-role-guard.test.ts
+tests/unit/multiremi/cli-capabilities-manifest.test.ts
+tests/unit/multiremi/issue-status-pages.test.ts
+tests/unit/remi/cli-collaboration.test.ts
+reports/performance/MUL-395-s9-3a-postgres-2026-09-28.json
+reports/performance/MUL-395-s9-3a-sqlite-2026-09-28.json
+reports/performance/MUL-395-s9-3a-2026-09-28.md
+reports/performance/MUL-395-s9-3a-2026-09-28.html</code></pre></section>
+<section><h2>产物</h2><p>两份 JSON 包含全部五轮原始样本、指标中位数和九格 dbq 矩阵。Markdown/HTML 汇总契约、证据和限制；HTML 的 CSS 全内联，无脚本、外部资源或存储依赖，将作为 MUL-395 交付评论附件。CI 与最终 PR head 以交付评论为准。</p></section></main></body></html>

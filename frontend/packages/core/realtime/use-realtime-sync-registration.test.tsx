@@ -28,6 +28,8 @@ vi.mock("../paths", () => ({
  */
 const EXPECTED_EVENTS: readonly string[] = [
   "issue:updated",
+  "decision:created",
+  "decision:updated",
   "issue:created",
   "issue:deleted",
   "issue_labels:changed",
@@ -221,6 +223,53 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["decision:created", "decision:updated"] as const)(
+    "invalidates the issue detail and decision list for %s",
+    (event) => {
+      const issueId = "issue-1";
+      const detailKey = issueKeys.detail("ws-1", issueId);
+      const decisionsKey = issueKeys.decisions("ws-1", issueId);
+      qc.setQueryData(detailKey, { id: issueId });
+      qc.setQueryData(decisionsKey, { count: 1 });
+      const mock = createRecordingWs();
+      renderHook(() => useRealtimeSync(mock.ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+
+      mock.emit(event, { issue_id: issueId, decision: { id: "decision-1" } });
+
+      expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(decisionsKey)?.isInvalidated).toBe(true);
+    },
+  );
+
+  it.each(["parent_done_grant_created", "parent_done_grant_revoked"] as const)(
+    "refetches the server-derived grant after %s activity",
+    (action) => {
+      const issueId = "issue-1";
+      const detailKey = issueKeys.detail("ws-1", issueId);
+      qc.setQueryData(detailKey, { id: issueId, parent_done_grant: null });
+      const mock = createRecordingWs();
+      renderHook(() => useRealtimeSync(mock.ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+
+      mock.emit("activity:created", {
+        issue_id: issueId,
+        entry: {
+          type: "activity",
+          id: `activity-${action}`,
+          actor_type: "member",
+          actor_id: "member-1",
+          action,
+          created_at: "2026-09-28T00:00:00.000Z",
+        },
+      });
+
+      expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    },
+  );
+
   it("invalidates plugin queries for agent_plugin events", () => {
     vi.useFakeTimers();
     const mock = createRecordingWs();
@@ -234,6 +283,20 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       queryKey: ["workspaces", "ws-1", "agent-plugins"],
     });
   });
+
+  it.each(["agent:archived", "agent:restored"] as const)(
+    "refetches detail grant effectiveness after %s",
+    (event) => {
+      const detailKey = issueKeys.detail("ws-1", "issue-1");
+      qc.setQueryData(detailKey, { id: "issue-1", parent_done_grant: { effective: true } });
+      const mock = createRecordingWs();
+      renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+
+      mock.emit(event, { agent: { id: "agent-1" } });
+
+      expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    },
+  );
 
   it("invalidates SCM queries for connection and repository binding events", () => {
     vi.useFakeTimers();
