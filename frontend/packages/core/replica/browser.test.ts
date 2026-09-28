@@ -5,6 +5,30 @@ import { replicaLockName } from "./channel";
 const replicas: BrowserReplica[] = [];
 afterEach(() => { for (const replica of replicas.splice(0)) replica.dispose(); });
 
+test.each(["shared", "no-opfs", "no-locks"])("%s fills every hole from one sparse frame batch", async (mode) => {
+  const reads: Array<{ from: number; to: number }> = [];
+  const replica = await openBrowserReplica({
+    userId: "user", workspaceId: "ws", tabId: "tab", subscribe: () => {}, unsubscribe: () => {},
+    readRange: async (_id, range) => {
+      reads.push(range);
+      return Array.from({ length: range.to - range.from + 1 }, (_, index) => ({
+        session_id: "session", seq: range.from + index, id: `row_${range.from + index}`,
+        kind: "message", revision: 1, body_md: "filled", body_html: null, render_version: null,
+      }));
+    },
+    env: { hasOpfs: mode !== "no-opfs", broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+      locks: mode === "no-locks" ? {} as never : { request: (_name: string, _options: unknown, callback: () => Promise<void>) => callback() } as never },
+  });
+  replicas.push(replica);
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  replica.open("session");
+  replica.ack("session", { stream: "log", id: "session", first_seq: 1, head_seq: 5, log_version: 1, gap: null });
+  replica.frames("session", [1, 3, 5].map(seq => ({ seq, kind: "entry", payload: { session_id: "session", seq, revision: 1 } })));
+  for (let n = 0; n < 24; n++) await Promise.resolve();
+  expect(reads).toEqual([{ from: 2, to: 2 }, { from: 4, to: 4 }]);
+  expect(replica.port.getSnapshot("session")).toMatchObject({ head: 5, fresh: true });
+});
+
 test.each([[2, 1], [1, 2]])("an ack head=%s version=%s publishes stale status and restarts a changed version", async (head, version) => {
   const subscriptions: number[] = [];
   const replica = await openBrowserReplica({

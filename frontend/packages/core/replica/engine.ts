@@ -14,7 +14,7 @@
 
 import type { HubFrame, HubSeqRange, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
 import type { SessionLogEntry, SessionReplicaSnapshot } from "./port";
-import { applyFrames, computeFresh, contiguousHead, decideAck, subscribeFromSeq, type ReplicaState } from "./protocol";
+import { applyFrames, computeFresh, contiguousHead, decideAck, firstHole, subscribeFromSeq, type ReplicaState } from "./protocol";
 import { coversSeq } from "./ranges";
 import { META_SCHEMA_VERSION, META_USER_ID, META_WORKSPACE_ID, REPLICA_SCHEMA_VERSION } from "./schema";
 import type { ReplicaStorage } from "./storage";
@@ -193,7 +193,7 @@ export class ReplicaEngine {
    * same table, same coverage — so a later reconnect resumes from the same head
    * either way.
    */
-  writeWindow(sessionId: string, entries: readonly SessionLogEntry[], range: HubSeqRange): void {
+  writeWindow(sessionId: string, entries: readonly SessionLogEntry[], range: HubSeqRange): HubSeqRange | null {
     if (entries.length > 0) this.storage.upsertEntries(entries);
     const state = this.storage.readState(sessionId);
     // Coverage advances to what the read route proved it served, not to the
@@ -208,6 +208,10 @@ export class ReplicaEngine {
     this.storage.writeState(sessionId, { ...state, ranges, head }, this.now());
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
+    // Only streaming coverage can expose a sync hole; a sparse deep-link window
+    // above the known server head must not initiate a read of its whole prefix.
+    const serverHead = this.acks.get(sessionId)?.headSeq ?? 0;
+    return firstHole(ranges.filter(r => r.from <= serverHead).map(r => ({ from: r.from, to: Math.min(r.to, serverHead) })), head);
   }
 
   /**

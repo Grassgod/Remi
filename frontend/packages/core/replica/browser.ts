@@ -388,75 +388,38 @@ class ReplicaFacade implements BrowserReplica {
 
 /** A replica with no lock and no Worker: same protocol, per tab, in memory. */
 function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaView): BrowserReplica {
-  const engine = new ReplicaEngine(new MemoryReplicaStorage());
   const openSessions = new Set<string>();
-  let generation = 0;
-  let disposed = false;
-
-  const refreshView = (sessionId: string): void => {
-    const snapshot = engine.snapshot(sessionId);
-    view.setWindow(sessionId, engine.readWindow(sessionId, 0, Number.MAX_SAFE_INTEGER), {
-      head: snapshot.head,
-      fresh: snapshot.fresh,
-      ready: snapshot.ready,
-    });
-  };
+  const bridge = createWorkerBridge(options, { hasOpfs: false });
+  const leader = new ReplicaLeader({
+    ...options, view, worker: bridge, broadcast: () => {},
+    subscription: { subscribe: options.subscribe, unsubscribe: options.unsubscribe },
+    onCleared: (reason) => { openSessions.clear(); options.onCleared?.(reason); },
+  });
+  bridge.onMessage((message) => leader.handleWorkerMessage(message));
+  bridge.postMessage({ type: "init", userId: options.userId, workspaceId: options.workspaceId, storage: "memory" });
 
   return {
     port: view,
     open: (sessionId) => {
-      if (disposed) return;
+      if (!leader.active) return;
       if (openSessions.has(sessionId)) return;
       openSessions.add(sessionId);
-      const opened = engine.openSession({ sessionId, userId: options.userId, workspaceId: options.workspaceId });
-      options.subscribe(sessionId, opened.fromSeq);
-      refreshView(sessionId);
+      leader.open(sessionId, options.tabId);
     },
     close: (sessionId) => {
       if (!openSessions.delete(sessionId)) return;
-      options.unsubscribe(sessionId);
-      generation += 1;
+      leader.close(sessionId, options.tabId);
     },
-    resubscribe: (sessionId) => {
-      if (!openSessions.has(sessionId)) return;
-      // Same rule as the shared path: the cursor is the stored head, never 1.
-      options.subscribe(sessionId, engine.resumeFrom(sessionId));
-    },
-    loadWindow: async (sessionId, range) => {
-      const current = generation;
-      const entries = await options.readRange(sessionId, range);
-      if (disposed || generation !== current || !openSessions.has(sessionId)) return;
-      engine.writeWindow(sessionId, entries, range);
-      refreshView(sessionId);
-    },
-    frames: (sessionId, frames) => {
-      if (disposed || !openSessions.has(sessionId)) return;
-      engine.frames(sessionId, frames);
-      refreshView(sessionId);
-    },
-    ack: (sessionId, ack) => {
-      if (disposed || !openSessions.has(sessionId)) return;
-      const result = engine.acknowledge(sessionId, ack);
-      refreshView(sessionId);
-      if (result.reset) options.subscribe(sessionId, engine.resumeFrom(sessionId));
-    },
-    clear: (reason) => {
-      if (disposed) return;
-      generation += 1;
-      for (const sessionId of openSessions) options.unsubscribe(sessionId);
-      openSessions.clear();
-      engine.clear(reason);
-      view.dropAll();
-      options.onCleared?.(reason);
-    },
+    resubscribe: (sessionId) => leader.resubscribe(sessionId),
+    loadWindow: (sessionId, range) => leader.loadWindow(sessionId, range),
+    frames: (sessionId, frames) => leader.frames(sessionId, frames),
+    ack: (sessionId, ack) => leader.ack(sessionId, ack),
+    clear: (reason) => leader.clear(reason),
     isLeader: true,
     storage: "memory",
     degraded: true,
     dispose: () => {
-      if (disposed) return;
-      disposed = true; generation += 1;
-      for (const sessionId of openSessions) options.unsubscribe(sessionId);
-      openSessions.clear(); engine.close();
+      leader.dispose(); bridge.terminate?.(); openSessions.clear();
     },
   };
 }
@@ -575,6 +538,7 @@ function createWorkerBridge(options: BrowserReplicaOptions, env: BrowserReplicaE
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    terminate: () => { listeners.clear(); engine.close(); },
   };
 }
 
@@ -634,7 +598,7 @@ function handleInline(
       ];
     }
     case "writeWindow": {
-      engine.writeWindow(request.sessionId, request.entries, request.range);
+      const missing = engine.writeWindow(request.sessionId, request.entries, request.range);
       const snapshot = engine.snapshot(request.sessionId);
       return [
         {
@@ -643,7 +607,7 @@ function handleInline(
           range: request.range,
           head: snapshot.head,
           fresh: snapshot.fresh,
-          missing: null,
+          missing,
           entries: [...snapshot.entries],
         },
       ];

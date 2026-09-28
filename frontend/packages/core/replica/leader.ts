@@ -90,7 +90,9 @@ export class ReplicaLeader {
    * twice and could interleave a frame batch between the read and its write,
    * which is how a replica ends up with a hole it reports as covered.
    */
-  private readonly inFlight = new Set<string>();
+  private readonly inFlight = new Map<string, {
+    token: string | undefined; current: HubSeqRange | null; ranges: HubSeqRange[]; done: Promise<void>;
+  }>();
   private readonly disposers: Array<() => void> = [];
   private disposed = false;
 
@@ -211,7 +213,9 @@ export class ReplicaLeader {
    * `browser.ts` to the Worker's `onMessage`.
    */
   handleWorkerMessage(message: ReplicaWorkerResponse): void {
-    void this.onWorkerMessage(message);
+    void this.onWorkerMessage(message).catch((error: unknown) => {
+      this.options.onDegraded?.(`replica read: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   /** Sessions this leader holds, for the handoff announcement. */
@@ -369,14 +373,26 @@ export class ReplicaLeader {
    */
   private async backfill(sessionId: string, range: HubSeqRange): Promise<void> {
     if (!this.isCurrent(sessionId)) return;
-    if (this.inFlight.has(sessionId)) return;
-    this.inFlight.add(sessionId);
     const token = this.tokens.get(sessionId);
-    try {
-      const entries = await this.options.readRange(sessionId, range);
-      if (this.isCurrent(sessionId, token)) this.post({ type: "writeWindow", sessionId, entries, range });
-    } finally {
-      this.inFlight.delete(sessionId);
+    const existing = this.inFlight.get(sessionId);
+    if (existing && existing.token === token) {
+      if (![existing.current, ...existing.ranges].some(r => r?.from === range.from && r.to === range.to)) existing.ranges.push(range);
+      return existing.done;
     }
+    const flight = { token, current: null as HubSeqRange | null, ranges: [range], done: Promise.resolve() };
+    this.inFlight.set(sessionId, flight);
+    flight.done = (async () => {
+      try {
+        while (flight.ranges.length > 0 && this.isCurrent(sessionId, token)) {
+          flight.current = flight.ranges.shift()!;
+          const entries = await this.options.readRange(sessionId, flight.current);
+          if (!this.isCurrent(sessionId, token)) return;
+          this.post({ type: "writeWindow", sessionId, entries, range: flight.current });
+        }
+      } finally {
+        if (this.inFlight.get(sessionId) === flight) this.inFlight.delete(sessionId);
+      }
+    })();
+    return flight.done;
   }
 }

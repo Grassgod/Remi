@@ -219,7 +219,7 @@ export class ReplicaWorkerHost {
           return;
         }
         case "writeWindow": {
-          engine.writeWindow(request.sessionId, request.entries, request.range);
+          const missing = engine.writeWindow(request.sessionId, request.entries, request.range);
           const view = engine.snapshot(request.sessionId);
           post({
             type: "appended",
@@ -227,7 +227,7 @@ export class ReplicaWorkerHost {
             range: request.range,
             head: view.head,
             fresh: view.fresh,
-            missing: null,
+            missing,
             entries: [...view.entries],
           });
           return;
