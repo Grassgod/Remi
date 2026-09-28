@@ -102,9 +102,10 @@ export function applyFrames(input: {
       // either reports it as a hole to read or finds it already covered (a hidden
       // marker keeps coverage without keeping a row).
       const target = patchTargetSeq(frame.payload, frame);
-      const held = input.entries.get(target) ?? upserts.get(target) ?? null;
+      const held = deletes.has(target) ? null : upserts.get(target) ?? input.entries.get(target) ?? null;
       if (held === null) continue;
       const patched = applyPatch(held, frame.payload);
+      if (patched === held) continue;
       if (patched === null) {
         // A tombstone removes the display row but not the seq: the log's axis is
         // append-only, so seq 7 stays "settled, no row" exactly like a hidden
@@ -121,6 +122,8 @@ export function applyFrames(input: {
 
     const parsed = frameAsEntry(frame);
     if (parsed === null) continue;
+    const held = upserts.get(parsed.seq) ?? input.entries.get(parsed.seq);
+    if (held && parsed.entry.revision <= held.revision) continue;
 
     if (parsed.hidden) {
       // A hidden marker is not a display unit, so it never lands in `entries`; it
@@ -133,6 +136,7 @@ export function applyFrames(input: {
     }
 
     upserts.set(parsed.seq, parsed.entry);
+    deletes.delete(parsed.seq);
     ranges = addRange(ranges, parsed.seq, parsed.seq);
   }
 
@@ -279,9 +283,10 @@ function frameAsEntry(frame: HubFrame): ParsedFrame | null {
 function applyPatch(entry: SessionLogEntry, payload: unknown): SessionLogEntry | null {
   if (!payload || typeof payload !== "object") return entry;
   const patch = payload as Record<string, unknown>;
+  const revision = payloadRevision(patch);
+  if (typeof patch.revision === "number" && revision <= entry.revision) return entry;
   if (typeof patch.deleted_at === "string" && patch.deleted_at.length > 0) return null;
   const fields = (patch.fields && typeof patch.fields === "object" ? patch.fields : patch) as Record<string, unknown>;
-  const revision = payloadRevision(patch);
   return {
     session_id: entry.session_id,
     seq: entry.seq,

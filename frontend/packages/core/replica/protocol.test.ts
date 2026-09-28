@@ -107,6 +107,22 @@ describe("step 2: ack", () => {
 });
 
 describe("step 3: frames", () => {
+  test("partial patches compose on the latest revision in the batch", () => {
+    const result = applyFrames({
+      frames: [patchFrame(1, { body_md: "edited" }, 2), patchFrame(1, { body_html: "<p>edited</p>" }, 3)],
+      state: emptyReplicaState(), entries: new Map([[1, entry(1)]]),
+    });
+    expect(result.upserts[0]).toMatchObject({ revision: 3, body_md: "edited", body_html: "<p>edited</p>" });
+  });
+
+  test.each(["entry", "patch"])("an old %s cannot replace newer content", (kind) => {
+    const held = entry(1, { revision: 5, body_md: "latest" });
+    const frame = kind === "entry" ? entryFrame(1) : patchFrame(1, { body_md: "old" }, 3);
+    const result = applyFrames({ frames: [frame], state: emptyReplicaState(), entries: new Map([[1, held]]) });
+    expect(result.upserts).toEqual([]);
+    expect(result.deletes).toEqual([]);
+  });
+
   test("entries extend coverage and advance the head", () => {
     const result = applyFrames({ frames: [entryFrame(1), entryFrame(2), entryFrame(3)], state: emptyReplicaState(), entries: new Map() });
     expect(result.upserts.map((row) => row.seq)).toEqual([1, 2, 3]);
