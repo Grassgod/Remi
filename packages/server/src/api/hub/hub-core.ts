@@ -598,9 +598,12 @@ export class HubImpl implements ObservableLiveHub {
   }
 
   private invalidateRemoteRevision(key: HubStreamKey, seq: number): void {
+    const known = this.knownHeads.get(key);
+    if (known) this.rememberHead(key, known.head, null);
     const stream = this.ring.get(key);
     if (!stream) return;
     this.ring.markStale(stream, seq);
+    this.stampLogVersion(stream, stream.headSeq, null);
     for (const subscriber of this.subscribers.get(key) ?? []) {
       if (subscriber.active && this.hasDelivered(subscriber, seq)) this.deferChangeGap(subscriber, seq);
     }

@@ -150,9 +150,11 @@ describe("Hub peer transport", () => {
     });
     f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "entry", payload: {} }], head: 0 });
     await waitFor(() => seen.length === 1, "base row");
+    await f.hub.applyRemoteHead("log:s", 0, 7);
     f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "patch", payload: { secret: "never-send" } }], head: 0 });
     await waitFor(() => gaps.length === 1, "revision gap");
     expect(gaps).toEqual([[0, 0]]);
+    expect(f.hub.knownHead("log:s")?.log_version).toBeNull();
     expect(JSON.stringify(f.posts)).not.toContain("never-send");
   });
 
