@@ -4495,14 +4495,46 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
-    return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
+    // The comment, its Session event and its log row commit together (B1).
+    // Notifications and agent dispatch follow that COMMIT, as before B1: a
+    // failed forced start (MUL-458) must not roll back the member's comment,
+    // and no realtime push may reach clients before the row is durable.
+    const commitEvents = options.deferredEvents ? null : createCommitEventQueue();
+    const created = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
+      issueId,
+      input,
+      commitEvents ? { ...options, deferredEvents: commitEvents } : options,
+    ))();
+    if (commitEvents) this.ctx.emitCommitEvents(commitEvents);
+    const { issue, comment, body, authorType, issueSessionId, sessionEventSeq } = created;
+    const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
+    this.notifySubscribedMembers(
+      issue,
+      "New comment",
+      body,
+      authorType,
+      input.authorId ?? null,
+      mentionedMemberIds,
+      { comment_id: comment.id, issue_session_id: issueSessionId },
+    );
+    if (options.deferAgentMentionDispatch) return comment;
+    const mentionTasks = this.triggerCommentMentions(issue, comment, sessionEventSeq);
+    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
+    return comment;
   }
 
   private createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions,
-  ): MultiremiIssueComment {
+  ): {
+    issue: MultiremiIssue;
+    comment: MultiremiIssueComment;
+    body: string;
+    authorType: string;
+    issueSessionId: string;
+    sessionEventSeq: number;
+  } {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
     // Lock before reading Issue/session state so concurrent first comments can
@@ -4612,20 +4644,7 @@ export class IssuesRepo {
     };
     if (options.deferredEvents) options.deferredEvents.workspace.push(commentCreatedEvent);
     else this.ctx.emitWorkspaceEvent(commentCreatedEvent);
-    const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
-    this.notifySubscribedMembers(
-      issue,
-      "New comment",
-      body,
-      authorType,
-      input.authorId ?? null,
-      mentionedMemberIds,
-      { comment_id: id, issue_session_id: issueSessionId },
-    );
-    if (options.deferAgentMentionDispatch) return comment;
-    const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq);
-    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
-    return comment;
+    return { issue, comment, body, authorType, issueSessionId, sessionEventSeq: commentEvent.seq };
   }
 
   /**
