@@ -32,6 +32,8 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
+Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用，避免运行态查询完成后插入卡片造成位移。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+
 ## 一次任务读取与更新
 
 ```text

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import { Bot, ChevronDown, Clock, Loader2, Square } from "lucide-react";
 import { api } from "@multiremi/core/api";
 import { chatKeys, mergeTaskMessages } from "@multiremi/core/chat/queries";
@@ -54,11 +55,17 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
   const qc = useQueryClient();
   const { t } = useT("issues");
   const { getActorName } = useActorName();
-  const [taskStates, setTaskStates] = useState<Map<string, TaskState>>(new Map());
+  const [taskStates, setTaskStates] = useState<Map<string, TaskState>>(() => new Map(
+    (qc.getQueryData<AgentTask[]>(issueKeys.tasks(issueId)) ?? [])
+      .filter(task => (!issueSessionId || task.issue_session_id === issueSessionId)
+        && ["queued", "dispatched", "waiting_local_directory", "running", "awaiting_human"].includes(task.status))
+      .map(task => [task.id, { task, messages: [] }] as const),
+  ));
   // AskUser requests belong to the Issue, not to whichever product Session is
   // currently selected in the right panel. Keep this issue-wide view separate
   // from the Session-filtered activity banner.
-  const [humanRequestTasks, setHumanRequestTasks] = useState<AgentTask[]>([]);
+  const [humanRequestTasks, setHumanRequestTasks] = useState<AgentTask[]>(() =>
+    (qc.getQueryData<AgentTask[]>(issueKeys.tasks(issueId)) ?? []).filter(task => task.status === "awaiting_human"));
   // Cancel confirmation is hoisted here (not per-card) so a single dialog
   // serves both the inline single banner and the multi-agent popover. A
   // confirm dialog living inside the popover would be torn down the moment

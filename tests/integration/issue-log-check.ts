@@ -109,6 +109,17 @@ try {
   const html = window.entries.find(e => e.id === written.id)?.body_html;
   check("XSS API sanitized rendered body", typeof html === "string" && !/<script[\s>]|\son\w+=|javascript:/i.test(html));
   check("XSS write and backfill use identical renderer", writeHtml === html);
+  const forgedHtml = '<script>window.__xss=10</script>';
+  const commentUpdate = await fetch(`${upstream}/api/comments/${written.id}`, { method: "PUT", headers,
+    body: JSON.stringify({ body: xss, body_html: forgedHtml }) });
+  check("comment update ignores client body_html", commentUpdate.ok);
+  const issueUpdate = await fetch(`${upstream}/api/issues/${fixture.longIssueId}`, { method: "PATCH", headers,
+    body: JSON.stringify({ body_html: forgedHtml }) });
+  check("issue update ignores client body_html", issueUpdate.ok);
+  const persisted = await fetch(`${upstream}/api/sessions/${fixture.longDefaultSessionId}/log?before=30`, { headers })
+    .then(response => response.json()) as { entries: Array<{ id: string; body_html: string | null }> };
+  check("forged body_html is absent from persisted log", persisted.entries.find(e => e.id === written.id)?.body_html === html
+    && !persisted.entries.some(e => e.body_html?.includes(forgedHtml)));
 
   const env = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`, NEXT_BUILD_CPUS: "8" };
   const dev = process.argv.includes("--dev");

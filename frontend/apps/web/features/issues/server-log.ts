@@ -7,6 +7,7 @@ import { ChildIssuesResponseSchema, IssueDetailSchema } from "@multiremi/core/ap
 import { IssueSessionListSchema } from "@multiremi/core/api/schemas/comments";
 import { UserSchema } from "@multiremi/core/api/schemas/users";
 import type { Issue, IssueSession, MemberWithUser, User, Workspace } from "@multiremi/core/types";
+import type { AgentTask } from "@multiremi/core/types/agent";
 
 export const SSR_LOG_TIMEOUT_MS = 800;
 
@@ -52,7 +53,7 @@ export const readSSRWorkspace = cache(async (slug: string): Promise<{ user: User
 
 export async function readIssueLogBootstrap(slug: string, issueId: string, selectedSessionId?: string): Promise<{
   issue: Issue; parentIssue: Issue | null; sessions: IssueSession[];
-  members: MemberWithUser[]; children: Issue[]; log: IssueLogBootstrap;
+  members: MemberWithUser[]; children: Issue[]; tasks: AgentTask[]; log: IssueLogBootstrap;
 } | null> {
   const cookie = (await cookies()).get("multimira_auth")?.value;
   if (!cookie) return null;
@@ -65,15 +66,16 @@ export async function readIssueLogBootstrap(slug: string, issueId: string, selec
   const session = selectedSessionId ? sessions?.find(s => s.id === selectedSessionId) : sessions?.find(s => s.is_default) ?? sessions?.[0];
   if (!issue || !sessions || !session) return null;
   const logPath = `/api/sessions/${encodeURIComponent(session.id)}/log`;
-  const [window, headWindow, parentIssue, members, children] = await Promise.all([
+  const [window, headWindow, parentIssue, members, children, tasks] = await Promise.all([
     readWithSessionCookie<IssueLogBootstrap["window"]>({ cookie, slug, signal, path: `${logPath}?before=30`, schema: SessionLogWindowSchema }),
     readWithSessionCookie<IssueLogBootstrap["window"]>({ cookie, slug, signal, path: `${logPath}?anchor=0&before=1`, schema: SessionLogWindowSchema }),
     issue.parent_issue_id ? readWithSessionCookie<Issue>({ cookie, slug, signal, path: `/api/issues/${encodeURIComponent(issue.parent_issue_id)}`, schema: IssueDetailSchema }) : null,
     readWithSessionCookie<MemberWithUser[]>({ cookie, slug, signal, path: `/api/workspaces/${encodeURIComponent(issue.workspace_id)}/members`, schema: MemberListSchema }),
     readWithSessionCookie<{ issues: Issue[] }>({ cookie, slug, signal, path: `${prefix}/children`, schema: ChildIssuesResponseSchema }),
+    readWithSessionCookie<AgentTask[]>({ cookie, slug, signal, path: `${prefix}/task-runs`, schema: z.array(z.object({ id: z.string(), issue_id: z.string(), status: z.string() }).loose()) }),
   ]);
-  return window && headWindow && members && children
-    ? { issue, parentIssue, sessions, members, children: children.issues,
+  return window && headWindow && members && children && tasks
+    ? { issue, parentIssue, sessions, members, children: children.issues, tasks,
         log: { sessionId: session.id, window, head: headWindow.entries.find(e => e.seq === 0) ?? null } }
     : null;
 }

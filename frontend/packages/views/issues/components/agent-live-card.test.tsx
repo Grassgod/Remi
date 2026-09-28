@@ -4,6 +4,7 @@ import { act, fireEvent as rtlFireEvent, render, screen, waitFor } from "@testin
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { TimelineItem } from "../../common/task-transcript";
 import enCommon from "../../locales/en/common.json";
@@ -138,8 +139,9 @@ function fireEvent(event: string, payload: unknown) {
   for (const h of handlers) h(payload);
 }
 
-function renderCard(issueId = "issue-1", issueSessionId?: string) {
+function renderCard(issueId = "issue-1", issueSessionId?: string, seededTasks?: AgentTask[]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (seededTasks) qc.setQueryData(issueKeys.tasks(issueId), seededTasks);
   const view = render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -178,6 +180,12 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("AgentLiveCard reconcile race", () => {
+  it("renders a cached running task before the reconciliation request returns", () => {
+    const response = deferred<{ tasks: AgentTask[] }>();
+    mockApi.getActiveTasksForIssue.mockReturnValue(response.promise);
+    renderCard("issue-1", "session-1", [makeTask("task-1", { issue_session_id: "session-1" })]);
+    expect(screen.getByText(/Agent agent-1 is working/)).toBeInTheDocument();
+  });
   it("counts running and queued tasks separately, including repeated Agent identities", async () => {
     mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [
       makeTask("leader"),

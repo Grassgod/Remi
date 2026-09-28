@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type { Issue, IssueSession, MemberWithUser } from "@multiremi/core/types";
+import type { AgentTask } from "@multiremi/core/types/agent";
 import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 import { IssueDetail } from "@multiremi/views/issues/components";
 import { useNavigation } from "@multiremi/views/navigation";
@@ -20,7 +21,7 @@ export default function IssueDetailPage({
   issueId: string;
   initialIssueSessionId?: string;
   initialLog?: IssueLogBootstrap;
-  initialData?: { issue: Issue; parentIssue: Issue | null; sessions: IssueSession[]; members: MemberWithUser[]; children: Issue[] };
+  initialData?: { issue: Issue; parentIssue: Issue | null; sessions: IssueSession[]; members: MemberWithUser[]; children: Issue[]; tasks: AgentTask[] };
 }) {
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
@@ -31,6 +32,7 @@ export default function IssueDetailPage({
     if (!queryClient.getQueryData(issueKeys.sessions(id))) queryClient.setQueryData(issueKeys.sessions(id), initialData.sessions);
     if (!queryClient.getQueryData(workspaceKeys.members(wsId))) queryClient.setQueryData(workspaceKeys.members(wsId), initialData.members);
     if (!queryClient.getQueryData(issueKeys.children(wsId, id))) queryClient.setQueryData(issueKeys.children(wsId, id), initialData.children);
+    if (!queryClient.getQueryData(issueKeys.tasks(id))) queryClient.setQueryData(issueKeys.tasks(id), initialData.tasks);
     if (initialData.parentIssue && !queryClient.getQueryData(issueKeys.detail(wsId, initialData.parentIssue.id))) {
       queryClient.setQueryData(issueKeys.detail(wsId, initialData.parentIssue.id), initialData.parentIssue);
     }
