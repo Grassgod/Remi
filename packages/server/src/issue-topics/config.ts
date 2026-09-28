@@ -43,26 +43,20 @@ export function readWorkspaceIssueTopics(settings: Record<string, unknown>): Iss
     : parseIssueTopicConfig(settings.issueTopics);
 }
 
-/**
- * The same read, for delivery paths that must never throw (MUL-407).
- *
- * `parseIssueTopicConfig` validates writes, and it is right to reject an
- * unusable `person` target there. A database written before that validation
- * existed (or edited around it) can still hold one, though — and a delivery
- * path that throws on it produces a human request with no delivery at all, so
- * nobody the task asked ever hears about it. An unusable target is treated as
- * "there is no recipient", which the decision lane already knows how to degrade
- * to text.
- */
-export function readWorkspaceIssueTopicsForDelivery(settings: Record<string, unknown>): IssueTopicConfig {
+/** Recover usable fields from legacy configs; unexpected failures still propagate. */
+export function readWorkspaceIssueTopicsLenient(
+  settings: Record<string, unknown>,
+  onInvalid?: (error: IssueTopicConfigError) => void,
+): IssueTopicConfig {
   try {
     return readWorkspaceIssueTopics(settings);
   } catch (error) {
     if (!(error instanceof IssueTopicConfigError)) throw error;
+    onInvalid?.(error);
     const raw = settings.issueTopics;
     if (!isRecord(raw)) return { enabled: false, chatId: "" };
     // Every field is read defensively: the whole point of this reader is that a
-    // stored config cannot abort a delivery, so a second malformed field must not
+    // stored config cannot abort a read, so a second malformed field must not
     // throw here either.
     let projectIds: string[] | undefined;
     try { projectIds = parseProjectIds(raw.projectIds); } catch { projectIds = undefined; }
@@ -78,6 +72,11 @@ export function readWorkspaceIssueTopicsForDelivery(settings: Record<string, unk
       ...(isFeishuOpenId(raw.notifyOpenId) ? { notifyOpenId: raw.notifyOpenId } : {}),
     };
   }
+}
+
+/** An unusable person target leaves delivery to degrade to text without a mention. */
+export function readWorkspaceIssueTopicsForDelivery(settings: Record<string, unknown>): IssueTopicConfig {
+  return readWorkspaceIssueTopicsLenient(settings);
 }
 
 function parseProjectIds(value: unknown): string[] | undefined {
