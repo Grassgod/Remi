@@ -41,6 +41,10 @@ store.appendConversationLog({ sessionId: fixture.longDefaultSessionId, kind: "th
   authorType: "system", bodyMd: "Hidden resolved marker" });
 store.appendConversationLog({ sessionId: fixture.longDefaultSessionId, kind: "thread_unresolved",
   authorType: "system", bodyMd: "Hidden unresolved marker" });
+const resolved = store.createIssueComment(fixture.longIssueId, {
+  issueSessionId: fixture.longDefaultSessionId, body: "Resolved row source", authorType: "member", authorId: fixture.userId,
+});
+store.resolveIssueComment(resolved.id, { actorType: "member", actorId: fixture.userId });
 const credential = (await store.createAccessToken({ name: "MUL-444 local fixture", type: "pat", purpose: "session",
   workspaceId: fixture.workspaceId, userId: fixture.userId, expiresInDays: 1 })).token;
 const apiPort = port(18400);
@@ -71,9 +75,9 @@ const xss = [
   '<details open ontoggle="window.__xss=8">XSS details</details>',
   '```html\n<script>window.__xss=9</script>\n```',
 ].join("\n\n");
-const profile: PerfProfileConfig = { name: "contract", scrollRoot: "[data-session-log-scroll]", items: "[data-perf-item]",
-  skeleton: '[data-slot="skeleton"]', anchors: [{ name: "latest-message", selector: '[data-perf-anchor="latest-message"]', pick: "first", visibility: "contained" }],
-  rule: { kind: "anchor", anchors: ["latest-message"] } };
+const profile: PerfProfileConfig = { name: "contract", scrollRoot: '[data-perf-scroll="issue-detail"]', items: "[data-perf-item]",
+  skeleton: '[data-slot="skeleton"]', anchors: [{ name: "latest-comment", selector: '[data-perf-anchor="latest-comment"]', pick: "first", visibility: "contained" }],
+  rule: { kind: "anchor", anchors: ["latest-comment"] } };
 async function ready(page: Page, timeout = 30_000) {
   await page.waitForSelector('[data-session-log-scroll][data-perf-state="ready"]', { timeout });
   await page.waitForFunction(() => !document.querySelector('[data-session-log-scroll] [data-slot="skeleton"]'));
@@ -90,11 +94,13 @@ try {
   const written = await write.json() as { id: string };
   check("XSS API response has comment id", typeof written.id === "string");
   const writtenRow = await fetch(`${upstream}/api/sessions/${fixture.longDefaultSessionId}/log?before=30`, { headers })
-    .then(response => response.json()) as { entries: Array<{ id: string; body_html: string | null; kind: string }> };
+    .then(response => response.json()) as { entries: Array<{ id: string; body_html: string | null; kind: string; resolved_at: string | null; resolved_by_type: string | null }> };
   const writeHtml = writtenRow.entries.find(entry => entry.id === written.id)?.body_html;
   check("XSS write path renders sanitized HTML", typeof writeHtml === "string" && !/<script[\s>]|\son\w+=|javascript:/i.test(writeHtml));
   check("follow_frozen shown and thread markers hidden in API", writtenRow.entries.some(entry => entry.id === frozen.id)
     && !writtenRow.entries.some(entry => entry.kind === "thread_resolved" || entry.kind === "thread_unresolved"));
+  check("resolved state belongs to comment row", writtenRow.entries.some(entry => entry.id === resolved.id
+    && entry.resolved_at !== null && entry.resolved_by_type === "member"));
   // Exercise C4's second trusted path against an old row in this temporary DB.
   db.run("UPDATE multiremi_conversation_log SET body_html = NULL, render_version = NULL WHERE id = ?", [written.id]);
   await new BodyHtmlBackfillTask({ store }).runBatch();
@@ -102,6 +108,7 @@ try {
   const window = await logResponse.json() as { entries: Array<{ id: string; body_html: string | null }> };
   const html = window.entries.find(e => e.id === written.id)?.body_html;
   check("XSS API sanitized rendered body", typeof html === "string" && !/<script[\s>]|\son\w+=|javascript:/i.test(html));
+  check("XSS write and backfill use identical renderer", writeHtml === html);
 
   const env = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`, NEXT_BUILD_CPUS: "8" };
   const dev = process.argv.includes("--dev");
@@ -222,6 +229,9 @@ try {
       && await page.locator(`[data-perf-key="${frozen.id}"] button`).count() === 0
       && await page.getByText("Hidden resolved marker").count() === 0
       && await page.getByText("Hidden unresolved marker").count() === 0);
+    check(`${entry} #${round} resolved comment renders folded from its own row`,
+      await page.locator(`[data-perf-key="${resolved.id}"] button`).count() > 0
+      && await page.getByText("Resolved row source").count() === 0);
     check(`${entry} #${round} XSS inert DOM`, await page.evaluate(() => !(window as unknown as { __xss?: number }).__xss
       && [...document.querySelectorAll('[data-entry-html] *')].every(el => ![...el.attributes].some(a => /^on/i.test(a.name)))
       && document.querySelectorAll('[data-entry-html] script').length === 0));

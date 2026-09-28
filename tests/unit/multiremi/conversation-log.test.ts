@@ -47,7 +47,7 @@ describe("conversation log (MUL-426)", () => {
     expect(bodies[1]).toEqual(bodies[2]);
   });
 
-  it("updates comments in place, emits resolved patches, and never mirrors legacy resolve markers", () => {
+  it("updates comments in place, emits resolved patches, and keeps thread markers hidden", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Patches", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
@@ -67,7 +67,10 @@ describe("conversation log (MUL-426)", () => {
     });
     expect("session_id" in patches[0]!).toBe(false);
     expect(store.getConversationLogEntryById(comment.id)?.revision).toBe(original.revision + 2);
-    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind.includes("resolved"))).toEqual([]);
+    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind.startsWith("thread_"))
+      .map((entry) => [entry.kind, entry.visibility, entry.metadata.target_seq]))
+      .toEqual([["thread_resolved", "hidden", original.seq], ["thread_unresolved", "hidden", original.seq]]);
+    expect(store.conversationLogWindow(session.id, { before: 30 }).entries.some((entry) => entry.kind.startsWith("thread_"))).toBe(false);
 
     store.updateIssueComment(comment.id, { body: "second" });
     const edited = store.getConversationLogEntryById(comment.id)!;
@@ -102,7 +105,10 @@ describe("conversation log (MUL-426)", () => {
     expect(patches[0]?.fields).toMatchObject({
       resolved_at: null, resolved_by_type: null, resolved_by_id: null,
     });
-    expect(store.listConversationLogEntries(sessionId).filter((entry) => entry.kind.includes("resolved"))).toEqual([]);
+    expect(store.listConversationLogEntries(sessionId).filter((entry) => entry.kind.startsWith("thread_"))
+      .map((entry) => [entry.kind, entry.visibility, entry.metadata.target_seq]))
+      .toEqual([["thread_resolved", "hidden", before.seq]]);
+    expect(store.conversationLogWindow(sessionId, { before: 30 }).entries.some((entry) => entry.kind.startsWith("thread_"))).toBe(false);
   });
 
   it("rolls back a log append together with its allocated seq", () => {

@@ -15,6 +15,7 @@ describe("Issue log presentation over C7", () => {
     const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });
     expect(mocks.read).not.toHaveBeenCalled();
     expect(replica.getSnapshot("s").entries.map(e => e.id)).toEqual(["r0", "r80", "r81"]);
+    expect(replica.getSnapshot("s").fresh).toBe(true);
     expect(SessionLogEntrySchema.parse(replica.getSnapshot("s").entries[1]).author_id).toBe("u");
     cleanup();
   });

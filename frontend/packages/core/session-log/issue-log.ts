@@ -82,9 +82,10 @@ export class IssueLogReplica extends ReplicaView {
       const held = current.find(e => e.seq === 0);
       if (held && held.revision >= (this.headRow?.revision ?? 0)) this.headRow = held;
       const rows = mergeRows(visible.entries.map(e => SessionLogEntrySchema.parse(e)), current);
+      const newerHead = (snapshot.head ?? -1) > (visible.head ?? -1);
       this.setWindow(this.sessionId, this.displayRows(rows), {
         head: Math.max(visible.head ?? 0, snapshot.head ?? 0),
-        fresh: snapshot.head === visible.head ? snapshot.fresh : visible.fresh, ready: true,
+        fresh: newerHead ? snapshot.fresh : visible.fresh || snapshot.fresh, ready: true,
       });
     };
     const off = browser.port.subscribe(this.sessionId, update);

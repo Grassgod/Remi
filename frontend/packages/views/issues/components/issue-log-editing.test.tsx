@@ -71,6 +71,11 @@ describe("MUL-444 migrated editing", () => {
     expect(mocks.patch).toHaveBeenCalledWith("i", { description: "Updated description", attachment_ids: [] });
     expect(mocks.patch.mock.invocationCallOrder[0]).toBeLessThan(onSaved.mock.invocationCallOrder[0]!);
   });
+  it("falls back to the existing sanitized Markdown renderer when body_html is absent", () => {
+    wrap(<IssueLogHead issueId="i" entry={{ ...entry, body_html: null }} currentUserId="u" onSaved={async () => {}} />);
+    expect(document.querySelector("[data-entry-html]")).toBeNull();
+    expect(screen.getByText("Original description")).toBeInTheDocument();
+  });
   it.each(["button", "drop"])("uploads using %s and carries pending attachment IDs into save", async path => {
     wrap(<IssueLogHead issueId="i" entry={entry} currentUserId="u" onSaved={async () => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));

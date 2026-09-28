@@ -96,6 +96,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <SessionLogList key={sessionId} sessionId={sessionId} replica={replica}
+    perfScroll="issue-detail" latestAnchor="latest-comment"
     initialPositioned={initialLog?.sessionId === sessionId} onScrollRoot={onScrollRoot}
     afterEntry={entry => entry.seq === 0 ? <>
       {replica.window?.has_more_before && <button type="button" data-log-earlier disabled={paging} className="mt-3 h-8 text-xs text-muted-foreground hover:text-foreground" onClick={() => void earlier()}>

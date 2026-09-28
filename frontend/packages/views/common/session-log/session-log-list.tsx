@@ -79,6 +79,8 @@ export interface SessionLogListProps {
   className?: string;
   /** Element carrying the scroll root's data attributes, for tests and probes. */
   testIdPrefix?: string;
+  perfScroll?: "session-log" | "issue-detail";
+  latestAnchor?: "latest-message" | "latest-comment";
   initialPositioned?: boolean;
   afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
   footer?: React.ReactNode;
@@ -131,6 +133,8 @@ export function SessionLogList({
   renderPending,
   className,
   testIdPrefix = "session-log",
+  perfScroll = "session-log",
+  latestAnchor = "latest-message",
   initialPositioned = false,
   afterEntry,
   footer,
@@ -180,6 +184,9 @@ export function SessionLogList({
   }, [snapshot.entries]);
 
   const anchorId = anchor.kind === "element" ? anchor.id : null;
+  const latestEntry = latestAnchor === "latest-comment"
+    ? entries.findLast(entry => entry.kind === "message")
+    : entries.at(-1);
 
   const reveal = useAnchoredReveal({
     scrollEl,
@@ -308,7 +315,7 @@ export function SessionLogList({
         data-ssr-initial={initialPositioned ? "" : undefined}
         data-ssr-expected={initialPositioned ? entries.length : undefined}
         data-session-log-degraded={degradedCount}
-        data-perf-scroll="session-log"
+        data-perf-scroll={perfScroll}
         data-perf-state={initialPositioned ? "pending" : undefined}
         data-perf-fresh={snapshot.fresh ? "1" : "0"}
         data-stick-state={stick.state}
@@ -333,7 +340,7 @@ export function SessionLogList({
           {!snapshot.ready && renderPending ? renderPending() : null}
           {entries.map((entry) => {
             const reservedHeight = reserve(entry);
-            const isLast = entry === entries[entries.length - 1];
+            const isLatest = entry === latestEntry;
             return (
               <div
                 key={entry.seq}
@@ -342,7 +349,7 @@ export function SessionLogList({
                 data-perf-item="message"
                 data-perf-key={entry.id}
                 {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
-                {...(isLast && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": "latest-message" } : null)}
+                {...(isLatest && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": latestAnchor } : null)}
                 style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
                 className="pb-3"
               >

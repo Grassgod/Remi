@@ -169,6 +169,21 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("marks the newest Issue comment as its terminal anchor even after a system notice", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2, {
+        kind: "follow_frozen", body_md: "Frozen",
+      })] },
+    });
+    const view = renderList(replica, { perfScroll: "issue-detail", latestAnchor: "latest-comment" });
+    reveal();
+
+    expect(view.root.getAttribute("data-perf-scroll")).toBe("issue-detail");
+    expect(view.container.querySelector('[data-perf-anchor="latest-comment"]')?.id).toBe("comment-cmt_1");
+    expect(view.container.querySelectorAll('[data-perf-anchor="latest-message"]')).toHaveLength(0);
+    view.restore();
+  });
+
   it("caps the DOM at 300 rows by dropping the oldest end of the window", () => {
     const many = Array.from({ length: SESSION_LOG_DOM_LIMIT + 25 }, (_, index) => entry(index + 1));
     const replica = new MemorySessionReplica({ [SESSION]: { entries: many } });
