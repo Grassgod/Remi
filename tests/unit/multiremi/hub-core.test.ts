@@ -208,7 +208,7 @@ describe("hub core: replay and gap", () => {
     await t.flush();
 
     const sink = new RecordingSink();
-    const subscription = t.hub.subscribeWithSink(key, 0, sink);
+    const subscription = t.hub.subscribeWithSink(key, 1, sink);
     await t.flush();
 
     expect(sink.frames.map((frame) => frame.seq)).toEqual([1, 2, 3, 4, 5]);
@@ -246,7 +246,7 @@ describe("hub core: replay and gap", () => {
     await t.flush();
 
     const sink = new RecordingSink();
-    const subscription = t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 3, sink);
+    const subscription = t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 4, sink);
     await t.flush();
 
     expect(sink.frames).toEqual([]);
@@ -313,7 +313,7 @@ describe("hub core: trace sequence handling", () => {
     const key = "trace:task_a" as HubStreamKey;
     t.reader.seed(key, [traceFrame(2)]);
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink(key, 0, sink);
+    t.hub.subscribeWithSink(key, 1, sink);
 
     t.hub.append("task_a", [traceEvent(1)]);
     t.hub.append("task_a", [traceEvent(3)]);
@@ -352,7 +352,7 @@ describe("hub core: fan-out and backpressure", () => {
   it("sends one batch frame per subscriber per flush", async () => {
     const t = bed();
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, sink);
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, sink);
     for (let seq = 1; seq <= 20; seq += 1) t.hub.onEntry("ises_1", entry(seq));
 
     await t.flush();
@@ -364,7 +364,7 @@ describe("hub core: fan-out and backpressure", () => {
   it("splits a batch at the 64 KiB cap instead of sending one oversized frame", async () => {
     const t = bed();
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, sink);
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, sink);
     // Each payload is ~8 KiB, so a batch of them crosses the 64 KiB cap.
     const filler = "x".repeat(8 * 1024);
     for (let seq = 1; seq <= 20; seq += 1) {
@@ -394,7 +394,7 @@ describe("hub core: fan-out and backpressure", () => {
     const t = bed();
     const slow = new RecordingSink();
     const key = "log:ises_1" as HubStreamKey;
-    const subscription = t.hub.subscribeWithSink(key, 0, slow);
+    const subscription = t.hub.subscribeWithSink(key, 1, slow);
 
     // The transport reports a backlog past the threshold: the subscriber pauses.
     slow.buffered = HUB_LAGGING_THRESHOLD_BYTES + 1;
@@ -421,7 +421,7 @@ describe("hub core: fan-out and backpressure", () => {
     const t = bed({ ring: { streamMaxFrames: 5 } });
     const sink = new RecordingSink();
     const key = "log:ises_1" as HubStreamKey;
-    const subscription = t.hub.subscribeWithSink(key, 0, sink);
+    const subscription = t.hub.subscribeWithSink(key, 1, sink);
 
     // Stay current first, so the subscriber's cursor is 3 before it pauses.
     for (let seq = 1; seq <= 3; seq += 1) t.hub.onEntry("ises_1", entry(seq));
@@ -462,7 +462,7 @@ describe("hub core: in-place updates", () => {
   it("delivers a patch for a row the subscriber already holds, on the row's own seq", async () => {
     const t = bed();
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, sink);
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, sink);
     t.hub.onEntry("ises_1", entry(1));
     await t.flush();
     expect(sink.frames.map((frame) => frame.seq)).toEqual([1]);
@@ -498,7 +498,7 @@ describe("hub core: in-place updates", () => {
     const t = bed();
     const current = new RecordingSink();
     const key = "log:ises_1" as HubStreamKey;
-    t.hub.subscribeWithSink(key, 0, current);
+    t.hub.subscribeWithSink(key, 1, current);
     t.hub.onEntry("ises_1", entry(1));
     await t.flush();
     current.batches.length = 0;
@@ -694,7 +694,7 @@ describe("hub core: cold-stream warm-up", () => {
 
     // The events live in the daemon, so the hub hands the subscriber the range it
     // must fetch and moves its own head; nothing is fabricated.
-    expect(sink.gaps).toEqual([{ from: 0, to: 40 }]);
+    expect(sink.gaps).toEqual([{ from: 1, to: 40 }]);
     expect(t.hub.head("task_hot")).toBe(40);
     expect(sink.frames).toEqual([]);
   });
@@ -705,9 +705,9 @@ describe("hub core: cold-stream warm-up", () => {
     reader.seed("log:ises_1" as HubStreamKey, [logFrame(1), logFrame(2)]);
     const t = bed({ reader });
 
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, new RecordingSink());
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, new RecordingSink());
     await t.hub.warmUpSettled();
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, new RecordingSink());
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, new RecordingSink());
     await t.hub.warmUpSettled();
 
     expect(t.reader.calls).toHaveLength(1);
@@ -724,7 +724,7 @@ describe("hub core: peer head pointers", () => {
     const t = bed({ reader });
 
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink(key, 0, sink);
+    t.hub.subscribeWithSink(key, 1, sink);
     await t.hub.warmUpSettled();
     await t.flush();
     sink.batches.length = 0;
@@ -809,7 +809,7 @@ describe("hub core: transport", () => {
   it("feeds a remote frame through the same enqueue path as a local one", async () => {
     const t = bed();
     const sink = new RecordingSink();
-    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, sink);
+    t.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, sink);
 
     // A peer's frame arrives through the transport subscription.
     let deliver: ((input: { key: HubStreamKey; frames: readonly HubFrame[] }) => void) | null = null;
@@ -821,7 +821,7 @@ describe("hub core: transport", () => {
     })();
     const remote = bed({ transport });
     const remoteSink = new RecordingSink();
-    remote.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 0, remoteSink);
+    remote.hub.subscribeWithSink("log:ises_1" as HubStreamKey, 1, remoteSink);
     deliver!({ key: "log:ises_1" as HubStreamKey, frames: [logFrame(1)] });
     await remote.flush();
     expect(remoteSink.frames.map((frame) => frame.seq)).toEqual([1]);

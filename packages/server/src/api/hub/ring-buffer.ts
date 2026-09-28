@@ -94,7 +94,7 @@ export interface HubRingStream {
   readonly id: string;
   readonly entries: HubRingEntry[];
   bytes: number;
-  /** Newest sequence the ring accepted. 0 means "nothing accepted yet". */
+  /** Newest accepted seq; the empty sentinel is origin - 1 (log -1, trace 0). */
   headSeq: number;
   /** Oldest retained sequence, or `headSeq + 1` when nothing is retained. */
   tailSeq: number;
@@ -162,14 +162,15 @@ export class HubRingBuffer {
     const existing = this.streams.get(key);
     if (existing) return existing;
     const colon = key.indexOf(":");
+    const origin = key.startsWith("log:") ? 0 : 1;
     const created: HubRingStream = {
       key,
       kind: key.startsWith("log:") ? "log" : "trace",
       id: key.slice(colon + 1),
       entries: [],
       bytes: 0,
-      headSeq: 0,
-      tailSeq: 1,
+      headSeq: origin - 1,
+      tailSeq: origin,
       logVersion: null,
       lastAccess: this.now(),
       closed: false,

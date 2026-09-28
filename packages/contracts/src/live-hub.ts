@@ -123,7 +123,11 @@ export interface HubSubscription {
 
 // ─── Browser WebSocket v2 frames (plan 2/6 §2) ──────────────────────────────────────────────────
 
-/** `stream.subscribe`: start (or resume) one stream, from `from_seq` exclusive. */
+/**
+ * `stream.subscribe`: start (or resume) one stream, from `from_seq` inclusive.
+ * Requests below the origin are clamped: log starts at 0, trace at 1.
+ * A-0's bare task-id TraceSink.subscribe is exclusive; the Hub adapts it with +1.
+ */
 export interface HubStreamSubscribePayload {
   stream: HubStreamName;
   id: string;

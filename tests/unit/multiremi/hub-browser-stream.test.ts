@@ -43,7 +43,7 @@ describe("MUL-436 regression 4B: real Hub browser sink", () => {
       for (let seq = 1; seq <= 10; seq++) row(seq);
       hub.flushNow();
       expect(frames.map((frame) => frame.type)).toEqual(["stream.ack", "stream.gap", "stream.data"]);
-      expect(frames[1]!.payload).toEqual({ stream, id: "s", from: 0, to: 7 });
+      expect(frames[1]!.payload).toEqual({ stream, id: "s", from: stream === "trace" ? 1 : 0, to: 7 });
       expect(frames[2]!.payload.frames.map((frame: { seq: number }) => frame.seq)).toEqual([8, 9, 10]);
     });
 
@@ -116,4 +116,21 @@ describe("MUL-436 regression 4B: real Hub browser sink", () => {
       socket.close(); server.stop(true);
     }
   });
+});
+
+describe("MUL-436 regression 4C: browser inclusive resume", () => {
+  for (const stream of ["log", "trace"] as const) {
+    it(`replays ${stream} seq 2 and 3 from next-wanted 2 on repeated subscriptions`, async () => {
+      const { hub, frames, subscribe, row } = fixture(stream);
+      for (let seq = 1; seq <= 3; seq++) row(seq);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        frames.length = 0;
+        await subscribe(2);
+        hub.flushNow();
+        expect(frames.map((frame) => frame.type)).toEqual(["stream.ack", "stream.data"]);
+        expect(frames[0]!.payload.gap).toBeNull();
+        expect(frames[1]!.payload.frames.map((frame: { seq: number }) => frame.seq)).toEqual([2, 3]);
+      }
+    });
+  }
 });

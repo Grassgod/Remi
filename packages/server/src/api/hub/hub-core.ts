@@ -475,6 +475,7 @@ export class HubImpl implements ObservableLiveHub {
    */
   subscribeWithSink(key: HubStreamKey, fromSeq: number, sink: HubSubscriberSink): HubSinkSubscription {
     const stream = this.ring.ensure(key);
+    fromSeq = Math.max(stream.kind === "log" ? 0 : 1, fromSeq);
     this.ring.touch(stream);
     const subscriber = this.newSubscriber(key, fromSeq, sink, null, null);
     // Whatever the ring cannot serve is reported through `gap` (the caller puts it
@@ -510,14 +511,16 @@ export class HubImpl implements ObservableLiveHub {
     // The listener spelling has no sink of its own, so `gap`/`head`/`closed` must
     // be read off the subscription — which is exactly why A-0 types them as live
     // getters rather than snapshot fields.
-    const subscriber = this.newSubscriber(key, fromSeq, listenerSink(key, () => {}), onEvents, taskId);
+    // A-0 is exclusive (trace-sink.ts); internal/keyed requests are inclusive.
+    const requested = Math.max(1, fromSeq + 1);
+    const subscriber = this.newSubscriber(key, requested, listenerSink(key, () => {}), onEvents, taskId);
     this.skipUnservable(subscriber, stream);
     this.scheduleFlushFor(key);
     void this.ensureWarm(key);
     return {
       get first_seq() { return firstServableSeq(stream); },
       get head() { return stream.headSeq; },
-      get gap() { return hasUnservableAfter(stream, subscriber.requested); },
+      get gap() { return gapFor(stream, subscriber.requested) !== null; },
       get closed() { return stream.closed; },
       unsubscribe: () => { this.removeSubscriber(subscriber); },
     };
@@ -685,6 +688,11 @@ export class HubImpl implements ObservableLiveHub {
         // Replay: everything at or below the head is already retained.
         dropped += 1;
         continue;
+      }
+      if (stream.kind === "log" && stream.headSeq === -1 && frame.seq === 1) {
+        // A writer may attach after the seq-0 head row. Replay reports that
+        // missing prefix; retaining row 1 must not claim that row 0 was delivered.
+        stream.headSeq = 0;
       }
       if (frame.seq === stream.headSeq + 1) {
         this.push(stream, frame, origin === "local");
@@ -1154,7 +1162,7 @@ export class HubImpl implements ObservableLiveHub {
    */
   private reportGap(subscriber: HubSubscriber, upTo: number): void {
     if (!subscriber.active) return;
-    const from = subscriber.cursor;
+    const from = Math.max(subscriber.key.startsWith("log:") ? 0 : 1, subscriber.cursor);
     if (upTo < from) return;
     this.notifyGap(subscriber, from, upTo);
     if (!subscriber.active) return;
@@ -1196,7 +1204,7 @@ export class HubImpl implements ObservableLiveHub {
       key,
       sink,
       requested: fromSeq,
-      cursor: fromSeq,
+      cursor: fromSeq - 1,
       delivered: [],
       deliveredRevisions: new Map(),
       changeGap: null,
@@ -1261,7 +1269,7 @@ export class HubImpl implements ObservableLiveHub {
       this.stampLogVersion(stream, known.head, known.log_version);
       return;
     }
-    const from = Math.max(1, known.head - this.limits.warmupFrames + 1);
+    const from = Math.max(0, known.head - this.limits.warmupFrames + 1);
     const pushed = await this.fillFrom(key, from - 1, known.head, true);
     const after = this.ring.get(key);
     if (!after) return;
@@ -1383,15 +1391,13 @@ function firstServableSeq(stream: HubRingStream): number {
 /**
  * The range a subscription created at `requested` cannot get from this ring.
  *
- * `from` is the requested cursor rather than `requested + 1`, so the range is
- * conservative by one sequence: a subscriber that re-reads `from` de-duplicates by
- * sequence, while one that skipped it could silently lose a frame. C0's contract
- * test pins this shape.
+ * The keyed request is inclusive: a request immediately before the first
+ * servable frame still needs a one-position gap (C0's contract).
  */
 function gapFor(stream: HubRingStream, requested: number): HubSeqRange | null {
-  if (stream.headSeq === 0) return null;
+  if (stream.headSeq < (stream.kind === "log" ? 0 : 1)) return null;
   const first = firstServableSeq(stream);
-  if (requested >= first - 1) return null;
+  if (requested >= first || requested > stream.headSeq) return null;
   return { from: requested, to: Math.min(stream.headSeq, first - 1) };
 }
 
@@ -1401,10 +1407,8 @@ function gapFor(stream: HubRingStream, requested: number): HubSeqRange | null {
  * One predicate covers both ways a ring goes short, because `firstServableSeq`
  * already folds them together: `cursor + 1 < first` means the next sequence the
  * subscriber wants is either below the retained tail or a position whose frame was
- * patched in place. The comparison is `cursor < first - 1` rather than
- * `cursor + 1 < first` for the one-sequence convention `gap` uses: `from` is the
- * requested cursor, so a request that only just reaches the servable range is not a
- * gap.
+ * patched in place. `cursor` is the last delivered or gap-skipped sequence,
+ * so a request at the exact first servable position does not need a gap.
  */
 function hasUnservableAfter(stream: HubRingStream, cursor: number): boolean {
   return cursor < firstServableSeq(stream) - 1;

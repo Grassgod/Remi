@@ -31,7 +31,7 @@ async function fixture() {
 
 async function subscribe(socket: WebSocket, stream: "log" | "trace", id: string) {
   const ack = nextWebSocketMessage(socket);
-  socket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream, id, from_seq: 0 } }));
+  socket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream, id, from_seq: 1 } }));
   expect(await ack).toMatchObject({ type: "stream.ack", payload: { stream, id } });
 }
 

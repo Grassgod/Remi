@@ -26,7 +26,7 @@ trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts]
 | 帧 | 载荷 |
 |---|---|
 | `auth` | `{token}`，握手第一帧（cookie 模式省略） |
-| `stream.subscribe` | `{stream, id, from_seq}`，`from_seq` 为**排他**游标（下一条想要的序号） |
+| `stream.subscribe` | `{stream, id, from_seq}`，`from_seq` 为**包含**起点（下一条想要的序号） |
 | `stream.unsubscribe` | `{stream, id}` |
 | `ping` | 无 |
 
@@ -49,6 +49,10 @@ trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts]
 浏览器 handler 通过 `subscribeWithSink` 接入真实 Hub，读取 socket 的 `getBufferedAmount()`，
 将运行中的缺口（含晚到 revision）发送为 `stream.gap`。Bun 的 `drain` 回调恢复该 socket 的订阅；
 ack 发送前的 data 和 gap 按到达顺序缓冲，ack 后才发给客户端。
+
+keyed Hub 与 `subscribeWithSink` 同样回放 `[fromSeq, head]`，低于流起点的请求被截断（log 为 0，trace 为 1）。
+A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部以 `fromSeq + 1` 适配。
+真实 Hub 的空 log 使用 `head=-1`、`first_seq=0`；实际接收 seq 0 后 head 才为 0。
 
 ## 订阅鉴权
 

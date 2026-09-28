@@ -69,8 +69,8 @@ describe("MUL-436 regression 4A: callback unsubscription", () => {
           const old = new RecordingSink();
           const replacement = new RecordingSink();
           const sibling = new RecordingSink();
-          const subscription = hub.subscribeWithSink("log:s", 0, old);
-          if (siblings) hub.subscribeWithSink("log:s", 0, sibling);
+          const subscription = hub.subscribeWithSink("log:s", 1, old);
+          if (siblings) hub.subscribeWithSink("log:s", 1, sibling);
           const flush = async () => {
             if (defaultScheduling) await settle();
             else for (let i = 0; i < 4; i++) hub.flushNow();
@@ -81,7 +81,7 @@ describe("MUL-436 regression 4A: callback unsubscription", () => {
             old.afterSend = null;
             old.afterGap = null;
             subscription.unsubscribe();
-            hub.subscribeWithSink("log:s", 1, replacement);
+            hub.subscribeWithSink("log:s", 2, replacement);
             row(hub, 2);
           };
           if (callback === "send") old.afterSend = replace;
@@ -99,7 +99,7 @@ describe("MUL-436 regression 4A: callback unsubscription", () => {
   it("stops replay when the ring gap callback unsubscribes", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 1 } } });
     const sink = new RecordingSink();
-    const subscription = hub.subscribeWithSink("log:s", 0, sink);
+    const subscription = hub.subscribeWithSink("log:s", 1, sink);
     sink.afterGap = () => subscription.unsubscribe();
     row(hub, 1); row(hub, 2); hub.flushNow();
     expect(sink.gaps).toHaveLength(1);
@@ -120,7 +120,7 @@ describe("MUL-436 regression 1: patch bases and stale replay", () => {
   it("does not mistake an ack gap cursor for a delivered base", () => {
     const hub = make();
     const current = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, current);
+    hub.subscribeWithSink("log:s", 1, current);
     row(hub, 1); hub.flushNow(); patch(hub, 1);
     const late = new RecordingSink();
     const sub = hub.subscribeWithSink("log:s", 0, late);
@@ -154,8 +154,8 @@ describe("MUL-436 regression 2: edits while lagging", () => {
   it("retains an invalidation for the slow consumer while delivering to the fast one", () => {
     const hub = make({ limits: { laggingBytes: 10 } });
     const slow = new RecordingSink(), fast = new RecordingSink();
-    const sub = hub.subscribeWithSink("log:s", 0, slow);
-    hub.subscribeWithSink("log:s", 0, fast);
+    const sub = hub.subscribeWithSink("log:s", 1, slow);
+    hub.subscribeWithSink("log:s", 1, fast);
     slow.buffered = 11;
     row(hub, 1); hub.flushNow(); patch(hub, 1); hub.flushNow();
     expect(slow.frames.map((frame) => frame.kind)).toEqual(["entry"]);
@@ -170,7 +170,7 @@ describe("MUL-436 regression 2: edits while lagging", () => {
   it("bounds deferred edits with one conservative range and resumes after its cursor", () => {
     const hub = make({ limits: { laggingBytes: 10 } });
     const out = new RecordingSink();
-    const sub = hub.subscribeWithSink("log:s", 0, out);
+    const sub = hub.subscribeWithSink("log:s", 1, out);
     out.buffered = 11;
     for (let seq = 1; seq <= 3; seq++) row(hub, seq);
     hub.flushNow();
@@ -185,10 +185,10 @@ describe("MUL-436 regression 3: edits outside retention", () => {
   it("delivers an edit after its base leaves the ring, and gaps a consumer without that base", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
     const current = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, current);
+    hub.subscribeWithSink("log:s", 1, current);
     for (let seq = 1; seq <= 5; seq++) { row(hub, seq); hub.flushNow(); }
     const late = new RecordingSink();
-    hub.subscribeWithSink("log:s", 5, late);
+    hub.subscribeWithSink("log:s", 6, late);
     patch(hub, 1); hub.flushNow();
     expect(current.frames.at(-1)).toMatchObject({ seq: 1, kind: "patch" });
     expect(current.gaps).toEqual([]);
@@ -200,7 +200,7 @@ describe("MUL-436 regression 3: edits outside retention", () => {
   it("keeps an out-of-ring edit visible to a lagging consumer after drain", () => {
     const hub = make({ limits: { laggingBytes: 10, ring: { streamMaxFrames: 3 } } });
     const out = new RecordingSink();
-    const sub = hub.subscribeWithSink("log:s", 0, out);
+    const sub = hub.subscribeWithSink("log:s", 1, out);
     for (let seq = 1; seq <= 5; seq++) { row(hub, seq); hub.flushNow(); }
     out.buffered = 11; row(hub, 6); hub.flushNow();
     patch(hub, 1); hub.flushNow();
@@ -212,7 +212,7 @@ describe("MUL-436 regression 3: edits outside retention", () => {
 describe("MUL-436 regression 4: coalesced partial patches", () => {
   it("preserves disjoint fields, explicit nulls, and the newest value for repeated fields", () => {
     const hub = make(), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     row(hub, 1); hub.flushNow();
     patch(hub, 1, { body_md: "edited", body_html: null }, 2);
     patch(hub, 1, { metadata: { resolved: true } }, 3);
@@ -228,7 +228,7 @@ describe("MUL-436 regression 4: coalesced partial patches", () => {
 
   it("merges an older queued revision without overwriting newer fields", () => {
     const hub = make(), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     row(hub, 1); hub.flushNow();
     patch(hub, 1, { body_md: "newer", metadata: { resolved: true } }, 3);
     patch(hub, 1, { body_md: "older", body_html: null }, 2);
@@ -245,7 +245,7 @@ describe("MUL-436 regression 5: ordinary flush boundaries", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
     const behind = new RecordingSink(), current = new RecordingSink();
     hub.subscribeWithSink("log:s", 0, behind);
-    hub.subscribeWithSink("log:s", 9, current);
+    hub.subscribeWithSink("log:s", 10, current);
     for (let seq = 1; seq <= 10; seq++) row(hub, seq);
     hub.flushNow();
     expect(behind.order).toEqual(["gap:0,7", "data:8,9,10"]);
@@ -260,13 +260,13 @@ describe("MUL-436 regression 5: ordinary flush boundaries", () => {
       seq: i + 1, ts: "2026-09-28T00:00:00Z", type: "text", content: `${i + 1}`,
     })));
     hub.flushNow();
-    expect(out.order).toEqual(["gap:0,7", "data:8,9,10"]);
+    expect(out.order).toEqual(["gap:1,7", "data:8,9,10"]);
   });
 
   it("rechecks retention between capped batches", () => {
     const hub = make({ limits: { batchBytes: 1, ring: { streamMaxFrames: 3 } } });
     const out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     for (let seq = 1; seq <= 3; seq++) row(hub, seq);
     hub.flushNow();
     for (let seq = 4; seq <= 8; seq++) row(hub, seq);
@@ -287,7 +287,7 @@ describe("MUL-436 regression 6: sparse cold warm-up", () => {
     expect(out.frames.map((frame) => frame.seq)).toEqual(Array.from({ length: 54 }, (_, i) => i + 137));
     expect(out.order.at(-1)).toBe("gap:190,200");
     const late = new RecordingSink();
-    hub.subscribeWithSink("log:s", 190, late); hub.flushNow();
+    hub.subscribeWithSink("log:s", 191, late); hub.flushNow();
     expect(late.order).toEqual(["gap:190,200"]);
     row(hub, 201); hub.flushNow();
     expect(sub.head).toBe(201);
@@ -314,7 +314,7 @@ describe("MUL-436 regression 6: sparse cold warm-up", () => {
     expect(sub.head).toBe(8);
     expect(out.order).toEqual(["gap:0,2", "data:3,4", "gap:4,5", "data:6", "gap:6,7", "data:8"]);
     const late = new RecordingSink();
-    hub.subscribeWithSink("log:s", 5, late); hub.flushNow(); hub.flushNow();
+    hub.subscribeWithSink("log:s", 6, late); hub.flushNow(); hub.flushNow();
     expect(late.order).toEqual(["data:6", "gap:6,7", "data:8"]);
   });
 
@@ -338,7 +338,7 @@ class ReentrantSink extends RecordingSink {
 describe("MUL-436 regression 2a: synchronous patch reentry", () => {
   it("delivers the patch queued synchronously while sending its base", () => {
     const hub = make(), out = new ReentrantSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     out.onSend = (frames) => {
       if (!frames.some((frame) => frame.kind === "entry" && frame.seq === 1)) return;
       out.onSend = null;
@@ -353,8 +353,8 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
 
   it("delivers a reentrant patch once to both consumers holding its base", () => {
     const hub = make(), first = new ReentrantSink(), second = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, first);
-    hub.subscribeWithSink("log:s", 0, second);
+    hub.subscribeWithSink("log:s", 1, first);
+    hub.subscribeWithSink("log:s", 1, second);
     row(hub, 1); hub.flushNow();
     first.onSend = () => {
       first.onSend = null;
@@ -371,8 +371,8 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
 
   it("preserves both fields when a pending revision triggers a newer patch during send", () => {
     const hub = make(), first = new ReentrantSink(), second = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, first);
-    hub.subscribeWithSink("log:s", 0, second);
+    hub.subscribeWithSink("log:s", 1, first);
+    hub.subscribeWithSink("log:s", 1, second);
     row(hub, 1); hub.flushNow();
     first.onSend = () => {
       first.onSend = null;
@@ -393,11 +393,11 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
 
   it("retains a reentrant patch for a key already handled in this flush", () => {
     const hub = make(), first = new RecordingSink(), second = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, first);
-    hub.subscribeWithSink("log:s", 0, second);
+    hub.subscribeWithSink("log:s", 1, first);
+    hub.subscribeWithSink("log:s", 1, second);
     row(hub, 1); hub.flushNow();
     const trigger = new ReentrantSink();
-    hub.subscribeWithSink("log:trigger", 0, trigger); hub.flushNow();
+    hub.subscribeWithSink("log:trigger", 1, trigger); hub.flushNow();
     trigger.onSend = () => {
       trigger.onSend = null;
       patch(hub, 1);
@@ -415,11 +415,11 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
 
   it("merges a reentrant patch into a later key's pending revision without duplicating it", () => {
     const hub = make(), first = new RecordingSink(), second = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, first);
-    hub.subscribeWithSink("log:s", 0, second);
+    hub.subscribeWithSink("log:s", 1, first);
+    hub.subscribeWithSink("log:s", 1, second);
     row(hub, 1); hub.flushNow();
     const trigger = new ReentrantSink();
-    hub.subscribeWithSink("log:trigger", 0, trigger);
+    hub.subscribeWithSink("log:trigger", 1, trigger);
     trigger.onSend = () => {
       trigger.onSend = null;
       patch(hub, 1, { metadata: { resolved: true } }, 3);
@@ -440,9 +440,9 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
 
   it("reports a reentrant edit as a gap to a consumer without the base", () => {
     const hub = make(), owner = new ReentrantSink(), baseless = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, owner);
+    hub.subscribeWithSink("log:s", 1, owner);
     row(hub, 1); hub.flushNow();
-    hub.subscribeWithSink("log:s", 1, baseless);
+    hub.subscribeWithSink("log:s", 2, baseless);
     owner.onSend = () => {
       owner.onSend = null;
       patch(hub, 1);
@@ -459,7 +459,7 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
   for (const order of [[2, 4, 3], [4, 2, 3]]) {
     it(`keeps each field's latest revision and null in queue order ${order.join(",")}`, () => {
       const hub = make(), out = new RecordingSink();
-      hub.subscribeWithSink("log:s", 0, out);
+      hub.subscribeWithSink("log:s", 1, out);
       row(hub, 1); hub.flushNow();
       for (const revision of order) {
         const fields = revision === 2 ? { body_html: "old html", metadata: { version: 2 } }
@@ -479,7 +479,7 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
 
   it("reproduces three-revision field rollback with the default scheduler", async () => {
     const hub = make({ scheduleFlush: (callback) => { setImmediate(callback); } }), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out); row(hub, 1); await settle();
+    hub.subscribeWithSink("log:s", 1, out); row(hub, 1); await settle();
     patch(hub, 1, { body_html: "old html", metadata: { version: 2 } }, 2);
     patch(hub, 1, { body_md: "latest body" }, 4);
     patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3);
@@ -494,7 +494,7 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
 
   it("gaps a late lower revision after the consumer has received a higher one", () => {
     const hub = make(), current = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, current);
+    hub.subscribeWithSink("log:s", 1, current);
     row(hub, 1); hub.flushNow();
     patch(hub, 1, { body_md: "latest body" }, 4); hub.flushNow();
     patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3); hub.flushNow();
@@ -508,7 +508,7 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
 
   it("gaps older fields concealed inside a higher coalesced revision", () => {
     const hub = make(), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     row(hub, 1); hub.flushNow();
     patch(hub, 1, { body_html: "current html" }, 4); hub.flushNow();
     patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3);
@@ -519,7 +519,7 @@ describe("MUL-436 regression 3 A1: per-field revisions", () => {
 
   it("bounds revision history and gaps edits after their revision proof is forgotten", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 1 } } }), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     for (let seq = 1; seq <= 1100; seq++) {
       row(hub, seq); hub.flushNow();
       patch(hub, seq, { body_md: "revision four" }, 4); hub.flushNow();
@@ -542,7 +542,7 @@ describe("MUL-436 regression 3 A2: bounded delivered history", () => {
       limits: { ring: { streamMaxFrames: 4 } },
       scheduleHole: (callback) => { fires.push(callback); return undefined; },
     }), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     for (let index = 0; index < 4096; index++) {
       row(hub, index * 2 + 1);
       if (index > 0) {
@@ -565,7 +565,7 @@ describe("MUL-436 regression 3 A2: bounded delivered history", () => {
 
   it("keeps uninterrupted deliveries in one range and still patches old bases", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 1 } } }), out = new RecordingSink();
-    hub.subscribeWithSink("log:s", 0, out);
+    hub.subscribeWithSink("log:s", 1, out);
     for (let seq = 1; seq <= 4096; seq++) { row(hub, seq); hub.flushNow(); }
     const subscriber = [...(hub as unknown as {
       subscribers: Map<string, Set<{ delivered: HubSeqRange[] }>>;
@@ -582,7 +582,7 @@ describe("MUL-436 regression 3 A2: bounded delivered history", () => {
       limits: { laggingBytes: 10 },
       scheduleHole: (callback) => { fires.push(callback); return undefined; },
     }), out = new RecordingSink();
-    const sub = hub.subscribeWithSink("log:s", 0, out);
+    const sub = hub.subscribeWithSink("log:s", 1, out);
     for (let index = 0; index < 1024; index++) {
       row(hub, index * 2 + 1);
       if (index > 0) { fires.shift()!(); await settle(); }
