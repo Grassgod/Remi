@@ -188,9 +188,9 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         observed.stop();
       }
       expect(injected).toBe(true);
+      assertSingleTransaction();
       expect(await graph()).toEqual(before);
       expect(observed.events).toEqual([]);
-      assertSingleTransaction();
     });
 
     it.each(["javascript", "sql"])("does not swallow a %s error after a task cancellation write", async failure => {
@@ -243,6 +243,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         childHook.mockRestore();
         observed.stop();
       }
+      assertSingleTransaction();
       expect(store.getRuntime(f.runtime.id)).toBeNull();
       expect(store.getAgent(f.agent.id)).toMatchObject({ runtimeId: null });
       expect(store.getAgent(f.agent.id)?.archivedAt).not.toBeNull();
@@ -264,7 +265,6 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       } else {
         expect(childChanges).toEqual([]);
       }
-      assertSingleTransaction();
     });
 
     it.each(["active_issue_workspaces", "plan_changed", "daemon_last_runtime"])("leaves every table and event unchanged on %s", async blocker => {
