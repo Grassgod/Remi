@@ -549,6 +549,7 @@ export interface ChildStatusChange {
   taskId: string;
   /** Terminal status of the task that produced the transition, when it was terminal. */
   taskTerminalStatus?: "completed" | "failed" | "cancelled";
+  dependencyCheckEventId?: string | null;
 }
 
 /**
@@ -6181,6 +6182,7 @@ ${placementAfter.sql}
             next,
             {
               taskTerminalStatus: change.taskTerminalStatus,
+              dependencyCheckEventId: change.dependencyCheckEventId,
               seen,
             },
           );
@@ -6258,7 +6260,7 @@ ${placementAfter.sql}
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
-      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      const { dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: updatedIssue,
         previousStatus: issue.status,
         actorType: "agent",
@@ -6276,6 +6278,7 @@ ${placementAfter.sql}
         previous: issue,
         issue: updatedIssue,
         taskId: task.id,
+        dependencyCheckEventId,
         taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
           ? task.status
           : undefined,

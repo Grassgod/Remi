@@ -223,9 +223,11 @@ squad rule about ordering was prose. The observable failures were:
    Both are gone. The dispatch decision is made under the locks before any write,
    as in 3a: an owner that cannot run writes exactly one
    `dependency_auto_start_skipped` (`reason: dispatch_failed`) in the same
-   transaction, with no status change; a skip already recorded since the
-   prerequisite's `done` suppresses a second one, so a concurrently completing
-   prerequisite or the recovery replay cannot double-record. Any other failure
+   transaction, with no status change; a skip already recorded for the same check
+   event suppresses a second one. A later `done` of the same prerequisite is a
+   new event with a new key and is attempted again. Each triggering event records
+   at most one outcome per dependent, so a dependent whose prerequisites finish
+   within the replay window may carry one skip per prerequisite. Any other failure
    is unexpected: the transaction rolls back with nothing written, the
    post-commit path only logs it, and the `dependency_auto_start_check` replay
    retries it. The prerequisite's own `done` stays committed. A `backlog` issue
@@ -257,11 +259,15 @@ squad rule about ordering was prose. The observable failures were:
    only E3 automatic starts: the prerequisite must still be `done`, and the
    dependent must still be `backlog`, have every prerequisite satisfied, have
    an agent/squad owner, and have no `dependency_auto_start_skipped` activity
-   since the event was created; that check runs inside the auto-start transaction
-   under the workspace and issue locks, keyed by the event's `created_at`.
+   for the same check event. That check runs inside the auto-start transaction
+   under the workspace and issue locks, keyed by the `dependency_auto_start_check`
+   event id: the `done` transaction returns it to the post-commit hook and the
+   replay reads it from the event row, so both attempts of one `done` share one
+   key and no wall-clock comparison is involved.
    Existing workspace/issue locks and the conditional `backlog -> todo` update
    arbitrate competing attempts; the event
-   id is audit data (`replayed: true`, `replay_event_id`), not an idempotency key.
+   id is recorded as `dependency_check_event_id` on skip and auto-start activities;
+   `replayed: true` appears only on replayed starts.
    The replay does not catch: business outcomes are return values written in the
    transaction, so every throw is treated as infrastructure and goes back to the
    outbox (eight attempts with exponential backoff, then `failed` with
