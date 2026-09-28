@@ -85,6 +85,7 @@ import type {
   MultiremiLabel,
   MultiremiSubscriptionReason,
   MultiremiTask,
+  MultiremiTaskStatus,
   MultiremiTimelineEntry,
   QuickCreateIssueInput,
   QuickCreateIssueResult,
@@ -211,6 +212,8 @@ export interface IssueWorkspaceMoveRelations {
   parent: string | null;
   children: string[];
   dependencies: Array<{ id: string; key: string; type: MultiremiIssueDependencyType }>;
+  /** Active tasks keep writing to the Issue from their own workspace. */
+  tasks: Array<{ id: string; status: MultiremiTaskStatus }>;
   hidden: number;
 }
 
@@ -221,7 +224,7 @@ export class IssueWorkspaceMoveError extends Error {
     readonly relations: IssueWorkspaceMoveRelations,
     readonly issueIds?: string[],
   ) {
-    super("Detach parent, child and dependency relationships before moving an issue to another workspace");
+    super("Detach parent, child and dependency relationships, and cancel or finish its tasks, before moving an issue to another workspace");
   }
 }
 
@@ -1465,8 +1468,16 @@ export class IssuesRepo {
        WHERE d.issue_id = ? OR d.depends_on_issue_id = ?
        ORDER BY d.id`,
     ).all(current.id, current.workspaceId, current.id, current.id) as Row[];
+    // Same predicate as cancelActiveIssueTasks, so unassigning unblocks the move.
+    // Task creation locks this row first, so none can commit behind this read.
+    const tasks = this.ctx.db.query(
+      `SELECT id, status, workspace_id FROM multiremi_tasks
+       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
+       ORDER BY id`,
+    ).all(current.id) as Row[];
     const visibleChildren = children.filter((row) => String(row.workspace_id) === current.workspaceId);
     const visibleDependencies = dependencies.filter((row) => row.other_key != null);
+    const visibleTasks = tasks.filter((row) => String(row.workspace_id) === current.workspaceId);
     const visibleParent = parent?.workspaceId === current.workspaceId ? parent.key : null;
     const relations: IssueWorkspaceMoveRelations = {
       parent: visibleParent,
@@ -1474,11 +1485,13 @@ export class IssuesRepo {
       dependencies: visibleDependencies.map((row) => ({
         id: String(row.id), key: String(row.other_key), type: String(row.type) as MultiremiIssueDependencyType,
       })),
+      tasks: visibleTasks.map((row) => ({ id: String(row.id), status: String(row.status) as MultiremiTaskStatus })),
       hidden: (current.parentIssueId && !visibleParent ? 1 : 0)
         + children.length - visibleChildren.length
-        + dependencies.length - visibleDependencies.length,
+        + dependencies.length - visibleDependencies.length
+        + tasks.length - visibleTasks.length,
     };
-    if (current.parentIssueId || children.length || dependencies.length) {
+    if (current.parentIssueId || children.length || dependencies.length || tasks.length) {
       throw new IssueWorkspaceMoveError(relations);
     }
   }
@@ -4425,6 +4438,11 @@ export class IssuesRepo {
       const lockedRows = lockIssueRowsWithinTransaction(this.ctx.db, [id, reopenedChildParent]);
       if (!lockedRows.get(id)) throw new Error(`Issue not found: ${id}`);
       const locked = this.getIssue(id)!;
+      // The Issue moved while this waited: resolve the assignee where it now
+      // lives, which throws exactly what a sequential assign would, before any write.
+      if (locked.workspaceId !== current.workspaceId) {
+        this.ctx.squads().resolveAssigneeRef(assigneeType, assigneeId, locked.workspaceId);
+      }
       if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
         if (!lockedRows.has(locked.parentIssueId)) throw new IssueLockSetStaleError();
         if (!lockedRows.get(locked.parentIssueId)) throw new Error(`Parent issue not found: ${locked.parentIssueId}`);

@@ -3,8 +3,11 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { IssueLockSetStaleError, IssuesRepo, IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
+import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { RelationLockInput } from "./fixtures/postgres-relation-lock-worker.js";
 
 interface WorkerResult {
@@ -13,6 +16,32 @@ interface WorkerResult {
   error?: string;
   code?: string;
   maxTransactionDepth: number;
+}
+
+type SqlParams = Array<string | number | bigint | boolean | null | Uint8Array>;
+type TraceEvent = { kind: "lock" | "read" | "hint"; id: string };
+
+const LOCK_SQL = "UPDATE multiremi_issues SET id = id WHERE id = ?";
+const READ_SQL = "SELECT * FROM multiremi_issues WHERE id = ?";
+// The unlocked reads that pick a lock set: PATCH, then Agent assignment.
+const HINT_SQL = new Set([
+  "SELECT workspace_id, parent_issue_id, status FROM multiremi_issues WHERE id = ?",
+  "SELECT parent_issue_id, status FROM multiremi_issues WHERE id = ?",
+]);
+const STALE_MESSAGE = new IssueLockSetStaleError().message;
+
+/** Row locks with no read in between: one `lockIssueRowsWithinTransaction` call. */
+function lockBatches(events: TraceEvent[]): string[][] {
+  const batches: string[][] = [];
+  let previous: TraceEvent["kind"] | null = null;
+  for (const event of events) {
+    if (event.kind === "lock") {
+      if (previous !== "lock") batches.push([]);
+      batches.at(-1)!.push(event.id);
+    }
+    previous = event.kind;
+  }
+  return batches;
 }
 
 function phase(worker: Worker, wanted: string): Promise<WorkerResult> {
@@ -31,6 +60,11 @@ function phase(worker: Worker, wanted: string): Promise<WorkerResult> {
     worker.addEventListener("message", onMessage);
     worker.addEventListener("error", onError);
   });
+}
+
+function thrown(action: () => unknown): Error & { code?: string } {
+  try { action(); } catch (error) { return error as Error & { code?: string }; }
+  throw new Error("Expected the action to throw");
 }
 
 for (const backend of ["SQLite", "PostgreSQL"] as const) {
@@ -72,7 +106,41 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const target = reverse ? a.id : b.id;
       const parent = store.createIssue({ id: `iss_a_${tag}`, title: "Parent", workspaceId: source });
       const child = store.createIssue({ id: `iss_z_${tag}`, title: "Unrelated child", workspaceId: source });
-      return { source, target, parent, child };
+      const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: source });
+      return { tag, source, target, parent, child, agent };
+    }
+
+    /** One workspace: P in progress, C done under P, an Agent. The ids pick which row sorts first. */
+    function family(parentFirst = true) {
+      const tag = `family-${backend.toLowerCase()}-${++serial}`;
+      const workspace = store.createWorkspace({ id: `wf-${tag}`, slug: `f-${tag}`, name: `F ${tag}` }).id;
+      const [parentId, childId] = parentFirst ? [`iss_a_${tag}`, `iss_z_${tag}`] : [`iss_z_${tag}`, `iss_a_${tag}`];
+      const parent = store.createIssue({ id: parentId, title: "Parent", workspaceId: workspace, status: "in_progress" });
+      const child = store.createIssue({ id: childId, title: "Child", workspaceId: workspace, parentIssueId: parent.id });
+      store.updateIssue(child.id, { status: "done" });
+      const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: workspace });
+      // Sorted after `iss_a_` and before `iss_z_`.
+      const extraParent = (letter: "m" | "n") => store.createIssue({
+        id: `iss_${letter}_${tag}`, title: `Parent ${letter}`, workspaceId: workspace, status: "in_progress",
+      });
+      return { workspace, parent, child, agent, extraParent };
+    }
+
+    function reopenOrAssign(action: "reopen" | "assign", issueId: string, agentId: string) {
+      if (action === "reopen") store.updateIssue(issueId, { status: "in_progress" });
+      else store.assignIssue(issueId, { assigneeType: "agent", assigneeId: agentId });
+    }
+
+    function activityCount(issueId: string, type?: string): number {
+      const row = type
+        ? db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ? AND type = ?").get(issueId, type)
+        : db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?").get(issueId);
+      return Number((row as { n: number | string }).n);
+    }
+
+    function taskIds(issueId: string): string[] {
+      return (db.query("SELECT id FROM multiremi_tasks WHERE issue_id = ? ORDER BY id").all(issueId) as Array<{ id: string }>)
+        .map((row) => row.id);
     }
 
     function assertNoForeignEdges() {
@@ -82,6 +150,50 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       expect(db.query(`SELECT d.id FROM multiremi_issue_dependencies d
         JOIN multiremi_issues a ON a.id = d.issue_id JOIN multiremi_issues b ON b.id = d.depends_on_issue_id
         WHERE a.workspace_id <> b.workspace_id OR d.workspace_id <> a.workspace_id`).all()).toEqual([]);
+      // An active task is an edge too: its workspace writes to its Issue. Finished
+      // tasks stay behind as history once the Issue may move.
+      expect(db.query(`SELECT t.id FROM multiremi_tasks t JOIN multiremi_issues i ON i.id = t.issue_id
+        WHERE t.workspace_id <> i.workspace_id AND t.status NOT IN ('completed', 'failed', 'cancelled')`).all()).toEqual([]);
+    }
+
+    function resetDepth() {
+      if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
+    }
+
+    function expectDepthOne() {
+      if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
+    }
+
+    /** Records row locks, full-row reads and lock-set hints in order. `onHint` runs before the hint is read. */
+    function trace(action: () => void, onHint?: (id: string) => void): TraceEvent[] {
+      const events: TraceEvent[] = [];
+      const originalRun = db.run.bind(db);
+      const originalQuery = db.query.bind(db);
+      const runSpy = spyOn(db, "run").mockImplementation((sql: string, params?: SqlParams) => {
+        if (sql === LOCK_SQL) events.push({ kind: "lock", id: String(params?.[0]) });
+        return originalRun(sql, params ?? []);
+      });
+      // Wrap rather than patch: bun:sqlite caches statements, so a patched
+      // `get` would outlive this spy.
+      const querySpy = spyOn(db, "query").mockImplementation((sql: string) => {
+        const stmt = originalQuery(sql);
+        const kind = sql === READ_SQL ? "read" : HINT_SQL.has(sql) ? "hint" : null;
+        if (!kind) return stmt;
+        return new Proxy(stmt, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target);
+            if (typeof value !== "function") return value;
+            if (key !== "get") return value.bind(target);
+            return (...params: unknown[]) => {
+              if (kind === "hint") onHint?.(String(params[0]));
+              events.push({ kind, id: String(params[0]) });
+              return value.apply(target, params);
+            };
+          },
+        });
+      });
+      try { action(); } finally { querySpy.mockRestore(); runSpy.mockRestore(); }
+      return events;
     }
 
     it("S1: sequential move-before-add refuses all relation writes; add-before-move refuses the move", () => {
@@ -96,52 +208,185 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       assertNoForeignEdges();
     });
 
-    for (const action of ["create", "reparent", "dependency"] as const) {
-      it(`S2: ${action} locks all existing endpoints in ascending order before reading their state`, () => {
+    it("S1: sequential move, assignment and task creation refuse whichever comes second", () => {
+      const moved = fixture();
+      store.updateIssue(moved.child.id, { workspaceId: moved.target });
+      expect(thrown(() => store.assignIssue(moved.child.id, { assigneeType: "agent", assigneeId: moved.agent.id })).message)
+        .toBe(`Agent not found: ${moved.agent.id}`);
+      expect(thrown(() => store.createTask({ agentId: moved.agent.id, issueId: moved.child.id, workspaceId: moved.source, prompt: "Late" })).message)
+        .toBe("Issue workspace does not match agent workspace");
+      expect(store.getIssue(moved.child.id)?.assigneeId).toBeNull();
+      expect(taskIds(moved.child.id)).toEqual([]);
+
+      for (const first of ["assign", "task"] as const) {
         const f = fixture();
-        const events: Array<{ kind: "lock" | "read"; id: string }> = [];
-        const originalRun = db.run.bind(db);
-        const originalQuery = db.query.bind(db);
-        const runSpy = spyOn(db, "run").mockImplementation((sql: string, params?: Array<string | number | bigint | boolean | null | Uint8Array>) => {
-          if (sql === "UPDATE multiremi_issues SET id = id WHERE id = ?") events.push({ kind: "lock", id: String(params?.[0]) });
-          return originalRun(sql, params ?? []);
-        });
-        const querySpy = spyOn(db, "query").mockImplementation((sql: string) => {
-          const stmt = originalQuery(sql);
-          if (sql === "SELECT * FROM multiremi_issues WHERE id = ?") {
-            const get = stmt.get.bind(stmt);
-            stmt.get = (...params) => { events.push({ kind: "read", id: String(params[0]) }); return get(...params); };
-          }
-          return stmt;
-        });
-        try {
+        const task = first === "assign"
+          ? store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id }).task!
+          : store.createTask({ agentId: f.agent.id, issueId: f.child.id, workspaceId: f.source, prompt: "First" });
+        const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target }));
+        expect(error).toBeInstanceOf(IssueWorkspaceMoveError);
+        expect((error as IssueWorkspaceMoveError).relations.tasks).toEqual([{ id: task.id, status: "queued" }]);
+        expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
+      }
+      assertNoForeignEdges();
+    });
+
+    it("PG-L8b: an Issue with an active task answers 409 with the task; unassigning unblocks the move", async () => {
+      const f = fixture();
+      const { task } = store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id });
+      const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+      expect(error.code).toBe("workspace_move_blocked");
+      expect(error.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [{ id: task!.id, status: "queued" }], hidden: 0 });
+      const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
+      const response = await app.request(`/api/multiremi/issues/${f.child.id}`, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer mul476-locks-root", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: f.target }),
+      });
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.code).toBe("workspace_move_blocked");
+      expect(body.relations.tasks).toEqual([{ id: task!.id, status: "queued" }]);
+      expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
+      // A task in another workspace is counted, never listed.
+      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [f.target, task!.id]);
+      const hidden = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+      expect(hidden.relations.tasks).toEqual([]);
+      expect(hidden.relations.hidden).toBe(1);
+      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [f.source, task!.id]);
+      // Unassigning cancels the task with the same predicate the guard reads.
+      store.assignIssue(f.child.id, {});
+      store.updateIssue(f.child.id, { workspaceId: f.target });
+      expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
+      assertNoForeignEdges();
+    });
+
+    it("PG-L8d (MUL-480 known residual): a move between assignment and task creation leaves a stale assignee and no task", () => {
+      const f = fixture();
+      const createTask = TasksRepo.prototype.createTask;
+      let moved = false;
+      const spy = spyOn(TasksRepo.prototype, "createTask").mockImplementation(function (this: TasksRepo, input) {
+        if (!moved) { moved = true; store.updateIssue(f.child.id, { workspaceId: f.target }); }
+        return createTask.call(this, input);
+      });
+      try {
+        expect(thrown(() => store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id })).message)
+          .toBe("Issue workspace does not match agent workspace");
+      } finally { spy.mockRestore(); }
+      const child = store.getIssue(f.child.id)!;
+      expect(moved).toBe(true);
+      expect(child.workspaceId).toBe(f.target);
+      expect(child.assigneeId).toBe(f.agent.id);
+      expect(child.status).toBe("todo");
+      expect(taskIds(f.child.id)).toEqual([]);
+    });
+
+    for (const action of ["create", "reparent", "dependency", "reopen", "assign", "sibling-status"] as const) {
+      it(`S2: ${action} locks its Issue rows once in ascending order, then re-reads them`, () => {
+        const f = fixture();
+        if (action === "reopen" || action === "assign" || action === "sibling-status") {
+          store.updateIssue(f.child.id, { parentIssueId: f.parent.id });
+          store.updateIssue(f.child.id, { status: action === "sibling-status" ? "in_progress" : "done" });
+        }
+        const events = trace(() => {
           if (action === "create") store.createIssue({ title: "Locked child", workspaceId: f.source,
             parentIssueId: f.parent.id, blockedBy: [f.child.key] });
           if (action === "reparent") store.updateIssue(f.child.id, { parentIssueId: f.parent.id });
           if (action === "dependency") store.createIssueDependency(f.child.id, { dependsOnIssueId: f.parent.key });
-        } finally { querySpy.mockRestore(); runSpy.mockRestore(); }
-        const expected = [f.parent.id, f.child.id].sort();
-        expect(events.filter((event) => event.kind === "lock").map((event) => event.id)).toEqual(expected);
-        const lastLock = events.findLastIndex((event) => event.kind === "lock");
-        for (const id of expected) expect(events.findIndex((event) => event.kind === "read" && event.id === id)).toBeGreaterThan(lastLock);
+          if (action === "reopen" || action === "assign") reopenOrAssign(action, f.child.id, f.agent.id);
+          // An unfinished child changing status does not touch its parent's count.
+          if (action === "sibling-status") store.updateIssue(f.child.id, { status: "in_review" });
+        });
+        const expected = action === "sibling-status" ? [f.child.id] : [f.parent.id, f.child.id].sort();
+        const batches = lockBatches(events);
+        expect(batches[0]).toEqual(expected);
+        if (action === "create" || action === "reparent" || action === "dependency") expect(batches).toHaveLength(1);
+        const firstLock = events.findIndex((event) => event.kind === "lock");
+        const batchEnd = firstLock + expected.length - 1;
+        // Only the assignment's own pre-read of C precedes the batch; the parent is never read first.
+        const earlyReads = events.slice(0, firstLock).filter((event) => event.kind === "read" && expected.includes(event.id));
+        expect(earlyReads.map((event) => event.id)).toEqual(action === "assign" ? [f.child.id] : []);
+        for (const id of action === "create" || action === "reparent" || action === "dependency" ? expected : [f.child.id]) {
+          expect(events.findIndex((event, i) => i > batchEnd && event.kind === "read" && event.id === id)).toBeGreaterThan(batchEnd);
+        }
       });
     }
 
+    for (const action of ["reopen", "assign"] as const) {
+      it(`S3: ${action} of a done child refuses a deleted parent and ignores a parent moved away`, () => {
+        const gone = family();
+        // parent_issue_id has no foreign key, so a parent row can vanish under its children.
+        db.run("DELETE FROM multiremi_issues WHERE id = ?", [gone.parent.id]);
+        expect(store.getIssue(gone.child.id)?.parentIssueId).toBe(gone.parent.id);
+        expect(thrown(() => reopenOrAssign(action, gone.child.id, gone.agent.id)).message)
+          .toBe(`Parent issue not found: ${gone.parent.id}`);
+        expect(store.getIssue(gone.child.id)?.status).toBe("done");
+        expect(taskIds(gone.child.id)).toEqual([]);
+
+        const moved = family();
+        const elsewhere = store.createWorkspace({ id: `wx-${moved.workspace}`, slug: `x-${moved.workspace}`, name: "Elsewhere" });
+        // A legacy foreign edge from before MUL-476; the rule does not migrate it.
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [elsewhere.id, moved.parent.id]);
+        reopenOrAssign(action, moved.child.id, moved.agent.id);
+        expect(store.getIssue(moved.child.id)?.status).toBe(action === "reopen" ? "in_progress" : "todo");
+        // Later cases assert that no foreign edge exists anywhere.
+        db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [moved.workspace, moved.parent.id]);
+      });
+    }
+
+    it("HTTP: a lock set stale twice answers 409 issue_relation_changed on PATCH and assign", async () => {
+      const f = family();
+      const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
+      const request = (path: string, method: string, body: unknown) => app.request(path, {
+        method,
+        headers: { Authorization: "Bearer mul476-locks-root", "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const update = spyOn(IssuesRepo.prototype, "updateIssueWithinTransaction").mockImplementation(() => {
+        throw new IssueLockSetStaleError();
+      });
+      try {
+        for (const prefix of ["/api/multiremi/issues", "/api/issues"]) {
+          update.mockClear();
+          const response = await request(`${prefix}/${f.child.id}`, "PATCH", { status: "in_progress" });
+          expect(response.status).toBe(409);
+          expect(await response.json()).toEqual({ error: STALE_MESSAGE, code: "issue_relation_changed" });
+          // The transaction owner retried once before giving up.
+          expect(update).toHaveBeenCalledTimes(2);
+        }
+      } finally { update.mockRestore(); }
+      const assign = spyOn(store, "assignIssue").mockImplementation(() => { throw new IssueLockSetStaleError(); });
+      try {
+        const response = await request(`/api/multiremi/issues/${f.child.id}/assign`, "POST",
+          { assignee_type: "agent", assignee_id: f.agent.id });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({ error: STALE_MESSAGE, code: "issue_relation_changed" });
+      } finally { assign.mockRestore(); }
+      expect(store.getIssue(f.child.id)?.status).toBe("done");
+    });
+
     if (backend !== "PostgreSQL") return;
 
-    async function hold(input: Omit<RelationLockInput, "databaseUrl">, action: () => void) {
+    function spawn(input: Omit<RelationLockInput, "databaseUrl">) {
       const worker = new Worker(new URL("./fixtures/postgres-relation-lock-worker.ts", import.meta.url).href);
+      const ready = input.gate ? phase(worker, "ready") : Promise.resolve(null);
       const locked = phase(worker, "locked");
-      const finished = Promise.all([phase(worker, "done"), phase(worker, "closed")]);
+      const finished = Promise.all([phase(worker, "done"), phase(worker, "closed")]).then(([done]) => done);
       worker.postMessage({ ...input, databaseUrl });
+      return { worker, ready, locked, finished };
+    }
+
+    /** Runs `action` while the worker holds its rows; the worker commits once `action` waits on them. */
+    async function hold(input: Omit<RelationLockInput, "databaseUrl">, action: () => void) {
+      const holder = spawn(input);
       try {
-        await locked;
+        await holder.locked;
         let failure: unknown;
         try { action(); } catch (error) { failure = error; }
-        expect((await finished)[0]!.ok).toBe(true);
+        expect((await holder.finished).ok).toBe(true);
         if (failure) throw failure;
       }
-      finally { worker.terminate(); }
+      finally { holder.worker.terminate(); }
     }
 
     for (const reverse of [false, true]) {
@@ -174,6 +419,38 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         assertNoForeignEdges();
       }, 15_000);
     }
+
+    it("PG-L8a: an assignment that waited on a move fails like a sequential one and writes nothing", async () => {
+      const f = fixture();
+      store.updateIssue(f.child.id, { status: "in_progress" });
+      const before = activityCount(f.child.id, "issue_assigned");
+      resetDepth();
+      await hold({ mode: "hold-move", role: "move", issueId: f.child.id, otherId: f.parent.id,
+        sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
+        expect(thrown(() => store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id })).message)
+          .toBe(`Agent not found: ${f.agent.id}`);
+      });
+      const child = store.getIssue(f.child.id)!;
+      expect(child.workspaceId).toBe(f.target);
+      expect(child.assigneeId).toBeNull();
+      expect(child.status).toBe("in_progress");
+      expect(activityCount(f.child.id, "issue_assigned")).toBe(before);
+      expect(taskIds(f.child.id)).toEqual([]);
+      expectDepthOne();
+      assertNoForeignEdges();
+    }, 15_000);
+
+    it("PG-L8c: task creation that waited on a move refuses the moved Issue", async () => {
+      const f = fixture();
+      await hold({ mode: "hold-move", role: "move", issueId: f.child.id, otherId: f.parent.id,
+        sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
+        expect(thrown(() => store.createTask({ agentId: f.agent.id, issueId: f.child.id, workspaceId: f.source, prompt: "Waiting" })).message)
+          .toBe("Issue workspace does not match agent workspace");
+      });
+      expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
+      expect(taskIds(f.child.id)).toEqual([]);
+      assertNoForeignEdges();
+    }, 15_000);
 
     async function race(inputs: Array<Omit<RelationLockInput, "databaseUrl" | "mode" | "barrierPath">>) {
       const directory = mkdtempSync(join(tmpdir(), "mul476-relation-"));
@@ -212,6 +489,21 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       }
     }
 
+    it("PG-L8c: move vs task creation permits exactly one writer (10 rounds)", async () => {
+      for (let round = 0; round < 10; round++) {
+        const f = fixture(round % 2 === 1);
+        const common = { sourceWorkspace: f.source, targetWorkspace: f.target, ownerId: f.agent.id, otherId: f.parent.id };
+        const results = await race([
+          { ...common, role: "move", issueId: f.child.id },
+          { ...common, role: "task", issueId: f.child.id },
+        ]);
+        expect(results.filter((result) => result.ok)).toHaveLength(1);
+        const [move, task] = results;
+        if (move!.ok) expect(task!.error).toBe("Issue workspace does not match agent workspace");
+        else expect(move!.code).toBe("workspace_move_blocked");
+      }
+    }, 120_000);
+
     for (const role of ["reparent", "dependency"] as const) {
       it(`PG-L4: opposing ${role} writes reject cycles without deadlock (10 rounds)`, async () => {
         for (let round = 0; round < 10; round++) {
@@ -225,7 +517,86 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const rejected = results.find((result) => !result.ok)!;
           expect(rejected.code === "dependency_cycle" || rejected.error === "Circular parent issue relationship detected").toBe(true);
         }
-      }, 30_000);
+      }, 120_000);
     }
+
+    for (const parentFirst of [true, false]) {
+      for (const [writer, reopener] of [["reparent", "reopen"], ["reparent", "assign"], ["dependency", "reopen"], ["dependency", "assign"]] as const) {
+        it(`PG-L5 ${parentFirst ? "P < C" : "C < P"}: ${writer} vs ${reopener} of the done child, no deadlock (10 rounds)`, async () => {
+          for (let round = 0; round < 10; round++) {
+            const f = family(parentFirst);
+            const common = { sourceWorkspace: f.workspace, targetWorkspace: f.workspace, ownerId: f.agent.id };
+            const results = await race([
+              writer === "reparent"
+                ? { ...common, role: "reparent", issueId: f.child.id, otherId: f.parent.id }
+                : { ...common, role: "dependency", issueId: f.parent.id, otherId: f.child.id },
+              { ...common, role: reopener, issueId: f.child.id, otherId: f.parent.id },
+            ]);
+            const rejected = results.filter((result) => !result.ok);
+            expect(rejected.length).toBeLessThanOrEqual(1);
+            for (const result of rejected) expect(`${result.code ?? ""} ${result.error}`).toMatch(/dependency_cycle|unfinished|circular/i);
+            expect(store.getIssue(f.child.id)?.parentIssueId).toBe(f.parent.id);
+            if (!rejected.length) expect(store.countOpenChildIssues(f.parent.id)).toBe(1);
+          }
+        }, 120_000);
+      }
+    }
+
+    for (const action of ["reopen", "assign"] as const) {
+      it(`PG-L6: ${action} whose child was re-parented while it waited retries once with the new parent`, async () => {
+        const f = family();
+        const next = f.extraParent("m");
+        const type = action === "reopen" ? "issue_updated" : "issue_assigned";
+        const before = activityCount(f.child.id, type);
+        resetDepth();
+        let events: TraceEvent[] = [];
+        await hold({ mode: "hold-reparent", role: "reparent", issueId: f.child.id, otherId: next.id,
+          sourceWorkspace: f.workspace, targetWorkspace: f.workspace }, () => {
+          events = trace(() => reopenOrAssign(action, f.child.id, f.agent.id));
+        });
+        expect(lockBatches(events).slice(0, 2)).toEqual([[f.parent.id, f.child.id], [next.id, f.child.id]]);
+        const child = store.getIssue(f.child.id)!;
+        expect(child.parentIssueId).toBe(next.id);
+        expect(child.status).toBe(action === "reopen" ? "in_progress" : "todo");
+        expect(activityCount(f.child.id, type)).toBe(before + 1);
+        expectDepthOne();
+        assertNoForeignEdges();
+      }, 20_000);
+    }
+
+    it("PG-L7: a lock set stale twice throws issue_relation_changed and writes nothing", async () => {
+      const f = family();
+      const second = f.extraParent("m");
+      const third = f.extraParent("n");
+      const gate = new SharedArrayBuffer(8);
+      const flags = new Int32Array(gate);
+      const common = { role: "reparent" as const, issueId: f.child.id, sourceWorkspace: f.workspace, targetWorkspace: f.workspace };
+      const later = spawn({ ...common, mode: "hold-reparent", otherId: third.id, gate });
+      try {
+        await later.ready;
+        const before = activityCount(f.child.id);
+        resetDepth();
+        let hints = 0;
+        let failure: Error & { code?: string } | null = null;
+        await hold({ ...common, mode: "hold-reparent", otherId: second.id }, () => {
+          trace(() => { failure = thrown(() => store.updateIssue(f.child.id, { status: "in_progress" })); }, (id) => {
+            if (id !== f.child.id || ++hints !== 2) return;
+            // The retry's hint: let the second re-parent take C before the retry locks.
+            Atomics.store(flags, 0, 1);
+            Atomics.notify(flags, 0);
+            if (Atomics.wait(flags, 1, 0, 15_000) === "timed-out") throw new Error("second re-parent never locked");
+          });
+        });
+        expect((await later.finished).ok).toBe(true);
+        expect(hints).toBe(2);
+        expect(failure).toBeInstanceOf(IssueLockSetStaleError);
+        expect(failure!.code).toBe("issue_relation_changed");
+        const child = store.getIssue(f.child.id)!;
+        expect(child.parentIssueId).toBe(third.id);
+        expect(child.status).toBe("done");
+        expect(activityCount(f.child.id)).toBe(before);
+        expectDepthOne();
+      } finally { later.worker.terminate(); }
+    }, 30_000);
   });
 }

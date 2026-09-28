@@ -99,6 +99,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 
 import {
   dependencyGateEnabled,
@@ -1470,6 +1471,10 @@ export class TasksRepo {
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
     const issueId = input.issueId ?? triggerComment?.issueId ?? null;
+    // MUL-476: a task is an edge to its Issue, so lock the Issue (after the
+    // workspace lock) before checking its workspace; a concurrent move then
+    // either sees this task or commits before this read.
+    if (issueId) lockIssueRowWithinTransaction(this.ctx.db, issueId);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");

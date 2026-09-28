@@ -178,9 +178,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         store.createIssueDependency(child.id, { dependsOnIssueId: other.id, type: "related" });
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id IN (?, ?)", [target, parent.id, other.id]);
         const childError = moveError(() => store.updateIssue(child.id, { workspaceId: target }));
-        expect(childError.relations).toEqual({ parent: null, children: [], dependencies: [], hidden: 2 });
+        expect(childError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], hidden: 2 });
         const parentError = moveError(() => store.updateIssue(parent.id, { workspaceId: source }));
-        expect(parentError.relations).toEqual({ parent: null, children: [], dependencies: [], hidden: 1 });
+        expect(parentError.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [], hidden: 1 });
         expect(store.getIssue(child.id)?.workspaceId).toBe(source);
       });
 

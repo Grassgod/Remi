@@ -17,9 +17,13 @@ it("issue relation SQL scopes content reads to a workspace", () => {
         const method = owner && ts.isMethodDeclaration(owner) ? owner.name.getText(ast) : "";
         // The duplicate-row probe validates a raw write, without projecting issue content.
         const rawWriteProbe = method === "findIssueDependencyRow";
+        // ADR 0003 #8: the assignment's lock-set hint only picks rows to lock;
+        // the locked rows are re-read before anything is used.
+        const lockSetHint = method === "assignIssue"
+          && sql === `"SELECT parent_issue_id, status FROM multiremi_issues WHERE id = ?"`;
         // These suffixes inherit both joins from the shared progress query below.
         const sharedProgress = sql.includes("${CHILD_PROGRESS_SELECT}");
-        if (!rawWriteProbe && !sharedProgress && !/\bworkspace_id\b/.test(sql)) {
+        if (!rawWriteProbe && !lockSetHint && !sharedProgress && !/\bworkspace_id\b/.test(sql)) {
           unscoped.push(`${method || "shared SQL"}:${ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1}`);
         }
       }
