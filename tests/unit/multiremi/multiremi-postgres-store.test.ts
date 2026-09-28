@@ -1536,6 +1536,77 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listIssues({ workspaceId: ws, limit: 2, offset: 2 }).length).toBe(1);
   });
 
+  it("keeps backlog out of active child progress and projects parent inbox fields (PG)", () => {
+    const ws = freshWorkspace();
+    const member = store.createWorkspaceMember({ name: "Parent owner", workspaceId: ws, role: "member" });
+    const parent = store.createIssue({ title: "Parent", workspaceId: ws, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+    store.createIssue({ title: "Unscheduled", workspaceId: ws, parentIssueId: parent.id, status: "backlog" });
+    store.createIssue({ title: "Active", workspaceId: ws, parentIssueId: parent.id, status: "todo" });
+    const terminal = store.createIssue({ title: "Terminal", workspaceId: ws, parentIssueId: parent.id, status: "in_progress" });
+    store.updateIssue(terminal.id, { status: "done" });
+
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 3, active: 1, done: 1, waiting: 0 });
+    const notification = store.listInboxItems(member.id, ws).find((item) => item.type === "child_issue_terminal");
+    expect(notification).toMatchObject({
+      issueId: parent.id,
+      issue_parent_id: parent.id,
+      issue_parent_key: parent.key,
+      issue_parent_title: parent.title,
+    });
+  });
+
+  it("scopes parent projections and progress to the child's workspace (PG)", () => {
+    const workspaceA = freshWorkspace();
+    const workspaceB = freshWorkspace();
+    const reviewer = store.createWorkspaceMember({ name: "Scoped parent reviewer", workspaceId: workspaceA, role: "member" });
+    const author = store.createWorkspaceMember({ name: "Scoped parent author", workspaceId: workspaceA, role: "member" });
+    const parent = store.createIssue({ title: "Parent moved to B", workspaceId: workspaceA });
+    const child = store.createIssue({
+      title: "Child staying in A",
+      workspaceId: workspaceA,
+      parentIssueId: parent.id,
+      createdBy: reviewer.id,
+      status: "todo",
+    });
+    store.createIssueComment(child.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify before moving the parent",
+    });
+
+    store.updateIssue(parent.id, { workspaceId: workspaceB });
+
+    expect(store.listInboxItems(reviewer.id, workspaceA).find((item) => item.issueId === child.id)).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 0, active: 0 });
+    expect(store.listChildIssueProgress(workspaceA).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listChildIssueProgress(workspaceB).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listIssues({ workspaceId: workspaceA, topLevelOnly: true }).map((issue) => issue.id)).toContain(child.id);
+    expect(store.listIssues({ workspaceId: workspaceA, parentId: parent.id })).toHaveLength(0);
+
+    const deletedParent = store.createIssue({ title: "Parent deleted in A", workspaceId: workspaceA });
+    const orphan = store.createIssue({
+      title: "Child orphaned in A",
+      workspaceId: workspaceA,
+      parentIssueId: deletedParent.id,
+      createdBy: reviewer.id,
+    });
+    store.createIssueComment(orphan.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify before deleting the parent",
+    });
+    expect(store.deleteIssue(deletedParent.id)).toBe(true);
+    expect(store.listInboxItems(reviewer.id, workspaceA).find((item) => item.issueId === orphan.id)).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+  });
+
   it("filters issues by assignee via the IN (…) pushdown", () => {
     const ws = freshWorkspace();
     const member = store.createWorkspaceMember({ name: "Assignee", workspaceId: ws, role: "member" });

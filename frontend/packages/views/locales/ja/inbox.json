@@ -30,6 +30,8 @@
     "mark_group_read": "グループを既読にする",
     "mark_done_tooltip": "完了にする",
     "archive_tooltip": "アーカイブ",
+    "expand_group": "通知を展開",
+    "collapse_group": "通知を折りたたむ",
     "feishu_source": "Feishu メッセージ",
     "time": {
       "just_now": "たった今",
@@ -73,7 +75,9 @@
     "feishu_message_notification": "Feishu メッセージ",
     "feishu_reply_draft": "Feishu 返信ドラフト",
     "feishu_issue_proposal": "Feishu イシュー提案",
-    "feishu_ingest_connection_alert": "Feishu 取り込みアラート"
+    "feishu_ingest_connection_alert": "Feishu 取り込みアラート",
+    "child_issue_terminal": "サブイシュー更新",
+    "decision_requested": "判断待ち"
   },
   "labels": {
     "set_status_to": "ステータスを変更:",
