@@ -105,7 +105,7 @@ describe("side Session snapshots", () => {
       events: [event(1), event(2, "agent", "agent_b"), event(3, "member", "member_a"), event(4, "system", null)],
     });
     expect(projection.jsonl).not.toContain("assistant_history");
-    expect(projection.jsonl.split("\n").slice(1).map((line) => JSON.parse(line).perspective)).toEqual([
+    expect(projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line).perspective)).toEqual([
       "inherited_agent", "inherited_agent", "inherited_user", "inherited_operator",
     ]);
   });
@@ -123,10 +123,10 @@ describe("side Session snapshots", () => {
     expect(projection.toSeq).toBe(1);
     expect(projection.jsonl).not.toContain("Message 2");
     expect(projection.jsonl).not.toContain("private-value");
-    expect(JSON.parse(projection.jsonl.split("\n")[1]!).metadata).toEqual({ result_available: true, status: "completed" });
+    expect(JSON.parse(projection.jsonl.split("\n")[2]!).metadata).toEqual({ result_available: true, status: "completed" });
   });
 
-  it("keeps default and explicit own projections byte-identical to the existing format", () => {
+  it("keeps default and explicit own projections byte-identical with the inbox directory", () => {
     const first = event(1);
     first.metadata = { z: 1, arbitrary: { b: true, a: "preserved" } };
     const input = {
@@ -134,12 +134,13 @@ describe("side Session snapshots", () => {
       tokenBudget: 4_096, events: [first],
     };
     const expected = '{"type":"session_projection","version":1,"mode":"bootstrap","session_id":"parent","target_agent_id":"agent_a","from_seq":0,"to_seq":1}\n'
+      + '{"type":"inbox_toc","entries":[]}\n'
       + '{"type":"session_event","seq":1,"kind":"message","perspective":"assistant_history","author_type":"agent","author_id":"agent_a","author_name":null,"body":"Message 1","task_id":null,"source_comment_id":null,"metadata":{"arbitrary":{"a":"preserved","b":true},"z":1},"created_at":"2026-09-17T00:00:00.000Z"}';
     expect(buildSessionProjection(input).jsonl).toBe(expected);
     expect(buildSessionProjection({ ...input, perspectiveMode: "own" }).jsonl).toBe(expected);
   });
 
-  it("splits the existing budget 40/60 and truncates both logs within that total", () => {
+  it("splits the existing budget 40/60 and folds long bodies within that total", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Projection budgets" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
@@ -158,8 +159,8 @@ describe("side Session snapshots", () => {
     expect(inherited.estimatedTokens).toBeLessThanOrEqual(Math.floor(total * 0.4));
     expect(own.estimatedTokens).toBeLessThanOrEqual(total - Math.floor(total * 0.4));
     expect(own.estimatedTokens + inherited.estimatedTokens).toBeLessThanOrEqual(total);
-    expect(own.truncated).toBe(true);
-    expect(inherited.truncated).toBe(true);
+    expect(own.jsonl).toContain('"body_folded":true');
+    expect(inherited.jsonl).toContain('"body_folded":true');
     expect(inherited.jsonl).not.toContain("assistant_history");
     expect(inherited.toSeq).toBe(side.inheritCutoffSeq!);
   });

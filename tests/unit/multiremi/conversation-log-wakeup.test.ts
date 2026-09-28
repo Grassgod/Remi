@@ -27,7 +27,8 @@ describe("MUL-427: log-backed wakeups and projections", () => {
               authorId: null, body: head.body_md, taskId: null, sourceCommentId: null, metadata: {}, createdAt: head.created_at }],
           });
           expect(projection.toSeq).toBe(0);
-          expect(projection.jsonl.split("\n")).toHaveLength(1);
+          expect(projection.jsonl.split("\n")).toHaveLength(2);
+          expect(JSON.parse(projection.jsonl.split("\n")[1]!)).toEqual({ type: "inbox_toc", entries: [] });
           expect(lane.cursorSeq).toBe(0);
           const side = store.createIssueSession(issue.id, { title: "Empty snapshot", parentSessionId: session.id });
           expect(side.inheritCutoffSeq).toBe(0);

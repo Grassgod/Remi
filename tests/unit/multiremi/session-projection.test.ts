@@ -67,6 +67,9 @@ describe("bounded Session projections", () => {
     expect(projection.truncated).toBe(true);
     expect(projection.omittedEvents).toBeGreaterThan(0);
     expect(projection.estimatedTokens).toBeLessThanOrEqual(1_200);
+    const toc = lines[1];
+    expect(toc.type).toBe("inbox_toc");
+    expect(toc.entries.every((entry: { seq: number }) => projectedEvents.some((event) => event.seq === entry.seq))).toBe(true);
     expect(projectedEvents.some((line) => line.seq === 3 && line.kind === "result_published")).toBe(true);
     expect(projectedEvents.at(-1)?.seq).toBe(10);
     expect(elisions.length).toBeGreaterThan(0);
@@ -94,6 +97,18 @@ describe("bounded Session projections", () => {
     expect(estimateProjectionTokens(projection.jsonl)).toBeLessThanOrEqual(1_200);
   });
 
+  it("marks a shorter entry folded when budget fallback folds it", () => {
+    const projection = buildSessionProjection({
+      sessionId: "ises_budget", targetAgentId: "agt_target",
+      events: [event(1, "message", "x".repeat(3_000))],
+      cursorSeq: 0, providerSessionId: null, tokenBudget: 500,
+    });
+    const [, toc, rendered] = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+    expect(toc.entries[0].folded).toBe(true);
+    expect(rendered.body_folded).toBe(true);
+    expect(projection.estimatedTokens).toBeLessThanOrEqual(500);
+  });
+
   it("resolves each author identity once across repeated fallback assemblies", () => {
     let resolverCalls = 0;
     const events = Array.from({ length: 320 }, (_, index) => ({
@@ -113,7 +128,7 @@ describe("bounded Session projections", () => {
       },
     });
 
-    expect(resolverCalls).toBe(2);
+    expect(resolverCalls).toBe(3); // Two authors plus the target agent's @-mention name.
     expect(projection.truncated).toBe(true);
     expect(projection.estimatedTokens).toBeLessThanOrEqual(1_200);
   });

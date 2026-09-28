@@ -79,13 +79,14 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   }
   const headerJson = JSON.stringify(header);
   const prepared = prepareProjectionEvents(projected, input);
+  const targetAgentName = input.resolveAuthorName?.("agent", input.targetAgentId) ?? null;
   const tocJson = JSON.stringify({
     type: "inbox_toc",
     entries: prepared.filter(({ event }) => event.authorType !== "agent" || event.authorId !== input.targetAgentId)
       .map(({ event, authorName }) => ({
         seq: event.seq,
-        id: event.id,
-        priority: eventPriority(event, input.targetAgentId, authorName),
+        id: event.sourceCommentId ?? event.id,
+        priority: eventPriority(event, input.targetAgentId, targetAgentName),
         kind: event.kind,
         author_name: authorName,
         created_at: event.createdAt,
@@ -206,7 +207,7 @@ interface PreparedProjectionEvent {
   fullJsonLength: number;
 }
 
-function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, authorName: string | null): EnvelopePriority {
+function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, targetAgentName: string | null): EnvelopePriority {
   const envelope = event.metadata?.envelope;
   if (envelope && typeof envelope === "object") {
     const value = envelope as Record<string, unknown>;
@@ -219,7 +220,7 @@ function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, auth
     });
   }
   if (event.authorType === "member" && event.kind === "message"
-    && (event.body.includes(`@${targetAgentId}`) || Boolean(authorName && event.body.includes(`@${authorName}`)))) return 1;
+    && (event.body.includes(`@${targetAgentId}`) || Boolean(targetAgentName && event.body.includes(`@${targetAgentName}`)))) return 1;
   if (event.kind === "task_failed" || event.kind === "task_cancelled") return 2;
   if (event.kind === "task_completed") return 3;
   return 4;
@@ -261,11 +262,14 @@ function assembleProjection(
   selected: Set<number>,
   bodyLimit: number | null,
 ): AssembledProjection {
-  const toc = JSON.parse(tocJson) as { type: string; entries: Array<{ seq: number }> };
+  const toc = JSON.parse(tocJson) as { type: string; entries: Array<{ seq: number; folded: boolean }> };
   const selectedSeqs = new Set([...selected].map((index) => events[index]?.event.seq));
+  const foldedSeqs = new Set([...selected].filter((index) => bodyLimit !== null
+    && events[index]!.event.body.length > bodyLimit).map((index) => events[index]!.event.seq));
   const lines: string[] = [headerJson, JSON.stringify({
     type: toc.type,
-    entries: toc.entries.filter((entry) => selectedSeqs.has(entry.seq)),
+    entries: toc.entries.filter((entry) => selectedSeqs.has(entry.seq))
+      .map((entry) => foldedSeqs.has(entry.seq) ? { ...entry, folded: true } : entry),
   })];
   let omittedEvents = 0;
   let bodyTruncated = false;

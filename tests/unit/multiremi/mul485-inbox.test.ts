@@ -52,6 +52,73 @@ async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
   expect((await app.request(`/api/sessions/ises_other/log/entry?seq=${entry.seq}`)).status).not.toBe(200);
 }
 
+async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<void> {
+  const agent = store.createAgent({ name: "MUL485 chat", provider: "codex", visibility: "workspace" });
+  const runtime = store.registerRuntime({ name: "MUL485 runtime", provider: "codex" });
+  for (const userId of ["mul485_alice", "mul485_bob"]) {
+    store.createWorkspaceMember({ workspaceId: "local", userId, name: userId, role: "member" });
+  }
+  const alice = await store.createAccessToken({ name: "MUL485 Alice", type: "pat", workspaceId: "local", userId: "mul485_alice" });
+  const bob = await store.createAccessToken({ name: "MUL485 Bob", type: "pat", workspaceId: "local", userId: "mul485_bob" });
+  const app = createMultiremiApp({ store, authToken: "mul485-test-master" });
+  const aliceHeaders = { Authorization: `Bearer ${alice.token}`, "Content-Type": "application/json" };
+  const created = await app.request("/api/chat/sessions", {
+    method: "POST", headers: aliceHeaders, body: JSON.stringify({ agent_id: agent.id, title: "Private plan" }),
+  });
+  expect(created.status).toBe(201);
+  const chatId = (await created.json()).id as string;
+  const sent = await app.request(`/api/chat/sessions/${chatId}/messages`, {
+    method: "POST", headers: aliceHeaders, body: JSON.stringify({ content: plan }),
+  });
+  expect(sent.status).toBe(201);
+  const { task_id: firstTaskId, message_id: messageId } = await sent.json();
+  const firstLogEntry = store.getConversationLogEntryById(messageId)!;
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(chatId, firstLogEntry.seq, {
+    fields: { metadata: { ...firstLogEntry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "chat", chatSessionId: chatId, agentId: agent.id }, source: {},
+    } } },
+  }))();
+  expect(store.claimTask(runtime.id)?.id).toBe(firstTaskId);
+  store.startTask(firstTaskId);
+  store.completeTask(firstTaskId, { output: "Read", workDir: "/tmp/mul485-chat" });
+  const next = await app.request(`/api/chat/sessions/${chatId}/messages`, {
+    method: "POST", headers: aliceHeaders, body: JSON.stringify({ content: "Continue" }),
+  });
+  expect(next.status).toBe(201);
+  const projection = store.buildTaskSessionProjection((await next.json()).task_id)!;
+  const toc = JSON.parse(projection.jsonl.split("\n")[1]!);
+  expect(toc.entries).toContainEqual(expect.objectContaining({ id: messageId, chars: plan.length, folded: true, priority: 1 }));
+  const folded = projection.jsonl.split("\n").slice(2).map((line) => JSON.parse(line))
+    .find((line) => line.type === "session_event" && line.body_folded);
+  const firstEntry = toc.entries.find((entry: { id: string }) => entry.id === messageId);
+  expect(folded?.expand).toBe(`remi session log get ${chatId} ${firstEntry.seq}`);
+  const path = `/api/sessions/${chatId}/log/entry?id=${messageId}`;
+  const allowed = await app.request(path, { headers: aliceHeaders });
+  expect(allowed.status).toBe(200);
+  expect((await allowed.json()).body_md).toBe(plan);
+  const denied = await app.request(path, { headers: { Authorization: `Bearer ${bob.token}` } });
+  expect(denied.status).not.toBe(200);
+}
+
+async function verifyIssueWorkspaceAccess(store: MultiremiStore): Promise<void> {
+  const workspace = store.createWorkspace({ name: "MUL485 isolated", slug: `mul485-${Math.random().toString(36).slice(2)}` });
+  store.createWorkspaceMember({ workspaceId: workspace.id, userId: "mul485_reader", name: "Reader", role: "member" });
+  store.createWorkspaceMember({ workspaceId: "local", userId: "mul485_outsider", name: "Outsider", role: "member" });
+  const reader = await store.createAccessToken({ name: "MUL485 reader", type: "pat", workspaceId: workspace.id, userId: "mul485_reader" });
+  const outsider = await store.createAccessToken({ name: "MUL485 outsider", type: "pat", workspaceId: "local", userId: "mul485_outsider" });
+  const issue = store.createIssue({ title: "Workspace-only plan", workspaceId: workspace.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: plan });
+  const path = `/api/sessions/${session.id}/log/entry?id=${comment.id}`;
+  const app = createMultiremiApp({ store, authToken: "mul485-test-master" });
+  const allowed = await app.request(path, { headers: { Authorization: `Bearer ${reader.token}` } });
+  expect(allowed.status).toBe(200);
+  expect((await allowed.json()).body_md).toBe(plan);
+  const denied = await app.request(path, { headers: { Authorization: `Bearer ${outsider.token}` } });
+  expect(denied.status).not.toBe(200);
+}
+
 afterEach(resetMultiremiTestEnv);
 
 describe("MUL-485 SQLite", () => {
@@ -61,18 +128,34 @@ describe("MUL-485 SQLite", () => {
   });
 
   it("orders the inbox by priority then seq and leaves old daemon JSONL readable", () => {
-    const events = [
-      makeEvent(1, "lifecycle", "FYI", "system", { envelope: envelope("lifecycle", 4) }),
-      makeEvent(2, "task_completed", "finished", "system"),
-      makeEvent(3, "task_failed", "blocked", "system"),
-      makeEvent(4, "message", "@agt_reader decide", "member"),
+    verifyPriorityAndCompatibility();
+  });
+
+  it("folds a private Chat and denies another member the expanded body", async () => {
+    await verifyChatProjectionAndAccess(createStore());
+  });
+
+  it("limits issue entry expansion to its workspace", async () => {
+    await verifyIssueWorkspaceAccess(createStore());
+  });
+});
+
+function verifyPriorityAndCompatibility(): void {
+  const events = [
+      makeEvent(1, "system", "FYI", "system", { envelope: envelope("lifecycle", 4) }),
+      makeEvent(2, "system", "child finished", "system", { envelope: envelope("report", 3, "done") }),
+      makeEvent(3, "system", "child blocked", "system", { envelope: envelope("report", 2, "failed") }),
+      makeEvent(4, "message", "@Reader decide", "member"),
       makeEvent(5, "message", "@agt_reader another decision", "member"),
+      makeEvent(6, "task_failed", "legacy failure", "system"),
+      makeEvent(7, "task_completed", "legacy completion", "system"),
     ];
     const projection = buildSessionProjection({ sessionId: "ises_priority", targetAgentId: "agt_reader",
-      events, cursorSeq: 0, providerSessionId: null, tokenBudget: 10_000 });
+      events, cursorSeq: 0, providerSessionId: null, tokenBudget: 10_000,
+      resolveAuthorName: (type, id) => type === "agent" && id === "agt_reader" ? "Reader" : null });
     const toc = JSON.parse(projection.jsonl.split("\n")[1]!);
     expect(toc.entries.map((entry: { seq: number; priority: number }) => [entry.seq, entry.priority]))
-      .toEqual([[4, 1], [5, 1], [3, 2], [2, 3], [1, 4]]);
+      .toEqual([[4, 1], [5, 1], [3, 2], [6, 2], [2, 3], [7, 3], [1, 4]]);
     const task = { id: "tsk_inbox", workspaceId: "local", issueId: "iss_inbox", chatSessionId: null,
       prompt: "Read inbox", issueSession: { id: "ises_priority", title: "Inbox" },
       sessionProjection: projection, repos: [], projectResources: [], project: null,
@@ -85,8 +168,13 @@ describe("MUL-485 SQLite", () => {
     } } as never);
     expect(old).toContain("## Current Session Context");
     expect(old).not.toContain("## Inbox");
-  });
-});
+    const unknown = buildTaskPrompt({ ...task, id: "tsk_unknown", sessionProjection: {
+      ...projection,
+      jsonl: projection.jsonl.replace('"type":"inbox_toc"', '"type":"future_directory"'),
+    } } as never);
+    expect(unknown).toContain("## Current Session Context");
+    expect(unknown).not.toContain("## Inbox");
+}
 
 function makeEvent(seq: number, kind: string, body: string, authorType: string, metadata: Record<string, unknown> = {}): MultiremiSessionEvent {
   return { id: `sevt_${seq}`, sessionId: "ises_priority", seq, kind, body, authorType,
@@ -94,8 +182,9 @@ function makeEvent(seq: number, kind: string, body: string, authorType: string, 
     metadata, createdAt: "2026-09-29T00:00:00.000Z" };
 }
 
-function envelope(kind: "lifecycle", priority: number) {
-  return { kind, wake: "inbox_only", priority, to: { role: "agent", agentId: "agt_reader", issueSessionId: "ises_priority" }, source: {} };
+function envelope(kind: "lifecycle" | "report", priority: number, outcome?: "done" | "failed") {
+  return { kind, wake: kind === "lifecycle" ? "inbox_only" : "now", priority, outcome,
+    to: { role: "agent", agentId: "agt_reader", issueSessionId: "ises_priority" }, source: {} };
 }
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -133,5 +222,17 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
 
   it("folds and expands the identical plan fixture on real PostgreSQL", async () => {
     await verifyPlanRoundTrip(store);
+  });
+
+  it("orders the same envelope and legacy entries on the PostgreSQL run", () => {
+    verifyPriorityAndCompatibility();
+  });
+
+  it("folds a private Chat and enforces creator access on real PostgreSQL", async () => {
+    await verifyChatProjectionAndAccess(store);
+  });
+
+  it("limits issue entry expansion to its workspace on real PostgreSQL", async () => {
+    await verifyIssueWorkspaceAccess(store);
   });
 });
