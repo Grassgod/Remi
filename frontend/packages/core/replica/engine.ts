@@ -162,7 +162,7 @@ export class ReplicaEngine {
     if (frames.length === 0) return null;
     const state = this.storage.readState(sessionId);
     const entries = this.storage.readEntries(sessionId);
-    const result = applyFrames({ frames, state, entries });
+    const result = applyFrames({ frames, state, entries, revisionWatermarks: this.storage.readRevisionWatermarks(sessionId) });
 
     // The server's head advances with a live frame.
     //
@@ -178,9 +178,12 @@ export class ReplicaEngine {
       this.acks.set(sessionId, { headSeq: highestFrameSeq, logVersion: known?.logVersion ?? state.logVersion });
     }
 
-    if (result.upserts.length > 0) this.storage.upsertEntries(result.upserts);
-    if (result.deletes.length > 0) this.storage.deleteEntries(sessionId, result.deletes);
-    this.storage.writeState(sessionId, result.state, this.now());
+    this.storage.transaction(() => {
+      if (result.upserts.length > 0) this.storage.upsertEntries(result.upserts);
+      if (result.deletes.length > 0) this.storage.deleteEntries(sessionId, result.deletes);
+      this.storage.writeRevisionWatermarks(sessionId, result.revisionWatermarks);
+      this.storage.writeState(sessionId, result.state, this.now());
+    });
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
     return result.missing;
@@ -195,8 +198,14 @@ export class ReplicaEngine {
    */
   writeWindow(sessionId: string, entries: readonly SessionLogEntry[], range: HubSeqRange): HubSeqRange | null {
     const held = this.storage.readEntries(sessionId);
-    const newer = entries.filter(entry => !held.has(entry.seq) || entry.revision > held.get(entry.seq)!.revision);
-    if (newer.length > 0) this.storage.upsertEntries(newer);
+    const revisions = this.storage.readRevisionWatermarks(sessionId);
+    const newer = new Map<number, SessionLogEntry>();
+    for (const entry of entries) {
+      const watermark = Math.max(revisions.get(entry.seq) ?? -Infinity, held.get(entry.seq)?.revision ?? -Infinity);
+      if (entry.revision <= watermark) continue;
+      newer.set(entry.seq, entry);
+      revisions.set(entry.seq, entry.revision);
+    }
     const state = this.storage.readState(sessionId);
     // Coverage advances to what the read route proved it served, not to the
     // highest seq among the returned rows: a window that came back short because
@@ -207,7 +216,13 @@ export class ReplicaEngine {
     // head of the session and call the result fresh. Only a window that extends
     // the run starting after the current head moves it.
     const head = contiguousHead(ranges, state.head);
-    this.storage.writeState(sessionId, { ...state, ranges, head }, this.now());
+    this.storage.transaction(() => {
+      if (newer.size > 0) {
+        this.storage.upsertEntries([...newer.values()]);
+        this.storage.writeRevisionWatermarks(sessionId, new Map([...newer].map(([seq, entry]) => [seq, entry.revision])));
+      }
+      this.storage.writeState(sessionId, { ...state, ranges, head }, this.now());
+    });
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
     // Only streaming coverage can expose a sync hole; a sparse deep-link window

@@ -65,6 +65,8 @@ export interface FrameApplyResult {
   upserts: SessionLogEntry[];
   /** Rows to delete: a hidden marker removes its own seq, an edit can tombstone. */
   deletes: number[];
+  /** Changed revision watermarks; deletions retain these independently of rows. */
+  revisionWatermarks: Map<number, number>;
   state: ReplicaState;
   /**
    * The first hole the batch exposed, if it exposed one.
@@ -90,9 +92,19 @@ export function applyFrames(input: {
   frames: readonly HubFrame[];
   state: ReplicaState;
   entries: ReadonlyMap<number, SessionLogEntry>;
+  revisionWatermarks?: ReadonlyMap<number, number>;
 }): FrameApplyResult {
   const upserts = new Map<number, SessionLogEntry>();
   const deletes = new Set<number>();
+  const revisions = new Map(input.revisionWatermarks);
+  for (const [seq, entry] of input.entries) {
+    revisions.set(seq, Math.max(revisions.get(seq) ?? -Infinity, entry.revision));
+  }
+  const revisionWatermarks = new Map<number, number>();
+  const remember = (seq: number, revision: number): void => {
+    revisions.set(seq, revision);
+    revisionWatermarks.set(seq, revision);
+  };
   let ranges = input.state.ranges.map((range) => ({ ...range }));
 
   const rows = new Map<number, HubFrame[]>();
@@ -111,33 +123,34 @@ export function applyFrames(input: {
   const ordered = [...rows.values()].flatMap(batch => batch.sort((a, b) => revisionOf(a) - revisionOf(b)));
   for (const frame of ordered) {
     if (frame.kind === "patch") {
-      // A patch addresses a row the replica already holds. Without that row there
-      // is nothing to update; the seq is left to the coverage walk below, which
-      // either reports it as a hole to read or finds it already covered (a hidden
-      // marker keeps coverage without keeping a row).
       const target = patchTargetSeq(frame.payload, frame);
       const held = deletes.has(target) ? null : upserts.get(target) ?? input.entries.get(target) ?? null;
-      if (held === null) continue;
-      const patched = applyPatch(held, frame.payload);
-      if (patched === held) continue;
-      if (patched === null) {
-        // A tombstone removes the display row but not the seq: the log's axis is
-        // append-only, so seq 7 stays "settled, no row" exactly like a hidden
-        // marker. Dropping coverage here would make the next sync re-read a seq
-        // that can never come back.
+      const patch = frame.payload as { revision?: unknown; deleted_at?: unknown } | null;
+      const watermark = revisions.get(target) ?? -Infinity;
+      const revision = typeof patch?.revision === "number" ? payloadRevision(patch) : (revisions.get(target) ?? -1) + 1;
+      if (revision <= watermark) continue;
+      // A tombstone settles the seq even without a cached display row. A partial
+      // edit still needs its base and must not manufacture a row from fields.
+      if (typeof patch?.deleted_at === "string" && patch.deleted_at.length > 0) {
+        if (!Number.isFinite(revision)) continue;
+        remember(target, revision);
         deletes.add(target);
         upserts.delete(target);
         ranges = addRange(ranges, target, target);
         continue;
       }
+      if (held === null) continue;
+      const patched = applyPatch(held, frame.payload);
+      if (patched === held) continue;
+      remember(target, patched.revision);
       upserts.set(target, patched);
       continue;
     }
 
     const parsed = frameAsEntry(frame);
     if (parsed === null) continue;
-    const held = upserts.get(parsed.seq) ?? input.entries.get(parsed.seq);
-    if (held && parsed.entry.revision <= held.revision) continue;
+    if (parsed.entry.revision <= (revisions.get(parsed.seq) ?? -Infinity)) continue;
+    remember(parsed.seq, parsed.entry.revision);
 
     if (parsed.hidden) {
       // A hidden marker is not a display unit, so it never lands in `entries`; it
@@ -160,6 +173,7 @@ export function applyFrames(input: {
   return {
     upserts: [...upserts.values()],
     deletes: [...deletes],
+    revisionWatermarks,
     state: {
       ranges: normalized,
       // The head only moves when the run reaching it is contiguous. A batch that
@@ -291,15 +305,14 @@ function frameAsEntry(frame: HubFrame): ParsedFrame | null {
 }
 
 /**
- * In-place update. Only the fields the patch carries change, so a hidden-marker
- * patch and an edit use one path; `deleted_at` removes the row entirely.
+ * In-place edit of a cached row. Only supplied fields change; tombstones are
+ * handled before this helper so their revision survives without a display row.
  */
-function applyPatch(entry: SessionLogEntry, payload: unknown): SessionLogEntry | null {
+function applyPatch(entry: SessionLogEntry, payload: unknown): SessionLogEntry {
   if (!payload || typeof payload !== "object") return entry;
   const patch = payload as Record<string, unknown>;
   const revision = payloadRevision(patch);
   if (typeof patch.revision === "number" && revision <= entry.revision) return entry;
-  if (typeof patch.deleted_at === "string" && patch.deleted_at.length > 0) return null;
   const fields = (patch.fields && typeof patch.fields === "object" ? patch.fields : patch) as Record<string, unknown>;
   return {
     session_id: entry.session_id,

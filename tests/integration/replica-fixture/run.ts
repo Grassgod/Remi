@@ -279,6 +279,8 @@ async function main(): Promise<void> {
       { key: "patch-in-place", opfs: "on" },
       { key: "cleared", opfs: "on" },
       { key: "opfs-off", opfs: "off" },
+      { key: "qa-r1-tombstone", opfs: "on" },
+      { key: "qa-r1-hidden", opfs: "on" },
     ];
     for (const scope of scopes) {
       if (options.only.length > 0 && !options.only.includes(scope.key)) continue;
@@ -602,6 +604,39 @@ async function runScope(
         ? `not every tab reached revision ${beforeRevision + 1}`
         : `revisions ${sawPatch.map((state) => state?.entries.find((entry) => entry.seq === 5)?.revision).join(", ")}`,
     );
+  }
+
+  if (key === "qa-r1-tombstone" || key === "qa-r1-hidden") {
+    const seq = 5;
+    const oldFrame = frameFor(server.hub.rows.find(row => row.seq === seq)!);
+    server.broadcast([key === "qa-r1-tombstone"
+      ? { seq, kind: "patch", payload: { target_seq: seq, revision: 50, deleted_at: "2026-09-28" } }
+      : { seq, kind: "entry", payload: { ...oldFrame.payload as object, revision: 50, visibility: "hidden" } }]);
+    await waitFor(async () => (await states()).every(state => state && !state.entries.some(entry => entry.seq === seq)));
+    check(`${key}: newer removal reaches every real OPFS page`, true, "revision 50 removed seq 5");
+
+    // A replacement engine must read the removal revision from OPFS, not memory.
+    const leaderIndex = (await waitForLeader(pages)).index;
+    await pages[leaderIndex]!.close();
+    pages.splice(leaderIndex, 1);
+    await waitForLeader(pages);
+    await waitFor(() => server.activeSubscriptions() === 1);
+    check(`${key}: replacement leader uses OPFS`, (await states()).some(state => state?.isLeader && state.storage === "opfs"), "leader reopened the persisted database");
+
+    server.broadcast([oldFrame]);
+    server.append(1);
+    // Seeing the following seq proves the stale frame has been processed.
+    await waitFor(async () => (await states()).every(state => state?.head === server.hub.head && state.fresh));
+    const after = await states();
+    check(`${key}: stale entry cannot resurrect removed seq`, after.every(state => !state?.entries.some(entry => entry.seq === seq)),
+      `seq5 revisions=${after.map(state => state?.entries.find(entry => entry.seq === seq)?.revision).join(",")}`);
+
+    const readsBefore = server.hub.logReads.length;
+    await Promise.all(pages.map(page => page.evaluate(({ seq }) =>
+      (window as unknown as { __replica: { loadWindow(from: number, to: number): Promise<void> } }).__replica.loadWindow(seq, seq), { seq })));
+    check(`${key}: stale HTTP window cannot resurrect removed seq`,
+      server.hub.logReads.length > readsBefore && (await states()).every(state => !state?.entries.some(entry => entry.seq === seq)),
+      `completed ${server.hub.logReads.length - readsBefore} stale /log reads`);
   }
 }
 

@@ -4,11 +4,12 @@
  * One database file per `(user_id, workspace_id)`, path
  * `remi-replica/<user>/<ws>.sqlite3`, so two workspaces of the same user never
  * share a file and two users of the same workspace never share a file either.
- * Five tables, and each one exists because a specific reader needs it:
+ * Six tables, and each one exists because a specific reader needs it:
  *
  * | table | why it is a table and not a column |
  * |---|---|
  * | `entries` | the rows the window renders, keyed by `(session_id, seq)` |
+ * | `revision_watermarks` | highest accepted revision, retained after deletion/hiding |
  * | `ranges` | a deep-link window is sparse, so coverage is many ranges, not one `head` |
  * | `heads` | `head_seq` + `log_version` is the freshness token, and the resume cursor |
  * | `row_heights` | measured heights, keyed per variant and width bucket |
@@ -34,7 +35,7 @@
  * would be a second implementation of the log's own schema evolution (plan 3/6
  * §1.6 lists schema upgrade among the full-clear triggers).
  */
-export const REPLICA_SCHEMA_VERSION = 1;
+export const REPLICA_SCHEMA_VERSION = 2;
 
 /** `meta` keys. `user_id` is a cleanup trigger, not bookkeeping. */
 export const META_USER_ID = "user_id";
@@ -59,6 +60,13 @@ CREATE TABLE IF NOT EXISTS ranges (
   from_seq   INTEGER NOT NULL,
   to_seq     INTEGER NOT NULL,
   PRIMARY KEY (session_id, from_seq)
+);
+
+CREATE TABLE IF NOT EXISTS revision_watermarks (
+  session_id TEXT    NOT NULL,
+  seq        INTEGER NOT NULL,
+  revision   INTEGER NOT NULL,
+  PRIMARY KEY (session_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS heads (
@@ -87,6 +95,9 @@ CREATE INDEX IF NOT EXISTS ranges_session ON ranges (session_id, from_seq);
 
 /** Every statement the replica runs, so the Worker and the tests share one spelling. */
 export const SQL = {
+  begin: "BEGIN IMMEDIATE",
+  commit: "COMMIT",
+  rollback: "ROLLBACK",
   selectMeta: "SELECT v FROM meta WHERE k = ?",
   upsertMeta: "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
   insertEntry: `INSERT INTO entries (session_id, seq, id, revision, kind, body_md, body_html, render_version)
@@ -102,7 +113,11 @@ export const SQL = {
   selectWindow: `SELECT session_id, seq, id, revision, kind, body_md, body_html, render_version
      FROM entries WHERE session_id = ? AND seq >= ? AND seq <= ? ORDER BY seq ASC`,
   countEntries: "SELECT COUNT(*) AS n FROM entries WHERE session_id = ?",
+  selectRevisionWatermarks: "SELECT seq, revision FROM revision_watermarks WHERE session_id = ?",
+  upsertRevisionWatermark: `INSERT INTO revision_watermarks (session_id, seq, revision) VALUES (?, ?, ?)
+     ON CONFLICT(session_id, seq) DO UPDATE SET revision = MAX(revision_watermarks.revision, excluded.revision)`,
   deleteSessionEntries: "DELETE FROM entries WHERE session_id = ?",
+  deleteSessionRevisionWatermarks: "DELETE FROM revision_watermarks WHERE session_id = ?",
   deleteSessionHead: "DELETE FROM heads WHERE session_id = ?",
   deleteSessionHeights: "DELETE FROM row_heights WHERE session_id = ?",
   selectRanges: "SELECT from_seq, to_seq FROM ranges WHERE session_id = ? ORDER BY from_seq ASC",
@@ -126,6 +141,7 @@ export const SQL = {
    * `user_id` check exists to prevent.
    */
   deleteAllEntries: "DELETE FROM entries",
+  deleteAllRevisionWatermarks: "DELETE FROM revision_watermarks",
   deleteAllRanges: "DELETE FROM ranges",
   deleteAllHeads: "DELETE FROM heads",
   deleteAllHeights: "DELETE FROM row_heights",

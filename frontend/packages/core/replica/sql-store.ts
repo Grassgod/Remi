@@ -47,6 +47,18 @@ export class SqlReplicaStorage implements ReplicaStorage {
     db.exec(REPLICA_SCHEMA_DDL);
   }
 
+  transaction<T>(write: () => T): T {
+    this.db.exec(SQL.begin);
+    try {
+      const result = write();
+      this.db.exec(SQL.commit);
+      return result;
+    } catch (error) {
+      this.db.exec(SQL.rollback);
+      throw error;
+    }
+  }
+
   private statement(sql: string) {
     let statement = this.statements.get(sql);
     if (!statement) {
@@ -115,6 +127,16 @@ export class SqlReplicaStorage implements ReplicaStorage {
     return new Map(rows.map((row) => [row.seq, toEntry(row)]));
   }
 
+  readRevisionWatermarks(sessionId: string): Map<number, number> {
+    const rows = this.statement(SQL.selectRevisionWatermarks).all<{ seq: number; revision: number }>([sessionId]);
+    return new Map(rows.map(row => [row.seq, row.revision]));
+  }
+
+  writeRevisionWatermarks(sessionId: string, revisions: ReadonlyMap<number, number>): void {
+    const statement = this.statement(SQL.upsertRevisionWatermark);
+    for (const [seq, revision] of revisions) statement.run([sessionId, seq, revision]);
+  }
+
   readWindow(sessionId: string, from: number, to: number): SessionLogEntry[] {
     return this.statement(SQL.selectWindow)
       .all<EntryRow>([sessionId, from, to])
@@ -123,6 +145,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
 
   clearSession(sessionId: string): void {
     this.statement(SQL.deleteSessionEntries).run([sessionId]);
+    this.statement(SQL.deleteSessionRevisionWatermarks).run([sessionId]);
     this.statement(SQL.deleteRanges).run([sessionId]);
     this.statement(SQL.deleteSessionHead).run([sessionId]);
     this.clearSessionHeights(sessionId);
@@ -139,6 +162,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
   clearDatabase(): void {
     this.statement(SQL.deleteAllMeta).run([]);
     this.statement(SQL.deleteAllEntries).run([]);
+    this.statement(SQL.deleteAllRevisionWatermarks).run([]);
     this.statement(SQL.deleteAllRanges).run([]);
     this.statement(SQL.deleteAllHeads).run([]);
     this.statement(SQL.deleteAllHeights).run([]);

@@ -18,6 +18,8 @@ import type { SessionLogEntry } from "./port";
 import type { ReplicaState } from "./protocol";
 
 export interface ReplicaStorage {
+  /** Synchronous write batch; SQLite commits rows and watermarks atomically. */
+  transaction<T>(write: () => T): T;
   readMeta(key: string): string | null;
   writeMeta(key: string, value: string): void;
   readState(sessionId: string): ReplicaState;
@@ -25,6 +27,9 @@ export interface ReplicaStorage {
   upsertEntries(entries: readonly SessionLogEntry[]): void;
   deleteEntries(sessionId: string, seqs: readonly number[]): void;
   readEntries(sessionId: string): Map<number, SessionLogEntry>;
+  /** Highest accepted revision, including rows no longer present in entries. */
+  readRevisionWatermarks(sessionId: string): Map<number, number>;
+  writeRevisionWatermarks(sessionId: string, revisions: ReadonlyMap<number, number>): void;
   /** Rows in `[from, to]`, ascending, keyed by seq. */
   readWindow(sessionId: string, from: number, to: number): SessionLogEntry[];
   clearSession(sessionId: string): void;
@@ -55,8 +60,13 @@ export interface ReplicaStorage {
 export class MemoryReplicaStorage implements ReplicaStorage {
   private readonly meta = new Map<string, string>();
   private readonly entries = new Map<string, Map<number, SessionLogEntry>>();
+  private readonly revisions = new Map<string, Map<number, number>>();
   private readonly states = new Map<string, ReplicaState>();
   private readonly heights = new Map<string, number>();
+
+  transaction<T>(write: () => T): T {
+    return write();
+  }
 
   readMeta(key: string): string | null {
     return this.meta.get(key) ?? null;
@@ -102,6 +112,21 @@ export class MemoryReplicaStorage implements ReplicaStorage {
     return new Map(session ? [...session].map(([seq, entry]) => [seq, { ...entry }]) : []);
   }
 
+  readRevisionWatermarks(sessionId: string): Map<number, number> {
+    return new Map(this.revisions.get(sessionId));
+  }
+
+  writeRevisionWatermarks(sessionId: string, revisions: ReadonlyMap<number, number>): void {
+    let session = this.revisions.get(sessionId);
+    if (!session) {
+      session = new Map();
+      this.revisions.set(sessionId, session);
+    }
+    for (const [seq, revision] of revisions) {
+      session.set(seq, Math.max(session.get(seq) ?? -Infinity, revision));
+    }
+  }
+
   readWindow(sessionId: string, from: number, to: number): SessionLogEntry[] {
     const session = this.entries.get(sessionId);
     if (!session) return [];
@@ -113,6 +138,7 @@ export class MemoryReplicaStorage implements ReplicaStorage {
 
   clearSession(sessionId: string): void {
     this.entries.delete(sessionId);
+    this.revisions.delete(sessionId);
     this.states.delete(sessionId);
     this.clearSessionHeights(sessionId);
   }
@@ -126,6 +152,7 @@ export class MemoryReplicaStorage implements ReplicaStorage {
   clearDatabase(): void {
     this.meta.clear();
     this.entries.clear();
+    this.revisions.clear();
     this.states.clear();
     this.heights.clear();
   }
