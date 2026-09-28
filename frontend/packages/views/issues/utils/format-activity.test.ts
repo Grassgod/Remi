@@ -130,6 +130,9 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("delegation_return_triggered"), t)).toBe(
       "activity.delegation_return_triggered",
     );
+    expect(formatActivity(activity("delegation_return_triggered", {
+      details: { sourceIssueId: "child", sourceIssueKey: "MUL-456", returnIssueId: "parent" },
+    }), t)).toBe('activity.delegation_return_triggered_cross_issue {"key":"MUL-456"}');
     expect(
       formatActivity(
         activity("delegation_return_skipped", { details: { reason: "already_covered" } }),
@@ -142,6 +145,15 @@ describe("formatActivity", () => {
       "coalesced_into_pending_return",
       "covered_by_queued_task",
       "deferred_lane_busy",
+      "source_not_issue_task",
+      "source_side_session",
+      "source_not_squad_leader",
+      "target_not_squad_member",
+      "cross_issue_no_lineage",
+      "self_dispatch",
+      "covered_by_delegate_wakeup",
+      "delegator_issue_closed",
+      "delegator_session_missing",
     ]) {
       expect(
         formatActivity(activity("delegation_return_skipped", { details: { reason } }), t),
@@ -192,6 +204,15 @@ describe("formatActivity", () => {
     expect(
       formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
     ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "grant_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_grant_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "final_summary_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_final_summary_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_done_grant_created", { details: { agentId: "agt_owner" } }), t, () => "Owner"))
+      .toBe('activity.parent_done_grant_created {"agent":"Owner"}');
+    expect(formatActivity(activity("parent_done_grant_revoked"), t)).toBe("activity.parent_done_grant_revoked");
+    expect(formatActivity(activity("parent_done_grant_used", { details: { source: "scm_merge" } }), t))
+      .toBe('activity.parent_done_grant_used {"source":"activity.parent_done_grant_source_scm_merge"}');
     expect(
       formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
     ).toBe('activity.issue_status_forced {"status":"status.done"}');
@@ -263,6 +284,18 @@ describe("formatActivity", () => {
     ).toBe("activity.dispatch_skipped_no_runnable_agent");
     expect(
       formatActivity(
+        activity("dispatch_skipped", { details: { reason: "member_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_member_assignee");
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "no_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_no_assignee");
+    expect(
+      formatActivity(
         activity("dispatch_skipped", { details: { reason: "assign_failed", error: "Squad is archived: sqd_1" } }),
         t,
       ),
@@ -275,5 +308,140 @@ describe("formatActivity", () => {
   it("echoes an unknown action instead of rendering a missing key", () => {
     expect(formatActivity(activity("teleported"), t)).toBe("teleported");
     expect(formatActivity(activity(undefined as unknown as string), t)).toBe("");
+  });
+});
+
+/**
+ * MUL-400 E3 (MUL-409): the dependency gate and automatic start introduced
+ * these activity types. Each one has to map to its own locale key with the
+ * right interpolation — a missing case would fall through to the raw action.
+ */
+describe("formatActivity — dependency activities", () => {
+  it("renders an automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_started", { details: { satisfiedByKey: "MUL-7" } }), t),
+    ).toBe('activity.dependency_auto_started {"key":"MUL-7"}');
+  });
+
+  it("renders a readiness report with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_satisfied", { details: { satisfied_by_key: "MUL-8" } }), t),
+    ).toBe('activity.dependency_satisfied {"key":"MUL-8"}');
+  });
+
+  it("renders a structural dependency exemption in all four locales", async () => {
+    expect(formatActivity(activity("dependency_gate_exempted", { details: { source: "redispatch" } }), t))
+      .toBe('activity.dependency_gate_exempted {"source":"activity.dependency_gate_exempted_redispatch"}');
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"),
+      import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"),
+      import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) expect(bundle.default.activity.dependency_gate_exempted).toContain("{{source}}");
+    expect(bundles[0]!.default.activity.dependency_gate_exempted).toContain("等待依赖");
+    expect(bundles[0]!.default.activity.dependency_gate_exempted_retry).toBe("重试");
+  });
+
+  it("renders a skipped automatic start with the satisfying prerequisite key", () => {
+    expect(
+      formatActivity(activity("dependency_auto_start_skipped", { details: { satisfied_by_key: "MUL-9" } }), t),
+    ).toBe('activity.dependency_auto_start_skipped {"key":"MUL-9"}');
+  });
+
+  /**
+   * MUL-409 fix round 4 (QA round 3, suggestion 4): the record an operator sees
+   * after a failed automatic start has to say what to DO. Fixing the owner and
+   * assigning the issue again is the whole recovery — no forced start — and the
+   * copy has to name that.
+   */
+  it("tells the operator how to recover from a skipped automatic start", async () => {
+    const bundle = (await import("../../locales/zh-Hans/issues.json")).default as {
+      activity: Record<string, string>;
+    };
+    const copy = bundle.activity.dependency_auto_start_skipped ?? "";
+    expect(copy.startsWith("{{key}}")).toBe(true);
+    expect(copy).toContain("负责人");
+    expect(copy).toContain("指派");
+    expect(copy).toContain("不需要强制开工");
+  });
+
+  it("renders a failed prerequisite with the dead prerequisite's key", () => {
+    expect(
+      formatActivity(activity("dependency_prerequisite_failed", { details: { prerequisite_key: "MUL-10" } }), t),
+    ).toBe('activity.dependency_prerequisite_failed {"key":"MUL-10"}');
+  });
+
+  it("renders the waiting marker of a creation that parked in backlog", () => {
+    expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
+  });
+
+  it("renders each member force-start source", () => {
+    expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "comment" } }), t))
+      .toBe("activity.dependency_force_started_comment");
+    expect(formatActivity(activity("dependency_force_started", {
+      details: { source: "mention", agent_id: "agt_qa" },
+    }), t, (_type, id) => id === "agt_qa" ? "QA" : id))
+      .toBe('activity.dependency_force_started_mention {"agent":"QA"}');
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "rerun" } }), t))
+      .toBe("activity.dependency_force_started_rerun");
+  });
+
+  it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {
+    expect(
+      formatActivity(activity("dispatch_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe("activity.dependency_gate_reason_dependencies_unmet");
+  });
+
+  it("renders a readiness report folded into an already-queued round", () => {
+    expect(formatActivity(activity("dependency_satisfied_coalesced"), t))
+      .toBe("activity.dependency_satisfied_coalesced");
+  });
+
+  it("renders the dependency hold for a mention that could not dispatch", () => {
+    // The outer copy names the skip; the reason resolves to the dependency hold
+    // rather than leaking the raw "dependencies_unmet" string.
+    expect(
+      formatActivity(activity("comment_mention_skipped", { details: { reason: "dependencies_unmet" } }), t),
+    ).toBe('activity.comment_mention_skipped {"reason":"activity.dependency_gate_reason_dependencies_unmet"}');
+  });
+
+  it("falls back to ? when the satisfying key is missing", () => {
+    expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
+  });
+});
+
+describe("formatActivity — decision activities", () => {
+  const actions = [
+    "decision_requested",
+    "decision_answered",
+    "decision_received",
+    "decision_escalated",
+    "decision_reminder",
+    "decision_card_skipped",
+    "decision_card_queued",
+    "decision_card_reminder",
+    "decision_card_degraded",
+  ] as const;
+
+  it.each(actions)("localizes %s instead of exposing the raw action", (action) => {
+    expect(formatActivity(activity(action), t)).toBe(`activity.${action}`);
+  });
+
+  it("ships copy for every decision activity in all four locales", async () => {
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"),
+      import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"),
+      import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) {
+      const copy = bundle.default.activity as Record<string, string>;
+      for (const action of actions) {
+        expect(copy[action]).toBeTruthy();
+        expect(copy[action]).not.toBe(action);
+      }
+    }
   });
 });

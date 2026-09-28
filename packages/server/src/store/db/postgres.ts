@@ -50,6 +50,18 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  /**
+   * True while a `transaction()` callback is open. `BEGIN` cannot nest on
+   * either backend, so a helper that may run inside or outside a transaction
+   * checks this instead of guessing from its call site.
+   */
+  readonly inTransaction?: boolean;
+  /**
+   * Deepest `transaction()` nesting seen by this handle. Postgres has no
+   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
+   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   */
+  readonly maxTransactionDepth?: number;
   close(): void;
 }
 
@@ -221,6 +233,12 @@ function dbReplyMaxBytes(): number {
   return cachedReplyMaxBytes;
 }
 
+/** The effective ceiling shared by the bridge and bounded-read callers. */
+export function postgresReplyMaxBytes(): number {
+  const limit = dbReplyMaxBytes();
+  return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
+}
+
 /** Test seam: drop the cached limit so the next query re-reads the environment. */
 export function resetDbReplyLimitForTest(): void {
   cachedReplyMaxBytes = null;
@@ -351,6 +369,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
   private failedAtDepth: number | null = null;
+  private peakTransactionDepth = 0;
   constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
     this.bridge = new PgBridge(url, resultBufferBytes);
   }
@@ -370,6 +389,19 @@ export class PostgresSyncDatabase implements SqlDatabase {
       }
       throw error;
     }
+  }
+  /**
+   * Deepest nesting reached so far. A caller that must stay a single atomic
+   * unit (issue creation, for example) opens its transaction only when it does
+   * not already own one and then checks this is 1, because a nested `BEGIN`
+   * cannot be rolled back independently on this bridge.
+   */
+  get maxTransactionDepth(): number {
+    return this.peakTransactionDepth;
+  }
+  /** Drop the observed peak, e.g. before asserting on one operation. */
+  resetTransactionDepthStats(): void {
+    this.peakTransactionDepth = this.transactionDepth;
   }
   query(sql: string): SqlStatement {
     return new PgStatement((statement, params) => this.execute(statement, params), translateSqliteToPg(sql));
@@ -413,6 +445,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
       this.execute("BEGIN", []);
       this.transactionDepth += 1;
       this.failedAtDepth = null;
+      this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
       try {
         const result = fn(...args);
         if (this.failedAtDepth != null) {

@@ -55,8 +55,116 @@ export function currentTaskAccessToken(c: Context): MultiremiAccessToken | null 
   return token?.type === "task" ? token : null;
 }
 
+/**
+ * MUL-456 fix round 1: does this request carry a *verified* credential?
+ *
+ * The anonymous compatibility modes — auth disabled, or the deployment master
+ * token — deliberately keep the historical trust-the-body behaviour, and those
+ * are exactly the requests with no verified identity: `currentAuth` falls back
+ * to {@link ANON_REQUEST_AUTH} and the middleware leaves the context unset.
+ * Every real credential (member PAT, login JWT, task token, daemon token)
+ * yields a non-null `accessToken` or `jwtUserId`, so this reads the existing
+ * authentication state rather than inventing a new switch.
+ */
+export function hasVerifiedRequestIdentity(c: Context): boolean {
+  const auth = currentAuth(c);
+  return auth.accessToken !== null || auth.jwtUserId !== null;
+}
+
+/**
+ * MUL-456 fix round 1: request body fields a verified credential owns on every
+ * task-creation surface.
+ *
+ * `parent_task_id` is lineage the server derives from the caller's task
+ * credential — the caller's own task id for a task token, `null` for a member
+ * PAT, a login session or any other credential. The store reads
+ * `parentTaskId ?? parent_task_id`, so leaving the snake_case alias in a
+ * verified body would win exactly when the credential carries no lineage: the
+ * manual wake-up a member can plant would then pass the D4 `wake_source IS NULL`
+ * check and swallow the real return. Anonymous compatibility (auth disabled /
+ * master token) keeps its historical pass-through and is deliberately not
+ * stripped here.
+ */
+export function stripParentTaskLineage<T extends object>(input: T): T {
+  const out = { ...(input as Record<string, unknown>) };
+  delete out.parentTaskId;
+  delete out.parent_task_id;
+  return out as T;
+}
+
+/**
+ * The body a task-creation route hands to the store.
+ *
+ * A verified credential's request cannot name its own lineage, so both
+ * spellings are dropped. Anonymous compatibility keeps the old behaviour: the
+ * route's camelCase stamp used to override a camelCase body value while the
+ * snake_case alias survived the store's `??`, so only the camelCase key is
+ * dropped here and the alias stays available to the helper below.
+ */
+export function requestTaskLineageBody<T extends object>(c: Context, body: T): T {
+  if (hasVerifiedRequestIdentity(c)) return stripParentTaskLineage(body);
+  const out = { ...(body as Record<string, unknown>) };
+  delete out.parentTaskId;
+  return out as T;
+}
+
+/**
+ * The lineage override a task-creation route stamps over the body.
+ *
+ * A verified credential always stamps the key: its own task id for a task
+ * token, and an explicit `null` for a member PAT, login JWT or daemon. The
+ * explicit key is what stops the store's historical fallbacks (the snake_case
+ * alias and a trigger comment's run id) from being steered by a request body.
+ *
+ * Anonymous compatibility reproduces the old `null ?? body.parent_task_id`
+ * read exactly: the alias is stamped when the body carries it, and otherwise no
+ * key is stamped at all, leaving the store's other fallbacks in charge as
+ * before.
+ */
+export function requestParentTaskLineage(
+  c: Context,
+  body: object,
+): { parentTaskId?: string | null } {
+  if (hasVerifiedRequestIdentity(c)) {
+    return { parentTaskId: currentTaskAccessToken(c)?.taskId ?? null };
+  }
+  if (!Object.hasOwn(body, "parent_task_id")) return {};
+  const lineage = (body as { parent_task_id?: unknown }).parent_task_id;
+  return { parentTaskId: cleanString(typeof lineage === "string" ? lineage : null) ?? null };
+}
+
+/**
+ * The `/api/multiremi/tasks` variant.
+ *
+ * That route has always destructured both spellings out of the body before it
+ * stamped anything, so a body could never supply the value. A verified
+ * credential still stamps its own (an explicit `null` for a member PAT, which
+ * also forbids the store's trigger-comment fallback from being steered), while
+ * anonymous compatibility stamps nothing and leaves the store's historical
+ * fallbacks in charge.
+ */
+export function requestStrippedParentTaskLineage(c: Context): { parentTaskId?: string | null } {
+  if (!hasVerifiedRequestIdentity(c)) return {};
+  return { parentTaskId: currentTaskAccessToken(c)?.taskId ?? null };
+}
+
 export function currentRequestUserId(c: Context): string {
   return currentAuth(c).requestUserId;
+}
+
+/**
+ * MUL-448: the anonymous compatibility mode, told apart from a credentialed
+ * request by the verification result the auth middleware already produced.
+ *
+ * `currentAuth` carries no access token and no verified user for the master
+ * token and for auth-disabled deployments - the two deployments that
+ * historically let a request name its own identity through the body or the
+ * `X-Agent-ID`/`X-Task-ID` headers. Every other request (member PAT, login JWT,
+ * task token, daemon token) is credentialed and must derive identity from it.
+ */
+export function isAnonymousCompatibilityRequest(c: Context): boolean {
+  const auth = currentAuth(c);
+  return !auth.accessToken && !auth.jwtUserId;
 }
 
 export function authenticatedRequestUserId(c: Context): string | null {

@@ -11,20 +11,22 @@ import {
   nullableString,
   parseJson,
   resolveOptionalStringField,
+  resolveCamelOrSnakeString,
   searchMatch,
   searchRank,
   toJson,
 } from "@multiremi/store/helpers.js";
 import {
-  createCommitEventQueue,
   type CommitEventQueue,
   type StoreContext,
   type WorkspaceEvent,
+  createCommitEventQueue,
   toInboxItem,
   toIssueComment,
 } from "@multiremi/store/context.js";
 import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
@@ -32,6 +34,7 @@ import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import type {
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   AnswerIssueDecisionInput,
   BatchDeleteIssuesInput,
@@ -46,6 +49,7 @@ import type {
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   ListIssuesInput,
+  IssueStatusPages,
   MultiremiAgent,
   MultiremiAssigneeFrequencyEntry,
   MultiremiAssigneeType,
@@ -67,7 +71,11 @@ import type {
   MultiremiIssueComment,
   MultiremiIssueDependency,
   MultiremiIssueDependencyType,
+  MultiremiIssueDependencyView,
+  MultiremiIssuePrerequisite,
+  MultiremiIssueWaitingOn,
   MultiremiIssueKind,
+  MultiremiIssueParentDoneGrant,
   MultiremiIssuePriority,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
@@ -85,9 +93,32 @@ import type {
   UpdateLabelInput,
 } from "@multiremi/contracts/types.js";
 
+import {
+  dependencyFailureCommands,
+  dependencyGateEnabled,
+  findDependencyCyclePath,
+  isPrerequisiteSatisfied,
+  IssueDependencyError,
+  type IssueDependencyUnmetRef,
+} from "@multiremi/store/repos/issue-dependencies.js";
+
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
+
+export interface DependencyForceStartedInput {
+  source: "status" | "comment" | "mention" | "rerun";
+  status: string;
+  previousStatus: string;
+  unmet: IssueDependencyUnmetRef[];
+  actorType: string;
+  actorId: string | null;
+  commentId?: string | null;
+  taskId?: string | null;
+  agentId?: string | null;
+  assigneeDispatched?: boolean;
+  parentTaskId?: string | null;
+}
 
 /**
  * MUL-400 E1 kill switch. The parent-status guards ship enabled; flipping this
@@ -106,6 +137,13 @@ function parentStatusGuardEnabled(): boolean {
  */
 export type ChildTerminalOutcome = "done" | "failed" | "blocked" | "cancelled";
 
+export type SquadLeaderDelegationDecision =
+  | { ok: true; delegatedFromIssueSessionId: string | null }
+  | { ok: false; reason: "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
+      | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | null };
+
+const DELEGATION_TREE_MAX_DEPTH = 16;
+
 /** `null` for statuses that are not a child ending. */
 function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
   switch (status) {
@@ -117,12 +155,37 @@ function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
   }
 }
 
-/** 409 for a held parent transition; the route maps it to the API error code. */
+/**
+ * MUL-400 E3: the dependency gate's refusal. A 409 for an unmet prerequisite
+ * (`dependencies_unmet`) or for a rejected dependency write (the cycle and
+ * ancestor codes), carrying the machine-readable list the API surfaces.
+ */
+export { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+
+/**
+ * MUL-400 S1c (A4): why an agent was refused `done` on a parent it does not (or
+ * no longer does) hold an effective grant for. The wire response repeats it so
+ * a run can tell "ask a member to authorize me" apart from "the grant lapsed".
+ */
+export type ParentDoneGrantRefusalReason =
+  | "grant_missing"
+  | "not_owner_agent"
+  | "assignee_changed"
+  | "owner_not_agent"
+  | "force_requires_member"
+  | "final_summary_missing"
+  | "children_open";
+
+/** 409/403 for a held parent transition; the route maps it to the API error code. */
 export class ParentStatusGuardError extends Error {
   constructor(
     readonly code: "issue_status_held" | "final_summary_missing" | "parent_done_requires_member",
     message: string,
-    readonly details: { openChildren?: number; lastChildClosedAt?: string | null } = {},
+    readonly details: {
+      openChildren?: number;
+      lastChildClosedAt?: string | null;
+      reason?: ParentDoneGrantRefusalReason;
+    } = {},
   ) {
     super(message);
   }
@@ -141,6 +204,10 @@ export class BatchParentStatusGuardError extends ParentStatusGuardError {
     super(cause.code, cause.message, cause.details);
     this.rejectedIssueIds = rejectedIssueIds;
   }
+}
+
+export class ParentDoneGrantOwnerError extends Error {
+  readonly code = "parent_done_grant_owner_not_agent";
 }
 
 /** Statuses a parent with unfinished children must not enter. */
@@ -167,15 +234,31 @@ function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProg
 }
 
 /**
- * Buckets for `GET /api/issues/child-progress` (MUL-400 E1). `waiting` is a
- * placeholder for the dependency gate (S2) and is always 0 until it lands.
+ * Buckets for `GET /api/issues/child-progress` (MUL-400 E1/E3).
+ *
+ * `waiting` counts children parked in `backlog` with at least one unmet
+ * `blocked_by` prerequisite — "the platform is holding this one for me". The
+ * subquery mirrors {@link IssuesRepo.listUnmetPrerequisites} for the whole
+ * workspace in one statement instead of hydrating every child.
  */
-const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
-              SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
-              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
-              SUM(CASE WHEN status NOT IN ('done', 'completed', 'closed', 'cancelled', 'blocked') THEN 1 ELSE 0 END) AS active
-       FROM multiremi_issues`;
+const CHILD_PROGRESS_SELECT = `SELECT child.parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN child.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
+              SUM(CASE WHEN child.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+              SUM(CASE WHEN child.status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+              SUM(CASE WHEN child.status = 'backlog' AND child.id IN (
+                    SELECT CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END
+                    FROM multiremi_issue_dependencies d
+                    JOIN multiremi_issues prereq ON prereq.id = CASE
+                      WHEN d.type = 'blocks' THEN d.issue_id
+                      ELSE d.depends_on_issue_id
+                    END
+                    WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
+                  ) THEN 1 ELSE 0 END) AS waiting,
+              SUM(CASE WHEN child.status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
+       FROM multiremi_issues child
+       JOIN multiremi_issues parent
+         ON parent.id = child.parent_issue_id
+        AND parent.workspace_id = child.workspace_id`;
 
 /** `result` is stored JSON; "has a result" means non-empty output text. */
 function storedTaskResultHasOutput(value: unknown): boolean {
@@ -228,6 +311,16 @@ export class IssueDecisionError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
 }
 
+/**
+ * MUL-412. `idempotent` marks the Feishu card path, where a replayed callback
+ * or a double tap must return the settled row instead of writing a second
+ * answer. The HTTP answer route leaves it off: a member re-answering from the
+ * web or CLI is a deliberate revision (S4).
+ */
+export interface AnswerIssueDecisionOptions {
+  idempotent?: boolean;
+}
+
 export type IssueDeletionBlockCode =
   | "issue_not_found"
   | "issue_has_active_tasks"
@@ -244,6 +337,50 @@ type IssueDeletionBlockedResult = Extract<BeginIssueDeletionResult, { ok: false 
 // Issue reactions and comment reactions are the same table shape hung off two different parents,
 // so the list/add/remove bodies live once on the repo and are configured by these two specs. Only
 // the parent existence check and the workspace lookup stay with the public methods.
+/**
+ * MUL-409 (QA round 4, blocker 1): what the in-transaction forced start decided.
+ *
+ * `skipped` is set when the owner cannot run the work (no owner, a member
+ * owner, an archived assignee, a squad with no runnable agent). The status
+ * change still commits — the member asked for it — and the reason is recorded
+ * in the same transaction as a `dispatch_skipped` activity.
+ */
+interface ForcedStartOutcome {
+  skipped: { reason: string; error: string } | null;
+}
+
+interface IssueCreationTransactionOwner {
+  childStatusChanges: ChildStatusChangeCollector;
+  deferredEvents: CommitEventQueue;
+}
+
+/**
+ * The public types keep ordinary callers honest, but API adapters and tests can
+ * still reach these methods through `any`. Reject a partial owner before the
+ * first SQL statement so a rollback cannot leave queued in-memory events that
+ * describe rows which never committed.
+ */
+function assertIssueCreationTransactionOwner(
+  value: unknown,
+): asserts value is IssueCreationTransactionOwner {
+  if (!value || typeof value !== "object") {
+    throw new Error("issue creation inside a transaction requires a transaction owner");
+  }
+  const owner = value as Partial<IssueCreationTransactionOwner>;
+  if (!Array.isArray(owner.childStatusChanges)) {
+    throw new Error("issue creation transaction owner requires childStatusChanges");
+  }
+  const queue = owner.deferredEvents as Partial<CommitEventQueue> | undefined;
+  if (!queue || typeof queue !== "object") {
+    throw new Error("issue creation transaction owner requires deferredEvents");
+  }
+  for (const field of ["workspace", "enqueuedTasks", "issueActivities"] as const) {
+    if (!Array.isArray(queue[field])) {
+      throw new Error(`issue creation deferredEvents requires ${field}`);
+    }
+  }
+}
+
 interface ReactionInput {
   actorType?: string;
   actorId?: string | null;
@@ -305,6 +442,35 @@ const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
+  /**
+   * MUL-400 E3 gate 3. The whole creation — the issue row, its number, its
+   * dependencies and the cycle/ancestor checks — is one transaction, so a
+   * rejected dependency leaves nothing behind: no orphan issue, no consumed
+   * number. Dispatch is the caller's business and happens after this commits.
+   *
+   * The body runs through {@link createIssueWithinTransaction}; the wrapper only
+   * decides whether it owns the transaction, because Postgres has no savepoints
+   * here and callers such as Feishu ingestion and autopilots already hold one.
+   */
+  createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
+    // The whole creation is one transaction, and every realtime push it causes
+    // (the `issue_created` activity, the parent re-derivation) has to wait for
+    // that COMMIT — a browser must never render a row a ROLLBACK would erase.
+    // A caller that already owns a transaction keeps its own queue.
+    if (transaction !== undefined) assertIssueCreationTransactionOwner(transaction);
+    if (this.ctx.db.inTransaction) {
+      assertIssueCreationTransactionOwner(transaction);
+      return this.createIssueWithinTransaction(input, transaction.childStatusChanges, transaction.deferredEvents);
+    }
+    const commitEvents = createCommitEventQueue();
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const issue = this.ctx.db.transaction(() =>
+      this.createIssueWithinTransaction(input, childStatusChanges, commitEvents))();
+    this.ctx.emitCommitEvents(commitEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return issue;
+  }
+
   private decisionOwner(issue: MultiremiIssue): MultiremiAgent | null {
     const id = issue.assigneeType === "agent" ? issue.assigneeId
       : issue.assigneeType === "squad" && issue.assigneeId
@@ -323,6 +489,19 @@ export class IssuesRepo {
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_issue_decisions WHERE id = ? AND issue_id = ?",
     ).get(decisionId, issueId) as Row | null;
+    return row ? toIssueDecision(row) : null;
+  }
+
+  /**
+   * A decision by its own id (MUL-412). The Feishu decision-card lane is keyed
+   * by decision id alone — a bot host is told the decision, not the parent
+   * Issue, and resolving the Issue from the row is what makes the workspace
+   * check possible.
+   */
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE id = ?",
+    ).get(decisionId) as Row | null;
     return row ? toIssueDecision(row) : null;
   }
 
@@ -423,6 +602,9 @@ export class IssuesRepo {
           body: title, data: { decision_id: id, kind, direct: true },
         }, events);
         this.notifyDecisionRequested(target, decision, events);
+        // A3: only the two "a person must decide this" cases get a card. A row
+        // the parent's owner agent answers itself stays in the web workbench.
+        this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(target, decision, events);
       }
       return decision;
     })();
@@ -431,7 +613,13 @@ export class IssuesRepo {
     return created;
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
     const answer = String(input.answer ?? "").trim();
     const reason = String(input.reason ?? "").trim();
     const overturn = String(input.overturn ?? "").trim();
@@ -451,6 +639,13 @@ export class IssuesRepo {
         throw new IssueDecisionError(403, "only the parent owner task can answer a pending decision");
       }
       if (decision.status === "withdrawn") throw new IssueDecisionError(409, "decision was withdrawn");
+      // A card click is a single-shot interaction: Feishu redelivers callbacks,
+      // a person can double-tap, and the card is still on screen after the web
+      // answered it. Replaying one must not append a second history entry, a
+      // second activity or a second wakeup. A deliberate re-answer from the web
+      // or CLI keeps the documented member-overturns-agent behavior, so the
+      // guard lives on the card path only.
+      if (options.idempotent && decision.status === "answered") return decision;
       const record: MultiremiIssueDecisionAnswer = {
         answererType: actor.type, answererId: actor.id, answer, reason,
         overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
@@ -481,6 +676,10 @@ export class IssuesRepo {
         this.queueDecisionRound(parent, owner, `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`, changes, events);
       }
       this.decisionEvent(events, "decision:updated", result);
+      // In-place terminal rewrite. The delivery row is written inside this
+      // transaction so a rollback leaves neither an answer nor a patch, and the
+      // realtime event is queued rather than emitted mid-transaction.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.tasks().runCollectedChildStatusChanges(changes);
@@ -508,6 +707,8 @@ export class IssuesRepo {
       }, events);
       this.notifyDecisionRequested(parent, result, events);
       this.decisionEvent(events, "decision:updated", result);
+      // S5b: the escalation is what turns a web-only decision into a card.
+      this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(parent, result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
@@ -533,6 +734,9 @@ export class IssuesRepo {
       this.ctx.db.run("UPDATE multiremi_issue_decisions SET status = 'withdrawn', updated_at = ? WHERE id = ?", [nowIso(), decision.id]);
       const result = this.getIssueDecision(issueId, decisionId)!;
       this.decisionEvent(events, "decision:updated", result);
+      // A withdrawn decision is a terminal state of its own (E4 has no expiry),
+      // so the card on screen is rewritten rather than left actionable.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
@@ -614,18 +818,21 @@ export class IssuesRepo {
       .map((member) => member.id);
   }
 
-  createIssue(input: CreateIssueInput): MultiremiIssue {
-    return this.createIssueWithEvents(input);
-  }
-
-  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue {
-    if (input.parentIssueId ?? input.parent_issue_id) {
-      throw new Error("Parented issue creation requires post-commit status replay");
-    }
-    return this.createIssueWithEvents(input, deferredEvents);
-  }
-
-  private createIssueWithEvents(input: CreateIssueInput, deferredEvents?: CommitEventQueue): MultiremiIssue {
+  /**
+   * Caller owns the transaction (see {@link createIssue}).
+   *
+   * The child-status collector and the commit-event queue are both required and
+   * have no defaults: a caller that already holds a transaction must be able to
+   * replay the parent re-derivation this creation triggers, and every realtime
+   * push it produces has to wait for that caller's COMMIT.
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue {
+    assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
+    const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
@@ -711,6 +918,12 @@ export class IssuesRepo {
       ],
     );
     this.linkReferencedAttachmentsToIssue(id, input.description);
+    for (const ref of blockedBy) {
+      this.createIssueDependencyWithinTransaction(id, { dependsOnIssueId: ref, type: "blocked_by" }, {
+        actorType: "system",
+        actorId: createdBy,
+      }, deferredEvents);
+    }
     if (projectId) {
       this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
     }
@@ -723,17 +936,14 @@ export class IssuesRepo {
     }, deferredEvents);
     // MUL-400 E1 re-derivation: a child created under an in_review parent puts
     // that parent back to in_progress. `createIssue` is the third entry point
-    // the plan names alongside status change and re-parenting. This method owns
-    // no transaction of its own, so its derived transition and queue are
-    // replayed right away, once the insert above is committed.
+    // the plan names alongside status change and re-parenting. The caller
+    // replays its derived transition and queue after the insert commits.
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
       if (parent) {
-        const collector: ChildStatusChangeCollector = [];
-        const deferredEvents = createCommitEventQueue();
-        this.rederiveParentStatus(parent, this.getIssue(id)!, collector, deferredEvents);
-        this.ctx.emitCommitEvents(deferredEvents);
-        this.ctx.tasks().runCollectedChildStatusChanges(collector);
+        // This method owns no transaction of its own; the caller's queue is the
+        // one that is (or will be) drained after the insert commits.
+        this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
     if (sourceIssueId) {
@@ -753,7 +963,31 @@ export class IssuesRepo {
       }
     }
     this.ctx.issueSessions().getOrCreateDefaultIssueSession(id, createdBy);
-    return this.getIssue(id)!;
+    const created = this.getIssue(id)!;
+    if (blockedBy.length && dependencyGateEnabled() && created.status !== "backlog") {
+      // The requested status is ignored on purpose: an issue that cannot be
+      // dispatched must not look startable on any surface.
+      if (this.listUnmetPrerequisites(id).length > 0) {
+        this.ctx.db.run(
+          "UPDATE multiremi_issues SET status = 'backlog', completed_at = NULL, archived_at = NULL, updated_at = ? WHERE id = ?",
+          [now, id],
+        );
+        this.ctx.appendIssueActivity(id, {
+          actorType: "system",
+          actorId: createdBy,
+          type: "dependency_waiting",
+          body: `backlog (requested ${created.status})`,
+          data: {
+            requestedStatus: created.status,
+            requested_status: created.status,
+            status: "backlog",
+            blockedBy: this.listUnmetPrerequisites(id).map((row) => row.key),
+          },
+        }, deferredEvents);
+        return this.getIssue(id)!;
+      }
+    }
+    return created;
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -839,7 +1073,8 @@ export class IssuesRepo {
   }
 
   listIssues(input: ListIssuesInput = {}): MultiremiIssue[] {
-    const { where, params } = buildIssueListWhere(input);
+    const resolved = this.resolveListHierarchyFilter(input);
+    const { where, params } = buildIssueListWhere(resolved);
     const offset = normalizeListOffset(input.offset);
     const limit = input.limit === undefined ? Number.POSITIVE_INFINITY : normalizeListLimit(input.limit);
     // Metadata is a JSON column filtered in JS; when it (or an unbounded limit) is present we can't
@@ -858,20 +1093,88 @@ export class IssuesRepo {
       .all(...params) as Row[];
     const issues = rows
       .map((row) => toIssue(row))
-      .filter((issue) => issueMatchesListFilter(issue, input))
+      .filter((issue) => issueMatchesListFilter(issue, resolved, (ref) => this.getIssueByRef(ref, this.listIssuesWorkspaceId(resolved))?.id ?? null))
       .slice(offset, offset + limit);
     return this.hydrateIssues(issues);
+  }
+
+  /**
+   * MUL-400 E3: `parentId` accepts a key or an id. Callers that already
+   * resolved it (the HTTP list routes do) pass an id and this is a no-op.
+   */
+  private resolveListHierarchyFilter(input: ListIssuesInput): ListIssuesInput {
+    const parentId = input.parentId ?? input.parent_id;
+    if (!parentId) return input;
+    const resolved = this.getIssueByRef(parentId, this.listIssuesWorkspaceId(input))?.id;
+    if (!resolved || resolved === parentId) return input;
+    return { ...input, parentId: resolved, parent_id: resolved };
+  }
+
+  private listIssuesWorkspaceId(input: ListIssuesInput): string | null {
+    return input.workspaceId ?? input.workspace_id ?? null;
   }
 
   countIssues(input: ListIssuesInput = {}): number {
     const unpaginated = { ...input, limit: undefined, offset: undefined };
     const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
     if (hasMetadata) return this.listIssues(unpaginated).length;
-    const { where, params } = buildIssueListWhere(unpaginated);
+    const { where, params } = buildIssueListWhere(this.resolveListHierarchyFilter(unpaginated));
     const row = this.ctx.db.query(
       `SELECT COUNT(*) AS total FROM multiremi_issues ${where}`,
     ).get(...params) as Row | null;
     return Number(row?.total ?? 0);
+  }
+
+  /** First page per status, including counts and labels from one read snapshot. */
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false): IssueStatusPages {
+    if (this.ctx.db.inTransaction) throw new Error("status pages require their own read snapshot");
+    return this.ctx.db.transaction(() => {
+      if (this.ctx.db.dialect === "postgres") {
+        this.ctx.db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      }
+      const resolved = this.resolveListHierarchyFilter(input);
+      const requested = normalizeIssueStatusList(input.statuses ?? input.status);
+      const statuses = requested.length ? requested : [...ISSUE_STATUSES];
+      const limit = normalizeListLimit(input.limit, 50);
+      const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+      const groups: IssueStatusPages["groups"] = {};
+      const params: unknown[] = [];
+      // Keep the exact single-status SELECT and its ordering. A partitioned
+      // window sort can choose different winners for tied updated_at values.
+      const selects = statuses.map((status) => {
+        groups[status] = { issues: [], total: 0, has_more: false };
+        const filter = buildIssueListWhere({ ...resolved, statuses: [status] });
+        params.push(...filter.params);
+        if (!hasMetadata) params.push(limit, 0);
+        return `SELECT * FROM (SELECT * FROM multiremi_issues ${filter.where}
+          ORDER BY updated_at DESC ${hasMetadata ? "" : "LIMIT ? OFFSET ?"}) AS status_page`;
+      });
+      const rows = this.ctx.db.query(selects.join(" UNION ALL ")).all(...params) as Row[];
+      let issues = rows.map((row) => toIssue(row));
+      if (hasMetadata) {
+        issues = issues.filter((issue) => issueMatchesListFilter(issue, resolved));
+        for (const issue of issues) groups[issue.status]!.total += 1;
+        const used = new Map<string, number>();
+        issues = issues.filter((issue) => {
+          const index = used.get(issue.status) ?? 0;
+          used.set(issue.status, index + 1);
+          return index < limit;
+        });
+      } else {
+        const filter = buildIssueListWhere({ ...resolved, statuses });
+        const counts = this.ctx.db.query(`SELECT status, COUNT(*) AS total
+          FROM multiremi_issues ${filter.where} GROUP BY status`).all(...filter.params) as Row[];
+        for (const row of counts) groups[String(row.status)]!.total = Number(row.total);
+      }
+      for (const issue of this.hydrateIssues(issues)) groups[issue.status]!.issues.push(issue);
+      for (const group of Object.values(groups)) group.has_more = group.issues.length < group.total;
+      return {
+        groups,
+        ...(includeArchivedTotal ? {
+          archived_total: this.countIssues({ workspaceId: this.listIssuesWorkspaceId(resolved), archivedOnly: true }),
+        } : {}),
+      };
+    })();
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -970,28 +1273,47 @@ export class IssuesRepo {
       .sort((left, right) => right.frequency - left.frequency || left.assigneeType.localeCompare(right.assigneeType) || left.assigneeId.localeCompare(right.assigneeId));
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     const issueIds = input.issueIds ?? input.issue_ids ?? [];
     const updates = input.updates ?? {};
     if (issueIds.length === 0) throw new Error("issue_ids is required");
-    if (!hasIssueMutation(updates)) return { updated: 0, issues: [] };
+    if (!hasIssueMutation(updates)) return { updated: 0, issues: [], skipped: [] };
     // Pre-flight the whole batch so a refusal cannot leave half the rows
     // written while the caller sees a refusal (MUL-400 S1, QA round 2).
     this.preflightBatchUpdateIssues(issueIds, updates);
     const issues: MultiremiIssue[] = [];
+    const skipped: Array<{ issueId: string; error: string; code: string | null }> = [];
+    // MUL-400 E3 (QA round 2, blocker 5): batch is not a second way across the
+    // dependency gate. The request's `force` is moved to a server-internal
+    // option that only the parent-status guard reads, so a waiting issue in a
+    // batch stays parked and no `dependency_force_started` is written. S1's
+    // member override for a parent with open children keeps working.
+    const batchOptions: UpdateIssueOptions = updates.force === true ? { parentStatusForce: true } : {};
+    const rowUpdates: UpdateIssueInput = updates.force === true ? { ...updates, force: undefined } : updates;
     for (const issueId of issueIds) {
       try {
-        issues.push(this.updateIssue(issueId, updates));
+        issues.push(this.updateIssue(issueId, rowUpdates, batchOptions));
       } catch (err) {
         // The per-row guard stays armed: a concurrent writer can still move an
         // Issue into a guarded state after the pre-flight above.
         if (err instanceof ParentStatusGuardError) {
           throw new BatchParentStatusGuardError(err, [issueId]);
         }
+        // MUL-400 E3: a dependency refusal is reported per row instead of failing
+        // the whole batch, matching the "skip invalid rows" shape callers
+        // already handle. The row stays parked and no override is recorded.
+        if (err instanceof IssueDependencyError) {
+          skipped.push({ issueId, error: err.message, code: err.code });
+          continue;
+        }
         // Match Multiremi's batch behavior: skip invalid or inaccessible rows.
       }
     }
-    return { updated: issues.length, issues };
+    return { updated: issues.length, issues, skipped };
   }
 
   /**
@@ -1319,9 +1641,9 @@ export class IssuesRepo {
   listChildIssueProgress(workspaceId = "local"): MultiremiIssueChildProgress[] {
     const rows = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE workspace_id = ? AND parent_issue_id IS NOT NULL
-       GROUP BY parent_issue_id
-       ORDER BY parent_issue_id ASC`,
+       WHERE child.workspace_id = ? AND child.parent_issue_id IS NOT NULL
+       GROUP BY child.parent_issue_id
+       ORDER BY child.parent_issue_id ASC`,
     ).all(workspaceId) as Row[];
     return rows.map(toChildIssueProgress);
   }
@@ -1329,8 +1651,8 @@ export class IssuesRepo {
   getChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
     const row = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE parent_issue_id = ?
-       GROUP BY parent_issue_id`,
+       WHERE child.parent_issue_id = ?
+       GROUP BY child.parent_issue_id`,
     ).get(parentIssueId) as Row | null;
     return row ? toChildIssueProgress(row) : emptyChildIssueProgress(parentIssueId);
   }
@@ -1357,6 +1679,9 @@ export class IssuesRepo {
    * that touch other fields — the auto-retitle service, the merge-completion
    * effect and every title/description/priority edit in the UI — are not status
    * decisions and must keep working on parents that already have children.
+   *
+   * MUL-400 S1c (A4): a task identity may close a parent when a member has
+   * authorized THIS issue's owner agent — see {@link parentDoneGrantStatus}.
    */
   private assertParentStatusAllowed(
     id: string,
@@ -1366,16 +1691,26 @@ export class IssuesRepo {
   ): void {
     if (!statusNeedsChildGuard(nextStatus)) return;
     const force = input.force === true;
-    const hasChildren = this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
-    ).get(id) != null;
+    const hasChildren = this.hasChildIssues(id);
     if (!hasChildren) return;
-    // A4: a task identity may never close a parent issue at all, force or not.
+    // A4: a task identity may never close a parent issue at all, force or not —
+    // unless a member has authorized exactly this agent on this parent (S1c).
     if (statusIsMemberOnlyParentTerminal(nextStatus) && input.actorType === "agent") {
-      throw new ParentStatusGuardError(
-        "parent_done_requires_member",
-        `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member can close an issue that has children`,
-      );
+      const grant = this.parentDoneGrantStatus(current);
+      if (!grant.effective || grant.agentId !== input.actorId) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Task ${input.parentTaskId ?? "unknown"} cannot set ${current.key} to ${nextStatus}; only a member, or the owner agent a member has authorized on this issue, can close an issue that has children`,
+          { reason: grant.effective ? "not_owner_agent" : grant.reason ?? "grant_missing" },
+        );
+      }
+      if (force) {
+        throw new ParentStatusGuardError(
+          "parent_done_requires_member",
+          `Only a member can force ${current.key} to ${nextStatus}; the owner agent must finish the children and publish a summary`,
+          { reason: "force_requires_member" },
+        );
+      }
     }
     if (force) return;
     const openChildren = this.countOpenChildIssues(id);
@@ -1383,19 +1718,96 @@ export class IssuesRepo {
       throw new ParentStatusGuardError(
         "issue_status_held",
         `${current.key} still has ${openChildren} unfinished child issue(s); finish or cancel them, or repeat the request with force`,
-        { openChildren },
+        { openChildren, reason: "children_open" },
       );
     }
     if (nextStatus === "done") {
-      const summary = this.finalSummaryAfterLastChild(id);
+      // A1. The authorized owner agent (S1c D2) may satisfy it either with a
+      // finished result-bearing round or with a summary comment it posted after
+      // the last child closed; every other caller keeps the original rule.
+      const grant = input.actorType === "agent" ? this.parentDoneGrantStatus(current) : null;
+      const acceptCommentBy = grant?.effective && grant.agentId === input.actorId ? input.actorId : null;
+      const summary = this.finalSummaryAfterLastChild(id, { acceptCommentBy });
       if (!summary.satisfied) {
         throw new ParentStatusGuardError(
           "final_summary_missing",
-          `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
-          { lastChildClosedAt: summary.lastChildClosedAt },
+          acceptCommentBy
+            ? `Post a summary comment on ${current.key} after the last child finished, then set it to done`
+            : `${current.key} cannot be closed before its owner publishes a result after the last child finished`,
+          { lastChildClosedAt: summary.lastChildClosedAt, reason: "final_summary_missing" },
         );
       }
     }
+  }
+
+  /**
+   * MUL-400 S1c (A4): does this Issue have any children at all? `countOpenChildIssues`
+   * answers a different question (unfinished children), and the grant rules key
+   * off "has children", not "has open children".
+   */
+  hasChildIssues(issueId: string): boolean {
+    return this.ctx.db.query(
+      "SELECT 1 AS present FROM multiremi_issues WHERE parent_issue_id = ? LIMIT 1",
+    ).get(issueId) != null;
+  }
+
+  /**
+   * MUL-400 S1c (A4): the ONE place that decides whether the stored grant still
+   * authorizes the CURRENT owner agent. Read by guard A (inside its row lock),
+   * the SCM merge effect and the detail routes, so all three agree.
+   *
+   * The effective agent is re-resolved from the Issue's assignee on every read
+   * (`resolveRunnableAgentForAssignee`: agent -> itself, squad -> its leader).
+   * A grant records the agent that was the owner when the member granted it, so
+   * re-assigning the parent makes the grant ineffective (`assignee_changed`,
+   * D1) instead of silently following the new owner.
+   */
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: ParentDoneGrantRefusalReason | null;
+  } {
+    const grantedAt = issue.parentDoneGrantAt ?? null;
+    const grantedBy = issue.parentDoneGrantBy ?? null;
+    const agentId = issue.parentDoneGrantAgentId ?? null;
+    const granted = grantedAt != null && agentId != null;
+    if (!granted) {
+      return { granted: false, grantedAt, grantedBy, agentId, ownerAgentId: null, effective: false, reason: "grant_missing" };
+    }
+    const ownerAgentId = issue.assigneeType && issue.assigneeId
+      ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)?.id ?? null
+      : null;
+    const effective = granted && ownerAgentId != null && ownerAgentId === agentId;
+    const reason: ParentDoneGrantRefusalReason | null = effective
+      ? null
+      : !granted
+        ? "grant_missing"
+        : ownerAgentId == null
+          ? "owner_not_agent"
+          : "assignee_changed";
+    return { granted, grantedAt, grantedBy, agentId, ownerAgentId, effective, reason };
+  }
+
+  /**
+   * The wire shape for `issue.parent_done_grant` (S7 / MUL-414 renders the
+   * toggle from it). `null` means "no grant was ever recorded"; a recorded but
+   * ineffective grant still returns its data with `effective: false` so the UI
+   * can say "re-authorize" instead of pretending nothing happened.
+   */
+  issueParentDoneGrantView(issue: MultiremiIssue): MultiremiIssueParentDoneGrant | null {
+    const status = this.parentDoneGrantStatus(issue);
+    if (!status.granted || status.grantedAt == null || status.grantedBy == null || status.agentId == null) return null;
+    return {
+      granted_at: status.grantedAt,
+      granted_by: status.grantedBy,
+      agent_id: status.agentId,
+      effective: status.effective,
+      ineffective_reason: status.effective ? null : status.reason === "assignee_changed" ? "assignee_changed" : "owner_not_agent",
+    };
   }
 
   /**
@@ -1405,12 +1817,11 @@ export class IssuesRepo {
    * with a non-empty result and `completed_at` at or after the last child's
    * terminal timestamp.
    *
-   * System paths that close an Issue on an external authority's behalf (the SCM
-   * merge effect) skip this and guard A4 entirely: the merge already required
-   * 贺华杰's authorization, so the Issue's terminal state carries the same human
-   * decision the guard exists to protect.
+   * An authorized owner agent may also satisfy A1 with its own non-empty
+   * comment after the final child closes. SCM checks the same signal before
+   * bypassing guard A; member closure keeps the original completed-task rule.
    */
-  finalSummaryAfterLastChild(parentIssueId: string): { satisfied: boolean; lastChildClosedAt: string | null } {
+  finalSummaryAfterLastChild(parentIssueId: string, options: { acceptCommentBy?: string | null } = {}): { satisfied: boolean; lastChildClosedAt: string | null } {
     const parent = this.getIssue(parentIssueId);
     if (!parent) return { satisfied: false, lastChildClosedAt: null };
     if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
@@ -1426,6 +1837,16 @@ export class IssuesRepo {
       ? this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId)?.id ?? null
       : null;
     if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
+    if (options.acceptCommentBy === parentAgentId) {
+      const comments = this.ctx.db.query(
+        `SELECT body FROM multiremi_issue_comments
+         WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
+           ${lastChildClosedAt ? "AND created_at >= ?" : ""}`,
+      ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
+      if (comments.some((row) => String(row.body ?? "").trim().length > 0)) {
+        return { satisfied: true, lastChildClosedAt };
+      }
+    }
     // `result` is a JSON blob written by completeTask; "has a result" means the
     // stored payload carries non-empty output text, so evaluate it in JS rather
     // than pattern-matching the serialized column in SQL.
@@ -1440,55 +1861,341 @@ export class IssuesRepo {
     return { satisfied, lastChildClosedAt };
   }
 
-  listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
+  /**
+   * MUL-400 E3: prerequisites of `issueId` that are not `done` yet.
+   *
+   * Only direct prerequisites count. A prerequisite that is itself waiting is
+   * still unmet (nothing cascades until the head of the chain finishes), and
+   * `in_review`, `blocked` and `cancelled` all count as unmet by design: the
+   * gate exists so a sibling never starts on a half-finished dependency.
+   */
+  listUnmetPrerequisites(issueId: string): IssueDependencyUnmetRef[] {
+    return this.listPrerequisites(issueId).filter((row) => !isPrerequisiteSatisfied(row.status));
+  }
+
+  /**
+   * Every direct prerequisite of `issueId`, met or not, in creation order.
+   *
+   * Both stored spellings are considered, because the reverse reading of a
+   * legacy `blocks` row is part of the semantics and there is no migration:
+   * a `blocked_by` row names the waiter in `issue_id`, while a `blocks` row
+   * names it in `depends_on_issue_id`.
+   */
+  private listPrerequisites(issueId: string): IssueDependencyUnmetRef[] {
+    const rows = this.ctx.db.query(
+      `SELECT d.id AS dependency_id,
+              CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END AS dependent_issue_id,
+              prereq.id AS prerequisite_issue_id,
+              prereq.issue_key,
+              prereq.title,
+              prereq.status
+       FROM multiremi_issue_dependencies d
+       JOIN multiremi_issues prereq ON prereq.id = CASE
+         WHEN d.type = 'blocks' THEN d.issue_id
+         ELSE d.depends_on_issue_id
+       END
+       WHERE d.type IN ('blocked_by', 'blocks')
+         AND CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END = ?
+       ORDER BY d.created_at ASC, d.id ASC`,
+    ).all(issueId) as Row[];
+    return rows.map((row) => ({
+      issueId: String(row.dependent_issue_id),
+      dependsOnIssueId: String(row.prerequisite_issue_id),
+      key: String(row.issue_key ?? ""),
+      title: String(row.title ?? ""),
+      status: String(row.status ?? "todo"),
+      dependencyId: String(row.dependency_id),
+    }));
+  }
+
+  /** MUL-400 E3: page data for the detail surface. */
+  getIssueWaitingOn(issueId: string): MultiremiIssueWaitingOn {
+    const prerequisites = this.listPrerequisites(issueId);
+    return {
+      unmet: prerequisites.filter((row) => !isPrerequisiteSatisfied(row.status)),
+      prerequisites,
+    };
+  }
+
+  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      const ownerAgentId = current.assigneeType && current.assigneeId
+        ? this.ctx.resolveRunnableAgentForAssignee(current.assigneeType, current.assigneeId)?.id ?? null
+        : null;
+      if (!ownerAgentId) throw new ParentDoneGrantOwnerError("Assign an agent or squad owner before granting parent closure");
+      if (current.parentDoneGrantAt && current.parentDoneGrantAgentId === ownerAgentId) return current;
+      const now = nowIso();
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = ?, parent_done_grant_by = ?, parent_done_grant_agent_id = ?, updated_at = ? WHERE id = ?",
+        [now, memberId, ownerAgentId, now, issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_created",
+        data: {
+          agentId: ownerAgentId, agent_id: ownerAgentId, memberId, member_id: memberId,
+          previousAgentId: current.parentDoneGrantAgentId, previous_agent_id: current.parentDoneGrantAgentId,
+          grantedAt: now, granted_at: now,
+        },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
+  }
+
+  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
+    const deferredEvents = createCommitEventQueue();
+    const issue = this.ctx.db.transaction(() => {
+      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]);
+      if (locked.changes === 0) throw new Error(`Issue not found: ${issueId}`);
+      const current = this.getIssue(issueId)!;
+      if (!current.parentDoneGrantAt) return current;
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET parent_done_grant_at = NULL, parent_done_grant_by = NULL, parent_done_grant_agent_id = NULL, updated_at = ? WHERE id = ?",
+        [nowIso(), issueId],
+      );
+      this.ctx.appendIssueActivity(issueId, {
+        actorType: "member", actorId: memberId, type: "parent_done_grant_revoked",
+        data: { agentId: current.parentDoneGrantAgentId, agent_id: current.parentDoneGrantAgentId, memberId, member_id: memberId },
+      }, deferredEvents);
+      return this.getIssue(issueId)!;
+    })();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return issue;
+  }
+
+  listIssueDependencies(issueId: string): MultiremiIssueDependencyView[] {
     if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    return this.listIssueDependencyViews(issueId);
+  }
+
+  private listIssueDependencyViews(issueId: string): MultiremiIssueDependencyView[] {
     const rows = this.ctx.db.query(
       `SELECT * FROM multiremi_issue_dependencies
        WHERE issue_id = ? OR depends_on_issue_id = ?
-       ORDER BY created_at ASC`,
+       ORDER BY created_at ASC, id ASC`,
     ).all(issueId, issueId) as Row[];
-    return rows.map((row) => this.hydrateIssueDependency(toIssueDependency(row)));
+    return rows.map((row) => this.issueDependencyView(
+      this.hydrateIssueDependency(toIssueDependency(row)),
+      issueId,
+    ));
+  }
+
+  /**
+   * The stored row read from one issue's point of view.
+   *
+   * `issue_id` and `depends_on_issue_id` stay the stored columns — a `blocks`
+   * row really is "(issue_id) blocks (depends_on_issue_id)" — and `direction`
+   * says which side the caller is on: `blocked_by` means the caller waits for
+   * the other issue, `blocks` means the other issue waits for the caller.
+   */
+  private issueDependencyView(
+    dependency: MultiremiIssueDependency,
+    perspectiveIssueId: string,
+  ): MultiremiIssueDependencyView {
+    // `related` is neither a prerequisite nor a dependent, so inventing a
+    // direction for it would let a client render "waits for" on a peer link.
+    if (dependency.type === "related") return { ...dependency, direction: null };
+    const callerIsIssue = dependency.issueId === perspectiveIssueId;
+    const callerWaits = dependency.type === "blocks" ? !callerIsIssue : callerIsIssue;
+    return {
+      ...dependency,
+      direction: callerWaits ? "blocked_by" : "blocks",
+    };
   }
 
   createIssueDependency(
     issueId: string,
     input: CreateIssueDependencyInput,
     activity: IssueMutationActivityContext = {},
-  ): MultiremiIssueDependency {
+  ): MultiremiIssueDependencyView {
+    const deferredEvents = createCommitEventQueue();
+    const dependency = this.ctx.db.transaction(() =>
+      this.createIssueDependencyWithinTransaction(issueId, input, activity, deferredEvents))();
+    this.ctx.emitCommitEvents(deferredEvents);
+    return dependency;
+  }
+
+  /**
+   * Caller owns the transaction: issue creation adds its prerequisites in the
+   * same transaction as the row itself, so a rejected cycle leaves no issue
+   * behind.
+   *
+   * Writes are normalized to a single direction before they are stored. Asking
+   * for `blocks` (A blocks B) is the same statement as B waiting on A, so the
+   * pair is flipped and one `blocked_by` row is written. `depends_on_issue_id`
+   * accepts a key (`MUL-12`) or an id.
+   */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity: IssueMutationActivityContext,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssueDependencyView {
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const dependsOnIssueId = input.dependsOnIssueId ?? input.depends_on_issue_id ?? "";
-    const dependsOnIssue = this.getIssue(dependsOnIssueId);
-    if (!dependsOnIssue) throw new Error(`Dependent issue not found: ${dependsOnIssueId}`);
-    if (issue.id === dependsOnIssue.id) throw new Error("An issue cannot depend on itself");
-    if (issue.workspaceId !== dependsOnIssue.workspaceId) throw new Error("Issue dependency must stay within a workspace");
-    const type = normalizeIssueDependencyType(input.type);
-    const id = input.id ?? createId("dep");
-    const now = nowIso();
-    const existing = this.ctx.db.query(
+    const dependsOnRef = String(input.dependsOnIssueId ?? input.depends_on_issue_id ?? "").trim();
+    const requestedType = normalizeIssueDependencyType(input.type);
+    // Two lookups on purpose: the workspace-scoped one is the normal path, and
+    // resolving across workspaces lets the cross-workspace case answer with its
+    // own error instead of a misleading "not found".
+    const requestedOther = this.getIssueByRef(dependsOnRef, issue.workspaceId);
+    if (!requestedOther) {
+      const otherWorkspaceIssue = this.getIssueByRef(dependsOnRef, null);
+      if (otherWorkspaceIssue) throw new Error("Issue dependency must stay within a workspace");
+      throw new Error(`Dependent issue not found: ${dependsOnRef}`);
+    }
+
+    // `related` carries no direction and is stored as asked. `blocked_by` and
+    // `blocks` both resolve to "the dependent waits for the prerequisite".
+    const waiter = requestedType === "blocks" ? requestedOther : issue;
+    const prerequisite = requestedType === "blocks" ? issue : requestedOther;
+    if (requestedType === "related") {
+      if (issue.id === requestedOther.id) throw new Error("An issue cannot depend on itself");
+      const existing = this.findIssueDependencyRow(issue.id, requestedOther.id, "related");
+      if (existing) return this.issueDependencyView(this.hydrateIssueDependency(toIssueDependency(existing)), issue.id);
+      return this.insertIssueDependencyRow(issue.id, requestedOther.id, "related", input, activity, issue.id, deferredEvents);
+    }
+    if (waiter.id === prerequisite.id) throw new Error("An issue cannot depend on itself");
+    // The pair may already be recorded (the CLI adds dependencies idempotently).
+    // Answer with the stored row before the cycle walk: an existing edge is the
+    // relation being requested, not a cycle through it.
+    const existing = this.findIssueDependencyRow(waiter.id, prerequisite.id, "blocked_by");
+    if (existing) return this.issueDependencyView(this.hydrateIssueDependency(toIssueDependency(existing)), issue.id);
+    this.assertDependencyAllowed(waiter, prerequisite);
+    return this.insertIssueDependencyRow(waiter.id, prerequisite.id, "blocked_by", input, activity, issue.id, deferredEvents);
+  }
+
+  private findIssueDependencyRow(
+    issueId: string,
+    dependsOnIssueId: string,
+    type: MultiremiIssueDependencyType,
+  ): Row | null {
+    return this.ctx.db.query(
       `SELECT * FROM multiremi_issue_dependencies
        WHERE issue_id = ? AND depends_on_issue_id = ? AND type = ?`,
-    ).get(issue.id, dependsOnIssue.id, type) as Row | null;
-    if (existing) return this.hydrateIssueDependency(toIssueDependency(existing));
+    ).get(issueId, dependsOnIssueId, type) as Row | null;
+  }
+
+  private insertIssueDependencyRow(
+    issueId: string,
+    dependsOnIssueId: string,
+    type: MultiremiIssueDependencyType,
+    input: CreateIssueDependencyInput,
+    activity: IssueMutationActivityContext,
+    perspectiveIssueId: string,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssueDependencyView {
+    const id = input.id ?? createId("dep");
+    const now = nowIso();
+    const existing = this.findIssueDependencyRow(issueId, dependsOnIssueId, type);
+    if (existing) {
+      return this.issueDependencyView(
+        this.hydrateIssueDependency(toIssueDependency(existing)),
+        perspectiveIssueId,
+      );
+    }
+    const workspaceId = this.getIssue(issueId)?.workspaceId ?? "local";
     this.ctx.db.run(
       `INSERT INTO multiremi_issue_dependencies (
         id, workspace_id, issue_id, depends_on_issue_id, type, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, issue.workspaceId, issue.id, dependsOnIssue.id, type, now],
+      [id, workspaceId, issueId, dependsOnIssueId, type, now],
     );
-    this.ctx.appendIssueActivity(issue.id, {
-      actorType: activity.actorType ?? "system",
-      actorId: activity.actorId ?? null,
+    const dependsOnIssue = this.getIssue(dependsOnIssueId);
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: activity.actorType ?? input.actorType ?? input.actor_type ?? "system",
+      actorId: activity.actorId ?? input.actorId ?? input.actor_id ?? null,
       type: "issue_dependency_added",
-      body: `${type} ${dependsOnIssue.key}`,
+      body: dependsOnIssue ? `blocked_by ${dependsOnIssue.key}` : type,
       data: {
         dependencyId: id,
-        dependsOnIssueId: dependsOnIssue.id,
+        dependsOnIssueId,
         type,
-        ...sourceTaskActivityData(activity.sourceTaskId),
+        ...sourceTaskActivityData(
+          activity.sourceTaskId ?? resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+        ),
       },
-    });
-    return this.getIssueDependency(id)!;
+    }, deferredEvents);
+    const stored = this.getIssueDependency(id)!;
+    return this.issueDependencyView(stored, perspectiveIssueId);
+  }
+
+  /**
+   * MUL-400 E3 cycle and ancestor checks, both bounded:
+   *
+   * - a cycle closes when the prerequisite already (transitively) waits on the
+   *   dependent, found by a depth-first walk over the same-direction graph with
+   *   a 200-node bound;
+   * - depending on an ancestor is the hierarchy version of the same mistake and
+   *   is refused outright, because a parent always finishes after its children.
+   */
+  private assertDependencyAllowed(waiter: MultiremiIssue, prerequisite: MultiremiIssue): void {
+    // Ancestry is a subset of the dependency graph once the platform's own
+    // parent-is-later ordering is considered, and an ancestor relationship is
+    // the more specific diagnosis, so it is reported first.
+    const ancestorChain = this.issueAncestorChain(waiter.id);
+    const ancestorIndex = ancestorChain.findIndex((ancestor) => ancestor.id === prerequisite.id);
+    if (ancestorIndex >= 0) {
+      // Nearest ancestor first, which is the order the chain is discovered in.
+      const chain = [...ancestorChain.slice(0, ancestorIndex + 1)];
+      throw new IssueDependencyError(
+        "dependency_on_ancestor",
+        `${waiter.key} cannot depend on its ancestor ${prerequisite.key}; a parent always finishes after its children`,
+        { path: [waiter.key, ...chain.map((ancestor) => ancestor.key)] },
+      );
+    }
+    // The walk follows "waits for" edges from the proposed prerequisite: the
+    // new edge closes a cycle exactly when that prerequisite already waits,
+    // directly or transitively, on the dependent.
+    const cyclePath = findDependencyCyclePath(prerequisite.id, waiter.id, (id) => this.directPrerequisitesOf(id));
+    if (cyclePath) {
+      throw new IssueDependencyError(
+        "dependency_cycle",
+        `Dependency would create a cycle: ${cyclePath.map((id) => this.getIssue(id)?.key ?? id).join(" -> ")}`,
+        { path: cyclePath.map((id) => this.getIssue(id)?.key ?? id) },
+      );
+    }
+  }
+
+  /**
+   * The ids `issueId` waits for, covering both stored spellings of the same
+   * relation: a `blocked_by` row names the prerequisite in its second column,
+   * while a `blocks` row names it in the first.
+   */
+  private directPrerequisitesOf(issueId: string): string[] {
+    const rows = this.ctx.db.query(
+      `SELECT issue_id, depends_on_issue_id, type FROM multiremi_issue_dependencies
+       WHERE depends_on_issue_id = ? OR issue_id = ?`,
+    ).all(issueId, issueId) as Row[];
+    const prerequisites = new Set<string>();
+    for (const row of rows) {
+      const type = String(row.type);
+      if (type === "related") continue;
+      const waiterId = type === "blocks" ? String(row.depends_on_issue_id) : String(row.issue_id);
+      const prerequisiteId = type === "blocks" ? String(row.issue_id) : String(row.depends_on_issue_id);
+      if (waiterId === issueId && prerequisiteId !== issueId) prerequisites.add(prerequisiteId);
+    }
+    return [...prerequisites];
+  }
+
+  /** Ancestors of `issueId`, nearest parent first. Bounded and cycle-safe. */
+  private issueAncestorChain(issueId: string): MultiremiIssue[] {
+    const ancestors: MultiremiIssue[] = [];
+    const seen = new Set<string>();
+    let cursor = this.getIssue(issueId)?.parentIssueId ?? null;
+    while (cursor && !seen.has(cursor) && ancestors.length < 200) {
+      seen.add(cursor);
+      const parent = this.getIssue(cursor);
+      if (!parent) break;
+      ancestors.push(parent);
+      cursor = parent.parentIssueId;
+    }
+    return ancestors;
   }
 
   getIssueDependency(id: string): MultiremiIssueDependency | null {
@@ -1530,213 +2237,366 @@ export class IssuesRepo {
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number } {
-    let previous: MultiremiIssue | null = null;
-    let updatedAt = "";
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    /**
+     * MUL-409 (QA round 4, blocker 1): this request was a `force` that tried to
+     * leave `backlog`, and the store already made the dispatch decision inside
+     * the write transaction. That is true whether or not the gate was still
+     * closed when the row lock was taken, so the route's assign-on-update step
+     * must skip it either way — dispatching there would cancel the round the
+     * store just queued and queue a second one.
+     *
+     * (Before the round-4 ruling the flag meant "a
+     * `dependency_force_started` was recorded", which left the already-open case
+     * dispatching twice.)
+     */
+    handledForcedStart: boolean;
+    /**
+     * The Issue as it was observed INSIDE the write transaction, after the row
+     * lock. Callers that decide "did this request move the issue?" from a
+     * pre-read can be stale — a concurrent writer (the automatic start, another
+     * PATCH) may have committed in between — and acting on that stale answer
+     * dispatches a second round. This snapshot is the one the write itself used.
+     */
+    previous: MultiremiIssue;
+  } {
+    // MUL-400 S1c (QA round 1): the row write and its audit activities are one
+    // transaction, and every outbound event waits for COMMIT. The write lives in
+    // {@link updateIssueWithinTransaction} so the SCM merge effect can join the
+    // same transaction and roll the status back together with its bookkeeping.
+    const collector: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
+    const result = this.ctx.db.transaction(() => this.updateIssueWithinTransaction(
+      id,
+      input,
+      options,
+      collector,
+      deferredEvents,
+    ))();
+    this.runIssueUpdatePostCommit(result, input, collector, deferredEvents);
+    return result;
+  }
+
+  /**
+   * MUL-400 S1c (QA round 1): the caller owns the transaction.
+   *
+   * The row update, `issue_updated`, `issue_status_forced` and
+   * `parent_done_grant_used` commit together, so an exception after any of them
+   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: Postgres
+   * has no savepoints, so this method never opens a transaction and never emits
+   * a workspace event directly. The caller must run
+   * {@link runIssueUpdatePostCommit} after its COMMIT.
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  } {
     let cancelledTasks = 0;
-    const transactionEvents = createCommitEventQueue();
-    const updated = this.ctx.db.transaction(() => {
-      if (hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id")) {
-        const initial = this.getIssue(id);
-        if (initial) {
-          // Match Task creation's workspace-before-Issue lock order so a
-          // first execution cannot race a directory change on Postgres.
-          const targetWorkspace = input.workspaceId ?? input.workspace_id ?? initial.workspaceId;
-          for (const workspaceId of [...new Set([initial.workspaceId, targetWorkspace])].sort()) {
-            this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-          }
+    // Every `force` that tries to leave `backlog`, whether or not the gate was
+    // still closed when the row lock was taken. The dispatch decision belongs to
+    // this transaction (see the `forceStartAttempt` block below).
+    let forceStartAttempt = false;
+    // Written inside the transaction closure below; declared here so the
+    // post-commit report can read the decision.
+    let dispatchOutcome: ForcedStartOutcome | null = null;
+    // A forced start may create a task, so take the workspace lock before the
+    // Issue row lock just like every other task-creation path.
+    const mayDispatch = input.force === true
+      || hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id", "projectId", "project_id");
+    if (mayDispatch) {
+      const initial = this.getIssue(id);
+      if (initial) {
+        // Match Task creation's workspace-before-Issue lock order so a
+        // first execution cannot race a directory change on Postgres.
+        const targetWorkspace = input.workspaceId ?? input.workspace_id ?? initial.workspaceId;
+        for (const workspaceId of [...new Set([initial.workspaceId, targetWorkspace])].sort()) {
+          this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
         }
       }
-      // A no-op UPDATE is a portable write lock: Postgres locks this Issue row
-      // until commit, while SQLite serializes the writer transaction. Re-read
-      // only after acquiring it so a user terminal transition and a worker
-      // lifecycle transition can never derive writes from the same stale row.
-      const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-      if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
-      const current = this.getIssue(id);
-      if (!current) throw new Error(`Issue not found: ${id}`);
-      previous = current;
+    }
+    // A no-op UPDATE is a portable write lock: Postgres locks this Issue row
+    // until commit, while SQLite serializes the writer transaction. Re-read
+    // only after acquiring it so a user terminal transition and a worker
+    // lifecycle transition can never derive writes from the same stale row.
+    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
+    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`Issue not found: ${id}`);
+    const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+    let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
+    const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
+    const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
+    const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
+    if (picksProject && picksDirectory) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
+    if (picksDirectory) nextProjectId = null;
+    if (picksProject) nextRuntimeWorkspaceId = null;
+    if (nextRuntimeWorkspaceId !== (current.runtimeWorkspaceId ?? null)) {
+    new RuntimeWorkspacesRepo(this.ctx).assertIssueBindingChange(id, nextRuntimeWorkspaceId, nextWorkspaceId);
+    } else if (nextRuntimeWorkspaceId && nextWorkspaceId !== current.workspaceId) {
+    new RuntimeWorkspacesRepo(this.ctx).require(nextRuntimeWorkspaceId, nextWorkspaceId);
+    }
+    let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
+    let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
+    const nextStartDate = hasAnyField(input, "startDate", "start_date")
+      ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
+      : current.startDate;
+    const nextDueDate = hasAnyField(input, "dueDate", "due_date")
+      ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
+      : current.dueDate;
+    const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
+      ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
+      : current.acceptanceCriteria;
+    const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
+      ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
+      : current.contextRefs;
 
-      const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
-      let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
-      const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
-      let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
-      const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
-      const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
-      if (picksProject && picksDirectory) throw new RuntimeWorkspaceError("Choose either a project or a runtime workspace");
-      if (picksDirectory) nextProjectId = null;
-      if (picksProject) nextRuntimeWorkspaceId = null;
-      if (nextRuntimeWorkspaceId !== (current.runtimeWorkspaceId ?? null)) {
-        new RuntimeWorkspacesRepo(this.ctx).assertIssueBindingChange(id, nextRuntimeWorkspaceId, nextWorkspaceId);
-      } else if (nextRuntimeWorkspaceId && nextWorkspaceId !== current.workspaceId) {
-        new RuntimeWorkspacesRepo(this.ctx).require(nextRuntimeWorkspaceId, nextWorkspaceId);
-      }
-      let nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null;
-      let nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
-      const nextStartDate = hasAnyField(input, "startDate", "start_date")
-        ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
-        : current.startDate;
-      const nextDueDate = hasAnyField(input, "dueDate", "due_date")
-        ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
-        : current.dueDate;
-      const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
-        ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
-        : current.acceptanceCriteria;
-      const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
-        ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
-        : current.contextRefs;
-
-      if (nextProjectId) {
-        const project = this.ctx.projects().getProject(nextProjectId);
-        if (!project) throw new Error(`Project not found: ${nextProjectId}`);
-        if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
-      }
-      if (nextParentIssueId) {
-        const parent = this.getIssue(nextParentIssueId);
-        if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
-        if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
-        this.validateIssueParent(id, nextParentIssueId);
-      }
-      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
-        const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
-          ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
-          : hasAnyField(input, "assigneeId", "assignee_id")
-            ? null
-            : nextAssigneeType;
-        const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
-        nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
-        nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
-        this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
-      }
-
-      updatedAt = nowIso();
-      const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
-      // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
-      // children cannot be parked in review or closed, and only a member may
-      // override. Runs before the write so a rejected request changes nothing.
-      // Field-only edits are never status decisions, so the guard stays out of
-      // their way even for a task identity.
-      const statusChanged = nextStatus !== current.status;
-      // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
-      // not decide a guarded parent transition, and must not fail either — it
-      // records why the request was held and leaves the status to the human. The
-      // hold replaces the guard rather than tripping it, and the write below is
-      // skipped entirely, so nothing about the Issue moves.
-      const holdParentStatus = options.holdParentStatus === true;
-      if (holdParentStatus) {
-        this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, transactionEvents);
-      } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
-        this.assertParentStatusAllowed(id, current, nextStatus, input);
-      }
-      const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
-      const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
-      const nextCompletedAt = enteringTerminal
-        ? updatedAt
-        : leavingTerminal
+    if (nextProjectId) {
+      const project = this.ctx.projects().getProject(nextProjectId);
+      if (!project) throw new Error(`Project not found: ${nextProjectId}`);
+      if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
+    }
+    if (nextParentIssueId) {
+      const parent = this.getIssue(nextParentIssueId);
+      if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
+      this.validateIssueParent(id, nextParentIssueId);
+    }
+    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
+      const requestedAssigneeType = hasAnyField(input, "assigneeType", "assignee_type")
+        ? resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MultiremiAssigneeType | null
+        : hasAnyField(input, "assigneeId", "assignee_id")
           ? null
-          : current.completedAt;
-      const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
-      // A held transition writes nothing at all: the request is audited as held
-      // and the Issue keeps its current status.
-      if (holdParentStatus) return current;
-      this.ctx.db.run(
-        `UPDATE multiremi_issues SET
-        title = ?,
-        description = ?,
-        status = ?,
-        priority = ?,
-        workspace_id = ?,
-        project_id = ?,
-        runtime_workspace_id = ?,
-        parent_issue_id = ?,
-        assignee_type = ?,
-        assignee_id = ?,
-        position = ?,
-        start_date = ?,
-        due_date = ?,
-        acceptance_criteria = ?,
-        context_refs = ?,
-        completed_at = ?,
-        archived_at = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.title ?? current.title,
-        input.description === undefined ? current.description : input.description,
-        nextStatus,
-        normalizeIssuePriority(input.priority ?? current.priority),
-        nextWorkspaceId,
-        nextProjectId,
-        nextRuntimeWorkspaceId,
-        nextParentIssueId,
-        nextAssigneeType,
-        nextAssigneeId,
-        input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
-        nextStartDate,
-        nextDueDate,
-        toJson(nextAcceptanceCriteria),
-        toJson(nextContextRefs),
-        nextCompletedAt,
-        nextArchivedAt,
-        updatedAt,
-        id,
-        ],
-      );
-      if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
-        && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
-        cancelledTasks = this.unassignIssueWithinTransaction(id, {
-          actorType: input.actorType ?? "system",
-          actorId: input.actorId ?? null,
-          parentTaskId: input.parentTaskId ?? input.parent_task_id,
-        }, transactionEvents);
-      }
-      const next = this.getIssue(id)!;
-      this.linkReferencedAttachmentsToIssue(id, next.description);
-      if ((input.title !== undefined && input.title !== current.title)
-        || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {
-        this.syncIssueHeads(next, updatedAt);
-      }
-      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
-        issue: next,
-        previousStatus: current.status,
-        actorType: "system",
-        actorId: null,
-        automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+          : nextAssigneeType;
+      const resolvedAssignee = this.ctx.squads().resolveAssigneeRef(requestedAssigneeType, nextAssigneeId, nextWorkspaceId);
+      nextAssigneeType = resolvedAssignee?.assigneeType ?? null;
+      nextAssigneeId = resolvedAssignee?.assigneeId ?? null;
+      this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
+    }
+
+    const updatedAt = nowIso();
+    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+    // MUL-400 E3 gate 2: dependency and parent-grant guards are both decided
+    // while the same Issue row lock is held.
+    this.assertDependenciesMetForStatus(id, current, nextStatus, input, deferredEvents);
+    forceStartAttempt = input.force === true
+      && current.status === "backlog"
+      && (nextStatus === "todo" || nextStatus === "in_progress");
+    // MUL-400 E1 guard A, inside the Issue row lock: a parent with unfinished
+    // children cannot be parked in review or closed, and only a member may
+    // override. Runs before the write so a rejected request changes nothing.
+    // Field-only edits are never status decisions, so the guard stays out of
+    // their way even for a task identity.
+    const statusChanged = nextStatus !== current.status;
+    // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
+    // not decide a guarded parent transition, and must not fail either — it
+    // records why the request was held and leaves the status to the human. The
+    // hold replaces the guard rather than tripping it, and the write below is
+    // skipped entirely, so nothing about the Issue moves.
+    const holdParentStatus = options.holdParentStatus === true;
+    if (holdParentStatus) {
+      this.recordHeldParentStatus(id, requestedStatusForHold(input, nextStatus), options.holdParentStatusData ?? null, deferredEvents);
+    } else if (parentStatusGuardEnabled() && statusChanged && !options.allowParentStatusGuardBypass) {
+      this.assertParentStatusAllowed(id, current, nextStatus, {
+        ...input,
+        // Batch updates carry their member override in a server-only option; it
+        // must not become a second dependency-gate bypass.
+        force: input.force === true || options.parentStatusForce === true,
       });
-      return next;
-    })();
-    this.ctx.emitCommitEvents(transactionEvents);
-    if (updated === previous) return { issue: updated, cancelledTasks };
+    }
+    const enteringTerminal = !isTerminalIssueStatus(current.status) && isTerminalIssueStatus(nextStatus);
+    const leavingTerminal = isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus);
+    const nextCompletedAt = enteringTerminal
+      ? updatedAt
+      : leavingTerminal
+        ? null
+        : current.completedAt;
+    const nextArchivedAt = leavingTerminal ? null : current.archivedAt;
+    // A held transition writes nothing at all: the request is audited as held
+    // and the Issue keeps its current status.
+    if (holdParentStatus) {
+      return {
+        issue: current,
+        previous: current,
+        cancelledTasks: 0,
+        handledForcedStart: false,
+      };
+    }
+    this.ctx.db.run(
+      `UPDATE multiremi_issues SET
+      title = ?,
+      description = ?,
+      status = ?,
+      priority = ?,
+      workspace_id = ?,
+      project_id = ?,
+      runtime_workspace_id = ?,
+      parent_issue_id = ?,
+      assignee_type = ?,
+      assignee_id = ?,
+      position = ?,
+      start_date = ?,
+      due_date = ?,
+      acceptance_criteria = ?,
+      context_refs = ?,
+      completed_at = ?,
+      archived_at = ?,
+      updated_at = ?
+     WHERE id = ?`,
+    [
+      input.title ?? current.title,
+      input.description === undefined ? current.description : input.description,
+      nextStatus,
+      normalizeIssuePriority(input.priority ?? current.priority),
+      nextWorkspaceId,
+      nextProjectId,
+      nextRuntimeWorkspaceId,
+      nextParentIssueId,
+      nextAssigneeType,
+      nextAssigneeId,
+      input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
+      nextStartDate,
+      nextDueDate,
+      toJson(nextAcceptanceCriteria),
+      toJson(nextContextRefs),
+      nextCompletedAt,
+      nextArchivedAt,
+      updatedAt,
+      id,
+      ],
+    );
+    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")
+      && !nextAssigneeType && !nextAssigneeId && current.assigneeId) {
+      cancelledTasks = this.unassignIssueWithinTransaction(id, {
+        actorType: input.actorType ?? "system",
+        actorId: input.actorId ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+      }, deferredEvents);
+    }
+    if (forceStartAttempt) {
+      dispatchOutcome = this.startForcedIssueWithinTransaction({
+        current,
+        ownerType: nextAssigneeType,
+        ownerId: nextAssigneeId,
+        actorType: input.actorType ?? "member",
+        actorId: input.actorId ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+      }, collector, deferredEvents);
+    }
+    const next = this.getIssue(id)!;
+    this.linkReferencedAttachmentsToIssue(id, next.description);
+    if ((input.title !== undefined && input.title !== current.title)
+      || (input.description !== undefined && (input.description ?? null) !== (current.description ?? null))) {
+      this.syncIssueHeads(next, updatedAt);
+    }
+    this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      issue: next,
+      previousStatus: current.status,
+      actorType: "system",
+      actorId: null,
+      automationSourceTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+    });
+    // MUL-400 S1c (QA round 1): every audit row below commits with the status
+    // write above. The events go on the caller's queue, so a rollback leaves
+    // neither rows nor listeners behind.
     this.ctx.appendIssueActivity(id, {
       actorType: "system",
       actorId: null,
       type: "issue_updated",
       body: null,
       data: input,
-    });
+    }, deferredEvents);
+    if (dispatchOutcome?.skipped) {
+      this.recordForcedStartSkipped(next, dispatchOutcome.skipped, input, deferredEvents);
+    }
     // MUL-400 E1: a member override has to be auditable next to the write it
     // allowed, including the child count it overrode at the time.
-    if (previous!.status !== updated.status && input.force === true && statusNeedsChildGuard(updated.status)) {
+    if (
+      current.status !== next.status
+      && (input.force === true || options.parentStatusForce === true)
+      && statusNeedsChildGuard(next.status)
+    ) {
       this.ctx.appendIssueActivity(id, {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
         type: "issue_status_forced",
-        body: updated.status,
+        body: next.status,
         data: {
-          status: updated.status,
-          previousStatus: previous!.status,
-          previous_status: previous!.status,
+          status: next.status,
+          previousStatus: current.status,
+          previous_status: current.status,
           openChildren: this.countOpenChildIssues(id),
           open_children: this.countOpenChildIssues(id),
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         },
-      });
+      }, deferredEvents);
     }
-    if (previous!.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, previous!.projectId]);
-    if (updated.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, updated.projectId]);
-    if (previous!.status !== "done" && updated.status === "done") {
-      this.ctx.knowledge().createIssueCompletionKnowledgeBundle(updated);
+    if (current.status !== "done" && next.status === "done" && input.actorType === "agent") {
+      const grant = this.parentDoneGrantStatus(next);
+      if (grant.effective && grant.agentId === input.actorId && this.hasChildIssues(id)) {
+        this.ctx.appendIssueActivity(id, {
+          actorType: "agent", actorId: input.actorId, type: "parent_done_grant_used",
+          data: {
+            source: options.parentDoneGrantSource ?? "api",
+            agentId: grant.agentId,
+            grantedBy: grant.grantedBy,
+            grantedAt: grant.grantedAt,
+            ...(options.parentDoneGrantData ?? {}),
+          },
+        }, deferredEvents);
+      }
     }
+    if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, current.projectId]);
+    if (next.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [updatedAt, next.projectId]);
+    if (current.status !== "done" && next.status === "done") {
+      this.ctx.knowledge().createIssueCompletionKnowledgeBundle(next);
+    }
+    return {
+      issue: next,
+      previous: current,
+      cancelledTasks,
+      handledForcedStart: forceStartAttempt,
+    };
+  }
+
+  /**
+   * MUL-400 S1c: the post-COMMIT half of {@link updateIssueWithinTransaction}.
+   *
+   * Publishes the audit events the committed write queued, then runs the E1/E2
+   * child-status hook, replays the transitions that hook itself produced and
+   * flushes the hook's own events. The write must already be durable — the hook
+   * opens its own transaction and Postgres has no savepoints.
+   */
+  runIssueUpdatePostCommit(
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
+    input: UpdateIssueInput,
+    collector: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const updated = result.issue;
+    const previous = result.previous;
+    // The write is durable: publish its audit rows (the `issue_updated` line,
+    // the member force record, the grant-use row, a hold) before the hook runs.
+    // The hook gets its OWN queue, so a hook failure cannot retroactively
+    // publish events for rows its rolled-back transaction just erased.
+    this.ctx.emitCommitEvents(deferredEvents);
+    if (updated === previous) return;
+    const hookEvents = createCommitEventQueue();
     // The write above is committed; the hook runs after it on purpose (ADR
     // 0003). A failure here therefore cannot undo the Issue's own transition —
     // it is logged and rethrown so the caller learns the report did not land.
@@ -1746,21 +2606,19 @@ export class IssuesRepo {
     // never dropped) so the replay walks all the way to the grandparent. The
     // deferred queue covers the hook's own realtime pushes; it is flushed only
     // after the hook returned and its transaction committed.
-    const collector: ChildStatusChangeCollector = [];
-    const deferredEvents = createCommitEventQueue();
     try {
       this.notifyChildStatusChange(
-        previous!,
+        previous,
         updated,
-        cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         collector,
       );
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
       // event for the family it LEFT, so the old parent re-derives as well. The
       // new parent is covered by the hook above.
-      if (parentStatusGuardEnabled() && previous!.parentIssueId && previous!.parentIssueId !== updated.parentIssueId) {
-        const oldParent = this.getIssue(previous!.parentIssueId);
-        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, deferredEvents);
+      if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
+        const oldParent = this.getIssue(previous.parentIssueId);
+        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
       }
     } catch (err) {
       // The hook's own transaction rolled back, so its transitions and events
@@ -1771,8 +2629,142 @@ export class IssuesRepo {
       throw err;
     }
     this.ctx.tasks().runCollectedChildStatusChanges(collector);
-    this.ctx.emitCommitEvents(deferredEvents);
-    return { issue: updated, cancelledTasks };
+    this.ctx.emitCommitEvents(hookEvents);
+  }
+
+  /**
+   * MUL-409 (QA round 4, blocker 1): the member's forced start is one
+   * transaction.
+   *
+   * The status write, `dependency_force_started`, `issue_assigned` and the round
+   * all commit together, so a process that dies between the status write and the
+   * dispatch can no longer leave a `todo` with nothing queued — no automatic
+   * path looks at `todo`, because both the gate and the automatic start only
+   * scan `backlog`.
+   *
+   * Lock order matches `createTaskWithinTransaction`: the workspace row first
+   * (taken here, inside the caller's transaction), then the Issue row, which
+   * `updateIssueWithOutcome` already write-locked before calling in. Taking the
+   * Issue lock first and the workspace lock second is what would deadlock a
+   * concurrent `createTask`, so the order is not negotiable.
+   *
+   * Two outcomes, both durable inside this transaction:
+   *   - a dispatchable owner gets the round, plus `issue_assigned` and (when the
+   *     gate was genuinely still closed) `dependency_force_started`;
+   *   - an owner that cannot run (none at all, a member, an archived assignee,
+   *     a squad with no runnable agent) keeps the status change and records
+   *     `dispatch_skipped`. That matches the previous behaviour: the member's
+   *     request is honoured, the reason is visible, and nothing is rolled back.
+   *
+   * Any unexpected failure throws, so the caller's transaction rolls back to
+   * `backlog` with no round and no force activity.
+   */
+  private startForcedIssueWithinTransaction(
+    context: {
+      current: MultiremiIssue;
+      ownerType: MultiremiAssigneeType | null;
+      ownerId: string | null;
+      actorType: string;
+      actorId: string | null;
+      parentTaskId: string | null;
+    },
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): ForcedStartOutcome {
+    const { current, ownerType, ownerId, actorType, actorId, parentTaskId } = context;
+    // The caller took the workspace row lock before the Issue row (see
+    // `updateIssueWithOutcome`), so `createTaskWithinTransaction` can take it
+    // again inside this transaction without inverting the order.
+
+    if (!ownerType || !ownerId) {
+      return {
+        skipped: {
+          reason: "no_assignee",
+          error: "Issue has no assignee",
+        },
+      };
+    }
+    if (ownerType === "member") {
+      return {
+        skipped: {
+          reason: "member_assignee",
+          error: "Member assignees do not run tasks",
+        },
+      };
+    }
+
+    const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
+    if (!taskAgent) {
+      // Decided before any INSERT, so the skip and the status change commit
+      // together and the issue is internally consistent.
+      log.warn(`dependency force-start dispatch skipped for ${current.id}: no runnable agent for ${ownerType}:${ownerId}`);
+      return {
+        skipped: {
+          reason: "no_runnable_agent",
+          error: `No runnable agent for ${ownerType}: ${ownerId}`,
+        },
+      };
+    }
+
+    const task = this.ctx.tasks().createTaskWithinTransaction({
+      agentId: taskAgent.id,
+      issueId: current.id,
+      workspaceId: current.workspaceId,
+      prompt: current.title,
+      parentTaskId,
+    }, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(task);
+    this.ctx.appendIssueActivity(current.id, {
+      actorType,
+      actorId,
+      type: "issue_assigned",
+      body: `Queued ${taskAgent.name}`,
+      data: {
+        assigneeType: ownerType,
+        assignee_type: ownerType,
+        assigneeId: ownerId,
+        assignee_id: ownerId,
+        toType: ownerType,
+        to_type: ownerType,
+        toId: ownerId,
+        to_id: ownerId,
+        taskId: task.id,
+        task_id: task.id,
+        ...sourceTaskActivityData(parentTaskId),
+        cancelled: 0,
+      },
+    }, deferredEvents);
+    if (current.projectId) {
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), current.projectId]);
+    }
+    return { skipped: null };
+  }
+
+  /**
+   * The `dispatch_skipped` row for a forced start that could not run. The owner
+   * calls this before COMMIT so the status change and the reason cannot split.
+   */
+  private recordForcedStartSkipped(
+    issue: MultiremiIssue,
+    skipped: { reason: string; error: string },
+    input: UpdateIssueInput,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "dispatch_skipped",
+      body: skipped.error,
+      data: {
+        reason: skipped.reason,
+        error: skipped.error,
+        assigneeType: issue.assigneeType,
+        assignee_type: issue.assigneeType,
+        assigneeId: issue.assigneeId,
+        assignee_id: issue.assigneeId,
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
+      },
+    }, deferredEvents);
   }
 
   /**
@@ -1895,7 +2887,23 @@ export class IssuesRepo {
       seen?: Set<string>;
     } = {},
   ): void {
-    if (!issue.parentIssueId) return;
+    // MUL-400 E3: the dependency side of the same hook. It runs before the
+    // parent notification so the report the parent owner reads already carries
+    // the "your prerequisite failed" lines, and it is independent of whether
+    // this issue has a parent at all. The automatic start opens a transaction of
+    // its own (see `autoStartDependent`) and runs to completion here, at depth
+    // 0 — before the report transaction below opens, because Postgres has no
+    // savepoints on this bridge.
+    const readinessLines: string[] = [];
+    const dependencyNested: ChildStatusChangeCollector = [];
+    const dependencyEvents = createCommitEventQueue();
+    this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, dependencyNested, dependencyEvents, readinessLines);
+    if (!issue.parentIssueId) {
+      // No parent report to fold into: the dependency side stands alone.
+      this.ctx.emitCommitEvents(dependencyEvents);
+      this.ctx.tasks().runCollectedChildStatusChanges(dependencyNested);
+      return;
+    }
     const parent = this.getIssue(issue.parentIssueId);
     if (!parent) return;
 
@@ -1936,7 +2944,9 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
       if (outcome) {
-        const reported = this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, staged, deferredEvents);
+        // MUL-400 E3 readiness lines for dependents that share this parent ride
+        // along in this one report so the parent owner reads a single round.
+        const reported = this.notifyParentOfChildOutcome(parent, issue, outcome, parentTaskId, readinessLines, staged, deferredEvents);
         enqueued.push(...reported.tasks);
         if (reported.comment) comments.push(reported.comment);
       }
@@ -1999,6 +3009,148 @@ export class IssuesRepo {
   }
 
   /**
+   * MUL-400 E3 hook body.
+   *
+   * - The prerequisite reached `done`: every dependent still parked in
+   *   `backlog` whose own prerequisites are now all satisfied starts itself when
+   *   its owner is an agent or a squad, and is only reported when the owner is a
+   *   human (or nobody). Idempotent by construction: a second `done` finds no
+   *   `backlog` dependent left, and the gate inside `assignIssue` refuses a
+   *   start that is not actually unblocked.
+   * - The prerequisite ended `cancelled` or `blocked`: each dependent that is
+   *   still waiting gets a `dependency_prerequisite_failed` record and the
+   *   report that reaches its owner carries the three concrete ways out.
+   */
+  private reactToIssueDependencyOutcome(
+    previous: MultiremiIssue,
+    issue: MultiremiIssue,
+    parentTaskId: string | null,
+    nested: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+    mergedLines: string[] = [],
+  ): string[] {
+    if (!dependencyGateEnabled()) return [];
+    if (previous.status === issue.status) return [];
+    if (issue.status !== "done" && issue.status !== "cancelled" && issue.status !== "blocked" && issue.status !== "failed") {
+      return [];
+    }
+    const dependents = this.listDependencyDependents(issue.id);
+    if (!dependents.length) return [];
+    const satisfied = issue.status === "done";
+    // Readiness lines for dependents that share this issue's parent: they belong
+    // in the E2 report for this issue rather than in a report of their own, so
+    // the parent owner reads one round instead of two. The caller passes the
+    // array it will hand to the report builder.
+    for (const dependent of dependents) {
+      if (dependent.status !== "backlog") continue;
+      const unmet = this.listUnmetPrerequisites(dependent.id);
+      if (satisfied && unmet.length === 0) {
+        const line = this.autoStartDependent(dependent, issue, parentTaskId);
+        if (line) mergedLines.push(line);
+        continue;
+      }
+      if (!satisfied) this.recordPrerequisiteFailure(dependent, issue, unmet, parentTaskId, nested, deferredEvents);
+    }
+    return mergedLines;
+  }
+
+  /**
+   * MUL-400 E3 readiness report for a dependent that has no agent to start it.
+   *
+   * Returns a line for the shared-parent case (the caller folds it into the
+   * prerequisite's E2 report, so the parent owner still gets one round); for
+   * every other case the report is delivered here and `null` comes back. The
+   * plan's wording is "the parent owner's next round", so an owner with no
+   * queued round is not given a new one — only an existing one is extended.
+   */
+  private reportDependencyReady(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+  ): string | null {
+    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
+    const line = `${dependent.key}: all prerequisites are done (${satisfiedBy.key}); it has no agent owner, so assign one or move it to todo to run it.`;
+    if (parent && parent.id === satisfiedBy.parentIssueId) {
+      // Same parent as the prerequisite: the dependent already carries the
+      // `dependency_satisfied` activity, and the line rides along in the
+      // prerequisite's E2 report. No second comment and no round of its own.
+      this.markDependencySatisfiedMerged(dependent, satisfiedBy, parent);
+      return line;
+    }
+    if (parent) {
+      // A different parent (or a prerequisite with none): keep the report on
+      // that parent as an activity and extend its owner's queued round if one
+      // is already waiting.
+      this.ctx.appendIssueActivity(parent.id, {
+        actorType: "system",
+        actorId: SYSTEM_AUTHOR_ID,
+        type: "dependency_satisfied",
+        body: dependent.key,
+        data: {
+          dependentIssueId: dependent.id,
+          dependent_issue_id: dependent.id,
+          dependentKey: dependent.key,
+          dependent_key: dependent.key,
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+          satisfiedByKey: satisfiedBy.key,
+          satisfied_by_key: satisfiedBy.key,
+        },
+      });
+      this.appendToQueuedParentRound(parent, line);
+      return null;
+    }
+    // No parent at all: the dependent's own owner (or its subscribers) hears
+    // about it, exactly as before.
+    for (const memberId of this.dependentReportRecipients(dependent)) {
+      this.ctx.createInboxItem({
+        issueId: dependent.id,
+        memberId,
+        type: "dependency_satisfied",
+        title: `${dependent.key}: all prerequisites are done`,
+        body: `${dependent.key} is ready to start.`,
+        actorType: "system",
+        actorId: null,
+        details: {
+          dependentIssueId: dependent.id,
+          dependent_issue_id: dependent.id,
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+        },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * Record on the dependent that its readiness line was folded into the
+   * prerequisite's report rather than delivered on its own. The activity type
+   * stays `dependency_satisfied` (the report is still what the plan asks for);
+   * the flag is what makes the merge auditable.
+   */
+  private markDependencySatisfiedMerged(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    parent: MultiremiIssue,
+  ): void {
+    this.ctx.appendIssueActivity(dependent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "dependency_satisfied",
+      body: satisfiedBy.key,
+      data: {
+        satisfiedBy: satisfiedBy.id,
+        satisfied_by: satisfiedBy.id,
+        satisfiedByKey: satisfiedBy.key,
+        satisfied_by_key: satisfiedBy.key,
+        parentIssueId: parent.id,
+        parent_issue_id: parent.id,
+        mergedIntoPrerequisiteReport: true,
+        merged_into_prerequisite_report: true,
+      },
+    });
+  }
+
+  /**
    * MUL-400 E1: a guarded system writer asked to move a parent but will not
    * decide the transition itself. Record why and leave the status untouched.
    * `holdParentStatus` callers mark their own effect processed afterwards, so a
@@ -2021,9 +3173,420 @@ export class IssuesRepo {
         openChildren,
         open_children: openChildren,
         status: "in_progress",
+        reason: "children_open",
         ...(extra ?? {}),
       },
     }, deferredEvents);
+  }
+
+  /**
+   * Extend the parent owner's already-queued round with one line. Nothing is
+   * created when no round is waiting, and the guarded UPDATE means a round that
+   * stopped being queued between the read and the write is simply left alone.
+   */
+  private appendToQueuedParentRound(parent: MultiremiIssue, line: string): boolean {
+    if (!parent.assigneeType || !parent.assigneeId || parent.assigneeType === "member") return false;
+    const agent = this.ctx.resolveRunnableAgentForAssignee(parent.assigneeType, parent.assigneeId);
+    if (!agent) return false;
+    const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+    const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
+    if (!queued) return false;
+    const appended = appendChildStatusReport(queued.prompt, {
+      commentId: queued.triggerCommentId ?? "",
+      outcome: "done",
+      actorId: parent.assigneeId,
+      extraLine: line,
+    });
+    const guarded = this.ctx.db.run(
+      `UPDATE multiremi_tasks SET prompt = ?, updated_at = ?
+       WHERE id = ? AND status = 'queued' AND continued_from_task_id IS NULL`,
+      [appended, nowIso(), queued.id],
+    );
+    if (guarded.changes === 0) return false;
+    this.ctx.appendIssueActivity(parent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "dependency_satisfied_coalesced",
+      body: line,
+      data: {
+        taskId: queued.id,
+        task_id: queued.id,
+        agentId: agent.id,
+        agent_id: agent.id,
+      },
+    });
+    return true;
+  }
+
+  /**
+   * The issues that wait on `issueId`, with the dependency row that links them,
+   * read from the single stored direction. Rows stored as `blocks` relate the
+   * same two issues the other way round, so they are included as well.
+   */
+  private listDependencyDependents(issueId: string): MultiremiIssue[] {
+    const rows = this.ctx.db.query(
+      `SELECT id, issue_id, depends_on_issue_id, type FROM multiremi_issue_dependencies
+       WHERE (depends_on_issue_id = ? OR issue_id = ?) AND type IN ('blocked_by', 'blocks')
+       ORDER BY created_at ASC, id ASC`,
+    ).all(issueId, issueId) as Row[];
+    const seen = new Set<string>();
+    const dependents: MultiremiIssue[] = [];
+    for (const row of rows) {
+      const storedIssueId = String(row.issue_id);
+      const storedDependsOnId = String(row.depends_on_issue_id);
+      // For `blocked_by` the dependent is `issue_id`; for the reversed `blocks`
+      // row the dependent is the other column.
+      const dependentId = String(row.type) === "blocks" ? storedDependsOnId : storedIssueId;
+      if (dependentId === issueId) continue;
+      if (seen.has(dependentId)) continue;
+      const dependent = this.getIssue(dependentId);
+      if (!dependent) continue;
+      seen.add(dependentId);
+      dependents.push(dependent);
+    }
+    return dependents;
+  }
+
+  /**
+   * MUL-400 E3 automatic start. The dependent becomes a real `todo` with a
+   * queued round for its owner. The waiting predicate is rechecked while
+   * holding the workspace and issue row locks.
+   */
+  private autoStartDependent(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    parentTaskId: string | null,
+  ): string | null {
+    const ownerType = dependent.assigneeType;
+    if (!ownerType || !dependent.assigneeId || ownerType === "member") {
+      this.ctx.appendIssueActivity(dependent.id, {
+        actorType: "system",
+        actorId: SYSTEM_AUTHOR_ID,
+        type: "dependency_satisfied",
+        body: satisfiedBy.key,
+        data: {
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+          satisfiedByKey: satisfiedBy.key,
+          satisfied_by_key: satisfiedBy.key,
+          assigneeType: dependent.assigneeType,
+          assignee_type: dependent.assigneeType,
+          assigneeId: dependent.assigneeId,
+          assignee_id: dependent.assigneeId,
+          autoStarted: false,
+          auto_started: false,
+        },
+      });
+      return this.reportDependencyReady(dependent, satisfiedBy);
+    }
+    // MUL-400 E3 (QA round 3, blockers 1+2): the claim, the status write and the
+    // round are ONE transaction. The previous shape committed
+    // `backlog -> todo` first and only then called `assignIssue`, which left two
+    // durable holes: a process that died in between stranded the issue at `todo`
+    // with no round and no path back, and a failure *after* the round was
+    // inserted "released" it into `backlog` while the round was still queued.
+    //
+    // Lock order — this is the order the rest of the codebase uses, and it is
+    // required to avoid deadlocking a writer that holds the workspace lock and
+    // is waiting for this Issue row:
+    //   1. `multiremi_workspaces` row (`lockWorkspaceRuntimeLifecycle`), the same
+    //      lock `createTaskWithinTransaction` takes for task creation;
+    //   2. `multiremi_issues` row for the dependent, through the conditional
+    //      UPDATE below.
+    // `createTaskWithinTransaction` is called while both are held, and it takes
+    // the workspace lock itself — re-entrant here because we already own it and
+    // no other writer can be between them.
+    //
+    // Arbitration stays the conditional UPDATE: only the transaction that flips
+    // `backlog -> todo` runs the dispatch, so a second prerequisite completing
+    // concurrently, or a member's forced start, cannot queue a second round.
+    // Captured after the member/no-owner guard above: the closure cannot rely on
+    // property narrowing, and this id is what every write in it uses.
+    const ownerId = dependent.assigneeId;
+    let outcome: { task: MultiremiTask | null; dispatched: boolean } | null = null;
+    // S1's commit-time queue: the round's wakeup and the realtime status event
+    // must not reach a client until the COMMIT that made them true. The queue is
+    // drained by `ctx.emitCommitEvents` after the transaction below.
+    const deferredEvents: CommitEventQueue = createCommitEventQueue();
+    const nested: ChildStatusChangeCollector = [];
+    try {
+      const attempted = this.ctx.db.transaction((): { task: MultiremiTask | null; dispatched: boolean } | null => {
+        this.ctx.lockWorkspaceRuntimeLifecycle(dependent.workspaceId);
+        if (this.ctx.db instanceof PostgresSyncDatabase) {
+          this.ctx.db.query("SELECT id FROM multiremi_issues WHERE id = ? FOR UPDATE").get(dependent.id);
+        }
+        const current = this.getIssue(dependent.id);
+        if (!current || current.status !== "backlog") return null;
+        if (this.listUnmetPrerequisites(dependent.id).length > 0) return null;
+        // A structurally exempt active round means this issue is not eligible
+        // for an automatic claim. Its own start will derive `in_progress`.
+        const existingRound = this.ctx.tasks().listTasksForIssue(dependent.id)
+          .find((task) => isActiveTaskStatus(task.status));
+        if (existingRound) return null;
+        // Owner resolution and validation happen INSIDE the transaction and
+        // before the round, mirroring `assignIssue`'s agent/squad branch, so a
+        // failure here rolls the status write back with everything else.
+        this.validateIssueAssignee(ownerType, ownerId);
+        const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
+        if (!taskAgent) throw new Error(`No runnable agent for ${ownerType}: ${ownerId}`);
+        const flipped = this.ctx.db.run(
+          `UPDATE multiremi_issues
+           SET status = 'todo', completed_at = NULL, archived_at = NULL, updated_at = ?
+           WHERE id = ? AND status = 'backlog'`,
+          [nowIso(), dependent.id],
+        );
+        if (flipped.changes !== 1) return null;
+        // The round can move this issue's own status and is a child event for ITS
+        // parent; both are collected and replayed after the COMMIT, never inline.
+        const task = this.ctx.tasks().createTaskWithinTransaction({
+          agentId: taskAgent.id,
+          issueId: dependent.id,
+          workspaceId: current.workspaceId,
+          prompt: current.title,
+          parentTaskId,
+        }, nested, deferredEvents);
+        deferredEvents.enqueuedTasks.push(task);
+        this.ctx.appendIssueActivity(dependent.id, {
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          type: "issue_assigned",
+          body: `Queued ${taskAgent.name}`,
+          data: {
+            assigneeType: ownerType,
+            assignee_type: ownerType,
+            assigneeId: ownerId,
+            assignee_id: ownerId,
+            toType: ownerType,
+            to_type: ownerType,
+            toId: ownerId,
+            to_id: ownerId,
+            taskId: task.id,
+            task_id: task.id,
+            ...sourceTaskActivityData(parentTaskId),
+            cancelled: 0,
+          },
+        }, deferredEvents);
+        this.ctx.appendIssueActivity(dependent.id, {
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          type: "dependency_auto_started",
+          body: satisfiedBy.key,
+          data: {
+            satisfiedBy: satisfiedBy.id,
+            satisfied_by: satisfiedBy.id,
+            satisfiedByKey: satisfiedBy.key,
+            satisfied_by_key: satisfiedBy.key,
+            autoStarted: true,
+            auto_started: true,
+            taskId: task.id,
+            task_id: task.id,
+            ...sourceTaskActivityData(parentTaskId),
+          },
+        }, deferredEvents);
+        if (current.projectId) {
+          this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), current.projectId]);
+        }
+        return { task, dispatched: true };
+      })();
+      outcome = attempted;
+    } catch (err) {
+      // The whole attempt rolled back: the dependent is still `backlog` with no
+      // round, and none of this attempt's activity survived. The prerequisite's
+      // own `done` transition is untouched. The skip is recorded in its OWN
+      // transaction afterwards, so the operator can see why the start did not
+      // happen and how to fix it.
+      this.recordAutoStartSkipped(dependent, satisfiedBy, err);
+      return null;
+    }
+    if (!outcome) return null;
+    // Post-commit only: the wakeup listener and the realtime status event both
+    // describe committed state. A crash between COMMIT and here therefore loses
+    // only the live notification — a client that refreshes reads `todo` with its
+    // queued round, and the claim is already durable.
+    const started = this.getIssue(dependent.id);
+    if (started) {
+      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+        issue: started,
+        previousStatus: "backlog",
+        actorType: "system",
+        actorId: null,
+        automationSourceTaskId: outcome.task?.id ?? null,
+      });
+      // Blocker 4: the frontend only re-buckets an issue from `issue:updated`
+      // (frontend/packages/core/realtime/sync/issues.ts). Without it an open
+      // list/detail keeps rendering the pre-start status. It rides the same
+      // commit-time queue as the wakeup, so a rollback can never emit it.
+      deferredEvents.workspace.push({
+        type: "issue:updated",
+        workspaceId: started.workspaceId,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          issue: {
+            id: started.id,
+            status: started.status,
+            completed_at: null,
+            archived_at: null,
+            updated_at: started.updatedAt,
+          },
+          status_changed: true,
+          prev_status: "backlog",
+        },
+      });
+    }
+    // Everything here describes committed state.
+    this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(nested);
+    return null;
+  }
+
+  /**
+   * MUL-400 E3 (QA round 3, blockers 1+2): one `dependency_auto_start_skipped`
+   * for an auto-start whose transaction rolled back.
+   *
+   * This is deliberately a separate transaction from the failed attempt: the
+   * attempt must leave nothing behind (no round, no half activity, the issue
+   * still `backlog`), while the skip has to survive as the operator's signal.
+   * The dependent keeps its `backlog` row, so the visible state is honest —
+   * "waiting, and the automatic start did not work" — instead of a `todo` with
+   * nothing running.
+   */
+  private recordAutoStartSkipped(
+    dependent: MultiremiIssue,
+    satisfiedBy: MultiremiIssue,
+    err: unknown,
+  ): void {
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      this.ctx.appendIssueActivity(dependent.id, {
+        actorType: "system",
+        actorId: SYSTEM_AUTHOR_ID,
+        type: "dependency_auto_start_skipped",
+        body: message,
+        data: {
+          satisfiedBy: satisfiedBy.id,
+          satisfied_by: satisfiedBy.id,
+          satisfiedByKey: satisfiedBy.key,
+          satisfied_by_key: satisfiedBy.key,
+          reason: "dispatch_failed",
+          error: message,
+        },
+      });
+    } catch (recordError) {
+      log.warn(
+        `dependency auto-start skip record failed for ${dependent.id}: `
+        + `${recordError instanceof Error ? recordError.message : String(recordError)}`,
+      );
+      return;
+    }
+    log.warn(`dependency auto-start skipped for ${dependent.id}: ${message}`);
+  }
+
+  /**
+   * MUL-400 E3 prerequisite failure. The dependent stays parked (only a human
+   * can decide between re-planning, cancelling and dropping the dependency),
+   * so the record is the deliverable: it names the dead prerequisite and the
+   * three concrete commands.
+   */
+  private recordPrerequisiteFailure(
+    dependent: MultiremiIssue,
+    prerequisite: MultiremiIssue,
+    unmet: IssueDependencyUnmetRef[],
+    parentTaskId: string | null,
+    nested: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const row = unmet.find((candidate) => candidate.dependsOnIssueId === prerequisite.id);
+    const dependencyId = row?.dependencyId ?? "";
+    const commands = dependencyFailureCommands({
+      dependentKey: dependent.key,
+      prerequisiteKey: prerequisite.key,
+      dependencyId,
+    });
+    this.ctx.appendIssueActivity(dependent.id, {
+      actorType: "system",
+      actorId: SYSTEM_AUTHOR_ID,
+      type: "dependency_prerequisite_failed",
+      body: prerequisite.key,
+      data: {
+        prerequisiteIssueId: prerequisite.id,
+        prerequisite_issue_id: prerequisite.id,
+        prerequisiteKey: prerequisite.key,
+        prerequisite_key: prerequisite.key,
+        prerequisiteStatus: prerequisite.status,
+        prerequisite_status: prerequisite.status,
+        dependencyId,
+        dependency_id: dependencyId,
+        commands,
+        ...sourceTaskActivityData(parentTaskId),
+      },
+    });
+    this.reportPrerequisiteFailureToOwner(dependent, prerequisite, commands, nested, deferredEvents);
+  }
+
+  /**
+   * Failing prerequisites are exactly the case the parent owner must act on, so
+   * the report lands in the same place as every other child outcome: the
+   * parent's round for an agent/squad owner, the owner's inbox for a member,
+   * and the dependent's own subscribers when the human fan-out has nobody to
+   * reach.
+   */
+  private reportPrerequisiteFailureToOwner(
+    dependent: MultiremiIssue,
+    prerequisite: MultiremiIssue,
+    commands: string[],
+    nested: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const parent = dependent.parentIssueId ? this.getIssue(dependent.parentIssueId) : null;
+    const summary = `${dependent.key}: ${prerequisite.key} ${prerequisiteStatusSentence(prerequisite.status)}`;
+    const details = {
+      prerequisiteIssueId: prerequisite.id,
+      prerequisite_issue_id: prerequisite.id,
+      prerequisiteKey: prerequisite.key,
+      prerequisite_key: prerequisite.key,
+      dependentIssueId: dependent.id,
+      dependent_issue_id: dependent.id,
+      commands,
+    };
+    if (parent) {
+      const body = [
+        `Prerequisite [${prerequisite.key}](mention://issue/${prerequisite.id}) for ${dependent.key} ${prerequisiteStatusSentence(prerequisite.status)}.`,
+        `${dependent.key} stays in backlog until a human decides.`,
+        ...commands.map((command) => `- ${command}`),
+      ].join("\n");
+      const comment = this.createSystemIssueComment(parent.id, body, {
+        type: "dependency_prerequisite_failed",
+        ...details,
+      });
+      this.triggerParentAssigneeForChildDone(parent, comment, "failed", null, nested, deferredEvents);
+      return;
+    }
+    for (const memberId of this.dependentReportRecipients(dependent)) {
+      this.ctx.createInboxItem({
+        issueId: dependent.id,
+        memberId,
+        type: "dependency_prerequisite_failed",
+        title: summary,
+        body: `${dependent.key} is parked in backlog. ${commands[0]}`,
+        actorType: "system",
+        actorId: null,
+        details,
+      });
+    }
+  }
+
+  /**
+   * The human recipients of a dependent's report: its member owner when it has
+   * one, otherwise its subscribers. Severity stays with `INBOX_ROUTING`.
+   */
+  private dependentReportRecipients(dependent: MultiremiIssue): string[] {
+    const recipients = dependent.assigneeType === "member" && dependent.assigneeId
+      ? [dependent.assigneeId]
+      : this.listIssueSubscribers(dependent.id)
+        .filter((subscriber) => subscriber.userType === "member")
+        .map((subscriber) => subscriber.userId);
+    return [...new Set(recipients)];
   }
 
   /**
@@ -2147,6 +3710,7 @@ export class IssuesRepo {
     child: MultiremiIssue,
     outcome: ChildTerminalOutcome,
     parentTaskId: string | null,
+    readinessLines: string[],
     nested: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): { tasks: MultiremiTask[]; comment: MultiremiIssueComment | null } {
@@ -2165,7 +3729,9 @@ export class IssuesRepo {
       childTitle: child.title,
       outcome,
       childStatus: child.status,
+      readinessLines,
     });
+    const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
     const comment = this.createSystemIssueCommentWithinTransaction(parent.id, body, {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -2173,7 +3739,7 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, deferredEvents);
+    }, deferredEvents, null, issueSessionId);
     return { tasks: this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId, nested, deferredEvents), comment };
   }
 
@@ -2223,6 +3789,7 @@ export class IssuesRepo {
       childTitle: child.title,
       outcome,
       childStatus: child.status,
+      readinessLines: [],
     }), {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -2432,7 +3999,7 @@ export class IssuesRepo {
     // Postgres, which has no savepoints.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+      const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
       const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
       if (queued) {
         const appended = appendChildStatusReport(queued.prompt, {
@@ -2479,6 +4046,7 @@ export class IssuesRepo {
         prompt: childDoneParentTaskPrompt(systemComment, outcome),
         parentTaskId,
         preserveIssueStatus: true,
+        wakeSource: "child_status",
       }, nested, deferredEvents);
       this.ctx.appendIssueActivity(parent.id, {
         actorType: "system",
@@ -2501,6 +4069,16 @@ export class IssuesRepo {
       }, deferredEvents);
       return [task];
     })();
+  }
+
+  private childDoneReturnSessionId(parentIssueId: string, triggeringTaskId: string | null): string {
+    const triggering = triggeringTaskId ? this.ctx.tasks().getTask(triggeringTaskId) : null;
+    const delegatedSessionId = triggering?.delegatedFromIssueSessionId;
+    const delegatedSession = delegatedSessionId
+      ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
+    return delegatedSession?.issueId === parentIssueId
+      ? delegatedSession.id
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -2548,7 +4126,7 @@ export class IssuesRepo {
     return cancelled;
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const requestedAssigneeType = input.assigneeType ?? input.assignee_type ?? null;
@@ -2565,7 +4143,7 @@ export class IssuesRepo {
       const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents))();
       this.ctx.emitCommitEvents(deferredEvents);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
@@ -2580,6 +4158,62 @@ export class IssuesRepo {
     const taskAgent = assigneeType === "member" ? null : this.ctx.resolveRunnableAgentForAssignee(assigneeType, assigneeId);
     if (assigneeType !== "member" && !taskAgent) {
       throw new Error(`No runnable agent for ${assigneeType}: ${assigneeId}`);
+    }
+    // MUL-400 E3 gate 1. Every "start this issue" call funnels through here, so
+    // this is where an unmet prerequisite stops one: the owner is recorded and
+    // the skip is visible, but the status and the task queue stay untouched.
+    // Server-internal only: a request body can never set this (see
+    // AssignIssueOptions), so an override is always paired with the member-only
+    // status write that recorded `dependency_force_started`.
+    const forcedDispatch = options.force === true;
+    const unmetDependencies = this.dependenciesBlockDispatch(current, forcedDispatch);
+    if (unmetDependencies) {
+      this.ctx.db.run(
+        "UPDATE multiremi_issues SET assignee_type = ?, assignee_id = ?, updated_at = ? WHERE id = ?",
+        [assigneeType, assigneeId, now, id],
+      );
+      if (assigneeType === "member") {
+        // A human owner is told about the assignment even though the work is
+        // held: otherwise the issue looks unassigned on every surface.
+        this.addIssueSubscriber(id, assigneeId, "assigned");
+        this.ctx.createInboxItem({
+          issueId: id,
+          memberId: assigneeId,
+          type: "issue_assigned",
+          title: `${current.key} assigned to you`,
+          body: current.title,
+          actorType: "system",
+          actorId: null,
+        });
+      }
+      this.ctx.appendIssueActivity(id, {
+        actorType,
+        actorId,
+        type: "issue_assigned",
+        body: null,
+        data: {
+          assigneeType,
+          assignee_type: assigneeType,
+          assigneeId,
+          assignee_id: assigneeId,
+          toType: assigneeType,
+          to_type: assigneeType,
+          toId: assigneeId,
+          to_id: assigneeId,
+          taskId: null,
+          task_id: null,
+          deferred: true,
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
+          cancelled: 0,
+        },
+      });
+      this.recordDependencyDispatchSkipped(
+        { ...current, assigneeType, assigneeId },
+        unmetDependencies,
+        { actorType, actorId, parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id") },
+      );
+      if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
+      return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
     }
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
@@ -2604,7 +4238,8 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
     }
     if (assigneeType === "member") {
@@ -2637,12 +4272,167 @@ export class IssuesRepo {
         to_id: assigneeId,
         taskId: task?.id ?? null,
         task_id: task?.id ?? null,
-        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         cancelled,
       },
     });
     if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
     return { issue: this.getIssue(id)!, task, cancelledTasks: cancelled };
+  }
+
+  /**
+   * MUL-400 E3 gate 2: an issue that still waits on a prerequisite cannot leave
+   * `backlog` through a direct status write. Without this, the issue would sit
+   * at `todo` with nothing running, because the dispatch path refuses too.
+   *
+   * A member may override with `force` (the routes already refuse a task
+   * identity before it gets here); the dependency rows stay in place so the
+   * page still explains what was skipped.
+   */
+  private assertDependenciesMetForStatus(
+    id: string,
+    current: MultiremiIssue,
+    nextStatus: string,
+    input: UpdateIssueInput,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    if (!dependencyGateEnabled()) return;
+    if (current.status !== "backlog") return;
+    if (nextStatus !== "todo" && nextStatus !== "in_progress") return;
+    const unmet = this.listUnmetPrerequisites(id);
+    if (!unmet.length) return;
+    if (input.force === true) {
+      // The override and its dispatch decision are part of the caller's owner
+      // transaction. Runnable agent/squad owners get a round; member, missing,
+      // or unavailable owners get `dispatch_skipped` with the requested status.
+      this.recordDependencyForceStarted(id, {
+        source: "status",
+        status: nextStatus,
+        previousStatus: current.status,
+        unmet,
+        actorType: input.actorType ?? "member",
+        actorId: input.actorId ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+      }, deferredEvents);
+      return;
+    }
+    throw new IssueDependencyError(
+      "dependencies_unmet",
+      `${current.key} is waiting on ${unmet.length} unfinished prerequisite issue(s): ${unmet.map((row) => row.key).join(", ")}; finish them, or repeat the request with force`,
+      { unmet },
+    );
+  }
+
+  recordDependencyForceStarted(
+    issueId: string,
+    input: DependencyForceStartedInput,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    const unmet = input.unmet.map((row) => ({
+      issueId: row.dependsOnIssueId,
+      issue_id: row.dependsOnIssueId,
+      dependsOnIssueId: row.dependsOnIssueId,
+      depends_on_issue_id: row.dependsOnIssueId,
+      dependencyId: row.dependencyId,
+      dependency_id: row.dependencyId,
+      key: row.key,
+      status: row.status,
+    }));
+    this.ctx.appendIssueActivity(issueId, {
+      actorType: input.actorType,
+      actorId: input.actorId,
+      type: "dependency_force_started",
+      body: input.source,
+      data: {
+        source: input.source,
+        status: input.status,
+        previousStatus: input.previousStatus,
+        previous_status: input.previousStatus,
+        unmet,
+        unmetPrerequisites: unmet,
+        unmet_prerequisites: unmet,
+        actor: `${input.actorType}:${input.actorId ?? ""}`,
+        ...(input.commentId
+          ? { commentId: input.commentId, comment_id: input.commentId }
+          : {}),
+        ...(input.taskId
+          ? { taskId: input.taskId, task_id: input.taskId }
+          : {}),
+        ...(input.agentId
+          ? { agentId: input.agentId, agent_id: input.agentId }
+          : {}),
+        ...(input.assigneeDispatched !== undefined
+          ? {
+              assigneeDispatched: input.assigneeDispatched,
+              assignee_dispatched: input.assigneeDispatched,
+            }
+          : {}),
+        ...sourceTaskActivityData(input.parentTaskId),
+      },
+    }, deferredEvents);
+  }
+
+  /**
+   * MUL-400 E3 gate 1, at the top of the dispatch path.
+   *
+   * `assignIssue` is the single funnel for every "start this issue" call —
+   * create-with-assignee, a changed assignee, `backlog -> todo` through
+   * `maybeDispatchOnUpdate`, and an explicit assign.
+   *
+   * The gate only holds an issue that is **waiting**: `status = backlog` with an
+   * unmet prerequisite. That is the definition the plan gives "waiting for a
+   * prerequisite", and it is what keeps the gate from strangling work that is
+   * already moving — an issue that is `todo`/`in_progress` and merely has a
+   * dependency recorded on it carries information, not a hold, so re-assigning
+   * it (or dispatching it) is allowed to proceed.
+   *
+   * A member may override with `force`; the rows stay so the page still shows
+   * the unmet prerequisite.
+   */
+  private dependenciesBlockDispatch(issue: MultiremiIssue, force = false): IssueDependencyUnmetRef[] | null {
+    if (!dependencyGateEnabled()) return null;
+    if (issue.status !== "backlog") return null;
+    if (force) return null;
+    const unmet = this.listUnmetPrerequisites(issue.id);
+    return unmet.length ? unmet : null;
+  }
+
+  private recordDependencyDispatchSkipped(
+    issue: MultiremiIssue,
+    unmet: IssueDependencyUnmetRef[],
+    actor: {
+      actorType?: string;
+      actorId?: string | null;
+      parentTaskId?: string | null;
+      /** Set when the skip came from a comment-driven dispatch. */
+      commentId?: string | null;
+    },
+  ): void {
+    const data = {
+      reason: "dependencies_unmet",
+      error: null,
+      unmet: unmet.map((row) => ({
+        issueId: row.dependsOnIssueId,
+        issue_id: row.dependsOnIssueId,
+        key: row.key,
+        status: row.status,
+      })),
+      assigneeType: issue.assigneeType,
+      assignee_type: issue.assigneeType,
+      assigneeId: issue.assigneeId,
+      assignee_id: issue.assigneeId,
+      ...(actor.commentId
+        ? { commentId: actor.commentId, comment_id: actor.commentId }
+        : {}),
+      ...sourceTaskActivityData(actor.parentTaskId ?? null),
+    };
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: actor.actorType ?? "system",
+      actorId: actor.actorId ?? null,
+      type: "dispatch_skipped",
+      body: null,
+      data,
+    });
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
@@ -2880,13 +4670,34 @@ export class IssuesRepo {
     if (!issue.assigneeId) return null;
     const agent = this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId);
     if (!agent) return null;
-    const task = this.ctx.tasks().createTask({
-      agentId: agent.id,
-      issueId: issue.id,
-      triggerCommentId: comment.id,
-      workspaceId: issue.workspaceId,
-      prompt: assigneeCommentPrompt(comment),
-    });
+    let task: MultiremiTask;
+    try {
+      task = this.ctx.tasks().createTask({
+        agentId: agent.id,
+        issueId: issue.id,
+        triggerCommentId: comment.id,
+        workspaceId: issue.workspaceId,
+        prompt: assigneeCommentPrompt(comment),
+        dependencyForce: {
+          source: "comment",
+          actorMemberId: comment.authorId ?? "local",
+          commentId: comment.id,
+        },
+      });
+    } catch (err) {
+      // MUL-400 E3 gate 3: the comment still lands (it was persisted before the
+      // dispatch), but a waiting issue does not get a first round from it. The
+      // skip is recorded so the author sees that the platform held the round
+      // rather than silently doing nothing.
+      if (!(err instanceof IssueDependencyError)) throw err;
+      this.recordDependencyDispatchSkipped(issue, this.listUnmetPrerequisites(issue.id), {
+        actorType: "system",
+        actorId: null,
+        parentTaskId: null,
+        commentId: comment.id,
+      });
+      return null;
+    }
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
       actorId: null,
@@ -3633,8 +5444,7 @@ export class IssuesRepo {
   getInboxItem(id: string): MultiremiInboxItem | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
     if (!row) return null;
-    const issueId = nullableString(row.issue_id);
-    return toInboxItem(row, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row])[0] ?? null;
   }
 
   listInboxItems(memberId?: string | null, workspaceId?: string): MultiremiInboxItem[] {
@@ -3705,52 +5515,63 @@ export class IssuesRepo {
     const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
     const params = workspaceId === undefined ? [resolvedMemberId] : [resolvedMemberId, workspaceId];
 
-    // The summary deliberately avoids Issue hydration and large message bodies. Only successful
-    // automation rows need details so their existing UI grouping by autopilot can be preserved.
-    const rows = this.ctx.db.query(
-      `SELECT id, issue_id, type, severity, read, created_at,
-              CASE WHEN type = 'autopilot_run_completed' THEN details ELSE NULL END AS details
-       FROM multiremi_inbox_items
-       WHERE member_id = ?${workspaceFilter} AND archived = 0
+    // MUL-473: the counts come back as one aggregate instead of pulling every
+    // unarchived row across the bridge to count it in JavaScript.
+    //
+    // A row belongs to a *selection key*: all of one Issue's rows collapse into
+    // a single candidate unless the type is an inbox ledger entry or the row has
+    // no Issue, in which case the key is the row itself. Only the newest row per
+    // key is visible. The window function ranks inside the key and the outer
+    // aggregate counts the winners; no Issue body, title or message column is
+    // read here.
+    const ledgerTypes = INBOX_LEDGER_TYPES.map((type) => `'${type.replace(/'/g, "''")}'`).join(", ");
+    const selectionKey = `CASE WHEN type IN (${ledgerTypes}) OR NULLIF(issue_id, '') IS NULL
+                          THEN 'item:' || id ELSE 'issue:' || issue_id END`;
+    const totals = this.ctx.db.query(
+      `WITH ranked AS (
+         SELECT read, severity, type,
+                ${selectionKey} AS selection_key,
+                ROW_NUMBER() OVER (PARTITION BY ${selectionKey} ORDER BY created_at DESC, id DESC) AS selection_rank
+         FROM multiremi_inbox_items
+         WHERE member_id = ?${workspaceFilter} AND archived = 0
+       ),
+       visible AS (SELECT read, severity, type, selection_key FROM ranked WHERE selection_rank = 1)
+       SELECT
+         COUNT(DISTINCT CASE WHEN read = 0 AND (severity = 'attention' OR severity = 'action_required')
+                             THEN selection_key END) AS attention,
+         COUNT(DISTINCT CASE WHEN read = 0 AND type != 'autopilot_run_completed'
+                             THEN selection_key END) AS unread_plain
+       FROM visible`,
+    ).get(...params) as Row | null;
+    const attention = Number(totals?.attention ?? 0);
+    let unread = Number(totals?.unread_plain ?? 0);
+
+    // Successful automation runs are the one type the UI merges by autopilot
+    // within a day bucket, so they are the only rows whose payload this route
+    // still reads. Ledger rows are already keyed by row id, so "one row per
+    // selection" is simply "every row" for this type; the filter keeps the
+    // bridge payload proportional to the completed runs, not to the inbox.
+    const runRows = this.ctx.db.query(
+      `SELECT read, created_at, details FROM multiremi_inbox_items
+       WHERE member_id = ?${workspaceFilter} AND archived = 0 AND type = 'autopilot_run_completed'
        ORDER BY created_at DESC, id DESC`,
     ).all(...params) as Row[];
-
-    const visible: Row[] = [];
-    const selectionKeys = new Set<string>();
-    for (const row of rows) {
-      const issueId = nullableString(row.issue_id);
-      const type = String(row.type);
-      const key = isInboxLedgerType(type) || !issueId ? `item:${row.id}` : `issue:${issueId}`;
-      if (selectionKeys.has(key)) continue;
-      selectionKeys.add(key);
-      visible.push(row);
-    }
-
-    const attention = visible.filter((row) =>
-      Number(row.read ?? 0) === 0
-      && (row.severity === "attention" || row.severity === "action_required")
-    ).length;
     const now = new Date();
     const mergedSuccessfulRuns = new Map<string, { unread: boolean }>();
-    let unread = 0;
-    for (const row of visible) {
+    for (const row of runRows) {
       const isUnread = Number(row.read ?? 0) === 0;
-      const details = row.type === "autopilot_run_completed"
-        ? parseJson<Record<string, unknown> | null>(row.details, null)
-        : null;
+      const details = parseJson<Record<string, unknown> | null>(row.details, null);
       const autopilotId = typeof details?.autopilot_id === "string" ? details.autopilot_id : null;
+      // A completed run without an autopilot id has nothing to merge with, so it
+      // counts as its own unread row — the same branch the old loop took.
       if (!autopilotId) {
         if (isUnread) unread += 1;
         continue;
       }
-      const dateGroup = inboxDateGroup(String(row.created_at), now, timezoneOffsetMinutes);
-      const mergeKey = `${dateGroup}:${autopilotId}`;
+      const mergeKey = `${inboxDateGroup(String(row.created_at), now, timezoneOffsetMinutes)}:${autopilotId}`;
       const merged = mergedSuccessfulRuns.get(mergeKey);
-      if (merged) {
-        merged.unread ||= isUnread;
-      } else {
-        mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
-      }
+      if (merged) merged.unread ||= isUnread;
+      else mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
     }
     unread += [...mergedSuccessfulRuns.values()].filter((entry) => entry.unread).length;
     return { unread, attention };
@@ -3761,8 +5582,7 @@ export class IssuesRepo {
     if (!existing) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   archiveInboxItem(id: string): MultiremiInboxItem {
@@ -3770,8 +5590,7 @@ export class IssuesRepo {
     if (!rowBefore) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   countUnreadInboxItems(memberId?: string | null, workspaceId?: string): number {
@@ -4285,22 +6104,61 @@ export class IssuesRepo {
   }
 
   private hydrateInboxRows(rows: Row[]): MultiremiInboxItem[] {
-    const issueIds = [...new Set(rows.map((row) => nullableString(row.issue_id)).filter((id): id is string => Boolean(id)))];
-    const issuesById = new Map<string, MultiremiIssue>();
+    const scopedKey = (workspaceId: string, issueId: string) => `${workspaceId}\0${issueId}`;
+    const issueIdsByWorkspace = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const issueId = nullableString(row.issue_id);
+      if (!issueId) continue;
+      const workspaceId = String(row.workspace_id ?? "local");
+      const ids = issueIdsByWorkspace.get(workspaceId) ?? new Set<string>();
+      ids.add(issueId);
+      issueIdsByWorkspace.set(workspaceId, ids);
+    }
+    const issuesByScope = new Map<string, MultiremiIssue>();
     // Keep below SQLite's default bind-variable limit. PostgreSQL benefits from the same bounded queries.
-    for (let offset = 0; offset < issueIds.length; offset += 400) {
-      const chunk = issueIds.slice(offset, offset + 400);
-      const placeholders = chunk.map(() => "?").join(", ");
-      const issueRows = this.ctx.db.query(
-        `SELECT * FROM multiremi_issues WHERE id IN (${placeholders})`,
-      ).all(...chunk) as Row[];
-      for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
-        issuesById.set(issue.id, issue);
+    for (const [workspaceId, issueIds] of issueIdsByWorkspace) {
+      const ids = [...issueIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const issueRows = this.ctx.db.query(
+          `SELECT * FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
+          issuesByScope.set(scopedKey(workspaceId, issue.id), issue);
+        }
+      }
+    }
+    const parentIdsByWorkspace = new Map<string, Set<string>>();
+    for (const issue of issuesByScope.values()) {
+      if (!issue.parentIssueId) continue;
+      const ids = parentIdsByWorkspace.get(issue.workspaceId) ?? new Set<string>();
+      ids.add(issue.parentIssueId);
+      parentIdsByWorkspace.set(issue.workspaceId, ids);
+    }
+    const parentsByScope = new Map<string, Pick<MultiremiIssue, "id" | "key" | "title">>();
+    for (const [workspaceId, parentIds] of parentIdsByWorkspace) {
+      const ids = [...parentIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const parentRows = this.ctx.db.query(
+          `SELECT id, issue_key, title FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const row of parentRows) {
+          const id = String(row.id);
+          parentsByScope.set(scopedKey(workspaceId, id), { id, key: String(row.issue_key), title: String(row.title) });
+        }
       }
     }
     return rows.map((row) => {
+      const workspaceId = String(row.workspace_id ?? "local");
       const issueId = nullableString(row.issue_id);
-      return toInboxItem(row, issueId ? issuesById.get(issueId) ?? null : null);
+      const issue = issueId ? issuesByScope.get(scopedKey(workspaceId, issueId)) ?? null : null;
+      const parent = issue?.parentIssueId
+        ? parentsByScope.get(scopedKey(workspaceId, issue.parentIssueId)) ?? null
+        : (row.type === "child_issue_terminal" || row.type === "decision_requested") ? issue : null;
+      return toInboxItem(row, issue, parent);
     });
   }
 
@@ -4570,7 +6428,7 @@ export class IssuesRepo {
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
-      if (comment.authorType === "agent" && !leaderDelegation) {
+      if (comment.authorType === "agent" && !leaderDelegation.ok) {
         this.recordCommentMentionSkipped(
           issue,
           comment,
@@ -4619,23 +6477,40 @@ export class IssuesRepo {
       // keeps one provider conversation and receives a delta; a teammate that
       // has never been delegated to still gets a fresh lane, and `remi task
       // create` remains the explicit way to start an independent one.
-      const continuedDelegation = leaderDelegation
+      const continuedDelegation = leaderDelegation.ok
         ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId)
         : null;
-      const delegationId = leaderDelegation
+      const delegationId = leaderDelegation.ok
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
-      const task = this.ctx.tasks().createTask({
-        agentId: agent.id,
-        issueId: issue.id,
-        triggerCommentId: comment.id,
-        workspaceId: issue.workspaceId,
-        prompt: commentMentionPrompt(comment),
-        delegationId,
-        delegatedByAgentId: delegationId ? comment.authorId : null,
-        assignmentAuthorType: comment.authorType,
-        assignmentAuthorId: comment.authorId,
-      });
+      let task: MultiremiTask;
+      try {
+        task = this.ctx.tasks().createTask({
+          agentId: agent.id,
+          issueId: issue.id,
+          triggerCommentId: comment.id,
+          workspaceId: issue.workspaceId,
+          prompt: commentMentionPrompt(comment),
+          delegationId,
+          delegatedByAgentId: delegationId ? comment.authorId : null,
+          assignmentAuthorType: comment.authorType,
+          assignmentAuthorId: comment.authorId,
+          dependencyForce: comment.authorType === "member"
+            ? {
+                source: "mention",
+                actorMemberId: comment.authorId ?? "local",
+                commentId: comment.id,
+              }
+            : undefined,
+        });
+      } catch (err) {
+        // MUL-400 E3 gate 3: the mention is persisted either way; on a waiting
+        // issue the platform records the hold instead of starting a round, and
+        // the mention's own skip activity says so.
+        if (!(err instanceof IssueDependencyError)) throw err;
+        this.recordCommentMentionSkipped(issue, comment, agent, target, "dependencies_unmet");
+        continue;
+      }
       tasks.push(task);
       this.ctx.appendIssueActivity(issue.id, {
         actorType: "system",
@@ -4661,7 +6536,13 @@ export class IssuesRepo {
     comment: MultiremiIssueComment,
     agent: MultiremiAgent | null,
     target: { assigneeType: "agent" | "squad"; assigneeId: string },
-    reason: "self_mention" | "unsupported_direction" | "unlinked_agent_comment" | "target_unavailable" | "side_session_delegation_blocked",
+    reason:
+      | "self_mention"
+      | "unsupported_direction"
+      | "unlinked_agent_comment"
+      | "target_unavailable"
+      | "side_session_delegation_blocked"
+      | "dependencies_unmet",
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
@@ -4706,30 +6587,101 @@ export class IssuesRepo {
     return targets;
   }
 
+  /**
+   * MUL-400 E2b: is a task-token dispatch a squad-leader delegation, and where
+   * does its terminal report return?
+   *
+   * The same-issue branch is the pre-E2b rule, byte for byte: the leader's own
+   * task, its own Session, a squad-owned issue, and a teammate. A dispatch to a
+   * *different* issue is the E2b extension: the delegator's issue must still be
+   * the squad's, its task must carry a main Session, and the target issue must
+   * sit in the delegator's own subtree or in the subtree of its parent (child,
+   * grandchild, sibling, sibling's descendant), walking up at most 16 levels
+   * with a visited set. The return always lands on the delegator's Issue
+   * Session, never on the child issue's Session.
+   *
+   * A failed cross-issue judgement returns a reason that the task carries to
+   * its terminal hook, so the silence that hid MUL-383 becomes auditable. The
+   * same-issue branch returns `reason: null`: its behaviour is deliberately
+   * unchanged, so a non-delegating same-issue dispatch stays exactly as quiet as
+   * it is today.
+   */
   isSquadLeaderDelegation(input: {
     issue: MultiremiIssue;
     sourceTask: MultiremiTask | null;
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): SquadLeaderDelegationDecision {
     const { issue, sourceTask, authorAgentId, targetAgentId, issueSessionId } = input;
-    if (
-      !authorAgentId
-      || !sourceTask
-      || sourceTask.agentId !== authorAgentId
-      || sourceTask.issueId !== issue.id
-      || sourceTask.issueSessionId !== issueSessionId
-      || issue.assigneeType !== "squad"
-      || !issue.assigneeId
-    ) return false;
-    const squad = this.ctx.squads().getSquad(issue.assigneeId);
-    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return false;
-    return this.ctx.squads().listSquadMembers(squad.id).some((member) =>
-      member.memberType === "agent"
-      && member.memberId === targetAgentId
-      && member.memberId !== authorAgentId
+    if (!authorAgentId || !sourceTask || sourceTask.agentId !== authorAgentId) {
+      return { ok: false, reason: null };
+    }
+    if (sourceTask.issueId === issue.id) {
+      if (
+        sourceTask.issueSessionId !== issueSessionId
+        || issue.assigneeType !== "squad"
+        || !issue.assigneeId
+      ) return { ok: false, reason: null };
+      const squad = this.ctx.squads().getSquad(issue.assigneeId);
+      if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return { ok: false, reason: null };
+      const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+        member.memberType === "agent"
+        && member.memberId === targetAgentId
+        && member.memberId !== authorAgentId
+      );
+      if (!teammate) return { ok: false, reason: null };
+      return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId! };
+    }
+
+    if (!sourceTask.issueId || !sourceTask.issueSessionId) {
+      return { ok: false, reason: "source_not_issue_task" };
+    }
+    const sourceIssue = this.getIssue(sourceTask.issueId);
+    if (!sourceIssue || sourceIssue.workspaceId !== issue.workspaceId) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    const sourceSession = this.ctx.issueSessions().getIssueSession(sourceTask.issueSessionId);
+    if (!sourceSession || sourceSession.inheritMode !== "none") {
+      return { ok: false, reason: "source_side_session" };
+    }
+    if (sourceIssue.assigneeType !== "squad" || !sourceIssue.assigneeId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    const squad = this.ctx.squads().getSquad(sourceIssue.assigneeId);
+    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    if (targetAgentId === authorAgentId) return { ok: false, reason: "self_dispatch" };
+    const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+      member.memberType === "agent" && member.memberId === targetAgentId
     );
+    if (!teammate) return { ok: false, reason: "target_not_squad_member" };
+    if (!this.isIssueInDelegationTree(sourceIssue, issue)) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId };
+  }
+
+  /**
+   * MUL-400 E2b scope rule: the target issue is the delegator's own issue, a
+   * descendant of it, or a descendant of its parent (which covers siblings and
+   * their subtrees). Bounded to 16 hops with a visited set, so a malformed
+   * parent chain cannot loop and a deep tree cannot cost unbounded reads.
+   */
+  private isIssueInDelegationTree(sourceIssue: MultiremiIssue, targetIssue: MultiremiIssue): boolean {
+    if (sourceIssue.id === targetIssue.id) return true;
+    const allowedRoots = new Set<string>([sourceIssue.id]);
+    if (sourceIssue.parentIssueId) allowedRoots.add(sourceIssue.parentIssueId);
+    const seen = new Set<string>();
+    let cursor: string | null = targetIssue.id;
+    for (let depth = 0; cursor && depth <= DELEGATION_TREE_MAX_DEPTH; depth += 1) {
+      if (allowedRoots.has(cursor)) return true;
+      if (seen.has(cursor)) return false;
+      seen.add(cursor);
+      cursor = this.getIssue(cursor)?.parentIssueId ?? null;
+    }
+    return false;
   }
 
   private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {
@@ -4896,6 +6848,8 @@ function childStatusSystemCommentBody(input: {
   childTitle: string;
   outcome: ChildTerminalOutcome;
   childStatus: string;
+  /** MUL-400 E3: dependents that became startable because of this child. */
+  readinessLines?: string[];
 }): string {
   const title = sanitizeChildDoneTitle(input.childTitle);
   const verb = childOutcomeSentence(input.outcome);
@@ -4903,6 +6857,9 @@ function childStatusSystemCommentBody(input: {
     `${input.mentionPrefix}Sub-issue [${input.childKey}](mention://issue/${input.childId}) - "${title}" - ${verb}.`,
     `Its status is now ${input.childStatus}; a platform round was queued for the owner of this issue.`,
     "Children whose dependencies are declared as `blocked_by` are promoted automatically, so this report only needs a review of the outcome.",
+    ...(input.readinessLines?.length
+      ? [`Dependencies satisfied: ${input.readinessLines.join(" ")}`]
+      : []),
   ].join(" ");
 }
 
@@ -4934,15 +6891,22 @@ function childStatusInboxBody(child: MultiremiIssue, outcome: ChildTerminalOutco
  */
 function appendChildStatusReport(
   prompt: string,
-  input: { commentId: string; outcome: ChildTerminalOutcome; actorId: string | null },
+  input: {
+    commentId: string;
+    outcome: ChildTerminalOutcome;
+    actorId: string | null;
+    /** MUL-400 E3: a readiness line folded into an already-queued round. */
+    extraLine?: string;
+  },
 ): string {
   return [
     prompt.trimEnd(),
     "",
     "## Additional Sub-Issue Report",
     `Outcome: ${input.outcome}`,
-    `Platform comment: ${input.commentId}`,
+    ...(input.commentId ? [`Platform comment: ${input.commentId}`] : []),
     ...(input.actorId ? [`Parent assignee: ${input.actorId}`] : []),
+    ...(input.extraLine ? ["", input.extraLine] : []),
   ].join("\n");
 }
 
@@ -5160,13 +7124,36 @@ function normalizeIssuePriority(value: string | undefined): MultiremiIssuePriori
   throw new Error("priority must be one of urgent, high, medium, low, or none");
 }
 
+/** MUL-400 E3: `blocked_by` accepts keys or ids, in either spelling. */
+function normalizeIssueRefList(value: unknown): string[] {
+  if (value == null) return [];
+  const items = Array.isArray(value) ? value : [value];
+  const out: string[] = [];
+  for (const item of items) {
+    const ref = String(item ?? "").trim();
+    if (ref && !out.includes(ref)) out.push(ref);
+  }
+  return out;
+}
+
+function prerequisiteStatusSentence(status: string): string {
+  if (status === "cancelled") return "was cancelled";
+  if (status === "blocked") return "is blocked";
+  if (status === "failed") return "failed";
+  return `is ${status}`;
+}
+
 function normalizeIssueDependencyType(value: string | undefined): MultiremiIssueDependencyType {
   const type = String(value ?? "related").trim().toLowerCase();
   if (type === "blocks" || type === "blocked_by" || type === "related") return type;
   throw new Error("dependency type must be one of blocks, blocked_by, or related");
 }
 
-function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): boolean {
+function issueMatchesListFilter(
+  issue: MultiremiIssue,
+  input: ListIssuesInput,
+  parentResolver?: (ref: string) => string | null,
+): boolean {
   const archivedOnly = input.archivedOnly ?? input.archived_only ?? false;
   const includeArchived = input.includeArchived ?? input.include_archived ?? false;
   if (archivedOnly ? !issue.archivedAt : !includeArchived && issue.archivedAt) return false;
@@ -5188,6 +7175,16 @@ function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): 
   const projectIds = normalizeStringList(input.projectIds ?? input.project_ids);
   if (projectIds.length && (!issue.projectId || !projectIds.includes(issue.projectId))) return false;
   if (input.includeNoProject && issue.projectId !== null) return false;
+  if (input.topLevelOnly ?? input.top_level_only ?? false) {
+    if (issue.parentIssueId !== null && (!parentResolver || parentResolver(issue.parentIssueId) !== null)) return false;
+  } else {
+    const parentId = input.parentId ?? input.parent_id;
+    if (parentId) {
+      const parent = parentResolver?.(parentId) ?? parentId;
+      if (issue.parentIssueId !== parent) return false;
+      if (parentResolver && issue.parentIssueId && parentResolver(issue.parentIssueId) === null) return false;
+    }
+  }
   if (input.metadata) {
     for (const [key, value] of Object.entries(input.metadata)) {
       if (issue.metadata[key] !== value) return false;
@@ -5240,6 +7237,25 @@ function buildIssueListWhere(input: ListIssuesInput): { where: string; params: u
   const projectIds = normalizeStringList(input.projectIds ?? input.project_ids);
   if (projectIds.length) inClause("project_id", projectIds);
   if (input.includeNoProject) clauses.push("(project_id IS NULL OR project_id = '')");
+  // MUL-400 E3: hierarchy filters. `top_level_only` wins over `parent_id` so a
+  // caller can pass both without ambiguity.
+  if (input.topLevelOnly ?? input.top_level_only ?? false) {
+    clauses.push(`(parent_issue_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM multiremi_issues parent
+      WHERE parent.id = multiremi_issues.parent_issue_id
+        AND parent.workspace_id = multiremi_issues.workspace_id
+    ))`);
+  } else {
+    const parentId = input.parentId ?? input.parent_id;
+    if (parentId) {
+      clauses.push(`parent_issue_id = ? AND EXISTS (
+        SELECT 1 FROM multiremi_issues parent
+        WHERE parent.id = multiremi_issues.parent_issue_id
+          AND parent.workspace_id = multiremi_issues.workspace_id
+      )`);
+      params.push(parentId);
+    }
+  }
 
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
@@ -5457,6 +7473,9 @@ function toIssue(row: Row): MultiremiIssue {
     contextRefs: parseJson(row.context_refs, []),
     metadata: parseIssueMetadata(row.metadata),
     labels: [],
+    parentDoneGrantAt: nullableString(row.parent_done_grant_at),
+    parentDoneGrantBy: nullableString(row.parent_done_grant_by),
+    parentDoneGrantAgentId: nullableString(row.parent_done_grant_agent_id),
     createdBy: nullableString(row.created_by),
     completedAt: nullableString(row.completed_at),
     archivedAt: nullableString(row.archived_at),
@@ -5472,7 +7491,7 @@ function toChildIssueProgress(row: Row): MultiremiIssueChildProgress {
     done: Number(row.done ?? 0),
     cancelled: Number(row.cancelled ?? 0),
     blocked: Number(row.blocked ?? 0),
-    waiting: 0,
+    waiting: Number(row.waiting ?? 0),
     active: Number(row.active ?? 0),
   };
 }

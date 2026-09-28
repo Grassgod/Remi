@@ -2451,6 +2451,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.status-pages": {
+      "command": "remi issue status-pages",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.status-pages",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.grouped": {
       "command": "remi issue grouped",
       "auth": [
@@ -2640,6 +2653,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.dependency.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.done-grant.add": {
+      "command": "remi issue done-grant add",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.done-grant.remove": {
+      "command": "remi issue done-grant remove",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.remove",
       "output": [
         "table",
         "json",

@@ -15,6 +15,7 @@ import {
   computeSelectorEquivalence,
   computeWaves,
   frameMoved,
+  installJumpRecorder,
   JUMP_THRESHOLD_PX,
   nearestRankPercentile,
   pairForCompare,
@@ -28,6 +29,7 @@ import {
 } from "../../../frontend/scripts/perf/lib/jump-recorder";
 import {
   inboxDomRowIndex,
+  inboxRowSelector,
   isEntryFailure,
   LEGACY,
   profileFor,
@@ -413,6 +415,42 @@ describe("computeAppReadyMs", () => {
     ]);
     expect(result.appReadyMs).toBe(640);
     expect(result.forced).toBe(false);
+  });
+
+  // A reset opens a measurement window (the click of a warm round). The app can
+  // publish its own `data-perf-state` transition inside the same task as that
+  // click — on a warm deep link the inbox already points at the issue, so the
+  // detail mounts, reveals and writes `ready` before the reset request arrives
+  // over CDP. The window therefore keeps what reaches the start of the
+  // measurement and drops the entry page's own publish; dropping everything
+  // reported `appReadyMs: null` for a clean round (MUL-390).
+  //
+  // The filter lives inside the browser half, which Playwright serialises into
+  // the page. Asserted from the serialised source on purpose: a helper call
+  // there is a `ReferenceError` in the browser, not a compile error, and it
+  // silently failed every warm round at once.
+  const resetFilterSource = (): string => {
+    const source = installJumpRecorder.toString();
+    const start = source.indexOf("reset: (visibleFrom");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start);
+    return body.slice(0, body.indexOf("lastSampleT"));
+  };
+
+  it("keeps the transitions the reset window already earned", () => {
+    const filter = resetFilterSource();
+    // The comparison is by the window's start, inclusive, so a transition that
+    // lands in the same millisecond as the click survives.
+    expect(filter).toContain("transition.t >= visibleFrom");
+    expect(filter).not.toContain("transitionsFrom");
+  });
+
+  it("starts an unbounded reset window empty", () => {
+    // No `visibleFrom` (a cold reset) means the window opens now, so nothing
+    // already in the buffer belongs to it.
+    const filter = resetFilterSource();
+    expect(filter).toContain('typeof visibleFrom === "number"');
+    expect(filter).toContain(": [];");
   });
 
   it("keeps the pre-fresh reading while the attribute is absent", () => {
@@ -921,6 +959,9 @@ describe("selectors", () => {
   it("builds both tables for the same targets", () => {
     expect(issueRowSelector("legacy", "iss_1")).toBe('[data-slot="sidebar-inset"] a[href$="/issues/iss_1"]');
     expect(issueRowSelector("contract", "iss_1")).toBe('[data-perf-item="issue"][data-perf-key="iss_1"] a');
+    expect(inboxRowSelector("contract", "inb_1")).toBe(
+      '[data-perf-item="inbox"][data-perf-key="inb_1"] a, [data-perf-item="inbox"][data-perf-key="inb_1"] [role="button"], [data-perf-item="inbox"][data-perf-key="inb_1"]',
+    );
   });
 
   it("falls back to the heading rule where legacy has no stable hook", () => {

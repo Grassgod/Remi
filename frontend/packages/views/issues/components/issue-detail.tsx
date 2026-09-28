@@ -16,6 +16,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useRecentContextStore } from "@multiremi/core/chat";
 import {
+  childIssuesOptions,
   findCachedIssue,
   issueDetailOptions,
   issueTimelinePrimerOptions,
@@ -102,7 +103,8 @@ export function IssueDetail({
       );
     }
   }, [id, queryClient, timelinePrimer.data]);
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const membersQuery = useQuery(memberListOptions(wsId));
+  const members = membersQuery.data ?? [];
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const sessions = useIssueSessionSelection(
     id,
@@ -112,8 +114,9 @@ export function IssueDetail({
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
   // rendering doesn't have to re-derive it for every row.
-  const currentUserRole =
-    members.find((m) => m.user_id === user?.id)?.role ?? null;
+  const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
+  const currentUserRole = currentMember?.role ?? null;
+  const isMember = currentMember !== null;
   const canModerateComments =
     currentUserRole === "owner" || currentUserRole === "admin";
   const { getActorName } = useActorName();
@@ -151,16 +154,25 @@ export function IssueDetail({
   // that: setState triggers the re-render that hands Virtuoso the element.
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
 
-  // Issue data from TQ — uses detail query, seeded from list cache if available.
-  // Only seed when description is present; list API omits it, and ContentEditor
-  // reads defaultValue on mount only — seeding null description shows an empty editor.
+  // Issue data from TQ. A list row is not a valid detail seed: the global query
+  // staleTime is infinite, so accepting one would suppress the detail request
+  // that carries pending_decision_count and the server-derived grant state.
   const { data: issue = null, isLoading: issueLoading } = useQuery({
     ...issueDetailOptions(wsId, id),
     initialData: () => {
       const cached = findCachedIssue(queryClient, wsId, id);
-      return cached?.description != null ? cached : undefined;
+      return cached?.description != null
+        && cached.pending_decision_count !== undefined
+        && Object.prototype.hasOwnProperty.call(cached, "parent_done_grant")
+        ? cached
+        : undefined;
     },
   });
+  const childIssuesQuery = useQuery({
+    ...childIssuesOptions(wsId, id),
+    enabled: !!issue,
+  });
+  const childIssues = childIssuesQuery.data ?? [];
 
   // Record recent visit
   const recordVisit = useRecentIssuesStore((s) => s.recordVisit);
@@ -232,7 +244,9 @@ export function IssueDetail({
     return clearSelection;
   }, [id, clearSelection]);
 
-  const loading = issueLoading;
+  const loading = issueLoading
+    || membersQuery.isPending
+    || (!!issue && childIssuesQuery.isPending);
 
   // Shared issue actions (mutations, pin, copy-link, modal dispatch, etc.).
   // Called before the `if (!issue)` early return so hook order stays stable.
@@ -305,6 +319,9 @@ export function IssueDetail({
       issueSessions={sessions.list}
       usage={usage}
       canManageArchives={canModerateComments}
+      isMember={isMember}
+      childIssues={childIssues}
+      onCreateSubIssue={actions.openCreateSubIssue}
     />
   );
 
@@ -329,10 +346,12 @@ export function IssueDetail({
       agents={agents}
       currentUserId={user?.id}
       canModerateComments={canModerateComments}
+      getActorName={getActorName}
       highlightCommentId={highlightCommentId}
       onShowKeyResults={handleShowKeyResults}
       onScrollContainerRef={setScrollContainerEl}
       scrollContainerEl={scrollContainerEl}
+      canForceStart={isMember}
     />
   );
 

@@ -1,0 +1,542 @@
+{
+  "issue": "MUL-398",
+  "stage": "A2 before/after",
+  "route": "GET /api/workspaces/:id/repository-wikis",
+  "database": "postgres://… (temporary PostgreSQL 17.5; one throwaway database per scenario; the connection string is only ever an environment variable)",
+  "accounting": "Server-Timing dbb (production request-metrics db_bytes) + per-statement JSON.stringify({rows,count}) attribution; an unreachable MULTIREMI_TEST_POSTGRES_URL exits non-zero instead of falling back to SQLite",
+  "baseCommit": "d905961b (merge of the A PR #273)",
+  "headCommit": "188153cf",
+  "pr": "https://github.com/Grassgod/Remi/pull/298",
+  "warmups": 1,
+  "samples": 5,
+  "routeComparison": {
+    "fixture": {
+      "pages": 146,
+      "pageStorage": "openviking",
+      "pageBodyBytes": 50000,
+      "repositoryScopedRuns": 130,
+      "scheduleOnlyRuns": 48,
+      "legacyRuns": 0,
+      "scheduleOnlyCompilationRuns": 3,
+      "runPayloadBytes": 46800,
+      "runResultBytes": 32000,
+      "compilationRuns": 133,
+      "nominalPayloadBytes": 6084000,
+      "nominalResultBytes": 5696000,
+      "seedMs": 1203.8,
+      "storedPayloadBytes": 6573861,
+      "storedResultBytes": 5556228,
+      "storedRuns": 178
+    },
+    "before": {
+      "dbBytes": 392775,
+      "dbQueries": 11,
+      "p50Ms": 20.378,
+      "p95Ms": 20.778,
+      "maxMs": 20.778,
+      "dbParseMs": 1.5,
+      "responseBytes": 1067
+    },
+    "after": {
+      "dbBytes": 177561,
+      "dbQueries": 9,
+      "p50Ms": 15.186,
+      "p95Ms": 18.047,
+      "maxMs": 18.047,
+      "dbParseMs": 0.8,
+      "responseBytes": 1067
+    },
+    "responseBody": {
+      "beforeBytes": 1067,
+      "afterBytes": 1067,
+      "beforeSha256": "cf4f1f2621d3d94658c97d3b9749bc1bef800290604cc635fb6989853060f6bb",
+      "afterSha256": "cf4f1f2621d3d94658c97d3b9749bc1bef800290604cc635fb6989853060f6bb",
+      "byteIdentical": true,
+      "leafValues": 40,
+      "contractFieldPaths": 20,
+      "differingLeaves": 0
+    },
+    "cli": {
+      "before": {
+        "table": {
+          "argv": [
+            "wiki",
+            "repository",
+            "list"
+          ],
+          "status": 0,
+          "stdoutBytes": 68,
+          "stderrBytes": 0,
+          "stdoutSha256": "5960a08c77a7d66caa31ced2318d4945b0e7b1122ac1132669408b53d44e41b9",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "ms": 117.2
+        },
+        "json": {
+          "argv": [
+            "wiki",
+            "repository",
+            "list",
+            "--output",
+            "json"
+          ],
+          "status": 0,
+          "stdoutBytes": 1482,
+          "stderrBytes": 0,
+          "stdoutSha256": "ff0e13b1b7740046d5a52ab54cbc4bf7424dc5e238b0d5f08c1bc90bf0848060",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "ms": 89.2
+        }
+      },
+      "after": {
+        "table": {
+          "argv": [
+            "wiki",
+            "repository",
+            "list"
+          ],
+          "status": 0,
+          "stdoutBytes": 68,
+          "stderrBytes": 0,
+          "stdoutSha256": "5960a08c77a7d66caa31ced2318d4945b0e7b1122ac1132669408b53d44e41b9",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "ms": 114.3
+        },
+        "json": {
+          "argv": [
+            "wiki",
+            "repository",
+            "list",
+            "--output",
+            "json"
+          ],
+          "status": 0,
+          "stdoutBytes": 1482,
+          "stderrBytes": 0,
+          "stdoutSha256": "ff0e13b1b7740046d5a52ab54cbc4bf7424dc5e238b0d5f08c1bc90bf0848060",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "ms": 86.6
+        }
+      },
+      "stdoutStderrCmpEqual": true
+    }
+  },
+  "scaleModel": {
+    "note": "Explorer's 209 row counts seeded literally: 1,842 observability rows = 1,443 repository-scoped + 399 schedule-only; page rows use the production OpenViking shape (empty row body)",
+    "fixture": {
+      "observabilityRows": 1842,
+      "buildStateRows": 1443,
+      "payloadBytes": 1663,
+      "resultBytes": 5509,
+      "docsPerRepository": 3,
+      "docBodyBytes": 50000,
+      "pageStorage": "openviking",
+      "repositoryCounts": [
+        26,
+        46,
+        92
+      ],
+      "source": "Explorer 209 probe (MUL-398 cmt_db48gqrimjk9)"
+    },
+    "acceptanceLimits": {
+      "oneMegabyte": 1000000,
+      "oneMiB": 1048576
+    },
+    "before": [
+      {
+        "repositories": 26,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 1877923,
+        "dbBytesMiB": 1.791,
+        "dbQueries": 162,
+        "p50Ms": 173.88,
+        "maxMs": 190.06,
+        "dbParseMs": 9.1,
+        "bytesPerRepository": 72227.8,
+        "statements": {
+          "observability": {
+            "bytes": 333686,
+            "rows": 1842,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publicationProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "docsStatement": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "getRunById": {
+            "bytes": 205773,
+            "rows": 26,
+            "calls": 26
+          },
+          "compilations": {
+            "bytes": 525275,
+            "rows": 1443,
+            "calls": 27
+          },
+          "taskById": {
+            "bytes": 46462,
+            "rows": 26,
+            "calls": 26
+          },
+          "autopilotById": {
+            "bytes": 16796,
+            "rows": 26,
+            "calls": 26
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 26
+          }
+        }
+      },
+      {
+        "repositories": 46,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 2136712,
+        "dbBytesMiB": 2.038,
+        "dbQueries": 282,
+        "p50Ms": 272.64,
+        "maxMs": 297.39,
+        "dbParseMs": 12.2,
+        "bytesPerRepository": 46450.3,
+        "statements": {
+          "observability": {
+            "bytes": 333866,
+            "rows": 1842,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publicationProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "docsStatement": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "getRunById": {
+            "bytes": 364061,
+            "rows": 46,
+            "calls": 46
+          },
+          "compilations": {
+            "bytes": 525275,
+            "rows": 1443,
+            "calls": 47
+          },
+          "taskById": {
+            "bytes": 82202,
+            "rows": 46,
+            "calls": 46
+          },
+          "autopilotById": {
+            "bytes": 29716,
+            "rows": 46,
+            "calls": 46
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 46
+          }
+        }
+      },
+      {
+        "repositories": 92,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 2731926,
+        "dbBytesMiB": 2.605,
+        "dbQueries": 558,
+        "p50Ms": 567.48,
+        "maxMs": 597.47,
+        "dbParseMs": 20.4,
+        "bytesPerRepository": 29694.8,
+        "statements": {
+          "observability": {
+            "bytes": 334280,
+            "rows": 1842,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publicationProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "docsStatement": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "getRunById": {
+            "bytes": 728125,
+            "rows": 92,
+            "calls": 92
+          },
+          "compilations": {
+            "bytes": 525275,
+            "rows": 1443,
+            "calls": 93
+          },
+          "taskById": {
+            "bytes": 164404,
+            "rows": 92,
+            "calls": 92
+          },
+          "autopilotById": {
+            "bytes": 59432,
+            "rows": 92,
+            "calls": 92
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 92
+          }
+        }
+      }
+    ],
+    "after": [
+      {
+        "repositories": 26,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 658858,
+        "dbBytesMiB": 0.628,
+        "dbQueries": 136,
+        "p50Ms": 138.96,
+        "maxMs": 149.11,
+        "dbParseMs": 4.1,
+        "bytesPerRepository": 25340.7,
+        "statements": {
+          "observability": {
+            "bytes": 249896,
+            "rows": 1443,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 12553,
+            "rows": 26,
+            "calls": 1
+          },
+          "publicationProbe": {
+            "bytes": 5070,
+            "rows": 26,
+            "calls": 26
+          },
+          "docsStatement": {
+            "bytes": 57915,
+            "rows": 78,
+            "calls": 1
+          },
+          "getRunById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "compilations": {
+            "bytes": 278522,
+            "rows": 1443,
+            "calls": 27
+          },
+          "taskById": {
+            "bytes": 46462,
+            "rows": 26,
+            "calls": 26
+          },
+          "autopilotById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 26
+          }
+        },
+        "marginVsOneMegabyte": 341142,
+        "marginVsOneMiB": 389718,
+        "atPlus5PercentRowConstants": 691379,
+        "atPlus10PercentRowConstants": 723900
+      },
+      {
+        "repositories": 46,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 759199,
+        "dbBytesMiB": 0.724,
+        "dbQueries": 236,
+        "p50Ms": 243.24,
+        "maxMs": 246.69,
+        "dbParseMs": 6.3,
+        "bytesPerRepository": 16504.3,
+        "statements": {
+          "observability": {
+            "bytes": 250076,
+            "rows": 1443,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 22193,
+            "rows": 46,
+            "calls": 1
+          },
+          "publicationProbe": {
+            "bytes": 8970,
+            "rows": 46,
+            "calls": 46
+          },
+          "docsStatement": {
+            "bytes": 102496,
+            "rows": 138,
+            "calls": 1
+          },
+          "getRunById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "compilations": {
+            "bytes": 278522,
+            "rows": 1443,
+            "calls": 47
+          },
+          "taskById": {
+            "bytes": 82202,
+            "rows": 46,
+            "calls": 46
+          },
+          "autopilotById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 46
+          }
+        },
+        "marginVsOneMegabyte": 240801,
+        "marginVsOneMiB": 289377,
+        "atPlus5PercentRowConstants": 796422,
+        "atPlus10PercentRowConstants": 833645
+      },
+      {
+        "repositories": 92,
+        "observabilityRows": 1842,
+        "buildStateRows": 1443,
+        "dbBytes": 989981,
+        "dbBytesMiB": 0.944,
+        "dbQueries": 466,
+        "p50Ms": 352.9,
+        "maxMs": 402.62,
+        "dbParseMs": 5.7,
+        "bytesPerRepository": 10760.7,
+        "statements": {
+          "observability": {
+            "bytes": 250490,
+            "rows": 1443,
+            "calls": 1
+          },
+          "buildState": {
+            "bytes": 44365,
+            "rows": 92,
+            "calls": 1
+          },
+          "publicationProbe": {
+            "bytes": 17940,
+            "rows": 92,
+            "calls": 92
+          },
+          "docsStatement": {
+            "bytes": 205030,
+            "rows": 276,
+            "calls": 1
+          },
+          "getRunById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "compilations": {
+            "bytes": 278522,
+            "rows": 1443,
+            "calls": 93
+          },
+          "taskById": {
+            "bytes": 164404,
+            "rows": 92,
+            "calls": 92
+          },
+          "autopilotById": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 0
+          },
+          "publishedProbe": {
+            "bytes": 0,
+            "rows": 0,
+            "calls": 92
+          }
+        },
+        "marginVsOneMegabyte": 10019,
+        "marginVsOneMiB": 58595,
+        "atPlus5PercentRowConstants": 1038019,
+        "atPlus10PercentRowConstants": 1086056
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "name": "publication probe back to getAutopilotRun",
+      "expected": "red",
+      "observed": "1 fail: decides publication from a narrow projection instead of the whole run row"
+    },
+    {
+      "name": "body added back to the workspace docs projection",
+      "expected": "red",
+      "observed": "1 fail: lists workspace docs without selecting the body column"
+    },
+    {
+      "name": "SQL ranking removed from listLatestRepositoryAutopilotRuns",
+      "expected": "red",
+      "observed": "1 fail: ranks runs in SQL so only the latest row per repository crosses the bridge"
+    }
+  ],
+  "verification": {
+    "tsc": "bunx tsc --noEmit passed",
+    "unit": "bun test tests/unit/multiremi/ — 3208 pass / 0 fail (267 files, real PostgreSQL)",
+    "pgIntegration": "multiremi-postgres-store.test.ts + multiremi-task-list-postgres.test.ts — 76 pass / 0 fail, no skips",
+    "arch": "tests/arch/ — 92 pass / 0 fail",
+    "docsCheck": "passed",
+    "cliCapabilities": "668 mapped / 91 exempt / 0 missing",
+    "apiRoutesSnapshot": "matches",
+    "prCi": "6/6 pass: build, check (ubuntu, windows), frontend-zero-jump, session-archive-platform (ubuntu, macos)"
+  }
+}

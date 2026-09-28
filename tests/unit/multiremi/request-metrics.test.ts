@@ -27,6 +27,14 @@ import {
   recordDbQuery,
   resolveDbReplyMaxBytes,
   resolveRequestMetricsOptions,
+  drainPeerWindowMetrics,
+  peerMetricsSnapshot,
+  recordPeerBatch,
+  recordPeerDegraded,
+  recordPeerDropped,
+  recordPeerDuplicate,
+  recordPeerFailure,
+  recordPeerOversizeDropped,
   resetRequestMetricsForTest,
   startRequestMetricsSummary,
   summarizeWindow,
@@ -54,6 +62,7 @@ const OPTIONS: RequestMetricsOptions = {
   summaryIntervalMs: 60_000,
   summaryTopRoutes: 10,
   bufferCapacity: 256,
+  role: "all",
 };
 
 afterEach(() => {
@@ -278,8 +287,9 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
     expect(typeof parsed.ts).toBe("string");
     // The exact field set is the contract the Issue fixed.
     expect(Object.keys(parsed).sort()).toEqual([
-      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "route", "status", "total_ms", "ts",
+      "db_bytes", "db_ms", "db_parse_ms", "db_queries", "event", "method", "role", "route", "status", "total_ms", "ts",
     ]);
+    expect(parsed.role).toBe("all");
   });
 
   it("uses <unmatched> for a request that matched no route", async () => {
@@ -321,22 +331,23 @@ describe("MUL-367 request metrics — slow-request log privacy", () => {
 
 describe("MUL-367 request metrics — environment switches", () => {
   it("defaults to enabled with a 500 ms threshold and a one-minute summary", () => {
-    expect(resolveRequestMetricsOptions({})).toEqual({
+    expect(resolveRequestMetricsOptions("all", {})).toEqual({
       enabled: true,
       slowRequestMs: 500,
       summaryIntervalMs: 60_000,
       summaryTopRoutes: 10,
       bufferCapacity: 4096,
+      role: "all",
     });
   });
 
   it("treats 0/false/off as off and ignores unparsable numbers", () => {
     for (const off of ["0", "false", "FALSE", "off", " off "]) {
-      expect(resolveRequestMetricsOptions({ MULTIREMI_REQUEST_METRICS: off }).enabled, off).toBe(false);
+      expect(resolveRequestMetricsOptions("all", { MULTIREMI_REQUEST_METRICS: off }).enabled, off).toBe(false);
     }
-    expect(resolveRequestMetricsOptions({ MULTIREMI_REQUEST_METRICS: "1" }).enabled).toBe(true);
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_REQUEST_METRICS: "1" }).enabled).toBe(true);
 
-    const invalid = resolveRequestMetricsOptions({
+    const invalid = resolveRequestMetricsOptions("all", {
       MULTIREMI_SLOW_REQUEST_MS: "not-a-number",
       MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "0",
     });
@@ -345,8 +356,8 @@ describe("MUL-367 request metrics — environment switches", () => {
   });
 
   it("accepts an explicit 0 threshold so every request can be logged", () => {
-    expect(resolveRequestMetricsOptions({ MULTIREMI_SLOW_REQUEST_MS: "0" }).slowRequestMs).toBe(0);
-    expect(resolveRequestMetricsOptions({ MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "5000" }).summaryIntervalMs)
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_SLOW_REQUEST_MS: "0" }).slowRequestMs).toBe(0);
+    expect(resolveRequestMetricsOptions("all", { MULTIREMI_METRICS_SUMMARY_INTERVAL_MS: "5000" }).summaryIntervalMs)
       .toBe(5000);
   });
 });
@@ -410,6 +421,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
         sample({ route: "/api/a", totalMs: 30 }),
         sample({ method: "POST", route: "/api/b", totalMs: 100 }),
       ],
+      role: "ui",
       dropped: 0,
       dbMs: 1000,
       dbQueries: 42,
@@ -428,6 +440,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
     const summary = summarizeWindow({
       windowMs: 10_000,
       samples: [sample({ status: 503, slow: true }), sample({ status: 200 })],
+      role: "runtime",
       dropped: 7,
       dbMs: 2500,
       dbQueries: 5,
@@ -452,6 +465,7 @@ describe("MUL-367 request metrics — window aggregation", () => {
       dbQueries: 0,
       eventLoopLagMaxMs: 0,
       topRoutes: 10,
+      role: "all",
       now: new Date("2026-09-24T12:00:00.000Z"),
     });
     expect(summary).toEqual({
@@ -465,8 +479,39 @@ describe("MUL-367 request metrics — window aggregation", () => {
       db_busy_pct: 0,
       db_queries: 0,
       event_loop_lag_max_ms: 0,
+      role: "all",
       routes: [],
+      // MUL-462: the peer block is always present; with no peer channel it is
+      // the zeroed heartbeat, so the summary shape does not depend on env.
+      peer: {
+        sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+        oversize_dropped: 0, degraded: 0, duplicates: 0,
+      },
     });
+  });
+
+  it("records nothing when the switch is off, for both DB and peer counters", async () => {
+    // Both hooks are keyed off the same switch, so a deployment that turns
+    // metrics off pays nothing for either — and cannot leak counters into a
+    // later summary through a stale window.
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware({ ...OPTIONS, enabled: false }));
+    app.get("/api/issues/:id", (c) => {
+      recordDbQuery(5, 128);
+      recordPeerBatch({ events: 3, rttMs: 9 });
+      recordPeerDropped(2);
+      recordPeerFailure();
+      return c.json({ ok: true });
+    });
+
+    await app.request("/api/issues/iss_1");
+    const zeroedPeer = {
+      sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+      oversize_dropped: 0, degraded: 0, duplicates: 0,
+    };
+    expect(peerMetricsSnapshot()).toEqual(zeroedPeer);
+    expect(drainPeerWindowMetrics()).toEqual(zeroedPeer);
+    expect(drainRequestMetricsForTest()).toEqual({ samples: [], dropped: 0 });
   });
 
   it("counts samples past the fixed capacity as dropped and keeps the newest ones", () => {
@@ -504,8 +549,9 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     const summary = JSON.parse(summaryLines[0]!) as Record<string, unknown>;
     expect(Object.keys(summary).sort()).toEqual([
       "db_busy_pct", "db_queries", "dropped", "event", "event_loop_lag_max_ms",
-      "requests", "routes", "slow", "status_5xx", "ts", "window_ms",
+      "peer", "requests", "role", "routes", "slow", "status_5xx", "ts", "window_ms",
     ]);
+    expect(summary.role).toBe("all");
     expect(summary.requests).toBe(1);
     expect(summary.db_queries).toBe(1);
     expect(summary.routes).toEqual([
@@ -513,6 +559,69 @@ describe("MUL-367 request metrics — minute summary timer", () => {
     ]);
 
     runtime!.stop();
+  });
+
+  it("carries MUL-461's role and MUL-462's peer block in the same summary line", async () => {
+    // The two features landed independently and both touch this line: role names
+    // the process, peer is a per-window counter block. Merging them must not drop
+    // either — and role must be the configured value, not a hardcoded `all`.
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware({ ...OPTIONS, role: "runtime", bufferCapacity: 64 }));
+    app.get("/api/daemon/runtimes/:id/activity", (c) => c.json({ ok: true }));
+    const runtime = startRequestMetricsSummary({
+      ...OPTIONS, role: "runtime", bufferCapacity: 64, summaryTopRoutes: 10,
+    });
+
+    recordPeerBatch({ events: 4, rttMs: 6 });
+    recordPeerDropped(1);
+
+    const { lines } = await captureConsoleLog(async () => {
+      await app.request("/api/daemon/runtimes/rt_1/activity");
+      runtime!.flush();
+    });
+
+    const summaryLine = lines.find((line) => line.includes("api_minute_summary"));
+    expect(summaryLine).toBeTruthy();
+    const summary = JSON.parse(summaryLine!) as {
+      role?: string;
+      peer?: Record<string, number>;
+    };
+
+    // MUL-461 field, with its own value.
+    expect(summary.role).toBe("runtime");
+    // MUL-462 block, with its own counters — both present, neither clobbering
+    // the other's reading.
+    expect(summary.peer).toMatchObject({ sent: 4, batches: 1, dropped: 1, failed: 0 });
+
+    runtime!.stop();
+  });
+
+  it("reports this window's peer counters and resets them for the next one", () => {
+    // MUL-462: the peer block is per-window, not a running total, so a burst of
+    // cross-process forwarding in one minute is not smeared across the next.
+    recordPeerBatch({ events: 3, rttMs: 4 });
+    recordPeerBatch({ events: 5, rttMs: 8 });
+    recordPeerDropped(2);
+    recordPeerFailure();
+    recordPeerOversizeDropped();
+    recordPeerDegraded();
+    recordPeerDuplicate();
+
+    const first = drainPeerWindowMetrics();
+    expect(first).toEqual({
+      sent: 8, batches: 2, dropped: 2, failed: 1, rtt_p95_ms: 8,
+      oversize_dropped: 1, degraded: 1, duplicates: 1,
+    });
+    expect(drainPeerWindowMetrics()).toEqual({
+      sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
+      oversize_dropped: 0, degraded: 0, duplicates: 0,
+    });
+
+    // The lifetime view keeps the totals the health endpoint reports.
+    expect(peerMetricsSnapshot()).toMatchObject({
+      sent: 8, batches: 2, dropped: 2, failed: 1,
+      oversize_dropped: 1, degraded: 1, duplicates: 1,
+    });
   });
 
   it("creates no timer when metrics are disabled", () => {

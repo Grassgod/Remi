@@ -18,11 +18,14 @@ import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js"
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
+export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
   CreateAttachmentInput,
   CreateIssueCommentInput,
+  CreateIssueDependencyInput,
   CreateIssueInput,
   CreateIssueSessionInput,
   CreateSkillInput,
@@ -50,8 +53,10 @@ import type {
   MultiremiInboxItem,
   MultiremiIssueComment,
   MultiremiIssue,
+  MultiremiIssueDependencyView,
   MultiremiKnowledgeSubmission,
   MultiremiIssueSession,
+  MultiremiIssueWaitingOn,
   MultiremiMetricCounter,
   MultiremiNotificationGroupKey,
   MultiremiNotificationChannel,
@@ -181,10 +186,11 @@ const KNOWN_AUTOPILOT_TRIGGERS = new Set(["schedule", "webhook", "system_event",
 export interface CommitEventQueue {
   workspace: WorkspaceEvent[];
   enqueuedTasks: MultiremiTask[];
+  issueActivities: Array<{ issueId: string; type: string; body: string; data: unknown }>;
 }
 
 export function createCommitEventQueue(): CommitEventQueue {
-  return { workspace: [], enqueuedTasks: [] };
+  return { workspace: [], enqueuedTasks: [], issueActivities: [] };
 }
 
 /**
@@ -198,7 +204,9 @@ export type CreateIssueCommentOptions =
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
-export type TaskMessagesListener = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }) => void;
+export type TaskMessagesListener = (
+  event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] },
+) => void;
 export type WorkspaceEventListener = (event: {
   type: string;
   workspaceId: string;
@@ -216,8 +224,20 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
-  createIssue(input: CreateIssueInput): MultiremiIssue;
-  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue;
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: CommitEventQueue;
+  }): MultiremiIssue;
+  /**
+   * MUL-400 E3: creation for a caller that already holds a transaction. The
+   * child-status collector and the commit-event queue are both required, with no
+   * defaults, so nothing this creation derives or queues can be dropped.
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -240,6 +260,50 @@ export interface IssuesSurface {
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
   listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
+  /**
+   * MUL-400 S1c (QA round 1): the same write as {@link updateIssue} but owned by
+   * the caller's transaction. The status row, its audit activities and (for the
+   * SCM merge effect) the effect's own bookkeeping commit together; every
+   * outbound event goes on `deferredEvents` and only flushes after COMMIT.
+   */
+  updateIssueWithinTransaction(
+    id: string,
+    input: UpdateIssueInput,
+    options: UpdateIssueOptions,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  };
+  /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
+  runIssueUpdatePostCommit(
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
+    input: UpdateIssueInput,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  hasChildIssues(issueId: string): boolean;
+  parentDoneGrantStatus(issue: MultiremiIssue): {
+    granted: boolean;
+    grantedAt: string | null;
+    grantedBy: string | null;
+    agentId: string | null;
+    ownerAgentId: string | null;
+    effective: boolean;
+    reason: import("./repos/issues-repo.js").ParentDoneGrantRefusalReason | null;
+  };
+  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }): {
+    satisfied: boolean;
+    lastChildClosedAt: string | null;
+  };
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /**
@@ -252,6 +316,23 @@ export interface IssuesSurface {
     requested: string,
     options: { exempt?: boolean; deferredEvents: CommitEventQueue },
   ): string;
+  /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
+  listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  /** MUL-458: caller owns the force-start task/status/activity transaction. */
+  recordDependencyForceStarted(
+    issueId: string,
+    input: import("./repos/issues-repo.js").DependencyForceStartedInput,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /** MUL-400 E3: page data for the detail surface. */
+  getIssueWaitingOn(issueId: string): MultiremiIssueWaitingOn;
+  /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity: import("./repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssueDependencyView;
   /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
   /**
    * Post-commit E1/E2 hook. Every Issue transition the hook's own writes produce
@@ -280,7 +361,11 @@ export interface IssuesSurface {
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean;
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision;
+  /** MUL-412: one decision by its own id (the Feishu card lane keys on it). */
+  getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
+  /** One decision scoped to the Issue it hangs on. */
+  getIssueDecision(issueId: string, decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
 }
 
 export interface AgentsSurface {
@@ -291,6 +376,10 @@ export interface AgentsSurface {
   /** Every Agent row without Skills — capability decisions only. */
   listAgentsLite(options?: { includeArchived?: boolean }): MultiremiAgent[];
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Reference resolution from Agent rows only — no Skills, no Skill files. */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
+  /** Live Agent rows by id, without Skills or Skill files. */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[];
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
   createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill;
@@ -335,6 +424,8 @@ export interface AnalyticsSurface {
 export interface WorkspacesSurface {
   getUser(id: string): MultiremiUser | null;
   getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null;
+  /** MUL-412: the users-table row a Feishu open_id belongs to, if any. */
+  getUserByExternalId(externalId: string | null | undefined): MultiremiUser | null;
   listWorkspaces(): MultiremiWorkspace[];
   getWorkspace(id: string): MultiremiWorkspace | null;
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null;
@@ -445,6 +536,14 @@ export interface TasksSurface {
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
+  /**
+   * MUL-474: identity/status columns only — no `prompt`, `result` or `usage`.
+   * The daemon identity guard and the task-level handlers read this instead of
+   * {@link getTask}; the row is cached for the rest of the request.
+   */
+  getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
+  /** MUL-474: the `status` route's fields, without the prompt column. */
+  getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -492,6 +591,15 @@ export interface ChatSurface {
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
+  /**
+   * The first in-flight task of every Chat the caller can list, in one statement
+   * (MUL-473). Ranked by the same expression {@link getPendingChatTask} uses per
+   * Session.
+   */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
+  ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
   createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
@@ -634,6 +742,11 @@ export interface RuntimesSurface {
   /** The Runtime row without the derived usage / model / execution-group reads. */
   getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
+  /**
+   * One workspace's Runtimes with the same hydration `listRuntimes` adds, but
+   * with the workspace filter in SQL and the derived reads batched (MUL-473).
+   */
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;
@@ -661,6 +774,50 @@ export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;
+  /**
+   * MUL-412: queue (or deliberately skip) the card for an escalated decision.
+   * Runs inside the caller's transaction and writes every event on its queue.
+   */
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /** MUL-412: queue the in-place terminal rewrite for a settled decision. */
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /**
+   * MUL-412: may this bot host read and answer decisions on this Issue? The
+   * same active-topic-binding predicate the human-request lane uses.
+   */
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean;
+  /** MUL-412: the operator behind a card click, as a live non-agent member. */
+  resolveFeishuDecisionOperatorMember(
+    workspaceId: string,
+    appId: string,
+    openId: string | null | undefined,
+  ): import("@multiremi/store/repos/feishu-bot-repo.js").IssueDecisionOperatorMemberResolution;
+  /** MUL-412: decision cards a restarting host must re-register. */
+  listFeishuIssueDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): Array<{
+    decision_id: string;
+    issue_id: string;
+    chat_id: string;
+    message_id: string;
+    recipient_open_id: string;
+  }>;
+  /** MUL-412: the lane a card click answers on. */
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
+    issue: MultiremiIssue;
+    chatId: string;
+    messageId: string | null;
+    recipientOpenId: string;
+  } | null;
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;
@@ -873,7 +1030,7 @@ export class StoreContext {
     return this.resolveHost();
   }
 
-  emitWorkspaceEvent(event: Parameters<WorkspaceEventListener>[0]): void {
+  emitWorkspaceEvent(event: WorkspaceEvent): void {
     for (const listener of [...this.workspaceEventListeners]) {
       try {
         listener(event);
@@ -888,6 +1045,19 @@ export class StoreContext {
    * Callers drain this after their COMMIT; on rollback they drop the queue.
    */
   emitCommitEvents(queue: CommitEventQueue): void {
+    for (const activity of queue.issueActivities) {
+      try {
+        this.appendIssueActivity(activity.issueId, {
+          actorType: "system",
+          actorId: null,
+          type: activity.type,
+          body: activity.body,
+          data: activity.data,
+        });
+      } catch (error) {
+        log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     for (const event of queue.workspace) this.emitWorkspaceEvent(event);
     for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
   }
@@ -921,7 +1091,7 @@ export class StoreContext {
     }
   }
 
-  notifyTaskMessages(task: MultiremiTask, messages: MultiremiTaskMessage[]): void {
+  notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
     if (messages.length === 0) return;
     for (const listener of [...this.taskMessagesListeners]) {
       try {
@@ -1159,8 +1329,16 @@ export class StoreContext {
     if (session?.withCode && session.codeRuntimeId) {
       return this.runtimes().getRuntime(session.codeRuntimeId)?.daemonId ?? session.codeRuntimeId;
     }
+    // A Project directory is only assigned to tasks that hold an Issue
+    // workspace — see the creation predicate in `tasks-repo.ts`:
+    // `holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"`.
+    // A discussion/side Task (holds_workspace = 0) deliberately does not
+    // inherit the directory, so treating it as a directory pin here would
+    // strand it on a machine Project device routing can refuse (MUL-449).
+    if (Number(taskRow.holds_workspace ?? 1) !== 1) return null;
     const issueId = cleanOptionalString(taskRow.issue_id);
     const issue = issueId ? this.issues().getIssue(issueId) : null;
+    if (issue?.issueKind === "intake") return null;
     const chatId = cleanOptionalString(taskRow.chat_session_id);
     const chat = chatId ? this.chat().getChatSession(chatId) : null;
     const projectId = issue?.projectId ?? chat?.projectId;
@@ -1380,7 +1558,11 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   return "updates";
 }
 
-export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiInboxItem {
+export function toInboxItem(
+  row: Row,
+  issue: MultiremiIssue | null,
+  parent: Pick<MultiremiIssue, "id" | "key" | "title"> | null = null,
+): MultiremiInboxItem {
   const workspaceId = String(row.workspace_id ?? "local");
   const issueId = nullableString(row.issue_id);
   const memberId = String(row.member_id);
@@ -1395,6 +1577,9 @@ export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiIn
     workspace_id: workspaceId,
     issueId,
     issue_id: issueId,
+    issue_parent_id: parent?.id ?? null,
+    issue_parent_key: parent?.key ?? null,
+    issue_parent_title: parent?.title ?? null,
     memberId,
     member_id: memberId,
     recipientType,

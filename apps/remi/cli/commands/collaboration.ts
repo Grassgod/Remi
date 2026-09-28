@@ -55,6 +55,9 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
   { name: "project", type: "string", valueName: "project", description: "Project filter" },
   { name: "offset", type: "integer", valueName: "n", description: "Legacy offset" },
   { name: "metadata", type: "string", valueName: "k=v", repeatable: true, description: "Metadata filter" },
+  // MUL-400 E3: hierarchy filters for the list surfaces.
+  { name: "parent", type: "string", valueName: "issue", description: "Only direct sub-issues of this issue" },
+  { name: "top-level-only", type: "boolean", description: "Only issues without a parent" },
   { name: "full-id", type: "boolean", description: "Show complete IDs" },
 ];
 
@@ -80,6 +83,10 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
 
 const ISSUE_CREATE_FIELDS: readonly CliOptionSpec[] = [
   ...ISSUE_FIELDS,
+  // MUL-400 E3: prerequisites declared at creation. An issue with an unmet
+  // prerequisite parks at backlog and the response says
+  // `dispatch_skipped_reason: dependencies_unmet`.
+  { name: "blocked-by", type: "string", valueName: "issue", repeatable: true, description: "Prerequisite issue (key or id) this issue waits for" },
   { name: "no-bind-topic", type: "boolean", description: "Create the Issue without moving the current Feishu topic workspace" },
   { name: "daemon-port", type: "integer", valueName: "port", description: "Local daemon helper port" },
 ];
@@ -147,14 +154,16 @@ function issueCompatibilitySpecs(): CommandSpec[] {
       ...ISSUE_FIELDS,
       // MUL-400 E1: member-only override for the parent-status guard. A run
       // (`task` identity) sending it is rejected by the server.
-      { name: "force", type: "boolean", description: "Force in_review/done even while sub-issues are still open (members only)" },
+      { name: "force", type: "boolean", description: "Force in_review/done with open sub-issues, or start a backlog issue with unmet prerequisites (members only)" },
     ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
       { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
-    legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [], ["issue", "status"]),
+    legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [
+      { name: "force", type: "boolean", description: "Force the transition past the parent-status and dependency guards (members only)" },
+    ], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
     nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/issues/${encodePath(positional(invocation, 0, "issue"))}/restore`, {});
@@ -359,6 +368,30 @@ function sessionCommandSpecs(): CommandSpec[] {
 
 function issueExtendedSpecs(): CommandSpec[] {
   return [
+    nativeSpec("issue.status-pages", ["issue", "status-pages"], "List the first page of each issue status", "read", HUMAN_TASK, [], [
+      ...ISSUE_LIST_OPTIONS.filter((option) => !["offset", "metadata", "full-id"].includes(option.name)),
+      { name: "statuses", type: "string", valueName: "statuses", description: "Comma-separated statuses (default: all seven)" },
+      { name: "assignee-ids", type: "string", valueName: "refs", description: "Comma-separated assignee references" },
+      { name: "project-ids", type: "string", valueName: "ids", description: "Comma-separated project IDs" },
+      { name: "metadata", type: "string", valueName: "json", description: "Metadata equality filter as a JSON object" },
+      { name: "include-no-assignee", type: "boolean", description: "Only issues without an assignee" },
+      { name: "include-no-project", type: "boolean", description: "Only issues without a project" },
+      { name: "include-archived", type: "boolean", description: "Include archived issues in status pages" },
+      { name: "archived-only", type: "boolean", description: "Only archived issues in status pages" },
+      { name: "include-archived-total", type: "boolean", description: "Include the workspace-wide archived count" },
+    ], async (invocation) => {
+      await getAndRender(invocation, "/api/issues/status-pages", [], {
+        ...issueQuery(invocation),
+        assignee_types: stringOption(invocation, "assignee-type"),
+        assignee_ids: stringOption(invocation, "assignee-ids"),
+        project_ids: stringOption(invocation, "project-ids"),
+        statuses: stringOption(invocation, "statuses"),
+        parent_id: stringOption(invocation, "parent"),
+        metadata: stringOption(invocation, "metadata"),
+        ...Object.fromEntries(["top-level-only", "include-no-assignee", "include-no-project", "include-archived", "archived-only", "include-archived-total"]
+          .map((name) => [name.replaceAll("-", "_"), invocation.options[name] === true ? true : undefined])),
+      });
+    }),
     nativeSpec("issue.grouped", ["issue", "grouped"], "List issues grouped for planning", "read", HUMAN_TASK, [], ISSUE_LIST_OPTIONS, async (invocation) => {
       await getAndRender(invocation, "/api/issues/grouped", ["groups", "issues"], issueQuery(invocation));
     }),
@@ -426,13 +459,24 @@ function issueExtendedSpecs(): CommandSpec[] {
       await getAndRender(invocation, issueSubpath(invocation, "dependencies"), ["dependencies"]);
     }),
     nativeSpec("issue.dependency.add", ["issue", "dependency", "add"], "Add an issue dependency", "write", HUMAN_TASK, [refPositional("issue"), refPositional("dependency")], [
-      { name: "type", type: "string", valueName: "blocks|depends_on", description: "Dependency type" },
+      // MUL-400 E3: the server takes keys or ids, and normalizes `blocks` to the
+      // reverse `blocked_by` row so the table keeps a single direction.
+      { name: "type", type: "string", valueName: "blocked_by|blocks|related", description: "Dependency type (default blocked_by)" },
     ], async (invocation) => {
-      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "dependencies"), { dependency_id: positional(invocation, 1, "dependency"), dependency_type: stringOption(invocation, "type") ?? "depends_on" });
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "dependencies"), {
+        depends_on_issue_id: positional(invocation, 1, "dependency"),
+        type: stringOption(invocation, "type") ?? "blocked_by",
+      });
     }),
     nativeSpec("issue.dependency.remove", ["issue", "dependency", "remove"], "Remove an issue dependency", "destructive", HUMAN_TASK, [refPositional("issue"), refPositional("dependency")], [YES_OPTION], async (invocation) => {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${issueSubpath(invocation, "dependencies")}/${encodePath(positional(invocation, 1, "dependency"))}`);
+    }),
+    nativeSpec("issue.done-grant.add", ["issue", "done-grant", "add"], "Authorize the owner agent to close a parent issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "parent-done-grant"));
+    }),
+    nativeSpec("issue.done-grant.remove", ["issue", "done-grant", "remove"], "Revoke the owner agent's parent closure grant", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "DELETE", issueSubpath(invocation, "parent-done-grant"));
     }),
     nativeSpec("issue.reaction.list", ["issue", "reaction", "list"], "List issue reactions", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "reactions"), ["reactions"]);
@@ -686,7 +730,21 @@ function chatCommandSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
     nativeSpec("chat.message.list", ["chat", "message", "list"], "List chat messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], queryOptions(invocation, { limit: integerOption(invocation, "limit") }));
+      const rawCursor = stringOption(invocation, "cursor");
+      let cursor: { created_at: string; id: string } | null = null;
+      if (rawCursor) {
+        try {
+          const parsed: unknown = JSON.parse(rawCursor);
+          if (isRecord(parsed) && typeof parsed.created_at === "string" && typeof parsed.id === "string"
+            && parsed.created_at && parsed.id) cursor = { created_at: parsed.created_at, id: parsed.id };
+        } catch { /* Report the same usage error as a malformed cursor object. */ }
+        if (!cursor) throw new CliError("usage", "--cursor must be the previous page's next_cursor JSON object");
+      }
+      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], {
+        limit: integerOption(invocation, "limit"),
+        before_created_at: cursor?.created_at,
+        before_id: cursor?.id,
+      });
     }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));

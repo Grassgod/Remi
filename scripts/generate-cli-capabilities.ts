@@ -180,6 +180,7 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues": "issue.list",
     "POST /api/multiremi/issues": "issue.create",
     "GET /api/issues/grouped": "issue.grouped",
+    "GET /api/issues/status-pages": "issue.status-pages",
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
@@ -366,6 +367,8 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/issues\/:id\/decisions\/:decisionId\/withdraw$/, "issue.decision.withdraw"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/dependencies$/, "issue.dependency.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/dependencies\/:dependencyId$/, "issue.dependency.remove"],
+    [/^POST \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.add"],
+    [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/parent-done-grant$/, "issue.done-grant.remove"],
     [/^GET \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.list"],
     [/^POST \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.add"],
     [/^DELETE \/api\/(?:multiremi\/)?issues\/:id\/reactions$/, "issue.reaction.remove"],
@@ -752,6 +755,14 @@ function exemptRoute(route: string): CliManifestRoute | null {
   });
   if (path === "/ws" || path === "/api/daemon/ws" || path === "/api/realtime/ws") {
     return exempt("websocket_transport", "Long-lived WebSocket transport is outside the CLI command surface.");
+  }
+  // MUL-462: the split-API peer channel lives off the dashboard surface —
+  // nginx never routes `/internal/`, and the two API processes authenticate
+  // each other with MULTIREMI_PEER_SECRET. It is machine-to-server traffic with
+  // no user-facing command, so it takes a fixed exempt category rather than
+  // becoming a `planned_command` that would never be implemented.
+  if (path.startsWith("/internal/")) {
+    return exempt("daemon_internal_protocol", "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow.");
   }
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");

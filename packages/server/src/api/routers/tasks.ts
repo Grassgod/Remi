@@ -28,6 +28,7 @@ import type { CreateTaskInput, MultiremiTask, MultiremiTaskStatus } from "@multi
 import type { TaskListCandidate, TaskListCursor } from "@multiremi/store/repos/tasks-repo.js";
 import { createId } from "@multiremi/ids.js";
 import { ChatIssueTaskConflictError, TaskSteerConflictError } from "@multiremi/store/repos/tasks-repo.js";
+import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
 import type { RouterDeps } from "./deps.js";
 import { parseTraceWindow } from "../trace/request.js";
@@ -154,6 +155,15 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     // Execution snapshots are minted only by the server's claim/retry path.
     // Never trust these internal fields from a dashboard or PAT request: a
     // forged empty/ready snapshot would bypass the Agent's real Plugin gate.
+    //
+    // MUL-448 extends the same rule to the provenance and attribution of the
+    // task itself. `triggerCommentId`, `triggerSummary`, `requestingUserName`
+    // and `requestingUserProfileDescription` describe who asked for the work
+    // and what asked for it; `assignmentEventId` names the session event the
+    // assignment replaces, and `assignmentAuthorType` / `assignmentAuthorId`
+    // name its author. All of them are derived by the server, so every HTTP
+    // caller — member, PAT, task credential or master token — has them
+    // stripped here and cannot write another run's lineage into the task.
     const {
       provider: _provider,
       codexProfile: _codexProfile,
@@ -176,16 +186,57 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       delegation_id: _delegationIdSnake,
       delegatedByAgentId: _delegatedByAgentId,
       delegated_by_agent_id: _delegatedByAgentIdSnake,
+      delegatedFromIssueSessionId: _delegatedFromIssueSessionId,
+      delegated_from_issue_session_id: _delegatedFromIssueSessionIdSnake,
+      delegationSkipReason: _delegationSkipReason,
+      delegation_skip_reason: _delegationSkipReasonSnake,
+      wakeSource: _wakeSource,
+      wake_source: _wakeSourceSnake,
       continueTaskId: _continueTaskId,
       continue_task_id: _continueTaskIdSnake,
       assignmentSourceEventId: _assignmentSourceEventId,
       assignment_source_event_id: _assignmentSourceEventIdSnake,
+      // MUL-400 E3 (QA round 2, blocker 1): the dependency gate treats these as
+      // structural exemptions, so they must never come from a request body — a
+      // caller that sets `attempt: 2` or `preserveIssueStatus: true` would
+      // otherwise start a waiting issue without the audited force. Both are set
+      // only by server paths (retry/redispatch and the E2 parent wake-up), and no
+      // HTTP caller sends them.
+      attempt: _attempt,
+      maxAttempts: _maxAttempts,
+      // MUL-409 fix round 4 (QA round 3, suggestion 1): the ADR claims both
+      // spellings of every exemption field are stripped, and the gate reads the
+      // camelCase form. `max_attempts` is not an exemption the gate consults
+      // today, but leaving it in the body hands a public caller a field the
+      // server owns — the next gate that reads it would inherit a hole. Strip it
+      // with its camelCase twin.
+      max_attempts: _maxAttemptsSnake,
+      preserveIssueStatus: _preserveIssueStatus,
+      preserve_issue_status: _preserveIssueStatusSnake,
+      dependencyForce: _dependencyForce,
+      dependency_force: _dependencyForceSnake,
+      assignmentEventId: _assignmentEventId,
+      assignment_event_id: _assignmentEventIdSnake,
+      assignmentAuthorType: _assignmentAuthorType,
+      assignment_author_type: _assignmentAuthorTypeSnake,
+      assignmentAuthorId: _assignmentAuthorId,
+      assignment_author_id: _assignmentAuthorIdSnake,
+      triggerCommentId: _triggerCommentId,
+      trigger_comment_id: _triggerCommentIdSnake,
+      triggerSummary: _triggerSummary,
+      trigger_summary: _triggerSummarySnake,
+      requestingUserName: _requestingUserName,
+      requesting_user_name: _requestingUserNameSnake,
+      requestingUserProfileDescription: _requestingUserProfileDescription,
+      requesting_user_profile_description: _requestingUserProfileDescriptionSnake,
       ...publicInput
     } = body;
     const issueId = cleanString(publicInput.issueId);
     const issue = issueId ? store.getIssue(issueId) : null;
     const requestedIssueSessionId = cleanString(publicInput.issueSessionId ?? publicInput.issue_session_id);
-    const inheritedIssueSessionId = requestedIssueSessionId ?? sourceTask?.issueSessionId ?? null;
+    const inheritedIssueSessionId = requestedIssueSessionId
+      ?? (issue?.id === sourceTask?.issueId ? sourceTask?.issueSessionId : null)
+      ?? null;
     if (continuedTask) {
       if (!continuedTask.delegationId || !continuedTask.delegatedByAgentId
         || continuedTask.agentId === continuedTask.delegatedByAgentId) {
@@ -210,27 +261,39 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
         return c.json({ error: "requested Issue Session does not match the continued task" }, 400);
       }
     }
-    const leaderDelegation = Boolean(
-      !continuedTask
-      && taskToken
-      && sourceTask
-      && issue
-      && store.isSquadLeaderDelegation({
+    const leaderDelegation = !continuedTask && taskToken && sourceTask && issue
+      ? store.isSquadLeaderDelegation({
         issue,
         sourceTask,
         authorAgentId: taskToken.agentId,
         targetAgentId: agent.id,
         issueSessionId: inheritedIssueSessionId,
       })
-    );
+      : null;
     // Keep continuation ancestry on the current Leader turn. A same-agent,
     // same-delegation successor of the previous child is reserved for retry /
     // self-continuation and intentionally suppresses that child's return in
     // drainDelegationReturnsWithinWorkspaceLock. This is a new requested round,
     // so every completed child Task must remain independently returnable.
+    //
+    // MUL-448: the assignment author of the `task_assigned` session event (and
+    // of the ledger row it becomes) is derived from the credential, never from
+    // the body. A run must not be able to record itself as the member that
+    // asked for the work; a member must not be able to name another author.
+    const requestingUserId = authenticatedRequestUserId(c);
+    const assignmentAuthor = taskToken?.agentId
+      ? { authorType: "agent", authorId: taskToken.agentId }
+      : requestingUserId
+      ? { authorType: "member", authorId: requestingUserId }
+      // Master token / auth-disabled carry no login identity, so the store's
+      // historical "system" default stays in charge there.
+      : null;
     const createInput: CreateTaskInput = {
       ...publicInput,
       parentTaskId: currentTaskParentId(c),
+      ...(assignmentAuthor
+        ? { assignmentAuthorType: assignmentAuthor.authorType, assignmentAuthorId: assignmentAuthor.authorId }
+        : {}),
       ...(continuedTask
         ? {
           issueId: continuedTask.issueId,
@@ -238,14 +301,20 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
           continuedFromTaskId: continuedTask.id,
           delegationId: continuedTask.delegationId,
           delegatedByAgentId: continuedTask.delegatedByAgentId,
+          delegatedFromIssueSessionId: continuedTask.delegatedFromIssueSessionId,
+          delegationSkipReason: continuedTask.delegationSkipReason,
+          wakeSource: continuedTask.wakeSource,
         }
-        : leaderDelegation
+        : leaderDelegation?.ok
         ? {
-          issueSessionId: inheritedIssueSessionId,
+          ...(inheritedIssueSessionId ? { issueSessionId: inheritedIssueSessionId } : {}),
           delegationId: createId("dlg"),
           delegatedByAgentId: sourceTask!.agentId,
+          delegatedFromIssueSessionId: leaderDelegation.delegatedFromIssueSessionId,
         }
-        : {}),
+        : leaderDelegation?.reason
+          ? { delegationSkipReason: leaderDelegation.reason }
+          : {}),
     };
     assertRuntimeWorkspaceAccess(c, store, createInput.runtimeWorkspaceId ?? createInput.runtime_workspace_id, agent.workspaceId);
     try {
@@ -253,6 +322,11 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ task: taskPublicResponse(task) }, 201);
     } catch (error) {
       if (error instanceof ChatIssueTaskConflictError) return c.json({ error: error.message }, 400);
+      // MUL-400 E3 gate 3: this funnel refuses the first task of a waiting
+      // issue; the caller has to force-start it explicitly first.
+      if (error instanceof IssueDependencyError) {
+        return c.json({ error: error.message, code: error.code, unmet: error.details.unmet ?? [] }, 409);
+      }
       throw error;
     }
   });

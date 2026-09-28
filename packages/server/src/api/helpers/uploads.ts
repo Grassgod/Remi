@@ -1,10 +1,10 @@
 // Attachment upload storage: the on-disk layout under the upload root, filename sanitising and
 // the local file response used when an attachment is served back.
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, open, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
-import type { MultiremiAttachment } from "@multiremi/contracts/types.js";
+import { basename, dirname, extname, join } from "node:path";
+import type { CreateAttachmentInput, MultiremiAttachment } from "@multiremi/contracts/types.js";
 
 export const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
 
@@ -13,7 +13,55 @@ export function uploadRoot(): string {
 }
 
 export function createUploadAttachmentId(): string {
-  return `att_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  return `att_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+/** Persist bytes before an atomic row insert; only this attempt's files may be removed. */
+export async function persistUploadedAttachments<T>(
+  workspaceId: string,
+  files: Array<{ filename: string; bytes: Uint8Array | (() => Promise<Uint8Array>); contentType: string }>,
+  insert: (inputs: CreateAttachmentInput[]) => T,
+): Promise<T> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const createdPaths: string[] = [];
+    try {
+      const inputs: CreateAttachmentInput[] = [];
+      for (const file of files) {
+        const id = createUploadAttachmentId();
+        const path = uploadAbsolutePath(uploadRelativePath(workspaceId, id, file.filename));
+        await mkdir(dirname(path), { recursive: true });
+        const handle = await open(path, "wx");
+        createdPaths.push(path);
+        let sizeBytes: number;
+        try {
+          const bytes = typeof file.bytes === "function" ? await file.bytes() : file.bytes;
+          sizeBytes = bytes.byteLength;
+          await handle.writeFile(bytes);
+        }
+        finally { await handle.close(); }
+        inputs.push({ id, workspaceId, filename: file.filename, url: `/api/attachments/${id}/content`,
+          contentType: file.contentType, sizeBytes });
+      }
+      return insert(inputs);
+    } catch (error) {
+      await Promise.all(createdPaths.map(async path => {
+        try { await unlink(path); }
+        catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
+        }
+      }));
+      if (!isAttachmentIdCollision(error)) throw error;
+    }
+  }
+  throw new Error("attachment id collision after 3 upload attempts");
+}
+
+function isAttachmentIdCollision(error: unknown): boolean {
+  if ((error as NodeJS.ErrnoException | null)?.code === "EEXIST") return true;
+  // The PostgreSQL sync bridge currently forwards only the server message.
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed: multiremi_attachments.id")
+    || /duplicate key value violates unique constraint "multiremi_attachments_pkey"/.test(message);
 }
 
 export function stringFormValue(value: FormDataEntryValue | null): string | null {
@@ -37,19 +85,42 @@ export function uploadedAttachmentPath(attachment: { workspaceId: string; id: st
   return uploadAbsolutePath(uploadRelativePath(attachment.workspaceId, attachment.id, attachment.filename));
 }
 
-export async function localAttachmentFileResponse(attachment: MultiremiAttachment): Promise<Response> {
+// All upload writers use exclusive creation through persistUploadedAttachments.
+export async function localAttachmentFileResponse(
+  attachment: MultiremiAttachment,
+  requestHeaders?: { get(name: string): string | null },
+): Promise<Response> {
   const filePath = uploadedAttachmentPath(attachment);
   if (!filePath || !existsSync(filePath)) return Response.json({ error: "attachment file not found" }, { status: 404 });
   const info = await stat(filePath);
-  const bytes = await readFile(filePath);
-  return new Response(bytes, {
-    headers: {
-      "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
-      "Content-Length": String(info.size),
-      "Content-Disposition": `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    },
+  const headers: Record<string, string> = {
+    "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
+    "Content-Length": String(info.size),
+    "Content-Disposition": `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    "Cache-Control": requestHeaders ? "private, max-age=31536000, immutable" : "no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (requestHeaders) {
+    headers["ETag"] = `"${attachment.id}"`;
+    // Private caches must also separate login credentials.
+    headers["Vary"] = "Authorization, Cookie";
+  }
+  // The caller completes authorization and visibility checks before this helper.
+  if (requestHeaders && ifNoneMatchMatches(requestHeaders.get("if-none-match"), headers["ETag"]!)) {
+    delete headers["Content-Length"];
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(Bun.file(filePath), { headers });
+}
+
+// GET revalidation uses weak comparison, including wildcard and validator lists.
+function ifNoneMatchMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const candidates = header.split(",").map((value) => value.trim());
+  if (candidates.includes("*")) return true;
+  return candidates.some((candidate) => {
+    const value = candidate.startsWith("W/") ? candidate.slice(2).trim() : candidate;
+    return value === etag;
   });
 }
 

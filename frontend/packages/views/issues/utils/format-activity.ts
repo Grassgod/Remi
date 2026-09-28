@@ -19,6 +19,24 @@ function delegationReturnReason(reason: string | undefined, t: IssuesT): string 
       return t(($) => $.activity.delegation_return_reason_covered_by_queued_task);
     case "deferred_lane_busy":
       return t(($) => $.activity.delegation_return_reason_deferred_lane_busy);
+    case "source_not_issue_task":
+      return t(($) => $.activity.delegation_return_reason_source_not_issue_task);
+    case "source_side_session":
+      return t(($) => $.activity.delegation_return_reason_source_side_session);
+    case "source_not_squad_leader":
+      return t(($) => $.activity.delegation_return_reason_source_not_squad_leader);
+    case "target_not_squad_member":
+      return t(($) => $.activity.delegation_return_reason_target_not_squad_member);
+    case "cross_issue_no_lineage":
+      return t(($) => $.activity.delegation_return_reason_cross_issue_no_lineage);
+    case "self_dispatch":
+      return t(($) => $.activity.delegation_return_reason_self_dispatch);
+    case "covered_by_delegate_wakeup":
+      return t(($) => $.activity.delegation_return_reason_covered_by_delegate_wakeup);
+    case "delegator_issue_closed":
+      return t(($) => $.activity.delegation_return_reason_delegator_issue_closed);
+    case "delegator_session_missing":
+      return t(($) => $.activity.delegation_return_reason_delegator_session_missing);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }
@@ -63,6 +81,9 @@ function commentMentionReason(reason: string | undefined, t: IssuesT): string {
       return t(($) => $.activity.comment_mention_reason_unlinked_agent_comment);
     case "target_unavailable":
       return t(($) => $.activity.comment_mention_reason_target_unavailable);
+    case "dependencies_unmet":
+      // MUL-400 E3 gate 3: the mention landed but the issue is still waiting.
+      return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
     default:
       return reason?.trim() || t(($) => $.activity.reason_unknown);
   }
@@ -134,6 +155,9 @@ export function formatActivity(
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
     case "delegation_return_triggered":
+      if (details.sourceIssueKey && details.sourceIssueId !== details.returnIssueId) {
+        return t(($) => $.activity.delegation_return_triggered_cross_issue, { key: details.sourceIssueKey });
+      }
       return t(($) => $.activity.delegation_return_triggered);
     case "delegation_return_skipped":
       return t(($) => $.activity.delegation_return_skipped, {
@@ -144,8 +168,24 @@ export function formatActivity(
     case "child_status_parent_coalesced":
       return t(($) => $.activity.child_status_parent_coalesced);
     case "parent_status_held":
-      return t(($) => $.activity.parent_status_held, {
+      return t(($) => details.reason === "grant_missing"
+        ? $.activity.parent_status_held_grant_missing
+        : details.reason === "final_summary_missing"
+          ? $.activity.parent_status_held_final_summary_missing
+          : $.activity.parent_status_held, {
         status: statusLabel(details.requested ?? details.status ?? "?", t),
+      });
+    case "parent_done_grant_created":
+      return t(($) => $.activity.parent_done_grant_created, {
+        agent: details.agentId && resolveActorName ? resolveActorName("agent", details.agentId) : details.agentId ?? "?",
+      });
+    case "parent_done_grant_revoked":
+      return t(($) => $.activity.parent_done_grant_revoked);
+    case "parent_done_grant_used":
+      return t(($) => $.activity.parent_done_grant_used, {
+        source: details.source === "scm_merge"
+          ? t(($) => $.activity.parent_done_grant_source_scm_merge)
+          : t(($) => $.activity.parent_done_grant_source_api),
       });
     case "parent_status_derived":
       return t(($) => $.activity.parent_status_derived);
@@ -158,6 +198,67 @@ export function formatActivity(
       return t(($) => $.activity.issue_status_forced, {
         status: statusLabel(details.status ?? "?", t),
       });
+    case "decision_requested":
+      return t(($) => $.activity.decision_requested);
+    case "decision_answered":
+      return t(($) => $.activity.decision_answered);
+    case "decision_received":
+      return t(($) => $.activity.decision_received);
+    case "decision_escalated":
+      return t(($) => $.activity.decision_escalated);
+    case "decision_reminder":
+      return t(($) => $.activity.decision_reminder);
+    case "decision_card_skipped":
+      return t(($) => $.activity.decision_card_skipped);
+    case "decision_card_queued":
+      return t(($) => $.activity.decision_card_queued);
+    case "decision_card_reminder":
+      return t(($) => $.activity.decision_card_reminder);
+    case "decision_card_degraded":
+      return t(($) => $.activity.decision_card_degraded);
+    // MUL-400 E3: dependency gate and automatic start.
+    case "dependency_auto_started":
+      return t(($) => $.activity.dependency_auto_started, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_gate_exempted": {
+      const sourceLabels: Record<string, string> = {
+        redispatch: t(($) => $.activity.dependency_gate_exempted_redispatch),
+        retry: t(($) => $.activity.dependency_gate_exempted_retry),
+        continuation: t(($) => $.activity.dependency_gate_exempted_continuation),
+        delegation_return: t(($) => $.activity.dependency_gate_exempted_delegation_return),
+        parent_wakeup: t(($) => $.activity.dependency_gate_exempted_parent_wakeup),
+      };
+      return t(($) => $.activity.dependency_gate_exempted, {
+        source: sourceLabels[String(details.source)] ?? String(details.source ?? "?"),
+      });
+    }
+    case "dependency_satisfied":
+      return t(($) => $.activity.dependency_satisfied, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_auto_start_skipped":
+      return t(($) => $.activity.dependency_auto_start_skipped, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });
+    case "dependency_prerequisite_failed":
+      return t(($) => $.activity.dependency_prerequisite_failed, {
+        key: details.prerequisiteKey ?? details.prerequisite_key ?? "?",
+      });
+    case "dependency_waiting":
+      return t(($) => $.activity.dependency_waiting);
+    case "dependency_force_started": {
+      if (details.source === "comment") {
+        return t(($) => $.activity.dependency_force_started_comment);
+      }
+      if (details.source === "mention") {
+        const agentId = details.agentId ?? details.agent_id;
+        const agent = agentId && resolveActorName
+          ? resolveActorName("agent", agentId)
+          : agentId ?? "?";
+        return t(($) => $.activity.dependency_force_started_mention, { agent });
+      }
+      if (details.source === "rerun") {
+        return t(($) => $.activity.dependency_force_started_rerun);
+      }
+      return t(($) => $.activity.dependency_force_started);
+    }
+    case "dependency_satisfied_coalesced":
+      return t(($) => $.activity.dependency_satisfied_coalesced);
     case "child_done_parent_skipped":
       return t(($) => $.activity.child_done_parent_skipped, {
         reason: childDoneParentReason(details.reason, t),
@@ -169,6 +270,17 @@ export function formatActivity(
     case "dispatch_skipped": {
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
+      }
+      if (details.reason === "member_assignee") {
+        return t(($) => $.activity.dispatch_skipped_member_assignee);
+      }
+      if (details.reason === "no_assignee") {
+        return t(($) => $.activity.dispatch_skipped_no_assignee);
+      }
+      // MUL-400 E3: the dependency hold has its own copy instead of showing the
+      // raw reason string.
+      if (details.reason === "dependencies_unmet") {
+        return t(($) => $.activity.dependency_gate_reason_dependencies_unmet);
       }
       const error = details.error?.trim();
       return error

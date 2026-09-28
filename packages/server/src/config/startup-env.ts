@@ -1,3 +1,5 @@
+import { resolveApiRole, isApiRoleConfigured, type ApiRole, type ApiRoleConfiguration } from "./api-role.js";
+
 export type StartupEnvironment = Record<string, string | undefined>;
 
 export interface StartupDegradation {
@@ -14,6 +16,9 @@ export interface StartupEffectiveConfig {
   multiremiToken: string;
   jwtSecret: string;
   daemonDirectBaseUrl: string | null;
+  /** MUL-461: the process role this API serves, after env resolution. */
+  apiRole: ApiRole;
+  apiRoleConfigured: boolean;
 }
 
 export interface StartupEnvResult {
@@ -38,9 +43,29 @@ const PRODUCTION_REQUIRED = [
 export const SESSION_ARCHIVE_DEGRADATION_MESSAGE =
   "Session Archive direct upload disabled, falling back to 8 MiB proxy limit";
 
-export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
+/**
+ * MUL-461: SQLite cannot back a split deployment.
+ *
+ * The whole point of `ui`/`runtime` is that two processes see the same rows. A
+ * file-backed SQLite database gives each process its own file, so a split pair
+ * would diverge silently — the browser would write an issue the daemon process
+ * never reads. A warning rather than a startup failure: this is also how someone
+ * runs the roles locally to reproduce a routing bug, and `all` is unaffected.
+ */
+export const API_ROLE_SQLITE_DEGRADATION_MESSAGE =
+  "MULTIREMI_API_ROLE is set to a split role while SQLite is the store; "
+  + "split roles require MULTIREMI_DATABASE_URL so both processes share one database";
+
+/** Sole production role-resolution entry, shared by server startup and standalone apps. */
+export function resolveStartupApiRole(env: StartupEnvironment, override?: ApiRole): ApiRoleConfiguration {
+  const role = resolveApiRole(env);
+  return { role: override ?? role, configured: override !== undefined || isApiRoleConfigured(env) };
+}
+
+export function evaluateStartupEnv(env: StartupEnvironment, apiRole?: ApiRoleConfiguration): StartupEnvResult {
   const production = isProductionEnvironment(env);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(env.MULTIREMI_DAEMON_DIRECT_BASE_URL);
+  const resolvedApiRole = apiRole ?? resolveStartupApiRole(env);
   const missingRequired = production
     ? PRODUCTION_REQUIRED.filter((key) => !clean(env[key]))
     : [];
@@ -52,6 +77,14 @@ export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
         effectiveValue: null,
         message: SESSION_ARCHIVE_DEGRADATION_MESSAGE,
       }];
+  if (resolvedApiRole.role !== "all" && !isPostgresDatabaseUrl(env.MULTIREMI_DATABASE_URL)) {
+    degradations.push({
+      id: "api_role_split_store",
+      status: "disabled",
+      effectiveValue: resolvedApiRole.role,
+      message: API_ROLE_SQLITE_DEGRADATION_MESSAGE,
+    });
+  }
 
   return {
     missingRequired,
@@ -63,8 +96,18 @@ export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
       multiremiToken: redactSecret(env.MULTIREMI_TOKEN),
       jwtSecret: redactSecret(env.JWT_SECRET),
       daemonDirectBaseUrl,
+      apiRole: resolvedApiRole.role,
+      apiRoleConfigured: resolvedApiRole.configured,
     },
   };
+}
+
+/**
+ * Mirrors `isPostgresConfigured()` in the store without importing it: this module
+ * is pure configuration, and the store module pulls in the SQLite singleton.
+ */
+function isPostgresDatabaseUrl(value: string | null | undefined): boolean {
+  return /^postgres(ql)?:\/\//i.test(clean(value) ?? "");
 }
 
 // An explicit development/test NODE_ENV wins over the database heuristic. Picking
