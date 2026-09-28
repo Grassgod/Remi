@@ -22,6 +22,7 @@ import {
   type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
   TRANSIENT_RETRY_FAILURE_REASONS,
@@ -90,9 +91,51 @@ import type {
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
 
+import {
+  dependencyGateEnabled,
+  IssueDependencyError,
+  type IssueDependencyUnmetRef,
+} from "@multiremi/store/repos/issue-dependencies.js";
+
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
+
+/**
+ * The Task columns the daemon identity guard, the task-level handlers and the
+ * task-message fan-out need — every scalar field they read, and none of the big
+ * payload columns (`prompt`, `result`, `usage`).
+ *
+ * MUL-474: the guard used to pull `SELECT *` and then the handler pulled it
+ * again, so a single 2.5 s poll shipped the full (>=100 KB) prompt across the
+ * Postgres bridge three times. Reads of this projection are cached per request
+ * under the same table scope `getTask` uses, so a write anywhere in the request
+ * invalidates them exactly like the full row.
+ */
+export interface MultiremiTaskIdentity {
+  id: string;
+  workspaceId: string;
+  runtimeId: string | null;
+  status: MultiremiTaskStatus;
+  agentId: string;
+  chatSessionId: string | null;
+  issueId: string | null;
+  issueSessionId: string | null;
+}
+
+/** One Task's snapshot fields, projected without the prompt/plugin payload columns. */
+export interface TaskStatusSnapshot {
+  id: string;
+  workspaceId: string;
+  status: MultiremiTaskStatus;
+  result: string | null;
+  error: string | null;
+  sessionId: string | null;
+  workDir: string | null;
+  usage: TaskUsageEntry[];
+  startedAt: string | null;
+  completedAt: string | null;
+}
 
 const TASK_AUTOPILOT_LOOKUP_BATCH_SIZE = 500;
 
@@ -323,6 +366,26 @@ export interface ChildStatusChange {
  * makes the compiler ask every call site which transaction owns the write.
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
+
+type DependencyForceInput = NonNullable<CreateTaskInput["dependencyForce"]>;
+
+type IssueDispatchGateDecision =
+  | {
+      kind: "exemption";
+      source: string;
+      unmet: IssueDependencyUnmetRef[];
+      previousTaskId: string | null;
+    }
+  | {
+      kind: "force";
+      force: DependencyForceInput;
+      unmet: IssueDependencyUnmetRef[];
+    };
+
+interface IssueStatusSyncResult {
+  changed: boolean;
+  previousStatus: string | null;
+}
 
 interface TaskTerminalFollowUps {
   retry: MultiremiTask | null;
@@ -670,10 +733,57 @@ export class TasksRepo {
   }
 
   /** Caller holds the task workspace row lock in an open transaction. */
+  /**
+   * MUL-400 E3 gate 3: no first task for an issue that is still waiting.
+   *
+   * "Waiting" means `backlog` with an unmet `blocked_by` prerequisite — the same
+   * definition the status-transition gates use. Anything else is a normal issue.
+   *
+   * Exemptions are structural, not identity-based: a round that continues an
+   * existing conversation (retry, continuation, E2 wake-up, delegation return)
+   * is not the issue's first execution, so it proceeds. Identity is deliberately
+   * not consulted. A verified member action reaches this layer only through the
+   * server-owned `dependencyForce` marker; public task creation strips it.
+   */
+  private assertIssueDispatchable(issue: MultiremiIssue, input: CreateTaskInput, parentTask: MultiremiTask | null):
+    IssueDispatchGateDecision | null {
+    if (!dependencyGateEnabled() || issue.status !== "backlog") return null;
+    const unmet = this.ctx.issues().listUnmetPrerequisites(issue.id);
+    if (unmet.length === 0) return null;
+    // MUL-409 (QA round 4, blocker 3): `continuedFromTaskId` names the round this
+    // one continues, and it must win over `parentTaskId`. A leader-token
+    // continuation (`continueTaskId` on POST /api/multiremi/tasks) carries BOTH:
+    // the delegating leader's task as the parent, and the delegated task being
+    // continued. Reading `parentTask` first recorded the leader's id as the
+    // previous round, so the audit pointed at the wrong task.
+    const continuedFromTaskId = cleanOptionalString(
+      input.continuedFromTaskId ?? input.continued_from_task_id,
+    );
+    const previousTaskId = continuedFromTaskId ?? parentTask?.id ?? null;
+    const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
+    const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
+    let source: string | null = null;
+    if (delegationId && delegatedByAgentId === input.agentId) source = "delegation_return";
+    else if (input.preserveIssueStatus === true || input.preserve_issue_status === true) source = "parent_wakeup";
+    else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "cancelled") source = "redispatch";
+    else if (normalizePositiveInt(input.attempt, 1) > 1 && parentTask?.status === "failed") source = "retry";
+    else if (continuedFromTaskId) source = "continuation";
+    else if (normalizePositiveInt(input.attempt, 1) > 1) source = "retry";
+    if (source) return { kind: "exemption", source, unmet, previousTaskId };
+    const dependencyForce = input.dependencyForce ?? input.dependency_force;
+    if (dependencyForce) return { kind: "force", force: dependencyForce, unmet };
+    throw new IssueDependencyError(
+      "dependencies_unmet",
+      `${issue.key} is waiting on ${unmet.length} unfinished prerequisite issue(s): ${unmet.map((row) => row.key).join(", ")}; start it explicitly with force, or finish the prerequisites first`,
+      { unmet },
+    );
+  }
+
   private createTaskWithinWorkspaceLock(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    gateIssueBeforeReplacement?: MultiremiIssue | null,
   ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -749,6 +859,24 @@ export class TasksRepo {
     // reference that would drive B's agent + machine + credentials from A).
     if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
     if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
+    // MUL-400 E3 gate 3 (task-creation layer). This is the single funnel every
+    // task is born in, so a waiting issue cannot acquire a first round through
+    // any path — CLI task create, rerun, autopilot, comments, mention dispatch.
+    // The check is structural, never identity-based, and runs before any write.
+    const gateIssue = gateIssueBeforeReplacement ?? issue;
+    const gateDecision = gateIssue ? this.assertIssueDispatchable(gateIssue, input, parentTask) : null;
+    if (gateDecision?.kind === "force") {
+      const action = gateDecision.force.source === "comment"
+        ? "commenting"
+        : gateDecision.force.source === "mention"
+          ? "mentioning an agent"
+          : "rerunning it";
+      const prerequisiteKeys = gateDecision.unmet.map((row) => row.key).join(", ");
+      input = {
+        ...input,
+        prompt: `${input.prompt}\n\nThis issue was waiting on unfinished prerequisites (${prerequisiteKeys}); a member started it by ${action}. Check whether those prerequisites still matter before proceeding.`,
+      };
+    }
     if (chatSession && issueId
       && this.ctx.feishuBot().getFeishuIssueIdForChatSession(chatSession.id) !== issueId) {
       throw new ChatIssueTaskConflictError("Only Feishu Issue topics can create Chat transport tasks with an Issue");
@@ -896,7 +1024,7 @@ export class TasksRepo {
     const id = input.id ?? createId("tsk");
     const now = nowIso();
     const attempt = normalizePositiveInt(input.attempt, 1);
-    const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts, 3));
+    const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts ?? input.max_attempts, 3));
     const delegationId = cleanOptionalString(input.delegationId ?? input.delegation_id);
     const delegatedByAgentId = cleanOptionalString(input.delegatedByAgentId ?? input.delegated_by_agent_id);
     if (Boolean(delegationId) !== Boolean(delegatedByAgentId)) {
@@ -1054,11 +1182,56 @@ export class TasksRepo {
       }
     }
     const task = this.getTask(id)!;
+    if (gateDecision?.kind === "exemption" && task.issueId) {
+      const unmet = gateDecision.unmet.map((row) => ({
+        ...row,
+        issue_id: row.issueId,
+        depends_on_issue_id: row.dependsOnIssueId,
+        dependency_id: row.dependencyId,
+      }));
+      deferredEvents.issueActivities.push({
+        issueId: task.issueId,
+        type: "dependency_gate_exempted",
+        body: gateDecision.source,
+        data: {
+          source: gateDecision.source,
+          taskId: task.id,
+          task_id: task.id,
+          previousTaskId: gateDecision.previousTaskId,
+          previous_task_id: gateDecision.previousTaskId,
+          unmet,
+          unmetPrerequisites: unmet,
+          unmet_prerequisites: unmet,
+        },
+      });
+    }
     // MUL-400 E2: the child-status wakeup carries `preserveIssueStatus` so a
     // manual child edit cannot knock an in-review parent back to `todo` while
     // that round is waiting to be claimed.
     const preserveIssueStatus = Boolean(input.preserveIssueStatus ?? input.preserve_issue_status);
-    if (task.issueId && !parentTaskId && !preserveIssueStatus && !this.hasInFlightTaskForIssue(task.issueId)) {
+    if (task.issueId && gateDecision?.kind === "force") {
+      const transition = this.syncIssueStatusFromTaskWithinTransaction(task, "todo", {
+        collectChildStatusChanges: childStatusChanges,
+        deferredEvents,
+      });
+      if (transition.changed && transition.previousStatus === "backlog") {
+        const assignedAgent = issue?.assigneeType && issue.assigneeId
+          ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId)
+          : null;
+        this.ctx.issues().recordDependencyForceStarted(task.issueId, {
+          source: gateDecision.force.source,
+          status: "todo",
+          previousStatus: transition.previousStatus,
+          unmet: gateDecision.unmet,
+          actorType: "member",
+          actorId: gateDecision.force.actorMemberId,
+          commentId: gateDecision.force.commentId ?? null,
+          taskId: task.id,
+          agentId: task.agentId,
+          assigneeDispatched: assignedAgent?.id === task.agentId,
+        }, deferredEvents);
+      }
+    } else if (task.issueId && !parentTaskId && !preserveIssueStatus && !this.hasInFlightTaskForIssue(task.issueId)) {
       this.syncIssueStatusFromTaskWithinTransaction(task, "todo", {
         collectChildStatusChanges: childStatusChanges,
         deferredEvents,
@@ -1277,8 +1450,79 @@ export class TasksRepo {
   }
 
   getTask(id: string): MultiremiTask | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(id) as Row | null;
+    const row = this.readTaskRow(id);
     return row ? this.withTaskAutopilotRun(toTask(row)) : null;
+  }
+
+  /**
+   * The Task row, cached for the life of the request.
+   *
+   * One request reads this row from the auth guard, from the handler and again
+   * from a store method the handler calls; the cache is request-scoped and every
+   * write to `multiremi_tasks` clears it, so a read that follows a write in the
+   * same request still reaches the database (same contract as the Runtime row:
+   * see `runtimes-repo.readRuntimeRow`).
+   */
+  private readTaskRow(id: string): Row | null {
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_tasks", "row", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached;
+    }
+    const row = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(id) as Row | null;
+    cache?.set(key, row);
+    return row;
+  }
+
+  /**
+   * MUL-474: the guard and the task-level handlers only ever look at identity,
+   * workspace, status and routing fields. Reading the whole row — `prompt`
+   * (>=100 KB in production), `result`, `usage`, the duplicated plugin snapshot —
+   * made every 2.5 s poll pay for columns nobody read.
+   */
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_tasks", "identity", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached ? toTaskIdentity(cached) : null;
+    }
+    const row = this.ctx.db.query(
+      `SELECT id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id
+       FROM multiremi_tasks WHERE id = ?`,
+    ).get(id) as Row | null;
+    cache?.set(key, row);
+    return row ? toTaskIdentity(row) : null;
+  }
+
+  /**
+   * MUL-474: the `status` route's response fields, without the prompt.
+   *
+   * The Feishu host renders `getFeishuBotTaskSnapshot` from this, so the shape is
+   * a contract: every field the route returned before is still returned, and the
+   * `result` / `session_id` / `work_dir` fallbacks are the same ones
+   * {@link toTask} applies.
+   */
+  getTaskStatusSnapshot(id: string): TaskStatusSnapshot | null {
+    const row = this.ctx.db.query(
+      `SELECT id, workspace_id, status, result, error, session_id, work_dir, usage, started_at, completed_at
+       FROM multiremi_tasks WHERE id = ?`,
+    ).get(id) as Row | null;
+    if (!row) return null;
+    const storedResult = normalizeStoredTaskResult(row.result);
+    return {
+      id: String(row.id),
+      workspaceId: String(row.workspace_id ?? "local"),
+      status: String(row.status) as MultiremiTaskStatus,
+      result: storedResult.output,
+      error: nullableString(row.error),
+      sessionId: nullableString(row.session_id) ?? storedResult.sessionId,
+      workDir: nullableString(row.work_dir) ?? storedResult.workDir,
+      usage: parseJson<TaskUsageEntry[]>(row.usage, []),
+      startedAt: nullableString(row.started_at),
+      completedAt: nullableString(row.completed_at),
+    };
   }
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {
@@ -2958,7 +3202,10 @@ export class TasksRepo {
 
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     if (messages.length === 0) return [];
-    const task = this.getTask(taskId);
+    // MUL-474: identity only. The fan-out below routes and authorizes by these
+    // fields, so neither this read nor the post-write re-read needs `prompt`,
+    // `result` or `usage`.
+    const task = this.getTaskIdentity(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const current = this.ctx.db.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?")
       .get(taskId) as { seq: number } | null;
@@ -3022,7 +3269,7 @@ export class TasksRepo {
       .filter((row) => changedSeqSet.has(Number(row.seq)))
       .map(toTaskMessage);
     // Listeners see only rows that changed, using their persisted, sanitized values.
-    this.ctx.notifyTaskMessages(this.getTask(taskId) ?? task, changed);
+    this.ctx.notifyTaskMessages(this.getTaskIdentity(taskId) ?? task, changed);
     return changed;
   }
 
@@ -3230,6 +3477,7 @@ export class TasksRepo {
       throw new Error(`Task not found or terminal: ${taskId}`);
     }
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
+    const issueBeforeReplacement = current.issueId ? this.ctx.issues().getIssue(current.issueId) : null;
     const terminal = this.cancelTaskWithinWorkspaceLock(current, true, childStatusChanges, deferredEvents);
     const nextAttempt = current.attempt + 1;
     const detachedChatIssue = !!current.chatSessionId && !!current.issueId
@@ -3256,7 +3504,7 @@ export class TasksRepo {
       delegationId: current.delegationId,
       delegatedByAgentId: current.delegatedByAgentId,
       assignmentSourceEventId: current.assignmentSourceEventId,
-    }, childStatusChanges, deferredEvents);
+    }, childStatusChanges, deferredEvents, issueBeforeReplacement);
     if (replacement.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -4760,15 +5008,15 @@ export class TasksRepo {
        */
       deferredEvents: CommitEventQueue;
     },
-  ): void {
-    if (!task.issueId || task.chatSessionId) return;
+  ): IssueStatusSyncResult {
+    if (!task.issueId || task.chatSessionId) return { changed: false, previousStatus: null };
     const childStatusChanges = options.collectChildStatusChanges;
     // Serialize against direct Issue mutations before checking terminal state.
     // The no-op write acquires a row lock on Postgres and the writer lock on
     // SQLite, so a late worker can never reopen a concurrently accepted or
     // cancelled Issue from a stale pre-lock read.
     const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [task.issueId]);
-    if (locked.changes === 0) return;
+    if (locked.changes === 0) return { changed: false, previousStatus: null };
     // Once the Issue row is locked, derive lifecycle state from the current
     // task rows. Explicit terminal/retry decisions pass rederive=false because
     // they are not recoverable from the remaining-task set alone.
@@ -4784,8 +5032,12 @@ export class TasksRepo {
     // Explicit issue terminal states are user decisions. A late worker event
     // (or a cancellation racing with it) must not reopen accepted/cancelled
     // work; only a direct issue mutation may leave these states.
-    if (issue?.status === "done" || issue?.status === "cancelled") return;
-    if (!issue || issue.status === status) return;
+    if (issue?.status === "done" || issue?.status === "cancelled") {
+      return { changed: false, previousStatus: issue.status };
+    }
+    if (!issue || issue.status === status) {
+      return { changed: false, previousStatus: issue?.status ?? null };
+    }
     const now = nowIso();
     const completedAt = status === "done" || status === "cancelled" ? now : null;
     this.ctx.db.run(
@@ -4841,6 +5093,7 @@ export class TasksRepo {
     // main-existing inline emission and is now fixed on this path by the
     // "queue in, all events out through the queue" rule.)
     options.deferredEvents.workspace.push(issueUpdatedEvent);
+    return { changed: true, previousStatus: issue.status };
   }
 
   private hasInFlightTaskForIssue(issueId: string): boolean {
@@ -5058,6 +5311,19 @@ function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) =>
     repos.push({ url, ...(description ? { description } : {}), ...(defaultBranch ? { defaultBranch } : {}) });
   }
   return repos;
+}
+
+function toTaskIdentity(row: Row): MultiremiTaskIdentity {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    runtimeId: nullableString(row.runtime_id),
+    status: String(row.status) as MultiremiTaskStatus,
+    agentId: String(row.agent_id),
+    chatSessionId: nullableString(row.chat_session_id),
+    issueId: nullableString(row.issue_id),
+    issueSessionId: nullableString(row.issue_session_id),
+  };
 }
 
 function toTask(row: Row): MultiremiTask {
