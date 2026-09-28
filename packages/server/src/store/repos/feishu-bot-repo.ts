@@ -25,6 +25,8 @@ import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import {
   decryptFeishuBotSecret,
   encryptFeishuBotSecret,
@@ -277,7 +279,11 @@ export class FeishuBotRepo {
 
   setSenderAllowed(workspaceId: string, senderId: string, allowed: boolean, actorId?: string | null): FeishuBotSender | null {
     return this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N before the sender row UPDATE and
+      // the audit row it writes. The audit seq is allocated under the number
+      // lock, so taking it here keeps D after both.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const config = this.getConfig(workspaceId);
       if (!config) return null;
       const row = this.ctx.db.query(
@@ -817,7 +823,14 @@ export class FeishuBotRepo {
     const submitEvents = createCommitEventQueue();
 
     const result = this.ctx.db.transaction((): SubmitFeishuBotMessageResult => {
+      // Global lock order (MUL-405): W then N, before any domain row lock.
+      // Whether this message auto-creates an Issue is only known after the
+      // sender is resolved, and resolving it writes the sender row (D). The
+      // number lock is therefore taken unconditionally — it is per workspace
+      // and held for the rest of this transaction, which is what keeps the
+      // order the same on every path instead of depending on the payload.
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
       const sender = this.resolveSender(workspaceId, config.appId, input, config.senderAccessPolicy);
       let binding = this.ctx.db.query(
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
@@ -3206,11 +3219,32 @@ export class FeishuBotRepo {
     return this.getRuntimeStatus(workspaceId, runtimeId)!;
   }
 
+  /**
+   * `seq` is read as `MAX(seq) + 1` and the audit trail is ordered by it
+   * (MUL-405), so concurrent writers must not read the same maximum. The read
+   * and the insert share one transaction that first takes the per-workspace
+   * number lock; callers already inside a transaction (sender allow/revoke, the
+   * disable paths) join it and keep their own commit boundary.
+   */
   recordAudit(
     workspaceId: string,
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> } = {},
   ): MultiremiFeishuBotAuditEntry {
+    return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
+  }
+
+  /** Caller already holds the transaction that takes the number lock. */
+  private recordAuditWithinTransaction(
+    workspaceId: string,
+    action: FeishuBotAuditAction,
+    input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
+  ): MultiremiFeishuBotAuditEntry {
+    // Global lock order (MUL-405, see store/advisory-locks.ts): the workspace
+    // lifecycle row lock precedes the number lock. Callers that already hold it
+    // (sender allow/revoke, the disable paths) re-lock the same row for free.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
     const id = createId("fba");
     const createdAt = nowIso();
     const details = input.details ?? {};
