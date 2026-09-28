@@ -2522,15 +2522,6 @@ export class IssuesRepo {
     taskId: string,
     body: string,
   ): MultiremiIssueComment {
-    return this.ctx.db.transaction(() => this.createTaskFailureSystemCommentWithinTransaction(issueId, issueSessionId, taskId, body))();
-  }
-
-  private createTaskFailureSystemCommentWithinTransaction(
-    issueId: string,
-    issueSessionId: string | null,
-    taskId: string,
-    body: string,
-  ): MultiremiIssueComment {
     return this.createSystemIssueComment(issueId, body, {
       type: "task_failure",
       taskId,
