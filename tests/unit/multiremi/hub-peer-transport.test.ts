@@ -92,8 +92,14 @@ describe("Hub peer transport", () => {
     const db = reader();
     const senderHub = createHub({ transport: source });
     const receiverHub = createHub({ transport: target, fill: db.fill });
-    senderApp = createMultiremiApp({ store: createStore(), hub: senderHub, peerChannel: sender, peerSecret: "test-only", backgroundJobs: false });
-    receiverApp = createMultiremiApp({ store: createStore(), hub: receiverHub, peerChannel: receiver, peerSecret: "test-only", backgroundJobs: false });
+    senderApp = createMultiremiApp({
+      store: createStore(), hub: senderHub, peerChannel: sender, peerSecret: "test-only", backgroundJobs: false,
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
+    receiverApp = createMultiremiApp({
+      store: createStore(), hub: receiverHub, peerChannel: receiver, peerSecret: "test-only", backgroundJobs: false,
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
     try {
       const seen: number[] = [];
       receiverHub.subscribe("log:s", 0, (_key, frames) => seen.push(...frames.map((frame) => frame.seq)));
@@ -304,7 +310,10 @@ describe("Hub peer transport", () => {
     const before = f.hub.snapshot().hub_peer_reconcile_streams;
     f.setNow(15_000);
     expect(f.hub.snapshot().peer_link).toBe("stale");
-    const app = createMultiremiApp({ store: createStore(), hub: f.hub, backgroundJobs: false });
+    const app = createMultiremiApp({
+      store: createStore(), hub: f.hub, backgroundJobs: false,
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
     expect((await (await app.request("/health")).json() as { hub: { peer_link: string } }).hub.peer_link).toBe("stale");
     expect(await (await app.request("/readyz")).json()).toEqual({ ok: true });
     expect(f.hub.snapshot().hub_peer_reconcile_streams).toBe(before);
