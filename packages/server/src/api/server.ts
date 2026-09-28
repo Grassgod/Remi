@@ -1029,11 +1029,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ? null
     : (options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
       ? null
-      : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL })));
+      : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole })));
   const streamAuth: StreamAuthReader = options.streamAuth
     ?? (ownedReadPool
       ? createPostgresStreamAuthReader(ownedReadPool)
-      : createStreamAuthReader(store));
+      : createStreamAuthReader(store, { role: effectiveApiRole }));
   const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
     hub: liveHub,
     auth: streamAuth,

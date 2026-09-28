@@ -834,16 +834,13 @@ export function createReadPool(options: {
   databaseUrl?: string | null;
   sqliteDb?: SqlDatabase | null;
   /**
-   * The API process role (MUL-403 C1 item 8). Undefined reads
-   * `MULTIREMI_API_ROLE`, so a caller that forgets it still gets the right
-   * capacity in a role-split deployment, and a caller that passes it explicitly
-   * (tests, tools) does not have to touch the environment.
+   * The already-resolved API process role. Omitted roles use the all capacity;
+   * production callers must pass their startup role explicitly.
    */
   role?: string | null;
 } = {}): ReadPool {
   const url = (options.databaseUrl ?? process.env.MULTIREMI_DATABASE_URL ?? "").trim();
-  const role = options.role ?? process.env.MULTIREMI_API_ROLE;
-  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url, readPoolCapacityForRole(role));
+  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url, readPoolCapacityForRole(options.role));
   if (!options.sqliteDb) {
     throw new Error("createReadPool needs a sqlite database when no Postgres URL is configured");
   }
