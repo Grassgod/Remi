@@ -622,6 +622,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       }, { type: "member", id: member.id, taskId: null }, { idempotent: true });
       return c.json({ decision });
     } catch (error) {
+      // The write may have raced a withdrawal or another terminal transition.
+      // Only the canonical row can prove that the decision ended; an HTTP
+      // status alone cannot distinguish that from a rolled-back write.
+      const decision = store.getIssueDecision(issueId, decisionId);
+      if (decision && decision.status !== "escalated") return c.json({ decision });
       if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
       throw error;
     }

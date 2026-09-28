@@ -1,5 +1,6 @@
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
+import { readSync } from "node:fs";
 
 const url = process.env.MUL412_CLAIM_PG_URL;
 const workspaceId = process.env.MUL412_CLAIM_WORKSPACE_ID;
@@ -15,15 +16,20 @@ function send(message: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-function stopAtBarrier(): void {
-  process.kill(process.pid, "SIGSTOP");
+function waitAtBarrier(): void {
+  const byte = Buffer.allocUnsafe(1);
+  while (true) {
+    const size = readSync(0, byte, 0, 1, null);
+    if (size === 0) throw new Error("claim worker stdin closed at barrier");
+    if (byte[0] === 10) return;
+  }
 }
 
 try {
   const store = new MultiremiStore(db);
   const backend = db.query("SELECT pg_backend_pid() AS pid").get() as { pid: string | number };
   send({ type: "ready", pid: process.pid, backendPid: Number(backend.pid) });
-  stopAtBarrier();
+  waitAtBarrier();
 
   const originalQuery = db.query.bind(db);
   let dueBarrierReached = false;
@@ -40,7 +46,7 @@ try {
         const rows = statement.all(...params) as Array<{ id: string }>;
         dueBarrierReached = true;
         send({ type: "due_selected", decisionIds: rows.map(row => String(row.id)) });
-        stopAtBarrier();
+        waitAtBarrier();
         return rows;
       },
       run: (...params: unknown[]) => statement.run(...params),

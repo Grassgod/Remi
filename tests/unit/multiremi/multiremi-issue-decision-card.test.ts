@@ -26,6 +26,42 @@ const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
 const OPERATOR_MISMATCH_TOAST = "本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。";
 const DECISION_FINISHED_TOAST = "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。";
+const DECISION_NOT_SUBMITTED_TOAST = "本次没有提交：这次没能提交。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。";
+const CARD_RECOVERING_TOAST = "本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。";
+
+const DECISION_SIDE_EFFECT_TABLES = [
+  "multiremi_issue_decisions",
+  "multiremi_issue_activity",
+  "multiremi_inbox_items",
+  "multiremi_feishu_bot_outbound_deliveries",
+  "multiremi_tasks",
+  "multiremi_session_events",
+] as const;
+
+function decisionSideEffectCounts(): Record<string, number> {
+  return Object.fromEntries(DECISION_SIDE_EFFECT_TABLES.map(table => {
+    const row = db!.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
+    return [table, Number(row.n)];
+  }));
+}
+
+async function daemonClientOverTcp<T>(
+  store: MultiremiStore,
+  run: (client: MultiremiDaemonClient) => Promise<T>,
+): Promise<T> {
+  const api = app(store);
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: request => api.fetch(request),
+  });
+  const host = await daemonToken(store);
+  try {
+    return await run(new MultiremiDaemonClient(server.url.origin, host.token));
+  } finally {
+    await server.stop(true);
+  }
+}
 
 let previousEncryptionKey: string | undefined;
 let previousPublicUrl: string | undefined;
@@ -1160,6 +1196,339 @@ describe("MUL-412 issue decision cards", () => {
     expect(settled.answeredByMemberId).toBe(member.id);
   });
 
+  for (const failure of ["archived runtime workspace", "agent moved to another machine"] as const) {
+    it(`does not report ${failure} as a finished decision`, async () => {
+      const { store, agentId } = scaffold();
+      const parent = issueWithTopic(store, `Rolled back: ${failure}`, { type: "agent", id: agentId });
+      const runtimeWorkspace = store.runtimeWorkspaces.create("rt_bot", {
+        name: `MUL-412 ${failure}`,
+        root_path: `/tmp/mul412-${failure.replaceAll(" ", "-")}`,
+      });
+      const child = store.createIssue({
+        title: "Decision source", workspaceId: "local", parentIssueId: parent.id,
+        assigneeType: "agent", assigneeId: agentId, runtimeWorkspaceId: runtimeWorkspace.id,
+      });
+      const task = store.createTask({ agentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
+      const decision = raiseDecision(store, agentId, child.id, task.id, {
+        kind: "production_change", title: "Deploy?", options: ["yes"],
+      });
+      sendCard(store, `om_${failure.replaceAll(" ", "_")}`)!;
+      db!.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+      if (failure === "archived runtime workspace") {
+        store.runtimeWorkspaces.archive(runtimeWorkspace.id);
+      } else {
+        const other = store.registerRuntime({
+          id: "rt_other_machine", name: "Other machine", provider: "codex",
+          workspaceId: "local", daemonId: "other-machine",
+        });
+        store.updateAgent(agentId, { runtimeId: other.id });
+      }
+
+      const before = decisionSideEffectCounts();
+      let wakes = 0;
+      const events: string[] = [];
+      const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
+      const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
+      const messageId = `om_${failure.replaceAll(" ", "_")}`;
+      const marker = decisionInteractionMarker(parent.id, decision.id);
+      let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+      try {
+        const result = await daemonClientOverTcp(store, async client => {
+          registration = registerIssueDecisionCardInteraction({
+            appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+            recipientOpenId: CARD_OPEN_ID,
+            getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
+            submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+              parent.id, decision.id, { answer, operatorOpenId },
+            ),
+          });
+          return handleIssueDecisionInteractionEvent("cli_issue_decision", {
+            operator: { open_id: CARD_OPEN_ID },
+            context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+            action: { name: `${marker}_o0`, form_value: {} },
+          });
+        });
+        expect(result?.toast).toEqual({
+          type: "error",
+          content: "本次没有提交：这次没能提交（错误码：runtime_workspace_error）。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。",
+        });
+        expect(result).not.toHaveProperty("card");
+      } finally {
+        registration?.dispose();
+        stopWake();
+        stopEvents();
+      }
+      expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "escalated", history: [] });
+      expect(decisionSideEffectCounts()).toEqual(before);
+      expect(wakes).toBe(0);
+      expect(events).toEqual([]);
+    });
+  }
+
+  it("keeps a no-card-context 404 non-terminal after a successful GET", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Missing card context", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?", options: ["yes"],
+    });
+    const messageId = "om_context_removed";
+    sendCard(store, messageId)!;
+    const marker = decisionInteractionMarker(parent.id, decision.id);
+    let before: Record<string, number> | null = null;
+    let wakes = 0;
+    const events: string[] = [];
+    const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
+    const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
+    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    try {
+      const result = await daemonClientOverTcp(store, async client => {
+        registration = registerIssueDecisionCardInteraction({
+          appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+          recipientOpenId: CARD_OPEN_ID,
+          getDecision: async () => {
+            const current = await client.getFeishuIssueDecision(parent.id, decision.id);
+            db!.run("DELETE FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?", [decision.id]);
+            before = decisionSideEffectCounts();
+            return current;
+          },
+          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId },
+          ),
+        });
+        return handleIssueDecisionInteractionEvent("cli_issue_decision", {
+          operator: { open_id: CARD_OPEN_ID },
+          context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+          action: { name: `${marker}_o0`, form_value: {} },
+        });
+      });
+      expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
+      expect(result).not.toHaveProperty("card");
+    } finally {
+      registration?.dispose();
+      stopWake();
+      stopEvents();
+    }
+    expect(before).not.toBeNull();
+    expect(decisionSideEffectCounts()).toEqual(before!);
+    expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "escalated", history: [] });
+    expect(wakes).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  for (const missing of ["issue", "decision"] as const) {
+    it(`keeps a GET 404 for a missing ${missing} non-terminal`, async () => {
+      const { store, agentId } = scaffold();
+      const parent = issueWithTopic(store, `Missing ${missing}`, { type: "agent", id: agentId });
+      const issueId = missing === "issue" ? "iss_missing" : parent.id;
+      const decisionId = "dcs_missing";
+      const messageId = `om_missing_${missing}`;
+      const marker = decisionInteractionMarker(issueId, decisionId);
+      let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+      try {
+        const result = await daemonClientOverTcp(store, async client => {
+          registration = registerIssueDecisionCardInteraction({
+            appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+            recipientOpenId: CARD_OPEN_ID,
+            getDecision: () => client.getFeishuIssueDecision(issueId, decisionId),
+            submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+              issueId, decisionId, { answer, operatorOpenId },
+            ),
+          });
+          return handleIssueDecisionInteractionEvent("cli_issue_decision", {
+            operator: { open_id: CARD_OPEN_ID },
+            context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+            action: { name: marker, form_value: { [`${marker}_answer`]: "yes" } },
+          });
+        });
+        expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
+        expect(result).not.toHaveProperty("card");
+      } finally {
+        registration?.dispose();
+      }
+    });
+  }
+
+  it("re-reads a withdrawal inserted at the answer boundary and returns a terminal receipt", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Withdraw race", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?", options: ["yes"],
+    });
+    const messageId = "om_withdraw_race";
+    sendCard(store, messageId)!;
+    const marker = decisionInteractionMarker(parent.id, decision.id);
+    const originalAnswer = store.answerIssueDecision.bind(store);
+    const injectedAnswer: typeof store.answerIssueDecision = (...args) => {
+      store.withdrawIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
+      return originalAnswer(...args);
+    };
+    store.answerIssueDecision = injectedAnswer;
+    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    try {
+      const result = await daemonClientOverTcp(store, async client => {
+        registration = registerIssueDecisionCardInteraction({
+          appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+          recipientOpenId: CARD_OPEN_ID,
+          getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
+          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId },
+          ),
+        });
+        return handleIssueDecisionInteractionEvent("cli_issue_decision", {
+          operator: { open_id: CARD_OPEN_ID },
+          context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+          action: { name: `${marker}_o0`, form_value: {} },
+        });
+      });
+      expect(result?.toast).toEqual({ type: "info", content: DECISION_FINISHED_TOAST });
+      expect(result).toHaveProperty("card");
+      expect(store.getIssueDecision(parent.id, decision.id)?.status).toBe("withdrawn");
+    } finally {
+      registration?.dispose();
+      store.answerIssueDecision = originalAnswer;
+    }
+  });
+
+  it("keeps an already-answered concurrent card callback idempotent", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Answer race", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?", options: ["yes"],
+    });
+    const messageId = "om_answer_race";
+    sendCard(store, messageId)!;
+    const marker = decisionInteractionMarker(parent.id, decision.id);
+    let raced = false;
+    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    try {
+      const result = await daemonClientOverTcp(store, async client => {
+        registration = registerIssueDecisionCardInteraction({
+          appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+          recipientOpenId: CARD_OPEN_ID,
+          getDecision: async () => {
+            const current = await client.getFeishuIssueDecision(parent.id, decision.id);
+            if (!raced) {
+              raced = true;
+              await client.answerFeishuIssueDecision(parent.id, decision.id, {
+                answer: "yes", operatorOpenId: CARD_OPEN_ID,
+              });
+            }
+            return current;
+          },
+          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId },
+          ),
+        });
+        return handleIssueDecisionInteractionEvent("cli_issue_decision", {
+          operator: { open_id: CARD_OPEN_ID },
+          context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+          action: { name: `${marker}_o0`, form_value: {} },
+        });
+      });
+      expect(result?.toast).toEqual({ type: "success", content: "已提交" });
+      expect(result).toHaveProperty("card");
+      expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "answered" });
+      expect(store.getIssueDecision(parent.id, decision.id)?.history).toHaveLength(1);
+    } finally {
+      registration?.dispose();
+    }
+  });
+
+  it("covers every Issue-decision handler return with a complete toast", async () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Handler return table", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, {
+      kind: "production_change", title: "Deploy?", options: ["yes"],
+    });
+    const marker = decisionInteractionMarker(parent.id, decision.id);
+    const rows = [
+      { name: "non-fd action", route: "ignored", expected: null, ignored: true },
+      { name: "card not registered", route: "missing_entry", expected: { type: "info", content: CARD_RECOVERING_TOAST } },
+      { name: "local operator mismatch", route: "operator", expected: { type: "error", content: OPERATOR_MISMATCH_TOAST } },
+      { name: "GET failure", route: "get_error", expected: { type: "error", content: "本次没有提交：提交失败，请稍后重试（错误码：handler_read_failed）。" } },
+      { name: "GET null", route: "get_null", expected: { type: "info", content: CARD_RECOVERING_TOAST } },
+      { name: "GET terminal", route: "get_answered", expected: { type: "info", content: DECISION_FINISHED_TOAST }, receipt: true },
+      { name: "button mismatch", route: "button_mismatch", expected: { type: "error", content: "本次没有提交：这个按钮和卡片上当前的问题对不上，可能是旧卡片。请到网页端回答。" } },
+      { name: "invalid custom answer", route: "invalid_custom", expected: { type: "error", content: "本次没有提交：自定义回答的格式无法识别。请重新填写文字后再提交，或到网页端回答。" } },
+      { name: "choices but empty", route: "empty_choices", expected: { type: "error", content: "本次没有提交：请选择一项，或填写自定义回答后再提交。" } },
+      { name: "no choices and empty", route: "empty_no_choices", expected: { type: "error", content: "本次没有提交：请填写回答后再提交。" } },
+      { name: "POST answered", route: "post_answered", expected: { type: "success", content: "已提交" }, receipt: true, submitted: true },
+      { name: "POST withdrawn", route: "post_withdrawn", expected: { type: "info", content: DECISION_FINISHED_TOAST }, receipt: true },
+      { name: "POST still escalated", route: "post_escalated", expected: { type: "error", content: DECISION_NOT_SUBMITTED_TOAST } },
+      { name: "POST failure", route: "post_error", expected: { type: "error", content: DECISION_NOT_SUBMITTED_TOAST } },
+    ] as const;
+    let activeRoute: typeof rows[number]["route"] = "ignored";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        if (request.method === "GET") {
+          if (activeRoute === "get_error") {
+            return Response.json({ error: "fixture", code: "handler_read_failed" }, { status: 500 });
+          }
+          if (activeRoute === "get_null") return Response.json({ decision: null });
+          const status = activeRoute === "get_answered" ? "answered" : "escalated";
+          const options = activeRoute === "empty_no_choices" ? [] : decision.options;
+          return Response.json({ decision: { ...decision, status, options } });
+        }
+        if (activeRoute === "post_error") return Response.json({ error: "decision not found" }, { status: 404 });
+        const status = activeRoute === "post_withdrawn"
+          ? "withdrawn"
+          : activeRoute === "post_escalated" ? "escalated" : "answered";
+        return Response.json({ decision: { ...decision, status } });
+      },
+    });
+    const client = new MultiremiDaemonClient(server.url.origin, "daemon-test-token");
+    try {
+      for (const [index, row] of rows.entries()) {
+        activeRoute = row.route;
+        const messageId = `om_handler_return_${index}`;
+        const shouldRegister = row.route !== "missing_entry" && row.route !== "ignored";
+        const registration = shouldRegister ? registerIssueDecisionCardInteraction({
+          appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
+          recipientOpenId: CARD_OPEN_ID,
+          getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
+          submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+            parent.id, decision.id, { answer, operatorOpenId },
+          ),
+        }) : null;
+        const actionName = row.route === "ignored"
+          ? "fr_not_an_issue_decision"
+          : row.route === "button_mismatch" ? "fd_stale_button"
+            : row.route === "empty_choices" || row.route === "empty_no_choices"
+              ? marker : `${marker}_o0`;
+        const formValue = row.route === "invalid_custom"
+          ? { [`${marker}_answer`]: { unsupported: true } }
+          : {};
+        try {
+          const result = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
+            operator: { open_id: row.route === "operator" ? "ou_somebody_else" : CARD_OPEN_ID },
+            context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
+            action: { name: actionName, form_value: formValue },
+          });
+          if (row.expected === null) {
+            expect(result, row.name).toBeNull();
+            continue;
+          }
+          expect(result?.toast, row.name).toEqual(row.expected);
+          expect(Boolean(result && "card" in result), row.name).toBe("receipt" in row && row.receipt === true);
+          if (!("submitted" in row && row.submitted)) {
+            expect(result?.toast.content.startsWith("本次没有提交："), row.name).toBe(true);
+            expect(result?.toast.content, row.name).toContain("请");
+          }
+        } finally {
+          registration?.dispose();
+        }
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   it("maps all 24 callback failure and terminal combinations to complete user-facing toasts", async () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Callback errors", { type: "agent", id: agentId });
@@ -1199,10 +1568,15 @@ describe("MUL-412 issue decision cards", () => {
         name: "POST mismatch", stage: "submit", response: "http", status: 403, code: "decision_operator_mismatch",
         expected: OPERATOR_MISMATCH_TOAST,
       },
-      { name: "GET 404", stage: "read", response: "http", status: 404, code: null, expected: DECISION_FINISHED_TOAST },
-      { name: "POST 404", stage: "submit", response: "http", status: 404, code: null, expected: DECISION_FINISHED_TOAST },
-      { name: "GET 409", stage: "read", response: "http", status: 409, code: null, expected: DECISION_FINISHED_TOAST },
-      { name: "POST 409", stage: "submit", response: "http", status: 409, code: null, expected: DECISION_FINISHED_TOAST },
+      { name: "GET 404", stage: "read", response: "http", status: 404, code: null, expected: DECISION_NOT_SUBMITTED_TOAST },
+      { name: "POST 404", stage: "submit", response: "http", status: 404, code: null, expected: DECISION_NOT_SUBMITTED_TOAST },
+      { name: "GET 409", stage: "read", response: "http", status: 409, code: null, expected: DECISION_NOT_SUBMITTED_TOAST },
+      { name: "POST 409", stage: "submit", response: "http", status: 409, code: null, expected: DECISION_NOT_SUBMITTED_TOAST },
+      {
+        name: "POST plugin version unavailable", stage: "submit", response: "http", status: 409,
+        code: "plugin_version_unavailable",
+        expected: "本次没有提交：这次没能提交（错误码：plugin_version_unavailable）。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。",
+      },
       {
         name: "GET 500", stage: "read", response: "http", status: 500, code: "decision_backend_failed",
         expected: "本次没有提交：提交失败，请稍后重试（错误码：decision_backend_failed）。",
@@ -1219,11 +1593,11 @@ describe("MUL-412 issue decision cards", () => {
       { name: "POST non-JSON error", stage: "submit", response: "non_json_error", expected: "本次没有提交：提交失败，请稍后重试。" },
       { name: "GET 200 non-JSON", stage: "read", response: "non_json_ok", expected: "本次没有提交：提交失败，请稍后重试。" },
       { name: "POST 200 non-JSON", stage: "submit", response: "non_json_ok", expected: "本次没有提交：提交失败，请稍后重试。" },
-      { name: "GET answered", stage: "read", response: "decision", decisionStatus: "answered", expected: DECISION_FINISHED_TOAST, toastType: "info" },
-      { name: "GET withdrawn", stage: "read", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info" },
-      { name: "POST withdrawn", stage: "submit", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info" },
+      { name: "GET answered", stage: "read", response: "decision", decisionStatus: "answered", expected: DECISION_FINISHED_TOAST, toastType: "info", receipt: true },
+      { name: "GET withdrawn", stage: "read", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info", receipt: true },
+      { name: "POST withdrawn", stage: "submit", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info", receipt: true },
     ] as const;
-    expect(cases).toHaveLength(23);
+    expect(cases).toHaveLength(24);
 
     let activeCase: typeof cases[number] | null = null;
     const server = Bun.serve({
@@ -1288,6 +1662,11 @@ describe("MUL-412 issue decision cards", () => {
             type: "toastType" in testCase ? testCase.toastType : "error",
             content: testCase.expected,
           });
+          expect(Boolean(result && "card" in result), testCase.name)
+            .toBe("receipt" in testCase && testCase.receipt === true);
+          if (testCase.response === "http" && (testCase.status === 404 || testCase.status === 409)) {
+            expect(store.getIssueDecision(parent.id, decision.id)?.status, testCase.name).toBe("escalated");
+          }
         } finally {
           registration.dispose();
         }

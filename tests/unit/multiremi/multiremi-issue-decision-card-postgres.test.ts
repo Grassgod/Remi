@@ -8,9 +8,15 @@
  * one card produce one delivery.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
-import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { decisionInteractionMarker, decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import {
+  handleIssueDecisionInteractionEvent,
+  registerIssueDecisionCardInteraction,
+} from "@connectors/feishu/task-interaction.js";
+import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -150,8 +156,9 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     // `createWorkspace` already seeded its owner member; bind it to a user whose
     // external_id is this case's Feishu open_id, the same way SSO login does.
     const member = targetStore.listWorkspaceMembers(workspaceId).find(item => item.role === "owner")!;
+    const openId = `ou_pg412_${workspaceSeq}`;
     const user = targetStore.getOrCreateUser({
-      externalId: `ou_pg412_${workspaceSeq}`, name: "PG owner", email: `pg412-${workspaceSeq}@example.com`,
+      externalId: openId, name: "PG owner", email: `pg412-${workspaceSeq}@example.com`,
     });
     targetDb.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
     const agentId = targetStore.createAgent({ name: "PG Concierge", provider: "codex", workspaceId }).id;
@@ -182,7 +189,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       title: `PG child ${workspaceSeq}`, workspaceId, parentIssueId: parent.id, assigneeType: "agent", assigneeId: agentId,
     });
     const task = targetStore.createTask({ agentId, issueId: child.id, workspaceId, prompt: "W" });
-    return { workspaceId, runtimeId, agentId, member, parent, child, task };
+    return { workspaceId, runtimeId, agentId, member, openId, parent, child, task };
   }
 
   function escalate(scope: ReturnType<typeof scaffold>, kind = "production_change", targetStore = store) {
@@ -268,6 +275,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         MUL412_CLAIM_RUNTIME_ID: scope.runtimeId,
         MUL412_CLAIM_NOW: now.toISOString(),
       },
+      stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -285,13 +293,19 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       expect(new Set(backendPids).size).toBe(2);
       expect(workerPids).toEqual(processes.map(child => child.pid));
 
-      for (const pid of workerPids) process.kill(pid, "SIGCONT");
+      for (const child of processes) {
+        child.stdin.write("\n");
+        child.stdin.flush();
+      }
       const selected = await Promise.all(nextMessages.map((next, index) =>
         beforeBarrierTimeout(next(), `worker ${index + 1} due SELECT`)));
       expect(selected.map(message => message.type)).toEqual(["due_selected", "due_selected"]);
       expect(selected.map(message => message.decisionIds)).toEqual([[decision.id], [decision.id]]);
 
-      for (const pid of workerPids) process.kill(pid, "SIGCONT");
+      for (const child of processes) {
+        child.stdin.write("\n");
+        child.stdin.flush();
+      }
       const results = await Promise.all(nextMessages.map((next, index) =>
         beforeBarrierTimeout(next(), `worker ${index + 1} claim result`)));
       expect(results.map(message => message.type)).toEqual(["result", "result"]);
@@ -314,11 +328,65 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     } finally {
       if (!completed) {
         for (const child of processes) {
-          try { process.kill(child.pid, "SIGCONT"); } catch { /* already exited */ }
           if (child.exitCode === null) child.kill(9);
         }
         await Promise.allSettled(processes.map(child => child.exited));
       }
+    }
+  }, 60_000);
+
+  it("classifies answer failures from the canonical Postgres decision over real HTTP", async () => {
+    const scope = scaffold();
+    const decision = escalate(scope);
+    const card = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
+    const messageId = "om_pg_answer_classification";
+    store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: messageId,
+      interactionOpenId: scope.openId,
+    });
+    const token = await store.createAccessToken({
+      name: "PG bot host", type: "daemon", workspaceId: scope.workspaceId,
+      daemonId: `d-${scope.runtimeId}`,
+    });
+    const api = createMultiremiApp({ store, authToken: "MASTER" });
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: request => api.fetch(request),
+    });
+    const client = new MultiremiDaemonClient(server.url.origin, token.token);
+    const marker = decisionInteractionMarker(scope.parent.id, decision.id);
+    const originalAnswer = store.answerIssueDecision.bind(store);
+    store.answerIssueDecision = (...args) => {
+      store.withdrawIssueDecision(scope.parent.id, decision.id, {
+        type: "agent", id: scope.agentId, taskId: scope.task.id,
+      });
+      return originalAnswer(...args);
+    };
+    const registration = registerIssueDecisionCardInteraction({
+      appId: "cli_pg412", chatId: "oc_pg412", messageId,
+      recipientOpenId: scope.openId,
+      getDecision: () => client.getFeishuIssueDecision(scope.parent.id, decision.id),
+      submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
+        scope.parent.id, decision.id, { answer, operatorOpenId },
+      ),
+    });
+    try {
+      const result = await handleIssueDecisionInteractionEvent("cli_pg412", {
+        operator: { open_id: scope.openId },
+        context: { open_message_id: messageId, open_chat_id: "oc_pg412" },
+        action: { name: `${marker}_o0`, form_value: {} },
+      });
+      expect(result?.toast).toEqual({
+        type: "info",
+        content: "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。",
+      });
+      expect(result).toHaveProperty("card");
+      expect(store.getIssueDecision(scope.parent.id, decision.id)?.status).toBe("withdrawn");
+    } finally {
+      registration.dispose();
+      store.answerIssueDecision = originalAnswer;
+      await server.stop(true);
     }
   });
 

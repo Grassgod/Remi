@@ -121,7 +121,9 @@ function issueDecisionFailureToast(error: unknown): string {
     return "本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。";
   }
   if (status === 404 || status === 409) {
-    return "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。";
+    return code
+      ? `本次没有提交：这次没能提交（错误码：${code}）。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。`
+      : "本次没有提交：这次没能提交。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。";
   }
   return code
     ? `本次没有提交：提交失败，请稍后重试（错误码：${code}）。`
@@ -235,7 +237,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   if (typeof action.name !== "string" || !action.name.startsWith("fd_")) return null;
   const entry = pendingDecisions.get(`${appId}:${String(context.open_message_id ?? "")}`);
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
-  if (!entry) return toast("请求已处理，或正在恢复，请稍后重试", "info");
+  if (!entry) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
   if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
     || object(event.operator).open_id !== entry.recipientOpenId) {
     return toast("本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。");
@@ -246,7 +248,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   } catch (error) {
     return toast(issueDecisionFailureToast(error));
   }
-  if (!decision) return toast("请求已处理，或正在恢复，请稍后重试", "info");
+  if (!decision) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
   if (decision.status !== "escalated") {
     return { ...toast("本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", "info"),
       card: { type: "raw", data: buildIssueDecisionCard(decision,
@@ -257,25 +259,39 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   // The form submits as one button whose name is the marker; individual option
   // buttons append `_o<index>`. Both carry the free-text field, so either may be
   // combined with a custom answer.
-  if (action.name !== marker && !action.name.startsWith(`${marker}_o`)) return toast("操作与当前问题不匹配");
+  if (action.name !== marker && !action.name.startsWith(`${marker}_o`)) {
+    return toast("本次没有提交：这个按钮和卡片上当前的问题对不上，可能是旧卡片。请到网页端回答。");
+  }
   let custom = "";
   try {
     custom = answerText(form[`${marker}_answer`]);
   } catch {
-    return toast("自定义回答格式无效");
+    return toast("本次没有提交：自定义回答的格式无法识别。请重新填写文字后再提交，或到网页端回答。");
   }
   const choices = Array.isArray(decision.options) ? decision.options : [];
   const optionIndex = action.name === marker ? -1 : Number(action.name.slice(marker.length + 2));
   const option = Number.isSafeInteger(optionIndex) && optionIndex >= 0 && optionIndex < choices.length
     ? String(choices[optionIndex])
     : null;
-  if (!option && !custom) return toast(choices.length ? "请选择一项，或填写自定义回答" : "请填写回答");
+  if (!option && !custom) {
+    return toast(choices.length
+      ? "本次没有提交：请选择一项，或填写自定义回答后再提交。"
+      : "本次没有提交：请填写回答后再提交。");
+  }
   const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
   try {
     const settled = await entry.submit(answer, String(object(event.operator).open_id ?? ""));
-    return { ...toast(settled.status === "answered" ? "已提交" : "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", settled.status === "answered" ? "success" : "info"),
-      card: { type: "raw", data: buildIssueDecisionCard(settled,
-        { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+    if (settled.status === "answered") {
+      return { ...toast("已提交", "success"),
+        card: { type: "raw", data: buildIssueDecisionCard(settled,
+          { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+    }
+    if (settled.status !== "escalated") {
+      return { ...toast("本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", "info"),
+        card: { type: "raw", data: buildIssueDecisionCard(settled,
+          { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
+    }
+    return toast("本次没有提交：这次没能提交。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。");
   } catch (error) {
     return toast(issueDecisionFailureToast(error));
   }
