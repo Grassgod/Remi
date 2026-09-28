@@ -1284,27 +1284,15 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(progress).toEqual({ ok: true });
     expect(store.getTask(task.id)?.progressSummary).toBe("editing");
 
-    const firstMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [
+    // Seed the legacy reader fixture without the removed daemon write route.
+    store.appendTaskMessages(task.id, [
           { seq: 1, type: "assistant", content: "starting" },
           { seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "ok" },
-        ],
-      }),
-    });
-    expect(firstMessages.status).toBe(200);
-    expect(await firstMessages.json()).toEqual({ status: "ok" });
+    ]);
     const seqTwoId = store.listTaskMessages(task.id).find((message) => message.seq === 2)?.id;
     expect(seqTwoId).toBeString();
 
-    const replayedMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: [{ seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "updated" }] }),
-    });
-    expect(await replayedMessages.json()).toEqual({ status: "ok" });
+    store.appendTaskMessages(task.id, [{ seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "updated" }]);
     const replayedMessage = store.listTaskMessages(task.id).find((message) => message.seq === 2);
     expect(replayedMessage?.id).toBe(seqTwoId);
     expect(replayedMessage?.output).toBe("updated");
@@ -1325,8 +1313,7 @@ describe("Multiremi API — daemon endpoints", () => {
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
-    expect(invalidMessages.status).toBe(400);
-    expect(await invalidMessages.json()).toEqual({ error: "invalid request body" });
+    expect(invalidMessages.status).toBe(404);
 
     const usageFirst = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "codex", model: "gpt-5", inputTokens: 10, outputTokens: 5 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(usageFirst).toEqual({ ok: true });

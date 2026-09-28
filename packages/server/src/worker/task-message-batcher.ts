@@ -17,8 +17,8 @@ export interface TaskMessageBatcherOptions {
 
 /**
  * Coalesces adjacent token chunks without crossing tool, plan, compaction, or
- * subagent boundaries. The first chunk's seq is retained; gaps are valid and
- * keep retries idempotent when this is also used for persisted outbox rows.
+ * subagent boundaries. Legacy input seq values are retained here, but the live
+ * TraceStore write assigns its own dense sequence after coalescing.
  */
 export function coalesceTaskMessages(
   messages: TaskMessageInput[],
@@ -39,8 +39,7 @@ export function coalesceTaskMessages(
 
 /**
  * Small in-memory front buffer for live ACP events. It preserves interactive
- * streaming while preventing one durable SQLite row and one HTTP request per
- * provider token.
+ * streaming while amortizing normalized trace writes across provider tokens.
  */
 export class TaskMessageBatcher {
   private readonly emit: (messages: TaskMessageInput[]) => void;

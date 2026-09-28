@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
-import { reportFrame } from "../../fixtures/report-session.js";
+import { reportFrame, reportTraceSink } from "../../fixtures/report-session.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -49,7 +49,7 @@ describe("daemon report replay idempotency", () => {
     expect(store.listTasks().length).toBe(tasksAfterFirst);
   });
 
-  it("upserts replayed message batches and merges replayed usage without duplicates", async () => {
+  it("absorbs replayed trace batches and merges replayed usage without duplicates", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "master-secret" });
     const runtime = store.registerRuntime({ id: "rt_replay_msg", name: "replay-msg", provider: "claude", workspaceId: "local" });
@@ -59,22 +59,22 @@ describe("daemon report replay idempotency", () => {
     store.startTask(task.id);
 
     const batch = {
-      messages: [
-        { seq: 1, type: "text", content: "hello " },
-        { seq: 2, type: "text", content: "world" },
+      task_id: task.id, closed: false,
+      events: [
+        { seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "hello " },
+        { seq: 2, ts: "2026-09-28T00:00:00Z", type: "text", content: "world" },
       ],
     };
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify(batch),
-      });
-      expect(response.status).toBe(200);
+      const response = await reportFrame(store, "trace.append", batch);
+      expect(response).toEqual({ ok: true, hub_head: 2 });
     }
-    const messages = store.listTaskMessages(task.id);
+    const messages: Array<{ seq: number; content?: string | null }> = [];
+    const sub = reportTraceSink(store).subscribe(task.id, 0, (_id, events) => messages.push(...events));
+    sub.unsubscribe();
     expect(messages).toHaveLength(2);
     expect(messages.map((m) => [m.seq, m.content])).toEqual([[1, "hello "], [2, "world"]]);
+    expect(store.listTaskMessages(task.id)).toEqual([]);
 
     const usage = { usage: [{ provider: "claude", model: "m1", input_tokens: 10, output_tokens: 5, total_tokens: 15 }] };
     for (let attempt = 0; attempt < 2; attempt += 1) {

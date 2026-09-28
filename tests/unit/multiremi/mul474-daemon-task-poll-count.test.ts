@@ -183,11 +183,14 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds POST messages for one message and never reads the task payload", async () => {
+  it("bounds trace.append for one event and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "POST", `/api/daemon/tasks/${scaffolded.fixture.taskId}/messages`, {
-      messages: [{ type: "text", content: "one message" }],
-    });
+    scaffolded.probe.reset();
+    const response = await reportFrame(scaffolded.store, "trace.append", { task_id: scaffolded.fixture.taskId, closed: false,
+      events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "one message" }],
+    }, { headers: scaffolded.headers, authToken: AUTH_TOKEN, beforeFrame: () => scaffolded.probe.reset() });
+    expect(response).toEqual({ ok: true, hub_head: 1 });
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.messages);
     expectNoTaskPayloadReads(sql);
   });

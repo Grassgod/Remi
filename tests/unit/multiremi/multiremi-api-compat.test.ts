@@ -1159,11 +1159,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(startedBody.status).toBe("running");
     expect(startedBody.wait_reason ?? null).toBeNull();
     expect(startedBody.waitReason).toBeUndefined();
-    await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: [{ type: "assistant", content: "compat done" }] }),
-    });
+    store.appendTaskMessages(task.id, [{ type: "assistant", content: "compat done" }]);
     const taskPrefix = task.id.slice(0, 8);
     expect((await (await app.request(`/api/tasks/${taskPrefix}/messages`)).json())[0].content).toBe("compat done");
 

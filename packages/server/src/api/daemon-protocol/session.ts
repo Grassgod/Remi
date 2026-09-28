@@ -211,6 +211,8 @@ export interface DaemonSessionOptions {
   clock?: DaemonProtocolClock;
 }
 
+const DEFERRED_RPC_REPLY = Symbol("deferred daemon RPC reply");
+
 /** A pending reliable downlink frame awaiting its acknowledgement. */
 interface PendingAck {
   seq: number;
@@ -413,6 +415,14 @@ export class DaemonProtocolSession {
   /** Answer an RPC frame. `re` is always the request's `id`. */
   sendReply(requestId: string, payload: unknown): boolean {
     return this.sendDirect({ t: "res", ...(requestId ? { re: requestId } : {}), p: payload });
+  }
+
+  /** A reverse RPC reply must be processed before its awaiting uplink handler. */
+  deferReply(requestId: string, reply: Promise<unknown>): symbol {
+    void reply.then(payload => this.sendReply(requestId, payload), () => this.sendReply(requestId, {
+      ok: false, code: "server_error", retryable: true,
+    }));
+    return DEFERRED_RPC_REPLY;
   }
 
   /** Issue a server -> daemon RPC and remember it until the reply arrives. */
@@ -812,6 +822,7 @@ export class DaemonProtocolSession {
       return "protocol_violation";
     }
     const reply = await handler(frame);
+    if (reply === DEFERRED_RPC_REPLY) return null;
     if (reply === null || reply === undefined) {
       // No handler answered. Replying "not wired yet" is deliberate: an RPC left
       // unanswered burns the caller's whole timeout and hides which layer is

@@ -59,7 +59,8 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 }
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
-export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore): void {
+export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -122,6 +123,10 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
               error: string(p.error) || "Task failed", sessionId: nullable(p.session_id), workDir: nullable(p.work_dir), failureReason: nullable(p.failure_reason) });
             break;
           default: reject();
+        }
+        if ((frame.type === "task.complete" || frame.type === "task.fail") && p.trace) {
+          const trace = p.trace as { head?: unknown; closed?: unknown };
+          if (trace.closed === true && Number.isSafeInteger(trace.head) && (trace.head as number) >= 0) onTraceClosed?.(taskId, trace.head as number, task.runtimeId!);
         }
         return { ok: true };
       }

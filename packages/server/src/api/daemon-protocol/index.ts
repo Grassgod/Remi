@@ -79,6 +79,9 @@ export class DaemonProtocolLayer {
   private readonly rpcHandlers = new Map<string, DaemonProtocolRpcHandler>();
   private readonly eventHandlers = new Map<string, DaemonProtocolRpcHandler>();
   private readonly bestEffortHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly replyListeners = new Set<(frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
+  private readonly closeListeners = new Set<(session: DaemonProtocolSession) => void>();
+  private traceHeads: (session: DaemonProtocolSession) => Record<string, number> = () => ({});
 
   constructor(options: DaemonProtocolLayerOptions) {
     this.store = options.store;
@@ -117,6 +120,9 @@ export class DaemonProtocolLayer {
       onRpc: (frame) => this.rpcHandlers.get(frame.type)?.(frame, session) ?? null,
       onEvent: (frame) => this.eventHandlers.get(frame.type)?.(frame, session) ?? null,
       onBestEffort: (frame) => this.bestEffortHandlers.get(frame.type)?.(frame, session) ?? null,
+      traceHeads: () => this.traceHeads(session),
+      onReply: frame => { for (const listener of this.replyListeners) listener(frame, session); },
+      onClose: () => { for (const listener of this.closeListeners) listener(session); },
     });
     return session;
   }
@@ -216,6 +222,16 @@ export class DaemonProtocolLayer {
 
   registerBestEffortHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
     this.bestEffortHandlers.set(frameType, handler);
+  }
+
+  setTraceHeads(source: (session: DaemonProtocolSession) => Record<string, number>): void { this.traceHeads = source; }
+  onReply(listener: (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void): () => void {
+    this.replyListeners.add(listener);
+    return () => this.replyListeners.delete(listener);
+  }
+  onClose(listener: (session: DaemonProtocolSession) => void): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   /** Close every live session with 4001 (server shutdown). */

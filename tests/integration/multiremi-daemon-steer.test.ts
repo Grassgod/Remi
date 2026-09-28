@@ -123,7 +123,7 @@ describe("Bun Multiremi daemon steering", () => {
       expect(steerId).toBeTruthy();
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-      const steerMessages = store.listTaskMessages(task.id).filter((m) => m.type === "steer");
+      const steerMessages = daemon.traceStore().read(task.id).events.filter((m) => m.type === "steer");
       expect(steerMessages).toHaveLength(1);
       expect(steerMessages[0]?.content).toBe("改用中文输出");
     } finally {

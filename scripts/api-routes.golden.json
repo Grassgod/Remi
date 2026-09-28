@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 745,
+    "routeCount": 744,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 519,
+      "compat": 518,
       "root": 14
     },
     "getRoutes": 321,
@@ -14,8 +14,8 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 424,
-    "mutationRoutesCovered": 269,
+    "mutationRoutes": 423,
+    "mutationRoutesCovered": 268,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -550,7 +550,6 @@
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
-    "POST /api/daemon/tasks/:taskId/messages",
     "POST /api/daemon/tasks/:taskId/steer/consume",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "POST /api/daemon/workspaces/:workspaceId/external-membership/check",
@@ -1250,7 +1249,6 @@
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-    "POST /api/daemon/tasks/:taskId/messages",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "POST /api/feedback",
     "POST /api/inbox/:id/archive",
@@ -4859,16 +4857,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#008 POST /api/daemon/tasks/:taskId/messages",
-      "route": "POST /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/messages",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#009 GET /api/tasks/:taskId/prompt",
+      "key": "daemon-task-lifecycle#008 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
       "path": "/api/tasks/tsk_7212d1hv48ko/prompt",
       "status": 200,
@@ -4881,13 +4870,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#010 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_7scgjf9hexul",
+          "id": "hrq_s9bxee1nx8n3",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4903,13 +4892,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#011 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#010 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/human-requests/hrq_7scgjf9hexul/respond",
+      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/human-requests/hrq_s9bxee1nx8n3/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_7scgjf9hexul",
+          "id": "hrq_s9bxee1nx8n3",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4925,13 +4914,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#012 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_k9s0950jhzoo",
+          "id": "hrq_7scgjf9hexul",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4947,13 +4936,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#013 POST /api/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#012 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_7212d1hv48ko/human-requests/hrq_k9s0950jhzoo/respond",
+      "path": "/api/tasks/tsk_7212d1hv48ko/human-requests/hrq_7scgjf9hexul/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_k9s0950jhzoo",
+          "id": "hrq_7scgjf9hexul",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4969,13 +4958,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_m89380nhvnyc",
+          "id": "hrq_k9s0950jhzoo",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4991,13 +4980,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
+      "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests/hrq_m89380nhvnyc/expire",
+      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests/hrq_k9s0950jhzoo/expire",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_m89380nhvnyc",
+          "id": "hrq_k9s0950jhzoo",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {

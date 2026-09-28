@@ -289,20 +289,23 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     }
   }, 20_000);
 
-  it("keeps pre-terminal report drain active so a CLI update remains blocked", async () => {
+  it("keeps the ordered terminal result wait active so a CLI update remains blocked", async () => {
     const { store, root } = testBed("multiremi-preterminal-active-");
     const agent = store.createAgent({ name: "Pre-terminal Active Bot", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "finish after reports catch up" });
     const daemonToken = await store.createAccessToken({ name: "pre-terminal daemon", type: "daemon", workspaceId: "local" });
     const server = newServer({ store, scheduler: null, authToken: "root-preterminal-secret", hostname: "127.0.0.1", port: 0 });
-    let rejectMessages = true;
-    let messageAttempts = 0;
-    const proxy = apiProxy(server.port, (request, url) => {
-      if (request.method === "POST" && url.pathname === `/api/daemon/tasks/${task.id}/messages`) {
-        messageAttempts++;
-        if (rejectMessages) return new Response("messages unavailable", { status: 503 });
+    let rejectComplete = true;
+    let completeAttempts = 0;
+    const proxy = apiProxy(server.port, () => null, (frame, direction, socket) => {
+      if (direction === "up" && frame.t === "task.complete") {
+        completeAttempts++;
+        if (rejectComplete) {
+          socket.send(JSON.stringify({ v: 2, t: "res", re: String(frame.seq), ts: Date.now(),
+            p: { ok: false, code: "server_error", retryable: true } }));
+          return false;
+        }
       }
-      return null;
     });
     const outboxPath = join(root, "outbox.db");
     const daemon = newDaemon({
@@ -329,7 +332,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     });
     const daemonRun = daemon.start();
     try {
-      await until(() => messageAttempts > 0, 5_000, "pre-terminal message delivery attempt");
+      await until(() => completeAttempts > 0, 5_000, "ordered completion delivery attempt");
       const state = daemon as unknown as {
         activeTaskCount: number;
         drainingTaskCount: number;
@@ -342,7 +345,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
         error: "daemon is busy; retry update when idle",
       });
 
-      rejectMessages = false;
+      rejectComplete = false;
       await daemonRun;
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "finished" });
     } finally {
@@ -473,7 +476,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       expect(completed.result).toBe("before during after");
 
       // Replayed messages arrive complete and in the original seq order.
-      const messages = store.listTaskMessages(task.id);
+      const messages = daemon.traceStore().read(task.id).events;
       expect(messages.map((message) => [message.seq, message.type, message.content ?? ""])).toEqual([
         [1, "execution", ""],
         [2, "text", "before during "],
@@ -786,13 +789,18 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       daemonId,
     });
     const server = newServer({ store, scheduler: null, authToken: "root-terminal-replay-secret", hostname: "127.0.0.1", port: 0 });
-    let delayedMessages = 0;
-    const proxy = apiProxy(server.port, async (request, url) => {
-      if (request.method === "POST" && url.pathname === `/api/daemon/tasks/${task.id}/messages`) {
-        delayedMessages++;
-        await Bun.sleep(300);
-      }
+    let completeAttempts = 0;
+    let recoverOrphansCalls = 0;
+    let heldComplete: { frame: Record<string, any>; socket: Bun.ServerWebSocket<ProxySocketData> } | null = null;
+    const proxy = apiProxy(server.port, (request, url) => {
+      if (request.method === "POST" && url.pathname.includes("recover-orphans")) recoverOrphansCalls++;
       return null;
+    }, (frame, direction, socket) => {
+      if (direction === "up" && frame.t === "task.complete") {
+        completeAttempts++;
+        heldComplete = { frame, socket };
+        return false;
+      }
     });
     store.beginPlatformDrain({ operationId: "pop_terminal_replay", ttlMs: 120_000 });
     const daemon = newDaemon({
@@ -817,9 +825,15 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
     });
     const run = daemon.start();
     try {
+      await until(() => heldComplete !== null && daemon.localPort() !== null, 5_000, "bounded startup with pending completion");
+      expect(recoverOrphansCalls).toBe(0);
+      expect(store.getTask(task.id)?.status).toBe("running");
+      const held = heldComplete as unknown as { frame: Record<string, any>; socket: Bun.ServerWebSocket<ProxySocketData> };
+      held.socket.data.upstream.send(JSON.stringify(held.frame));
       await until(() => store.getTask(task.id)?.status === "completed", 5_000, "historical terminal replay");
       await until(() => daemon.outboxStats()?.pending === 0, 5_000, "historical report acknowledgement");
-      expect(delayedMessages).toBe(1);
+      expect(completeAttempts).toBe(1);
+      expect(daemon.traceStore().read(task.id).events).toMatchObject([{ seq: 1, type: "text", content: "last buffered message" }]);
       expect(store.getTask(task.id)).toMatchObject({
         status: "completed",
         result: "replayed completion",
@@ -846,9 +860,7 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       backoffScheduleMs: [60_000],
       deliver: async () => { throw new Error("old API unavailable"); },
     });
-    historical.enqueue(task.id, "messages", {
-      messages: [{ seq: 1, type: "text", content: "must survive" }],
-    });
+    historical.enqueue(task.id, "progress", { summary: "must survive" });
     await Bun.sleep(20);
     await historical.close();
 

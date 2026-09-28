@@ -1603,7 +1603,6 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   await rec.json("POST", `/api/daemon/tasks/${id}/wait-local-directory`, { reason: "missing repo" });
   await rec.report("task.start", { task_id: id });
   await rec.report("task.progress", { task_id: id, summary: "half", step: 1, total: 2 });
-  await rec.json("POST", `/api/daemon/tasks/${id}/messages`, { messages: [{ type: "assistant", content: "hello" }] });
   const assembledPrompt = "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task";
   await rec.report("task.prompt", { task_id: id,
     mode: "bootstrap",

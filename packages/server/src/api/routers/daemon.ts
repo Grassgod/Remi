@@ -7,7 +7,7 @@ import { createUploadAttachmentId, detectContentTypeFromFilename, uploadAbsolute
   stringFormValue } from "../helpers/uploads.js";
 
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
-import { MAX_TASK_MESSAGES_PER_REQUEST, bindDaemonTokenIdentityOrDeny, buildDaemonInstallInstructions, callerCanReceiveRelay, compareDaemonPendingTasks, daemonRegisterOwnerContext, daemonTaskMessageInput, denyCurrentUserWorkspaceAccess, denyDaemonTokenRuntimeIdentity, denyDaemonTokenTaskRuntimeIdentity, denyDaemonTokenWorkspace, denyUnprivilegedOwnerlessDaemonClaim, deregisterDaemonRuntimes, isDaemonPendingTaskForRuntime, isJsonApiError, isTerminalTaskStatus, normalizeRuntimeIds, readJsonStrict, readJsonStrictAllowEmpty, registerDaemonRuntimes, promoteLegacyCliPatForDaemonHeartbeat, promoteLegacyCliPatForDaemonRegistration, localAttachmentFileResponse } from "../helpers.js";
+import { bindDaemonTokenIdentityOrDeny, buildDaemonInstallInstructions, callerCanReceiveRelay, compareDaemonPendingTasks, daemonRegisterOwnerContext, denyCurrentUserWorkspaceAccess, denyDaemonTokenRuntimeIdentity, denyDaemonTokenTaskRuntimeIdentity, denyDaemonTokenWorkspace, denyUnprivilegedOwnerlessDaemonClaim, deregisterDaemonRuntimes, isDaemonPendingTaskForRuntime, isJsonApiError, isTerminalTaskStatus, normalizeRuntimeIds, readJsonStrict, readJsonStrictAllowEmpty, registerDaemonRuntimes, promoteLegacyCliPatForDaemonHeartbeat, promoteLegacyCliPatForDaemonRegistration, localAttachmentFileResponse } from "../helpers.js";
 import { authenticatedRequestUserId, cleanString, currentAccessToken, currentRequestUserId, currentWorkspaceRoleStrict, daemonBotAgentResponse, daemonHeartbeatHttpResponse, daemonTaskClaimResponse, daemonTaskWireResponse, workspaceReposResponse } from "../wire/index.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
@@ -929,29 +929,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!responded) return c.json({ error: "request is no longer pending" }, 409);
     return c.json({ request: responded });
   });
-
-  app.post("/api/daemon/tasks/:taskId/messages", async (c) => {
-    const body = await readJsonStrict<{ messages?: any[] }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-    if (!rawMessages.length) return c.json({ status: "ok" });
-    if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
-      return c.json({ error: "too many messages" }, 413);
-    }
-    // MUL-474: identity only — this route writes messages and never reads the
-    // prompt, result or usage columns.
-    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
-    // Whitelist each message to the known TaskMessageInput fields (accepting
-    // both camel and snake casing) so a compromised/buggy daemon can't smuggle
-    // arbitrary JSON into the row; the store layer additionally byte-caps every
-    // field.
-    store.appendTaskMessages(taskId, rawMessages.map(daemonTaskMessageInput));
-    return c.json({ status: "ok" });
-  });
-
 
   app.get("/api/daemon/tasks/:taskId/status", (c) => {
     const taskId = c.req.param("taskId");

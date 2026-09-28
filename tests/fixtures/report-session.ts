@@ -6,6 +6,15 @@ import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from 
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { MultiremiDaemonClient } from "@multiremi/client.js";
 import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
+import { InMemoryTraceSink } from "@multiremi/api/trace/trace-sink.js";
+import { registerDaemonTraceHandlers } from "@multiremi/api/daemon-protocol/trace-handlers.js";
+
+const traceSinks = new WeakMap<MultiremiStore, InMemoryTraceSink>();
+export function reportTraceSink(store: MultiremiStore): InMemoryTraceSink {
+  let sink = traceSinks.get(store);
+  if (!sink) traceSinks.set(store, sink = new InMemoryTraceSink());
+  return sink;
+}
 
 /** Exercise client payloads against real session dispatch; HTTP remains for non-report calls. */
 export function bindReportFrames(client: MultiremiDaemonClient, store: MultiremiStore, options: Parameters<typeof reportFrame>[3] = {}) {
@@ -41,7 +50,7 @@ export function captureReports(client: MultiremiDaemonClient, reply: (type: stri
 export async function reportFrame(
   store: MultiremiStore, type: string, payload: Record<string, unknown> = {},
   options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
-    headers?: HeadersInit; authToken?: string; rawPayload?: string } = {},
+    headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void } = {},
 ): Promise<Record<string, any>> {
   const layer = new DaemonProtocolLayer({ store });
   let identity = { accessToken: options.token ?? null, masterToken: !options.token };
@@ -57,7 +66,8 @@ export async function reportFrame(
     ?? runtimes.find(runtime => !token || (runtime.daemonId === token.daemonId && runtime.workspaceId === token.workspaceId))?.id;
   const runtime = runtimeId ? store.getRuntimeLite(runtimeId) : null;
   const daemonId = token?.daemonId ?? runtime?.daemonId ?? "fixture-reports";
-  registerDaemonReportHandlers(layer, store);
+  const trace = registerDaemonTraceHandlers(layer, store, reportTraceSink(store));
+  registerDaemonReportHandlers(layer, store, (taskId, head, rt) => trace.close(taskId, head, rt));
   registerDaemonMaintenanceHandlers(layer, store, options.archives ?? new SessionArchiveService(store));
   const frames: Array<Record<string, any>> = [];
   let closed: number | undefined;
@@ -77,6 +87,7 @@ export async function reportFrame(
     const re = event ? String(seq) : "fixture-rpc";
     const frame = JSON.stringify({ v: 2, t: type, ...(event ? { seq } : category === "rpc" ? { id: re } : {}),
       ...(runtimeId ? { rt: runtimeId } : {}), p: payload });
+    options.beforeFrame?.();
     await session.handleMessage(options.rawPayload === undefined ? frame : frame.slice(0, frame.lastIndexOf('"p":')) + `"p":${options.rawPayload}}`);
     if (closed !== undefined) return { closed };
     if (category === "best_effort") return { sent: true };

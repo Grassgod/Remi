@@ -22,7 +22,6 @@ import type {
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
-  TaskMessageInput,
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
@@ -993,10 +992,6 @@ export class MultiremiDaemonClient {
       total,
       ...(options?.final ? { final: true } : {}),
     });
-  }
-
-  async reportTaskMessages(taskId: string, messages: TaskMessageInput[]): Promise<void> {
-    await this.post(`/api/daemon/tasks/${taskId}/messages`, { messages });
   }
 
   async listTaskMessages(taskId: string, sinceSeq = 0): Promise<MultiremiTaskMessage[]> {

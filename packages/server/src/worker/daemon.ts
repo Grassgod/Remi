@@ -10,7 +10,10 @@ import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport } from "./report-transport.js";
+import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport, daemonOutboxHasPriority } from "./report-transport.js";
+import { acquireDaemonTrace, releaseDaemonTrace, daemonTraceStore, type DaemonTraceTransport } from "./trace-transport.js";
+import type { DaemonTraceListener } from "./trace-subscriptions.js";
+import type { TraceStore } from "@multiremi/worker/trace-store.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -767,6 +770,7 @@ export class MultiremiDaemon {
   private serverDrainActive = false;
   private appliedDrainGeneration = 0;
   private outbox: MultiremiTaskReportOutbox | null = null;
+  private traceTransport: DaemonTraceTransport | null = null;
   private outboxAbort: AbortController | null = null;
   private readonly outboxPath: string;
   private readonly legacyOutboxPath: string;
@@ -1095,8 +1099,16 @@ export class MultiremiDaemon {
       readyToConnect: () => this.supervisorReady(),
     };
     this.protocolClient.addLane(this.protocolLane);
+    this.ensureTrace();
     this.client.setReportTransport(daemonReportTransport(this.protocolClient, () => this.options.runtimeId, () => this.ensureOutbox(),
-      this.options.taskDrainTimeoutMs, () => this.pollAbort.signal));
+      this.options.taskDrainTimeoutMs, () => this.pollAbort.signal, {
+        completion: taskId => {
+          const trace = this.ensureTrace();
+          if (this.options.runtimeId) trace.track(taskId, this.options.runtimeId);
+          return trace.completion(taskId);
+        },
+        close: (taskId, status) => this.ensureTrace().close(taskId, status),
+      }));
   }
 
   async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
@@ -1228,6 +1240,7 @@ export class MultiremiDaemon {
   }
 
   async start(): Promise<void> {
+    this.ensureTrace();
     this.startedAt = new Date();
     this.ready = false;
     this.stopped = false;
@@ -1367,6 +1380,10 @@ export class MultiremiDaemon {
       await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
       await this.protocolClient?.drain();
+      if (this.traceTransport) {
+        this.traceTransport = null;
+        await releaseDaemonTrace(this.protocolClient);
+      }
       this.gitWorktreeInspector?.close();
       this.stopRepoCheckoutServer();
       // Undelivered rows stay on disk and replay on the next start(). close()
@@ -2926,7 +2943,22 @@ export class MultiremiDaemon {
    * never unwinds the agent's provider session.
    */
   private enqueueTaskReport(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
-    this.ensureOutbox().enqueue(taskId, kind, { ...payload, runtime_id: payload.runtime_id ?? this.options.runtimeId });
+    const terminal = kind === "complete" || kind === "fail";
+    if (terminal && this.options.runtimeId) this.ensureTrace().track(taskId, this.options.runtimeId);
+    this.ensureOutbox().enqueue(taskId, kind, { ...payload, runtime_id: payload.runtime_id ?? this.options.runtimeId,
+      ...(terminal ? this.ensureTrace().completion(taskId) : {}) });
+    if (terminal) this.ensureTrace().close(taskId, kind === "complete" ? "completed" : "failed");
+  }
+
+  private ensureTrace(): DaemonTraceTransport {
+    return this.traceTransport ??= acquireDaemonTrace(this.protocolClient, undefined,
+      () => daemonOutboxHasPriority(this.protocolClient),
+      error => log.warn(`Trace transport failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  traceStore(): TraceStore { return daemonTraceStore(this.protocolClient); }
+  subscribeTrace(taskId: string, fromSeq: number, onEvents: DaemonTraceListener): Promise<() => Promise<void>> {
+    return this.ensureTrace().subscriptions.subscribeTrace(taskId, fromSeq, onEvents);
   }
 
   /**
@@ -2984,11 +3016,9 @@ export class MultiremiDaemon {
   /** Outbox → API dispatch. Each call is idempotent server-side (seq upsert / status guards). */
   private async deliverOutboxRecord(record: MultiremiOutboxRecord): Promise<void> {
     if (record.kind !== "messages") throw new Error("non-message reports use WS");
-    try { await this.client.reportTaskMessages(record.taskId, Array.isArray(record.payload.messages) ? record.payload.messages : []); }
-    catch (error) {
-      if (error instanceof MultiremiDaemonHttpError && error.status === 404) throw new DaemonProtocolRpcError("task_not_found", false);
-      throw error;
-    }
+    // Only v1 queues can contain these rows. New producers write straight to trace.
+    this.ensureTrace().append(record.taskId, String(record.payload.runtime_id ?? this.options.runtimeId),
+      Array.isArray(record.payload.messages) ? record.payload.messages : []);
   }
 
   /** Exposed on the local /health endpoint for observability. */
@@ -3882,7 +3912,7 @@ export class MultiremiDaemon {
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
     try {
-      this.enqueueTaskReport(taskId, "messages", { messages: [{ seq, type, content, input }] });
+      this.ensureTrace().append(taskId, this.options.runtimeId!, [{ type, content, input }]);
     } catch (err) {
       log.warn(`Failed to report ${type} message for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -4078,9 +4108,8 @@ export class MultiremiDaemon {
     const toMessages = createEventMapper(createAdapter(config.agentType));
     messageBatcher = new TaskMessageBatcher({
       emit: (messages) => {
-        const sequenced = messages.map((message) => ({ ...message, seq: nextSeq() }));
-        this.enqueueTaskReport(task.id, "messages", { messages: sequenced });
-        progressSummarizer?.onMessages(sequenced);
+        const stored = this.ensureTrace().append(task.id, this.options.runtimeId!, messages);
+        progressSummarizer?.onMessages(stored);
       },
     });
 

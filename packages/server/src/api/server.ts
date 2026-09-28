@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { registerDaemonTraceHandlers } from "./daemon-protocol/trace-handlers.js";
 import { resolveRequestWorkspaceId } from "./helpers/workspace-context.js";
 import { cors } from "hono/cors";
 import { getCookie } from "hono/cookie";
@@ -863,7 +864,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     dbCounters: () => readProcessDbCounters(),
   });
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
-  registerDaemonReportHandlers(daemonProtocol, store);
+  const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store);
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
