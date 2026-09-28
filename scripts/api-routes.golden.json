@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 769,
+    "routeCount": 770,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 543,
+      "compat": 544,
       "root": 14
     },
-    "getRoutes": 326,
-    "getRoutesWithBody": 323,
+    "getRoutes": 327,
+    "getRoutesWithBody": 324,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -240,6 +240,7 @@
     "GET /api/issues/children",
     "GET /api/issues/grouped",
     "GET /api/issues/search",
+    "GET /api/issues/status-pages",
     "GET /api/knowledge/runs",
     "GET /api/knowledge/runs/:id",
     "GET /api/knowledge/submissions",
@@ -992,6 +993,7 @@
     "GET /api/issues/children",
     "GET /api/issues/grouped",
     "GET /api/issues/search",
+    "GET /api/issues/status-pages",
     "GET /api/knowledge/runs",
     "GET /api/knowledge/runs/:id",
     "GET /api/knowledge/submissions",
@@ -9927,6 +9929,17 @@
             "allowed": true
           },
           {
+            "id": "issue.status-pages",
+            "command": "remi issue status-pages",
+            "capability": "issue.status-pages",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "issue.subscriber.add",
             "command": "remi issue subscriber add",
             "capability": "issue.subscriber.add",
@@ -16396,6 +16409,219 @@
           }
         ],
         "total": 5
+      }
+    },
+    {
+      "key": "get-sweep GET /api/issues/status-pages",
+      "route": "GET /api/issues/status-pages",
+      "path": "/api/issues/status-pages",
+      "status": 200,
+      "body": {
+        "groups": {
+          "backlog": {
+            "issues": [
+              {
+                "id": "iss_snapshot_blocked",
+                "workspace_id": "local",
+                "number": 3,
+                "identifier": "MUL-3",
+                "title": "Snapshot blocked issue",
+                "description": null,
+                "status": "backlog",
+                "priority": "none",
+                "assignee_type": "member",
+                "assignee_id": "mem_local_local",
+                "creator_type": "member",
+                "creator_id": "mem_snapshot_one",
+                "parent_issue_id": null,
+                "parent_done_grant_at": null,
+                "parent_done_grant_by": null,
+                "parent_done_grant_agent_id": null,
+                "issue_kind": "execution",
+                "source_issue_id": null,
+                "project_id": null,
+                "runtime_workspace_id": null,
+                "position": 0,
+                "start_date": null,
+                "due_date": null,
+                "completed_at": null,
+                "archived_at": null,
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "metadata": {},
+                "labels": []
+              }
+            ],
+            "total": 1,
+            "has_more": false
+          },
+          "todo": {
+            "issues": [
+              {
+                "id": "iss_gbmah1mhgwob",
+                "workspace_id": "local",
+                "number": 5,
+                "identifier": "MUL-5",
+                "title": "Snapshot {{title}}",
+                "description": "Autopilot used by the snapshot",
+                "status": "todo",
+                "priority": "none",
+                "assignee_type": null,
+                "assignee_id": null,
+                "creator_type": "member",
+                "creator_id": "apl_snapshot",
+                "parent_issue_id": null,
+                "parent_done_grant_at": null,
+                "parent_done_grant_by": null,
+                "parent_done_grant_agent_id": null,
+                "issue_kind": "execution",
+                "source_issue_id": null,
+                "project_id": "prj_snapshot",
+                "runtime_workspace_id": null,
+                "position": 0,
+                "start_date": null,
+                "due_date": null,
+                "completed_at": null,
+                "archived_at": null,
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "metadata": {},
+                "labels": []
+              },
+              {
+                "id": "iss_j3m15clzy3p6",
+                "workspace_id": "local",
+                "number": 4,
+                "identifier": "MUL-4",
+                "title": "snapshot run",
+                "description": "Autopilot used by the snapshot",
+                "status": "todo",
+                "priority": "none",
+                "assignee_type": null,
+                "assignee_id": null,
+                "creator_type": "member",
+                "creator_id": "apl_snapshot",
+                "parent_issue_id": null,
+                "parent_done_grant_at": null,
+                "parent_done_grant_by": null,
+                "parent_done_grant_agent_id": null,
+                "issue_kind": "execution",
+                "source_issue_id": null,
+                "project_id": "prj_snapshot",
+                "runtime_workspace_id": null,
+                "position": 0,
+                "start_date": null,
+                "due_date": null,
+                "completed_at": null,
+                "archived_at": null,
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "metadata": {},
+                "labels": []
+              },
+              {
+                "id": "iss_snapshot",
+                "workspace_id": "local",
+                "number": 1,
+                "identifier": "MUL-1",
+                "title": "Snapshot issue",
+                "description": "Issue used by the snapshot",
+                "status": "todo",
+                "priority": "high",
+                "assignee_type": "agent",
+                "assignee_id": "agt_snapshot",
+                "creator_type": "member",
+                "creator_id": "mem_snapshot_one",
+                "parent_issue_id": null,
+                "parent_done_grant_at": null,
+                "parent_done_grant_by": null,
+                "parent_done_grant_agent_id": null,
+                "issue_kind": "execution",
+                "source_issue_id": null,
+                "project_id": "prj_snapshot",
+                "runtime_workspace_id": null,
+                "position": 0,
+                "start_date": null,
+                "due_date": null,
+                "completed_at": null,
+                "archived_at": null,
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "metadata": {
+                  "snapshot_key": "snapshot_value"
+                },
+                "labels": [
+                  {
+                    "id": "lbl_snapshot",
+                    "workspace_id": "local",
+                    "name": "snapshot",
+                    "color": "#3366ff",
+                    "created_at": "<timestamp>",
+                    "updated_at": "<timestamp>"
+                  }
+                ]
+              },
+              {
+                "id": "iss_snapshot_child",
+                "workspace_id": "local",
+                "number": 2,
+                "identifier": "MUL-2",
+                "title": "Snapshot child issue",
+                "description": null,
+                "status": "todo",
+                "priority": "none",
+                "assignee_type": null,
+                "assignee_id": null,
+                "creator_type": "member",
+                "creator_id": "mem_snapshot_one",
+                "parent_issue_id": "iss_snapshot",
+                "parent_done_grant_at": null,
+                "parent_done_grant_by": null,
+                "parent_done_grant_agent_id": null,
+                "issue_kind": "execution",
+                "source_issue_id": null,
+                "project_id": "prj_snapshot",
+                "runtime_workspace_id": null,
+                "position": 0,
+                "start_date": null,
+                "due_date": null,
+                "completed_at": null,
+                "archived_at": null,
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "metadata": {},
+                "labels": []
+              }
+            ],
+            "total": 4,
+            "has_more": false
+          },
+          "in_progress": {
+            "issues": [],
+            "total": 0,
+            "has_more": false
+          },
+          "in_review": {
+            "issues": [],
+            "total": 0,
+            "has_more": false
+          },
+          "done": {
+            "issues": [],
+            "total": 0,
+            "has_more": false
+          },
+          "blocked": {
+            "issues": [],
+            "total": 0,
+            "has_more": false
+          },
+          "cancelled": {
+            "issues": [],
+            "total": 0,
+            "has_more": false
+          }
+        }
       }
     },
     {
