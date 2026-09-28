@@ -36,22 +36,40 @@ async function fixture(topic = false) {
 }
 
 describe("Chat task request isolation", () => {
-  it("returns 400 for ordinary Chat plus an explicit or comment-derived Issue without creating a task", async () => {
+  it("returns 400 for an ordinary Chat plus an explicit Issue without creating a task", async () => {
     const { store, app, headers, agent, issue, chat } = await fixture();
-    const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Issue trigger" });
     const before = store.listTasks().length;
-    for (const input of [
-      { issueId: issue.id },
-      { triggerCommentId: comment.id },
-      { trigger_comment_id: comment.id },
-    ]) {
+    const response = await app.request("/api/multiremi/tasks", {
+      method: "POST", headers,
+      body: JSON.stringify({ agentId: agent.id, chatSessionId: chat.id, prompt: "Try attaching an Issue", issueId: issue.id }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Only Feishu Issue topics can create Chat transport tasks with an Issue" });
+    expect(store.listTasks()).toHaveLength(before);
+  });
+
+  it("ignores a body-supplied trigger comment instead of deriving an Issue from it", async () => {
+    const { store, app, headers, agent, issue, chat } = await fixture();
+    // MUL-448: `trigger_comment_id` is server-derived (the mention dispatcher
+    // calls the repo directly), so the public task route strips it. That also
+    // removes the old path where a body could pull an Issue into a Chat task.
+    const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Issue trigger" });
+    for (const spelling of ["triggerCommentId", "trigger_comment_id"] as const) {
       const response = await app.request("/api/multiremi/tasks", {
         method: "POST", headers,
-        body: JSON.stringify({ agentId: agent.id, chatSessionId: chat.id, prompt: "Try attaching an Issue", ...input }),
+        body: JSON.stringify({
+          agentId: agent.id,
+          chatSessionId: chat.id,
+          prompt: "Try attaching an Issue",
+          [spelling]: comment.id,
+        }),
       });
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Only Feishu Issue topics can create Chat transport tasks with an Issue" });
-      expect(store.listTasks()).toHaveLength(before);
+      expect(response.status).toBe(201);
+      const created = (await response.json()).task as { id: string };
+      const task = store.getTask(created.id)!;
+      expect(task.triggerCommentId).toBeNull();
+      expect(task.issueId).toBeNull();
+      expect(task.chatSessionId).toBe(chat.id);
     }
   });
 

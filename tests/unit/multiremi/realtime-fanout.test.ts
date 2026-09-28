@@ -313,7 +313,10 @@ describe("realtime fanout — two servers over one database", () => {
       hostname: "127.0.0.1",
       peerChannel: peerA,
       peerSecret: secret,
-      requestMetrics: { enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 16 },
+      requestMetrics: {
+        enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
+        bufferCapacity: 16, role: "all",
+      },
     });
     serverB = startMultiremiServer({
       store: storeB,
@@ -322,7 +325,10 @@ describe("realtime fanout — two servers over one database", () => {
       hostname: "127.0.0.1",
       peerChannel: peerB,
       peerSecret: secret,
-      requestMetrics: { enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 16 },
+      requestMetrics: {
+        enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
+        bufferCapacity: 16, role: "all",
+      },
     });
 
     return {

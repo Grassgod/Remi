@@ -32,6 +32,7 @@
  * so the browser still sees one frame per message in `seq` order.
  */
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import type { ApiRole } from "../config/api-role.js";
 import type { MultiremiTask, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import {
   PEER_EVENT_PROTOCOL_VERSION,
@@ -60,27 +61,13 @@ import {
 /**
  * Which registries this process holds.
  *
- * MUL-461 (S10-A) owns `config/api-role.ts` and its env-driven `resolveApiRole()`.
- * Until that lands this file declares the union locally and `server.ts` passes
- * `"all"`, which is today's single-process behaviour. After S10-A merges, swap
- * this for `import { type ApiRole } from "../config/api-role.js"`.
+ * The role is the process's one effective role, resolved by `server.ts` from the
+ * shared guard (`config/api-role.ts`) — including an injected `apiRole`. This
+ * module never reads the role env itself: the fanout must deliver by the same
+ * role the routing guard enforces, or a process would refuse traffic for one side
+ * while fanning out for the other.
  */
-export type LocalRealtimeRole = "all" | "ui" | "runtime";
-
-/**
- * Where this process's role comes from.
- *
- * One function on purpose: after the role guard lands, this body becomes
- * `return resolveApiRole();` with an import at the top of the file and nothing
- * else moves. Until then there is no role env var, so every process is `all` —
- * exactly what the pre-split server was.
- */
-export function resolveLocalRealtimeRole(
-  _env: Record<string, string | undefined> = process.env,
-): LocalRealtimeRole {
-  // TODO(MUL-461): replace with the shared role guard once it merges.
-  return "all";
-}
+export type LocalRealtimeRole = ApiRole;
 
 export interface RealtimeFanoutRegistries {
   daemon: DaemonWebSocketRegistry;

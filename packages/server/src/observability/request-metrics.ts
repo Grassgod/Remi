@@ -32,6 +32,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, MiddlewareHandler } from "hono";
+import { resolveApiRole, type ApiRole } from "../config/api-role.js";
 
 /**
  * Per-request accumulator. One instance per request, never shared.
@@ -113,6 +114,8 @@ export interface MinuteSummary {
   db_busy_pct: number;
   db_queries: number;
   event_loop_lag_max_ms: number;
+  /** MUL-461: which API role produced this window. */
+  role: ApiRole;
   routes: RouteSummary[];
   peer: PeerSummary;
 }
@@ -128,6 +131,12 @@ export interface RequestMetricsOptions {
   summaryTopRoutes: number;
   /** Fixed window-buffer capacity; older samples are dropped once it wraps. */
   bufferCapacity: number;
+  /**
+   * MUL-461: the API role this process runs as. It is part of the process's
+   * identity, so it rides both log lines and lets an operator tell `api` from
+   * `api-runtime` in one stream once MUL-405's `pid` lands next to it.
+   */
+  role: ApiRole;
 }
 
 export const DEFAULT_SLOW_REQUEST_MS = 500;
@@ -582,7 +591,9 @@ export interface WindowSummaryInput {
   dbQueries: number;
   eventLoopLagMaxMs: number;
   topRoutes: number;
-  /** Peer-channel counters for this window. Omitted means a zeroed block. */
+  /** MUL-461: reported verbatim in the summary line. */
+  role: ApiRole;
+  /** MUL-462: peer-channel counters for this window. Omitted means a zeroed block. */
   peer?: PeerSummary;
   /** Injectable clock so tests can pin `ts`. */
   now?: Date;
@@ -630,6 +641,7 @@ export function summarizeWindow(input: WindowSummaryInput): MinuteSummary {
     db_busy_pct: windowMs > 0 ? round2((finite(input.dbMs) / windowMs) * 100) : 0,
     db_queries: Math.max(0, Math.trunc(finite(input.dbQueries))),
     event_loop_lag_max_ms: round1(finite(input.eventLoopLagMaxMs)),
+    role: input.role,
     routes: routes.slice(0, top),
     peer: input.peer ?? {
       sent: 0, batches: 0, dropped: 0, failed: 0, rtt_p95_ms: 0,
@@ -667,6 +679,7 @@ export function resolveRequestMetricsOptions(
     ),
     summaryTopRoutes: envNumber(env.MULTIREMI_METRICS_SUMMARY_TOP_N, DEFAULT_SUMMARY_TOP_ROUTES, 0),
     bufferCapacity: envNumber(env.MULTIREMI_METRICS_BUFFER_SIZE, DEFAULT_BUFFER_CAPACITY, 1),
+    role: resolveApiRole(env),
   };
 }
 
@@ -819,6 +832,7 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
           emitSlowRequest({
             event: "api_slow_request",
             ts: new Date().toISOString(),
+            role: options.role,
             method,
             route,
             status,
@@ -896,6 +910,7 @@ export function startRequestMetricsSummary(options: RequestMetricsOptions): Requ
       dbQueries,
       eventLoopLagMaxMs: lag,
       topRoutes: options.summaryTopRoutes,
+      role: options.role,
       peer,
     });
     console.log(JSON.stringify(summary));

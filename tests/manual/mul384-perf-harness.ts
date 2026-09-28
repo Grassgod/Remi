@@ -73,7 +73,7 @@ const server = startMultiremiServer({
   hostname: "127.0.0.1",
   authToken: TOKEN_PLACEHOLDER,
   backgroundJobs: false,
-  requestMetrics: { enabled: true, slowRequestMs: 0, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 1024 },
+  requestMetrics: { enabled: true, slowRequestMs: 0, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 1024, role: "all" },
 });
 
 const started: Array<{ kill: () => void }> = [];
