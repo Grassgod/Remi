@@ -82,6 +82,27 @@ export class SquadsRepo {
     return rows.map(toSquad);
   }
 
+  /**
+   * Resolve an assignee reference (id, user id, or name) to a typed assignee.
+   *
+   * The search order and the tie-breaking are the contract this method has had
+   * since before MUL-473, because every untyped caller (`GET /api/issues`'s
+   * `assignee_id` / `assignee_ids`, Issue creation, assignment) depends on it:
+   *
+   * - a reference whose shape names one kind outright (`agt_`/`mem_`/`sqd_`)
+   *   searches only that kind, so a miss is `<Kind> not found`;
+   * - every other reference — including a `usr_` user id, because an Agent or a
+   *   Squad may legitimately be *named* `usr_…` — is searched as Agent, then
+   *   Member, then Squad. Exactly one match wins; two or more are
+   *   `Ambiguous assignee reference`; none are `Assignee not found`.
+   *
+   * Only the matched row's id leaves this method, so each kind is searched over
+   * a single narrow read: the Agents are read without their Skills, and the
+   * Member and Squad lists are the ones the store already serves. That is one
+   * statement per kind instead of the two (`getX` fast path + `listX`) the
+   * historical code spent — and, unlike it, none of them hydrate Skill bodies
+   * (MUL-473).
+   */
   resolveAssigneeRef(
     assigneeType: MultiremiAssigneeType | null | undefined,
     assigneeId: string | null | undefined,
@@ -94,18 +115,59 @@ export class SquadsRepo {
     const types: MultiremiAssigneeType[] = normalizedType ? [normalizedType] : ["agent", "member", "squad"];
     const matches: Array<{ assigneeType: MultiremiAssigneeType; assigneeId: string }> = [];
     for (const type of types) {
-      const entity = type === "agent"
-        ? this.ctx.agents().getAgentByRef(ref, workspaceId)
+      const matchedId = type === "agent"
+        ? this.matchAgentRef(ref, workspaceId)
         : type === "member"
-          ? this.ctx.workspaces().getWorkspaceMemberByRef(ref, workspaceId)
-          : this.getSquadByRef(ref, workspaceId);
-      if (entity) matches.push({ assigneeType: type, assigneeId: entity.id });
+          ? this.matchMemberRef(ref, workspaceId)
+          : this.matchSquadRef(ref, workspaceId);
+      if (matchedId) matches.push({ assigneeType: type, assigneeId: matchedId });
     }
     const unique = uniqueBy(matches, (match) => `${match.assigneeType}:${match.assigneeId}`);
     if (unique.length === 1) return unique[0]!;
     if (unique.length > 1) throw new Error(`Ambiguous assignee reference: ${ref}`);
     if (normalizedType) throw new Error(`${capitalizeAssigneeType(normalizedType)} not found: ${ref}`);
     throw new Error(`Assignee not found: ${ref}`);
+  }
+
+  /**
+   * The Agent tier of {@link resolveAssigneeRef}: exact id, then the alias tiers.
+   *
+   * Mirrors the historical `getAgentByRef`, whose `getAgent` fast path is the
+   * same set as `uniqueRefMatch`'s exact-id tier over the non-archived,
+   * workspace-filtered rows — so one list read answers both. Reading the Agents
+   * *without* their Skills is what makes the untyped search affordable: the old
+   * alias scan hydrated every Agent in the workspace, which is where the
+   * my-issues statement count came from (MUL-473).
+   */
+  private matchAgentRef(ref: string, workspaceId?: string | null): string | null {
+    const agents = this.ctx.agents().listAgentsLite()
+      .filter((agent) => !workspaceId || agent.workspaceId === workspaceId);
+    return uniqueRefMatch(agents, ref, (agent) => agent.id, (agent) => [agent.name])?.id ?? null;
+  }
+
+  /**
+   * The Member tier of {@link resolveAssigneeRef}.
+   *
+   * Two rules the other kinds do not have, both preserved from
+   * `getWorkspaceMemberByRef`: a row id matches before anything else, and a
+   * `user_id` match is decided *before* the alias tiers — with more than one
+   * `user_id` match refusing the kind entirely rather than picking one. Folding
+   * `user_id` into the alias list instead would change the answer whenever a ref
+   * is one member's `user_id` and another member's name.
+   */
+  private matchMemberRef(ref: string, workspaceId?: string | null): string | null {
+    const members = this.ctx.workspaces().listWorkspaceMembers(workspaceId);
+    const byId = members.find((member) => member.id === ref);
+    if (byId) return byId.id;
+    const byUserId = members.filter((member) => member.userId === ref);
+    if (byUserId.length) return byUserId.length === 1 ? byUserId[0]!.id : null;
+    return uniqueRefMatch(members, ref, (member) => member.id, (member) => [member.name, member.email])?.id ?? null;
+  }
+
+  /** The Squad tier of {@link resolveAssigneeRef}. */
+  private matchSquadRef(ref: string, workspaceId?: string | null): string | null {
+    const squads = this.listSquads(workspaceId);
+    return uniqueRefMatch(squads, ref, (squad) => squad.id, (squad) => [squad.name])?.id ?? null;
   }
 
   updateSquad(id: string, input: UpdateSquadInput): MultiremiSquad {
@@ -294,6 +356,21 @@ export class SquadsRepo {
   }
 }
 
+/**
+ * The id prefixes that name one assignee kind outright.
+ *
+ * Only `agt_`, `mem_` and `sqd_` are listed, and they are the same three the
+ * resolver recognised before MUL-473. A prefix here does not merely hint at a
+ * kind, it *locks the search to that kind*, which is only sound when the id
+ * shape is exclusive to it.
+ *
+ * `usr_` is not one of them. A user id is a member's `user_id`, but it is also
+ * just a string: an Agent or a Squad may be *named* `usr_…`, and the historical
+ * untyped search tries Agent, then Member, then Squad precisely so that such a
+ * name still resolves. Adding `usr_` (as this branch first did) skipped the
+ * Agent tier and turned a resolvable name into `Member not found: usr_…`
+ * (MUL-473 QA rework).
+ */
 function inferAssigneeTypeFromRef(ref: string): MultiremiAssigneeType | null {
   if (/^agt_/i.test(ref)) return "agent";
   if (/^mem_/i.test(ref)) return "member";

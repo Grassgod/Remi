@@ -39,9 +39,12 @@ import {
   cleanString,
   commentCompatibilityResponse,
   currentTaskAccessToken,
+  authenticatedRequestUserId,
+  currentRequestUserId,
   currentAccessToken,
   currentWorkspaceMember,
   hasRequestField,
+  isAnonymousCompatibilityRequest,
   issueBatchDeleteCompatibilityInput,
   issueBatchUpdateCompatibilityInput,
   issueCommentListErrorResponse,
@@ -64,7 +67,12 @@ import {
   IssueTimelineRequestError,
   issueTimelineResponse,
   issueUpdateCompatibilityInput,
+  stripServerOwnedAssignFields,
+  stripServerOwnedIssueCreateFields,
+  stripServerOwnedIssueSourceFields,
+  stripServerOwnedQuickCreateFields,
   stripServerOwnedIssueUpdateFields,
+  stripServerOwnedSessionTaskFields,
   issueUsageResponse,
   labelCompatibilityErrorResponse,
   labelCompatibilityResponse,
@@ -76,6 +84,7 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
 import type {
   AddSessionParticipantInput,
   AssignIssueInput,
@@ -188,6 +197,17 @@ function denySideSessionIssueUpdate(
 // stale cancelled task must not resurface as "dispatched"), then the newest
 // still-standing task, and with no task left the recorded dispatch_skipped
 // activity supplies the original failure reason instead of a guess.
+/**
+ * MUL-400 E3: `blocked_by` is the compatibility spelling of the unmet
+ * prerequisite keys, so a child row can explain its hold without another call.
+ */
+function withBlockedBy(store: MultiremiStore) {
+  return (child: MultiremiIssue): MultiremiIssue & { blocked_by: string[] } => ({
+    ...child,
+    blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+  });
+}
+
 function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIssue): Record<string, unknown> {
   const response = issueCompatibilityResponse(issue);
   const skipped = (reason: string, error?: string | null): Record<string, unknown> => ({
@@ -586,12 +606,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids"));
     const issues = listAccessibleChildIssues(c, parentIds)
-      .map((child) => issueCompatibilityResponse(child));
+      .map((child) => ({
+        ...issueCompatibilityResponse(child),
+        blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+      }));
     return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/children", (c) => {
     const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
-    const issues = listAccessibleChildIssues(c, parentIds);
+    const issues = listAccessibleChildIssues(c, parentIds).map(withBlockedBy(store));
     return c.json({ issues, total: issues.length });
   });
   function validateBatchWorkspaceBinding(c: Context, input: BatchUpdateIssuesInput): Response | null {
@@ -620,7 +643,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // The batch writer needs the same attribution the PATCH routes stamp, or
     // guards that branch on `actorType` (A4) silently do not apply.
     const { actorType, actorId } = issueMutationActor(c);
-    return c.json(store.batchUpdateIssues({
+    const result = store.batchUpdateIssues({
       ...body,
       updates: body.updates
         ? {
@@ -630,7 +653,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
           parentTaskId: currentTaskParentId(c),
         }
         : body.updates,
-    }));
+    });
+    return c.json(result);
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
@@ -652,7 +676,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
           }
           : input.updates,
       });
-      return c.json({ updated: result.updated });
+      // The compat body stays `{ updated }` unless a row was actually held, so
+      // existing callers that assert the exact shape keep working.
+      return result.skipped.length
+        ? c.json({ updated: result.updated, skipped: result.skipped })
+        : c.json({ updated: result.updated });
     } catch (err) {
       if (err instanceof Error && err.message === "issue_ids is required") return c.json({ error: err.message }, 400);
       throw err;
@@ -698,14 +726,34 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
     if (dispatchDenied) return dispatchDenied;
-    const issue = store.createIssue({
-      ...body,
-      workspaceId,
-      assigneeType: null,
-      assignee_type: null,
-      assigneeId: null,
-      assignee_id: null,
-    });
+    // MUL-448 B3: a credentialed request cannot pick the lineage that decides
+    // whether this create is served from the generated-issue cache. Anonymous
+    // compatibility mode keeps the historical body pass-through.
+    const sourceStripped = isAnonymousCompatibilityRequest(c)
+      ? body
+      : stripServerOwnedIssueSourceFields(body);
+    // MUL-448 B4: the body's `created_by` is dropped, but this route does not
+    // stamp the caller either - main records no creator here, and creator
+    // ownership feeds share management and automatic subscription.
+    let issue: MultiremiIssue;
+    try {
+      issue = store.createIssue({
+        ...stripServerOwnedIssueCreateFields(sourceStripped),
+        blockedBy: body.blockedBy ?? body.blocked_by,
+        workspaceId,
+        assigneeType: null,
+        assignee_type: null,
+        assigneeId: null,
+        assignee_id: null,
+      });
+    } catch (err) {
+      // MUL-400 E3 (QA round 2, blocker 4): the three `blocked_by` rejections
+      // answer with the dependency error contract, matching the dependency
+      // routes. Without this the native route surfaced them as 500.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
+      throw err;
+    }
     let task = null;
     if (assigneeId) {
       const assigned = store.assignIssue(issue.id, {
@@ -769,7 +817,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       let task: { id: string } | null = null;
       let dispatchSkippedReason: string | null = null;
       let dispatchError: string | null = null;
-      if (!issue.assigneeType || !issue.assigneeId) {
+      const pendingPrerequisites = store.listUnmetPrerequisites(issue.id);
+      if (pendingPrerequisites.length > 0) {
+        // MUL-400 E3 gate 3: the issue parked itself in backlog. Say why, rather
+        // than reporting the generic backlog_status.
+        dispatchSkippedReason = "dependencies_unmet";
+      } else if (!issue.assigneeType || !issue.assigneeId) {
         dispatchSkippedReason = "no_assignee";
       } else if (issue.status === "backlog") {
         dispatchSkippedReason = "backlog_status";
@@ -805,6 +858,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (dispatchError) response.dispatch_error = dispatchError;
       return c.json(response, 201);
     } catch (err) {
+      // MUL-400 E3 (QA round 2, blocker 4): a rejected `blocked_by` is a
+      // dependency error, not an issue error — "prerequisite not found" and
+      // "prerequisite in another workspace" have no issue-shaped mapping and
+      // used to fall through as 500. Try the dependency mapping first so the
+      // three rejections answer the same codes the dependency routes use.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
       const response = issueErrorResponse(c, err);
       if (response) return response;
       throw err;
@@ -821,7 +881,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    const result = safeQuickCreateIssue(store, { ...body, workspaceId });
+    // MUL-448 B4: the body's requester is dropped and no credentialed requester
+    // is stamped on, so this route records no creator exactly as main does.
+    const result = safeQuickCreateIssue(store, {
+      ...stripServerOwnedQuickCreateFields(body),
+      workspaceId,
+    });
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
       taskId: result.task.id,
@@ -838,7 +903,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<QuickCreateIssueInput>(c);
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
-    const input = { ...issueQuickCreateCompatibilityInput(body), workspaceId };
+    const input = {
+      ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
+      workspaceId,
+    };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");
@@ -865,14 +933,25 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const tasks = issue.tasks.filter((task) => canCurrentUserAccessChatTask(c, store, task)).map(taskPublicResponse);
     const comments = store.listIssueComments(issue.id);
+    const waitingOn = store.getIssueWaitingOn(issue.id);
     return c.json({
       // MUL-400 E1: `child_count` is a plain COUNT (no child bodies), so the
       // detail surfaces can show "N sub-issues" without the MUL-385 cost.
-      issue: { ...issue, tasks, child_count: issue.childProgress.total,
-        pending_decision_count: store.countPendingIssueDecisions(issue.id) },
-      children: issue.children,
+      issue: {
+        ...issue,
+        tasks,
+        child_count: issue.childProgress.total,
+        parent_done_grant: store.issueParentDoneGrantView(issue),
+        pending_decision_count: store.countPendingIssueDecisions(issue.id),
+        // MUL-400 E3: unmet prerequisites stop dispatch, so the detail surface
+        // needs them in the same payload.
+        waiting_on: waitingOn.unmet.map((row) => row.key),
+      },
+      children: issue.children.map(withBlockedBy(store)),
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
+      waitingOn,
+      waiting_on: waitingOn,
       comments,
       activity: store.listIssueActivity(issue.id),
     });
@@ -1014,7 +1093,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ...body,
       parentTaskId: currentTaskParentId(c),
     });
-    if ("error" in result) return c.json({ error: result.error }, result.status);
+    if ("error" in result) {
+      // MUL-400 E3: the task-creation gate reports the same 409 code as the
+      // status gate, so a client handles both with one branch.
+      return result.code
+        ? c.json({ error: result.error, code: result.code, unmet: result.unmet ?? [] }, result.status)
+        : c.json({ error: result.error }, result.status);
+    }
     return c.json(taskCompatibilityResponse(result.task), 202);
   });
   app.post("/api/issues/:id/tasks/:taskId/cancel", async (c) => {
@@ -1042,12 +1127,30 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (!issue) return c.json({ error: "issue not found" }, 404);
       const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
       if (denied) return denied;
+      // MUL-448 B2: the evaluator is the credential, never the request body.
+      //
+      // `recordSquadLeaderEvaluation` falls back to the squad's leader agent when
+      // no actor is given, so a member PAT posting `actor_id=<leader>` (or
+      // nothing at all) was recorded as `agent/leader` with a 201. Only a task
+      // token may name the evaluating agent; a credentialed non-task request has
+      // no agent identity at all and is rejected here, before any write. The
+      // header/body fallbacks remain for the anonymous compatibility mode, where
+      // they are the historical behaviour.
       const taskToken = currentTaskAccessToken(c);
+      const anonymousCompat = isAnonymousCompatibilityRequest(c);
+      // Anonymous compatibility mode keeps main's behaviour exactly, including
+      // the store's "no actor given -> the squad leader" default. A credentialed
+      // request that is not a task token has no agent identity to evaluate with.
+      if (!taskToken?.agentId && !anonymousCompat) {
+        return c.json({ error: "only the squad leader agent can record evaluations" }, 403);
+      }
       const activity = store.recordSquadLeaderEvaluation(issue.id, {
         outcome: body.outcome ?? "",
         reason: body.reason ?? null,
-        taskId: taskToken?.taskId ?? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null,
-        actorId: taskToken?.agentId ?? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null,
+        taskId: taskToken?.taskId
+          ?? (anonymousCompat ? c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null : null),
+        actorId: taskToken?.agentId
+          ?? (anonymousCompat ? c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null : null),
       });
       return c.json({
         ...activity,
@@ -1070,16 +1173,21 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const children = store.listChildIssues(issue.id);
-    return c.json({ issues: children, total: children.length });
+    return c.json({ issues: children.map(withBlockedBy(store)), total: children.length });
   });
   app.get("/api/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    // MUL-400 E3: every child row says what it is still waiting on, so the
+    // sidebar can render the hold without a second round trip per child.
     const children = store.listChildIssues(issue.id);
     return c.json({
-      issues: children.map((child) => issueCompatibilityResponse(child)),
+      issues: children.map((child) => ({
+        ...issueCompatibilityResponse(child),
+        blocked_by: store.listUnmetPrerequisites(child.id).map((row) => row.key),
+      })),
       total: children.length,
     });
   });
@@ -1168,7 +1276,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueDependencyInput>(c);
-    return c.json({ dependency: store.createIssueDependency(issue.id, body, issueMutationActivity(c)) }, 201);
+    try {
+      const dependency = store.createIssueDependency(issue.id, body, issueMutationActivity(c));
+      // MUL-400 E3: answer with the row as seen from this issue, so the caller
+      // can render the direction without recomputing it.
+      const view = store.listIssueDependencies(issue.id).find((row) => row.id === dependency.id);
+      return c.json({ dependency: view ?? dependency }, 201);
+    } catch (err) {
+      const response = issueDependencyErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1211,6 +1329,35 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
+  for (const prefix of ["/api/issues/:id", "/api/multiremi/issues/:id"]) {
+    app.post(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can authorize parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      try {
+        const updated = store.grantParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+        return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+      } catch (error) {
+        if (error instanceof ParentDoneGrantOwnerError) return c.json({ error: error.message, code: error.code }, 409);
+        throw error;
+      }
+    });
+    app.delete(`${prefix}/parent-done-grant`, (c) => {
+      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
+      if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
+      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
+        return c.json({ error: "Only a member can revoke parent closure", code: "parent_done_grant_requires_member" }, 403);
+      }
+      const updated = store.revokeParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
+      return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
+    });
+  }
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -1233,10 +1380,35 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, issue.workspaceId);
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
-    const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
-    lockAutoTitleAfterHumanEdit(c, updated, input);
-    const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
-    return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
+    try {
+      const outcome = store.updateIssueWithOutcome(issue.id, input);
+      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
+      lockAutoTitleAfterHumanEdit(c, updated, input);
+      // MUL-400 E3 (QA round 2, blocker 2): a forced start already dispatched
+      // inside the store. Dispatch here as well would cancel that fresh round and
+      // queue a second one, so the route defers to the store in that case.
+      const dispatched = handledForcedStart
+        ? { issue: updated, task: null, cancelledTasks: 0 }
+        // QA round 4: the decision uses the PRE-WRITE snapshot the store took
+        // inside its row lock, never the route's earlier read. A concurrent
+        // automatic start can commit between the route's read and this call, and
+        // the stale `backlog -> todo` answer made this path dispatch a second
+        // round, cancelling the one the automatic start had just queued.
+        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
+      return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
+    } catch (err) {
+      // MUL-400 E3 (QA round 3, blocker 3): the store refuses a transition that
+      // leaves `backlog` with unmet prerequisites by throwing
+      // `IssueDependencyError`. The compatibility PATCH already answers 409
+      // `dependencies_unmet`; the native route used to let it escape and become
+      // a bare 500 with no code, so a client could not tell a hold from a fault.
+      // Nothing was written: the store throws before its UPDATE.
+      const dependencyResponse = issueDependencyErrorResponse(c, err);
+      if (dependencyResponse) return dependencyResponse;
+      const response = issueErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -1258,9 +1430,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (dispatchDenied) return dispatchDenied;
     try {
       assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, issue.workspaceId);
-      const { issue: updated, cancelledTasks } = store.updateIssueWithOutcome(issue.id, input);
+      const outcome = store.updateIssueWithOutcome(issue.id, input);
+      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
       lockAutoTitleAfterHumanEdit(c, updated, input);
-      const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
+      // See the native PATCH route: the store already dispatched a forced start,
+      // and the pre-write snapshot only the store can see decides the rest.
+      const dispatched = handledForcedStart
+        ? { issue: updated, task: null, cancelledTasks: 0 }
+        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
       const response = {
         ...issueCompatibilityResponse(dispatched.issue),
         task_id: dispatched.task?.id ?? null,
@@ -1353,13 +1530,21 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const body = await readJson<AssignIssueInput>(c);
+    const body = await readJson<AssignIssueInput & { force?: unknown }>(c);
+    // MUL-400 E3: assignment never overrides the dependency gate. `force` is a
+    // server-internal dispatch option (see AssignIssueOptions) that only the
+    // audited member status write sets, so a request body carrying it is ignored
+    // rather than honored: the caller changes nothing and gets the hold behavior
+    // of a plain assign.
+    delete body.force;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, issue.workspaceId,
       body.assigneeType ?? body.assignee_type, body.assigneeId ?? body.assignee_id);
     if (dispatchDenied) return dispatchDenied;
     const { actorType, actorId } = issueMutationActivity(c);
+    // MUL-448: strip both lineage spellings before stamping, so a member body
+    // cannot supply the parent task that the credential did not.
     const result = safeAssignIssue(store, issue.id, {
-      ...body,
+      ...stripServerOwnedAssignFields(body),
       actorType,
       actorId,
       parentTaskId: currentTaskParentId(c),
@@ -1560,7 +1745,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const creator = issueSubscriberCaller(c);
     try {
       const task = store.createSessionTask(session.id, {
-        ...body,
+        ...stripServerOwnedSessionTaskFields(body),
         // Non-null past the `if (!agent) return 404` guard above; cleanString's
         // null just has to become the `agentId?: string` field's undefined.
         agentId: agentId ?? undefined,
@@ -1570,6 +1755,8 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       });
       return c.json(taskCompatibilityResponse(task), 201);
     } catch (error) {
+      const dependencyResponse = issueDependencyErrorResponse(c, error);
+      if (dependencyResponse) return dependencyResponse;
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   });

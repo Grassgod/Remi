@@ -128,6 +128,32 @@ async function setMode(fixture: Awaited<ReturnType<typeof setup>>, mode: "report
 }
 
 describe("Organizer supervisor privilege layer", () => {
+  it("records a dependency exemption on real supervisor redispatch", async () => {
+    const fixture = await setup();
+    const supervisorToken = await grantSupervisor(fixture);
+    await setMode(fixture, "act");
+    const prerequisite = fixture.store.createIssue({ title: "Still open", status: "in_progress" });
+    fixture.store.createIssueDependency(fixture.targetIssue.id, {
+      dependsOnIssueId: prerequisite.id, type: "blocked_by",
+    });
+    fixture.store.updateIssue(fixture.targetIssue.id, { status: "backlog" });
+    const response = await fixture.app.request(`/api/tasks/${fixture.targetTask.id}/redispatch`, {
+      method: "POST",
+      headers: headers(supervisorToken.token),
+      body: JSON.stringify({ reason: "restore lane" }),
+    });
+    expect(response.status).toBe(202);
+    const replacement = fixture.store.listTasksForIssue(fixture.targetIssue.id)
+      .find((task) => task.id !== fixture.targetTask.id)!;
+    expect(replacement.status).toBe("queued");
+    const activities = fixture.store.listIssueActivity(fixture.targetIssue.id)
+      .filter((activity) => activity.type === "dependency_gate_exempted");
+    expect(activities).toHaveLength(1);
+    expect(activities[0]!.data).toMatchObject({
+      source: "redispatch", taskId: replacement.id,
+      previousTaskId: fixture.targetTask.id, unmet: [{ key: prerequisite.key }],
+    });
+  });
   it("defaults to report_only and only lets human owner/admin configure supervisor authority", async () => {
     const fixture = await setup();
 

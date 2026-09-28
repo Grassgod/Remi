@@ -390,10 +390,40 @@ export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: Multire
 }
 
 export function canCurrentUserAccessAgent(c: Context, store: MultiremiStore, agent: MultiremiAgent): boolean {
-  if (agent.visibility !== "private") return true;
+  return agentVisibleToUser(agent, currentRequestUserId(c), (workspaceId) => currentWorkspaceRole(c, store, workspaceId));
+}
+
+/**
+ * Batched twin of {@link canCurrentUserAccessAgent} for list routes (MUL-473).
+ *
+ * The rule is identical — a private Agent is reachable by its owner and by
+ * workspace owners/admins — but the caller's role is resolved at most once per
+ * workspace instead of once per Agent. Without this a route that checks N
+ * private Agents issued N membership reads for one answer.
+ */
+export function canCurrentUserAccessAgentChecker(
+  c: Context,
+  store: MultiremiStore,
+): (agent: MultiremiAgent) => boolean {
   const userId = currentRequestUserId(c);
+  const rolesByWorkspace = new Map<string, string>();
+  return (agent) => agentVisibleToUser(agent, userId, (workspaceId) => {
+    const cached = rolesByWorkspace.get(workspaceId);
+    if (cached !== undefined) return cached;
+    const role = currentWorkspaceRole(c, store, workspaceId);
+    rolesByWorkspace.set(workspaceId, role);
+    return role;
+  });
+}
+
+function agentVisibleToUser(
+  agent: MultiremiAgent,
+  userId: string,
+  roleForWorkspace: (workspaceId: string) => string,
+): boolean {
+  if (agent.visibility !== "private") return true;
   if (agent.ownerId === userId) return true;
-  const role = currentWorkspaceRole(c, store, agent.workspaceId);
+  const role = roleForWorkspace(agent.workspaceId);
   return role === "owner" || role === "admin";
 }
 
