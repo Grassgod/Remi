@@ -127,6 +127,8 @@ function sendFrame(client: MultiremiWebSocketClient, type: string, payload: unkn
  */
 export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): BrowserStreamHandler {
   const byClient = new WeakMap<MultiremiWebSocketClient, Map<string, ActiveStreamSubscription>>();
+  const pendingByClient = new WeakMap<MultiremiWebSocketClient, Map<string, symbol>>();
+  const disposedClients = new WeakSet<MultiremiWebSocketClient>();
 
   const subscriptionsOf = (client: MultiremiWebSocketClient): Map<string, ActiveStreamSubscription> => {
     let map = byClient.get(client);
@@ -162,6 +164,7 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
 
   return {
     async handleSubscribe(client, event) {
+      if (disposedClients.has(client)) return;
       const parsed = parseSubscribe(event);
       if (!parsed) {
         const payload = payloadOf(event);
@@ -178,6 +181,16 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
         sendError(client, parsed.stream, parsed.id, "wrong_endpoint");
         return;
       }
+      const key = subscriptionKey(parsed.stream, parsed.id);
+      let pending = pendingByClient.get(client);
+      if (!pending) {
+        pending = new Map();
+        pendingByClient.set(client, pending);
+      }
+      // Only this request may register after the await. Replacement, unsubscribe
+      // and disposal invalidate its identity even before an active handle exists.
+      const request = Symbol(key);
+      pending.set(key, request);
       let authorized: { ok: true } | { ok: false; code: string };
       try {
         authorized = await authorize(client, parsed.stream, parsed.id);
@@ -188,6 +201,8 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
         // because this runs inside the socket's message handler.
         authorized = { ok: false, code: "unavailable" };
       }
+      if (disposedClients.has(client) || pending.get(key) !== request) return;
+      pending.delete(key);
       if (!authorized.ok) {
         sendError(client, parsed.stream, parsed.id, authorized.code);
         return;
@@ -197,7 +212,6 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       // this socket already holds replaces it — that is the reassign case, and
       // the client uses it to resume a stream from a new `from_seq`.
       const active = subscriptionsOf(client);
-      const key = subscriptionKey(parsed.stream, parsed.id);
       active.get(key)?.unsubscribe();
 
       // Ordering: the ack is what tells the client which sequences the hub can
@@ -260,6 +274,7 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       if (!parsed) return;
       const active = subscriptionsOf(client);
       const key = subscriptionKey(parsed.stream, parsed.id);
+      pendingByClient.get(client)?.delete(key);
       const subscription = active.get(key);
       if (!subscription) return;
       subscription.unsubscribe();
@@ -267,6 +282,8 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
     },
 
     disposeClient(client) {
+      disposedClients.add(client);
+      pendingByClient.get(client)?.clear();
       const active = byClient.get(client);
       if (!active) return;
       for (const subscription of active.values()) subscription.unsubscribe();

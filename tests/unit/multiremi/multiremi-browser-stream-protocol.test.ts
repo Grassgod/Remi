@@ -209,6 +209,37 @@ const subscribeFrame = (stream: "log" | "trace", id: string, fromSeq = 1) => ({
   payload: { stream, id, from_seq: fromSeq },
 });
 
+describe("MUL-438 pending subscription disposal", () => {
+  it("invalidates authorization even when dispose precedes the first active subscription", async () => {
+    const world = seedWorld(createStore());
+    const { createBrowserStreamHandler } = await import("../../../packages/server/src/api/hub/browser-stream.js");
+    const { createSqliteStreamAuthReader } = await import("../../../packages/server/src/api/hub/stream-auth.js");
+    const reader = createSqliteStreamAuthReader(world.store);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const hub = new FakeHub();
+    const handler = createBrowserStreamHandler({
+      hub,
+      endpoint: "log",
+      auth: {
+        ...reader,
+        async logFacts(...args) {
+          await gate;
+          return reader.logFacts(...args);
+        },
+      },
+    });
+    const client = fakeClient(world.workspaceId, world.creatorUserId);
+    const pending = handler.handleSubscribe(client as any, subscribeFrame("log", world.issueSessionId));
+    handler.disposeClient(client as any);
+    release();
+    await pending;
+    expect(handler.subscriptionCount(client as any)).toBe(0);
+    expect(hub.subscriptions.filter((subscription) => !subscription.unsubscribed)).toHaveLength(0);
+    expect(client.frames).toEqual([]);
+  });
+});
+
 describe("MUL-438 browser stream protocol — log subscription authorization", () => {
   it("allows an issue session to a workspace member", async () => {
     const world = seedWorld(createStore());

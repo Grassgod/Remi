@@ -7,6 +7,9 @@
 // scope.
 import { afterEach, describe, expect, it } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api.js";
+import { createEmptyLiveHub, type HubSubscription } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+import { createStreamAuthReader, type StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
 import {
   authenticateBrowserWebSocket,
   createStore,
@@ -16,6 +19,127 @@ import {
 } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function pausedSubscriptionFixture(stream: "log" | "trace") {
+  const store = createStore();
+  const workspace = store.ensureLocalWorkspace();
+  store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+  const issue = store.createIssue({ title: "Subscription races", workspaceId: workspace.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
+  const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
+  const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "race", issueId: issue.id });
+  const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+  const auth = createStreamAuthReader(store);
+  const gates = Array.from({ length: 2 }, () => ({ entered: deferred(), release: deferred(), finished: deferred() }));
+  let request = 0;
+  const pause: StreamAuthReader = {
+    backend: auth.backend,
+    async logFacts(...args) {
+      const gate = gates[request++]!;
+      gate.entered.resolve();
+      await gate.release.promise;
+      try { return await auth.logFacts(...args); } finally { gate.finished.resolve(); }
+    },
+    async traceFacts(...args) {
+      const gate = gates[request++]!;
+      gate.entered.resolve();
+      await gate.release.promise;
+      try { return await auth.traceFacts(...args); } finally { gate.finished.resolve(); }
+    },
+  };
+  const active = new Set<number>();
+  const hub = createEmptyLiveHub(createLocalHubTransport());
+  // Only the keyed browser overload is used by this fixture.
+  hub.subscribe = ((_key: string, fromSeq: number): HubSubscription => {
+    active.add(fromSeq);
+    return { first_seq: 1, head: 50, log_version: null, gap: null, unsubscribe: () => { active.delete(fromSeq); } };
+  }) as typeof hub.subscribe;
+  const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null, liveHub: hub, streamAuth: pause });
+  const path = stream === "log" ? "/ws" : "/api/trace/ws";
+  const socket = new WebSocket(`ws://127.0.0.1:${server.port}${path}?workspace_id=${workspace.id}`);
+  const frames: Array<{ type: string }> = [];
+  socket.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+  await authenticateBrowserWebSocket(socket, token.token);
+  const id = stream === "log" ? session.id : task.id;
+  const subscribe = (fromSeq: number) => socket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream, id, from_seq: fromSeq } }));
+  const barrier = async () => {
+    const pong = nextWebSocketMessage(socket);
+    socket.send(JSON.stringify({ type: "ping" }));
+    expect(await pong).toEqual({ type: "pong" });
+  };
+  return { server, socket, id, gates, active, frames, subscribe, barrier };
+}
+
+describe.each(["log", "trace"] as const)("MUL-438 pending %s subscriptions over real sockets", (stream) => {
+  it("cancels pending authorization after unsubscribe has been processed", async () => {
+    const fixture = await pausedSubscriptionFixture(stream);
+    const { server, socket, id, gates, active, frames, subscribe, barrier } = fixture;
+    try {
+      subscribe(1);
+      await gates[0]!.entered.promise;
+      socket.send(JSON.stringify({ type: "stream.unsubscribe", payload: { stream, id } }));
+      await barrier();
+      const quiet = expectNoWebSocketMessage(socket);
+      gates[0]!.release.resolve();
+      await quiet;
+      expect(frames.filter((frame) => frame.type === "stream.ack")).toEqual([]);
+      expect(active.size).toBe(0);
+    } finally {
+      for (const gate of gates) gate.release.resolve();
+      socket.close();
+      server.stop(true);
+    }
+  });
+
+  it("disposes pending authorization when the connection closes", async () => {
+    const { server, socket, gates, active, subscribe } = await pausedSubscriptionFixture(stream);
+    try {
+      subscribe(1);
+      await gates[0]!.entered.promise;
+      const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve(), { once: true }));
+      socket.close();
+      await closed;
+      gates[0]!.release.resolve();
+      await gates[0]!.finished.promise;
+      await Bun.sleep(10);
+      expect(active.size).toBe(0);
+    } finally {
+      for (const gate of gates) gate.release.resolve();
+      socket.close();
+      server.stop(true);
+    }
+  });
+
+  it("keeps the newer anchor when the older authorization finishes last", async () => {
+    const { server, socket, gates, active, frames, subscribe, barrier } = await pausedSubscriptionFixture(stream);
+    try {
+      subscribe(1);
+      await gates[0]!.entered.promise;
+      subscribe(50);
+      await gates[1]!.entered.promise;
+      const ack = nextWebSocketMessage(socket);
+      gates[1]!.release.resolve();
+      expect(await ack).toMatchObject({ type: "stream.ack" });
+      expect([...active]).toEqual([50]);
+      const quiet = expectNoWebSocketMessage(socket);
+      gates[0]!.release.resolve();
+      await quiet;
+      await barrier();
+      expect([...active]).toEqual([50]);
+      expect(frames.filter((frame) => frame.type === "stream.ack")).toHaveLength(1);
+    } finally {
+      for (const gate of gates) gate.release.resolve();
+      socket.close();
+      server.stop(true);
+    }
+  });
+});
 
 describe("MUL-438 browser stream endpoints", () => {
   it("serves log streams on /ws, refuses trace there, and refuses log on /api/trace/ws", async () => {
