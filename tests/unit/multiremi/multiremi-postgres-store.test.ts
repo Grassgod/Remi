@@ -18,7 +18,7 @@
  * The integration suite is skipped (not failed) when Postgres is unreachable, so
  * the file is safe on machines without the configured MULTIREMI_DATABASE_URL.
  */
-import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +30,7 @@ import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/p
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
+import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import { TaskSteerConflictError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
@@ -3217,10 +3218,160 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const before = store.listTasksForIssue(dependent.id);
     expect(before).toHaveLength(1);
     const issues = (store as unknown as { issues: { autoStartDependent(...args: unknown[]): unknown } }).issues;
-    issues.autoStartDependent(dependent, store.getIssue(prereq.id)!, null, { since: store.getIssue(prereq.id)!.updatedAt });
+    const checkId = (db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string }).id;
+    issues.autoStartDependent(dependent, store.getIssue(prereq.id)!, null, { dependencyCheckEventId: checkId });
     expect(store.listTasksForIssue(dependent.id)).toEqual(before);
     expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started")).toHaveLength(1);
     expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+  });
+
+  describe("MUL-452 check event identity (PG)", () => {
+    const base = Date.parse("2028-01-01T00:00:00.000Z");
+
+    function drainIdentityEvents() {
+      const pending = db.query("SELECT 1 FROM multiremi_system_events WHERE status IN ('pending', 'processing') LIMIT 1");
+      const at = new Date(Math.max(Date.now(), base + 60_000) + 24 * 60 * 60 * 1_000);
+      for (let round = 0; round < 100 && pending.get(); round++) store.dispatchPendingSystemEvents(at);
+      if (pending.get()) throw new Error("Identity test event queue did not drain within 100 rounds");
+    }
+
+    function chain() {
+      const runtime = store.registerRuntime({ name: `Check identity ${++wsCounter}`, provider: "claude" });
+      const agent = store.createAgent({ name: `Check identity ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+      const prerequisite = store.createIssue({ title: `Check prerequisite ${wsCounter}`, status: "in_progress" });
+      const dependent = store.createIssue({ title: `Check dependent ${wsCounter}`, status: "backlog",
+        blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: agent.id });
+      return { agent, prerequisite, dependent };
+    }
+
+    function checks(issueId: string) {
+      const rows = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+        .all(issueId) as Array<{ id: string }>;
+      return rows.map(({ id }) => store.getSystemEvent(id)!);
+    }
+
+    function activities(issueId: string, type: string) {
+      return store.listIssueActivity(issueId).filter((entry) => entry.type === type);
+    }
+
+    function withoutHooks(fn: () => void) {
+      const issues = (store as unknown as { issues: IssuesRepo }).issues;
+      const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
+      try { fn(); } finally { hook.mockRestore(); }
+    }
+
+    it.each([
+      ["reopened later", "later"],
+      ["U11 same millisecond", "same millisecond"],
+      ["U12 slower process", "slower process"],
+    ] as const)(
+      "starts again after an old skip (%s, PG)", (_case, timing) => {
+        drainIdentityEvents();
+        const { agent, prerequisite, dependent } = chain();
+        try {
+          setSystemTime(new Date(base + (timing === "slower process" ? 60_000 : 0)));
+          db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+          store.updateIssue(prerequisite.id, { status: "done" });
+          const oldCheck = checks(prerequisite.id)[0]!;
+          expect(activities(dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
+          expect(activities(dependent.id, "dependency_auto_start_skipped")[0]?.data)
+            .toMatchObject({ dependency_check_event_id: oldCheck.id });
+
+          setSystemTime(new Date(base + (timing === "same millisecond" ? 0 : 1_000)));
+          store.updateIssue(prerequisite.id, { status: "in_progress" });
+          db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [agent.id]);
+          setSystemTime(new Date(base + (timing === "same millisecond" ? 0 : 2_000)));
+          store.updateIssue(prerequisite.id, { status: "done" });
+          const nextCheck = checks(prerequisite.id).find((event) => event.id !== oldCheck.id)!;
+          expect(nextCheck.id).not.toBe(oldCheck.id);
+          if (timing === "same millisecond") expect(nextCheck.createdAt).toBe(oldCheck.createdAt);
+          if (timing === "slower process") expect(Date.parse(nextCheck.createdAt)).toBeLessThan(Date.parse(oldCheck.createdAt));
+
+          setSystemTime(new Date(base + 7_000));
+          store.dispatchPendingSystemEvents();
+          expect(store.getSystemEvent(nextCheck.id)?.status).toBe("processed");
+          expect(store.getIssue(dependent.id)?.status).toBe("todo");
+          expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+          expect(activities(dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
+          expect(activities(dependent.id, "dependency_auto_started")[0]?.data)
+            .toMatchObject({ dependency_check_event_id: nextCheck.id });
+        } finally {
+          setSystemTime();
+        }
+      },
+    );
+
+    it.each(["archived-agent", "missing-agent", "archived-squad", "missing-squad", "no-runnable-squad"] as const)(
+      "treats an unavailable owner as a business skip (%s, PG)", (kind) => {
+        drainIdentityEvents();
+        const { agent, prerequisite, dependent } = chain();
+        if (kind === "archived-agent") {
+          db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+        } else if (kind === "missing-agent") {
+          db.run("UPDATE multiremi_issues SET assignee_id = 'missing-agent' WHERE id = ?", [dependent.id]);
+        } else {
+          const squad = store.createSquad({ name: `Unavailable PG ${kind}`, leaderId: agent.id });
+          db.run("UPDATE multiremi_issues SET assignee_type = 'squad', assignee_id = ? WHERE id = ?", [squad.id, dependent.id]);
+          if (kind === "archived-squad") db.run("UPDATE multiremi_squads SET archived_at = ? WHERE id = ?", [new Date().toISOString(), squad.id]);
+          if (kind === "missing-squad") db.run("UPDATE multiremi_issues SET assignee_id = 'missing-squad' WHERE id = ?", [dependent.id]);
+          if (kind === "no-runnable-squad") db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+        }
+        withoutHooks(() => store.updateIssue(prerequisite.id, { status: "done" }));
+        const check = checks(prerequisite.id)[0]!;
+        store.dispatchPendingSystemEvents(new Date(check.availableAt));
+        expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+        expect(activities(dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
+        expect(activities(dependent.id, "dependency_auto_start_skipped")[0]?.data)
+          .toMatchObject({ reason: "dispatch_failed", dependency_check_event_id: check.id });
+        expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+        expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+        (store as unknown as { issues: IssuesRepo }).issues.replayDependencyAutoStart(check);
+        expect(activities(dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
+      },
+    );
+
+    it("a partial replay retry does not redo an earlier task or skip (PG)", () => {
+      drainIdentityEvents();
+      const { agent, prerequisite, dependent } = chain();
+      const unavailable = store.createAgent({ name: `Unavailable PG ${++wsCounter}`, provider: "claude", runtimeId: agent.runtimeId! });
+      const skipped = store.createIssue({ title: `Skipped PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
+        assigneeType: "agent", assigneeId: unavailable.id });
+      db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), unavailable.id]);
+      const failed = store.createIssue({ title: `Failed PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
+        assigneeType: "agent", assigneeId: agent.id });
+      withoutHooks(() => store.updateIssue(prerequisite.id, { status: "done" }));
+      const check = checks(prerequisite.id)[0]!;
+      const issues = (store as unknown as { issues: IssuesRepo }).issues;
+      const list = spyOn(issues as unknown as { listDependencyDependents(id: string): unknown[] }, "listDependencyDependents")
+        .mockImplementation(() => [dependent, skipped, failed].map((issue) => store.getIssue(issue.id)!));
+      const run = db.run.bind(db);
+      let injected = false;
+      const failure = spyOn(db, "run").mockImplementation((sql, ...args) => {
+        if (!injected && sql.includes("SET status = 'todo'") && (args[0] as unknown[] | undefined)?.[1] === failed.id) {
+          injected = true;
+          throw new Error("third PG dependent failed");
+        }
+        return run(sql, ...args);
+      });
+      try {
+        store.dispatchPendingSystemEvents(new Date(check.availableAt));
+        expect(injected).toBe(true);
+        expect(store.getSystemEvent(check.id)).toMatchObject({ status: "pending", attemptCount: 1 });
+        expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+        expect(activities(skipped.id, "dependency_auto_start_skipped")).toHaveLength(1);
+        expect(store.listTasksForIssue(failed.id)).toEqual([]);
+        failure.mockRestore();
+        store.dispatchPendingSystemEvents(new Date(Date.parse(check.availableAt) + 2_000));
+        expect(store.getSystemEvent(check.id)).toMatchObject({ status: "processed", attemptCount: 2 });
+        expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
+        expect(activities(skipped.id, "dependency_auto_start_skipped")).toHaveLength(1);
+        expect(store.listTasksForIssue(failed.id)).toHaveLength(1);
+      } finally {
+        failure.mockRestore();
+        list.mockRestore();
+      }
+    });
   });
 
   it("U9 retries a transaction write failure without a business skip (PG 40001)", () => {

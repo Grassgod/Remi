@@ -2206,6 +2206,7 @@ export class IssuesRepo {
      * dispatching twice.)
      */
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
     /**
      * The Issue as it was observed INSIDE the write transaction, after the row
      * lock. Callers that decide "did this request move the issue?" from a
@@ -2253,6 +2254,7 @@ export class IssuesRepo {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   } {
     let cancelledTasks = 0;
     // Every `force` that tries to leave `backlog`, whether or not the gate was
@@ -2383,6 +2385,7 @@ export class IssuesRepo {
         previous: current,
         cancelledTasks: 0,
         handledForcedStart: false,
+        dependencyCheckEventId: null,
       };
     }
     this.ctx.db.run(
@@ -2448,7 +2451,7 @@ export class IssuesRepo {
     }
     const next = this.getIssue(id)!;
     this.linkReferencedAttachmentsToIssue(id, next.description);
-    this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+    const { dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
       issue: next,
       previousStatus: current.status,
       actorType: "system",
@@ -2515,6 +2518,7 @@ export class IssuesRepo {
       previous: current,
       cancelledTasks,
       handledForcedStart: forceStartAttempt,
+      dependencyCheckEventId,
     };
   }
 
@@ -2532,6 +2536,7 @@ export class IssuesRepo {
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: ChildStatusChangeCollector,
@@ -2561,6 +2566,7 @@ export class IssuesRepo {
         updated,
         resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         collector,
+        { dependencyCheckEventId: result.dependencyCheckEventId },
       );
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
       // event for the family it LEFT, so the old parent re-derives as well. The
@@ -2811,6 +2817,7 @@ export class IssuesRepo {
     collector: ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      dependencyCheckEventId?: string | null;
       /**
        * Replay-chain de-duplication, shared by every hop of the upward
        * derivation. `TasksRepo.runCollectedChildStatusChanges` owns it so a
@@ -2829,7 +2836,7 @@ export class IssuesRepo {
     const readinessLines: string[] = [];
     const dependencyNested: ChildStatusChangeCollector = [];
     const dependencyEvents = createCommitEventQueue();
-    this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, dependencyNested, dependencyEvents, readinessLines);
+    this.reactToIssueDependencyOutcome(previous, issue, parentTaskId, options.dependencyCheckEventId ?? null, dependencyNested, dependencyEvents, readinessLines);
     if (!issue.parentIssueId) {
       // No parent report to fold into: the dependency side stands alone.
       this.ctx.emitCommitEvents(dependencyEvents);
@@ -2954,6 +2961,7 @@ export class IssuesRepo {
     previous: MultiremiIssue,
     issue: MultiremiIssue,
     parentTaskId: string | null,
+    dependencyCheckEventId: string | null,
     nested: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
     mergedLines: string[] = [],
@@ -2974,8 +2982,12 @@ export class IssuesRepo {
       if (dependent.status !== "backlog") continue;
       const unmet = this.listUnmetPrerequisites(dependent.id);
       if (satisfied && unmet.length === 0) {
+        if (!dependencyCheckEventId) {
+          log.error(`dependency auto-start check id missing for ${issue.id}`);
+          continue;
+        }
         try {
-          const line = this.autoStartDependent(dependent, issue, parentTaskId, { since: issue.updatedAt });
+          const line = this.autoStartDependent(dependent, issue, parentTaskId, { dependencyCheckEventId });
           if (line) mergedLines.push(line);
         } catch (error) {
           log.warn(`dependency auto-start failed for ${dependent.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -3189,8 +3201,8 @@ export class IssuesRepo {
       if (dependent.status !== "backlog" || this.listUnmetPrerequisites(dependent.id).length > 0) continue;
       if (!dependent.assigneeId || (dependent.assigneeType !== "agent" && dependent.assigneeType !== "squad")) continue;
       this.autoStartDependent(dependent, prerequisite, cleanOptionalString(event.payload.automation_source_task_id), {
-        since: event.createdAt,
-        replayEventId: event.id,
+        dependencyCheckEventId: event.id,
+        replayed: true,
       });
     }
   }
@@ -3204,7 +3216,7 @@ export class IssuesRepo {
     dependent: MultiremiIssue,
     satisfiedBy: MultiremiIssue,
     parentTaskId: string | null,
-    options: { since: string; replayEventId?: string },
+    options: { dependencyCheckEventId: string; replayed?: boolean },
   ): string | null {
     const ownerType = dependent.assigneeType;
     if (!ownerType || !dependent.assigneeId || ownerType === "member") {
@@ -3272,8 +3284,9 @@ export class IssuesRepo {
         if (existingRound) return null;
         const skipped = this.ctx.db.query(
           `SELECT 1 FROM multiremi_issue_activity
-           WHERE issue_id = ? AND type = 'dependency_auto_start_skipped' AND created_at >= ? LIMIT 1`,
-        ).get(dependent.id, options.since);
+           WHERE issue_id = ? AND type = 'dependency_auto_start_skipped'
+             AND data LIKE ? ESCAPE '\\' LIMIT 1`,
+        ).get(dependent.id, `%"dependency_check_event_id":"${escapeDependencyCheckEventIdForLike(options.dependencyCheckEventId)}"%`);
         if (skipped) return null;
         const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
         if (!taskAgent) {
@@ -3290,6 +3303,8 @@ export class IssuesRepo {
               satisfied_by_key: satisfiedBy.key,
               reason: "dispatch_failed",
               error: message,
+              dependencyCheckEventId: options.dependencyCheckEventId,
+              dependency_check_event_id: options.dependencyCheckEventId,
             },
           }, deferredEvents);
           return { task: null, dispatched: false };
@@ -3343,11 +3358,9 @@ export class IssuesRepo {
             satisfied_by_key: satisfiedBy.key,
             autoStarted: true,
             auto_started: true,
-            ...(options.replayEventId ? {
-              replayed: true,
-              replayEventId: options.replayEventId,
-              replay_event_id: options.replayEventId,
-            } : {}),
+            dependencyCheckEventId: options.dependencyCheckEventId,
+            dependency_check_event_id: options.dependencyCheckEventId,
+            ...(options.replayed ? { replayed: true } : {}),
             taskId: task.id,
             task_id: task.id,
             ...sourceTaskActivityData(parentTaskId),
@@ -6553,6 +6566,10 @@ export class IssuesRepo {
 
 function formatIssueKey(number: number): string {
   return `MUL-${number}`;
+}
+
+function escapeDependencyCheckEventIdForLike(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
 }
 
 function toIssueDecision(row: Row): MultiremiIssueDecision {
