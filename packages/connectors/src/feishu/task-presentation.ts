@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
@@ -109,9 +110,7 @@ export class FeishuTaskPresentation {
         if (event.kind === "message") {
           await this.message(event.message);
         } else {
-          // Snapshots are polled while the Task runs, so the conversation label
-          // settles as soon as the provider session is pinned. A command reply
-          // reports no session and keeps the plain agent name.
+          // The subscription's closed callback supplies the final display snapshot.
           if (event.snapshot.sessionId) this.sessionId = event.snapshot.sessionId;
           finalStatus = event.snapshot.status;
           error = event.snapshot.error;
@@ -159,7 +158,7 @@ export class FeishuTaskPresentation {
     return { messageId: this.state.resultMessageId };
   }
 
-  private async message(message: MultiremiTaskMessage): Promise<void> {
+  private async message(message: TraceEvent): Promise<void> {
     this.timeline.accept(message);
     // Nested agent prose must never become the main agent's final answer.
     const nested = Boolean(message.meta?.parent_tool_call_id);
@@ -266,7 +265,7 @@ export class FeishuTaskPresentation {
     await this.save();
   }
 
-  private async waitForInteraction(message: MultiremiTaskMessage): Promise<void> {
+  private async waitForInteraction(message: TraceEvent): Promise<void> {
     const requestId = String(message.input?.request_id ?? "");
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
@@ -279,13 +278,13 @@ export class FeishuTaskPresentation {
     await this.writeProcess(this.timeline.resume(requestId, request.status), message.seq);
   }
 
-  private async interaction(message: MultiremiTaskMessage): Promise<void> {
+  private async interaction(message: TraceEvent): Promise<void> {
     const requestId = String(message.input?.request_id ?? "");
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (this.meta.getHumanRequest && !request) throw new Error("Task human request unavailable");
     request ??= { id: requestId, taskId: this.meta.taskId, kind: message.type === "question_request" ? "question" : "permission",
-      payload: message.input ?? {}, status: "pending", response: null, respondedBy: null, createdAt: message.createdAt, respondedAt: null };
+      payload: message.input ?? {}, status: "pending", response: null, respondedBy: null, createdAt: message.ts, respondedAt: null };
     if (request.taskId !== this.meta.taskId) throw new Error("Interaction Task mismatch");
     let entry = this.state.interactions[requestId];
     if (!entry && request.status !== "pending") return; // historical request already answered on web

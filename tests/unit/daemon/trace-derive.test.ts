@@ -8,7 +8,6 @@ import {
   traceTypeHistogram,
 } from "@shared/trace-derive.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
-import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { KNOWN_TRACE_EVENT_TYPES } from "@multiremi/contracts/trace.js";
 
 let nextSeq = 1;
@@ -33,20 +32,7 @@ function event(patch: Partial<TraceEvent> = {}): TraceEvent {
 function timelineAnswer(events: TraceEvent[]): string {
   const timeline = new FeishuCotTimeline("task");
   for (const item of events) {
-    timeline.accept({
-      id: `m${item.seq}`,
-      taskId: "task",
-      seq: item.seq,
-      type: item.type,
-      tool: item.tool ?? null,
-      content: item.content ?? null,
-      input: item.input ?? null,
-      output: item.output ?? null,
-      toolCallId: item.tool_call_id ?? null,
-      status: item.status ?? null,
-      meta: item.meta ?? null,
-      createdAt: item.ts,
-    } as unknown as MultiremiTaskMessage);
+    timeline.accept(item);
   }
   // `answer(fallback)` returns final || candidate || fallback; an empty fallback
   // makes it directly comparable with a function that returns null for "none".
@@ -238,12 +224,7 @@ describe("trace histogram and counters", () => {
     expect(countToolCalls(events)).toBe(2);
     const timeline = new FeishuCotTimeline("task");
     for (const item of events) {
-      timeline.accept({
-        id: `m${item.seq}`, taskId: "task", seq: item.seq, type: item.type,
-        tool: item.tool ?? null, content: null, input: null, output: null,
-        toolCallId: item.tool_call_id ?? null, status: null,
-        meta: item.meta ?? null, createdAt: item.ts,
-      } as unknown as MultiremiTaskMessage);
+      timeline.accept(item);
     }
     expect(timeline.toolCount).toBe(countToolCalls(events));
   });

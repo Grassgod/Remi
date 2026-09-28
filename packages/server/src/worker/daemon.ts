@@ -209,7 +209,6 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiTaskHumanRequest,
-  MultiremiTaskMessage,
   MultiremiTaskStatus,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
@@ -1129,10 +1128,6 @@ export class MultiremiDaemon {
 
   downloadFeishuBotOutboundAttachment(deliveryId: string, claimToken: string, attachmentId: string): Promise<Buffer> {
     return this.client.downloadFeishuBotOutboundAttachment(this.options.runtimeId!, deliveryId, claimToken, attachmentId);
-  }
-
-  listFeishuBotTaskMessages(taskId: string, sinceSeq: number): Promise<MultiremiTaskMessage[]> {
-    return this.client.listTaskMessages(taskId, sinceSeq);
   }
 
   getFeishuBotTaskSnapshot(taskId: string): Promise<FeishuBotTaskSnapshot> {

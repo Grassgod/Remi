@@ -1,0 +1,131 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-447 local integration evidence</title><style>body{font:15px/1.6 system-ui;margin:24px;max-width:1100px;color:#222}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f3;padding:16px}h1{font-size:24px}p{max-width:900px}</style><h1>MUL-447: local integration evidence</h1><p>Real local daemon/API and temporary SQLite. Feishu sender and trace content are simulated. CoT resumes from 2 to 3, then from 4 to 5 after disconnect, and ends on closed. One final status read; no messages polling. Human-request 750 ms polling remains pending its cross-process event transport. Independent QA is still required.</p><pre>{
+  "issue": "MUL-447",
+  "executed_at": "2026-09-28T13:24:16.215Z",
+  "bun": "1.3.14",
+  "environment": "real local Bun API + real co-resident daemon + temporary SQLite; fake Feishu sender; synthetic trace producer",
+  "initial_checkpoint": 2,
+  "checkpoint_before_disconnect": 4,
+  "final_checkpoint": 6,
+  "subscribe_from_seq": [
+    2,
+    4
+  ],
+  "received_seq": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "closed": true,
+  "native_events": [
+    {
+      "event_type": "REASONING_START",
+      "content": "{\"messageId\":\"a7d2eef075441b3ae4a0b4b0ee93ecab\"}",
+      "timestamp": "1790601855611"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_START",
+      "content": "{\"messageId\":\"c43ea933ad646b1f1a82dd113fdbdac1\",\"role\":\"reasoning\"}",
+      "timestamp": "1790601855612"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_CONTENT",
+      "content": "{\"messageId\":\"c43ea933ad646b1f1a82dd113fdbdac1\",\"delta\":\"live 3\"}",
+      "timestamp": "1790601855613"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_END",
+      "content": "{\"messageId\":\"c43ea933ad646b1f1a82dd113fdbdac1\"}",
+      "timestamp": "1790601855614"
+    },
+    {
+      "event_type": "TOOL_CALL_START",
+      "content": "{\"toolCallId\":\"d7e7129fd1ce51bad6e486d80c7f0524\",\"toolCallName\":\"Read\",\"title\":\"读取 /synthetic/source.ts\",\"icon\":\"read\"}",
+      "timestamp": "1790601855615"
+    },
+    {
+      "event_type": "TOOL_CALL_ARGS",
+      "content": "{\"toolCallId\":\"d7e7129fd1ce51bad6e486d80c7f0524\",\"delta\":\"/synthetic/source.ts\"}",
+      "timestamp": "1790601855616"
+    },
+    {
+      "event_type": "TOOL_CALL_END",
+      "content": "{\"toolCallId\":\"d7e7129fd1ce51bad6e486d80c7f0524\"}",
+      "timestamp": "1790601855617"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_START",
+      "content": "{\"messageId\":\"ed1d0f49ffd388d59f4eb447b52d3ffb\",\"role\":\"reasoning\"}",
+      "timestamp": "1790601856148"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_CONTENT",
+      "content": "{\"messageId\":\"ed1d0f49ffd388d59f4eb447b52d3ffb\",\"delta\":\"recovered 5\"}",
+      "timestamp": "1790601856149"
+    },
+    {
+      "event_type": "future.widget",
+      "content": "{\"ts\":\"2026-09-28T13:24:15.613Z\",\"type\":\"future.widget\",\"tool\":null,\"content\":\"literal future payload\",\"input\":{\"nested\":[1,{\"two\":true}]},\"output\":null,\"tool_call_id\":null,\"status\":null,\"meta\":{\"arbitrary\":\"value\"},\"seq\":6}",
+      "timestamp": "1790601856150"
+    },
+    {
+      "event_type": "REASONING_MESSAGE_END",
+      "content": "{\"messageId\":\"ed1d0f49ffd388d59f4eb447b52d3ffb\"}",
+      "timestamp": "1790601856215"
+    },
+    {
+      "event_type": "REASONING_END",
+      "content": "{\"messageId\":\"a7d2eef075441b3ae4a0b4b0ee93ecab\"}",
+      "timestamp": "1790601856216"
+    },
+    {
+      "event_type": "RUN_FINISHED",
+      "content": "{\"threadId\":\"oc_local_fixture\",\"runId\":\"tsk_bl8v7wqa7be4\",\"status\":\"done\"}",
+      "timestamp": "1790601856217"
+    }
+  ],
+  "http_requests": [
+    {
+      "method": "POST",
+      "path": "/api/daemon/register"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/workspaces/local/repos"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/runtimes/rt_xlbu5i/agent-plugins/desired"
+    },
+    {
+      "method": "POST",
+      "path": "/api/daemon/runtimes/rt_xlbu5i/recover-orphans"
+    },
+    {
+      "method": "GET",
+      "path": "/api/daemon/tasks/tsk_bl8v7wqa7be4/status"
+    }
+  ],
+  "trace_requests": [
+    {
+      "type": "trace.subscribe",
+      "task_id": "tsk_bl8v7wqa7be4",
+      "from_seq": 2
+    },
+    {
+      "type": "trace.subscribe",
+      "task_id": "tsk_bl8v7wqa7be4",
+      "from_seq": 4
+    },
+    {
+      "type": "trace.unsubscribe",
+      "task_id": "tsk_bl8v7wqa7be4"
+    }
+  ],
+  "polling": {
+    "cot_400ms_removed": true,
+    "status_reads": 1,
+    "human_750ms_removed": false,
+    "human_request_note": "No human requests in this CoT fixture. Step 5 deferred: MUL-436 Hub events are API-process local and agent/MUL-421 has no task.human_request.settled producer/receiver."
+  }
+}</pre></html>

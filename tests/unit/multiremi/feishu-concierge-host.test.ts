@@ -222,22 +222,20 @@ describe("control-plane Feishu concierge host", () => {
     expect(sends).toBe(1);
   });
 
-  it("opens a Task stream without a session and surfaces the provider session as soon as it is pinned", async () => {
+  it("opens without a session and reads the final provider session once on closed", async () => {
     const { daemon } = fakeDaemon();
-    const statuses = [
-      { status: "running" as const, sessionId: null },
-      { status: "running" as const, sessionId: "sess_pinned" },
-      // A repeat poll must not replay the same session as another snapshot.
-      { status: "running" as const, sessionId: "sess_pinned" },
-      { status: "completed" as const, sessionId: "sess_pinned" },
-    ];
-    let poll = 0;
+    let reads = 0;
     Object.assign(daemon, {
-      listFeishuBotTaskMessages: async () => [],
+      subscribeTrace: async (_taskId: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
+        expect(fromSeq).toBe(0);
+        expect(reads).toBe(0);
+        await onEvents([], true);
+        return async () => {};
+      },
       getFeishuBotTaskSnapshot: async () => {
-        const next = statuses[Math.min(poll++, statuses.length - 1)]!;
-        return { taskId: "tsk_private", status: next.status, result: "done", error: null,
-          sessionId: next.sessionId, workDir: null, usage: [] };
+        reads++;
+        return { taskId: "tsk_private", status: "completed", result: "done", error: null,
+          sessionId: "sess_pinned", workDir: null, usage: [] };
       },
     });
     const test = host({ daemon });
@@ -255,7 +253,8 @@ describe("control-plane Feishu concierge host", () => {
       { signal: new AbortController().signal, onStarted: async () => {} });
     // `null`, not `undefined`: the card starts as a newborn, not a bare agent name.
     expect(metaSessionId).toBeNull();
-    expect(observed).toEqual(["sess_pinned", "sess_pinned"]);
+    expect(observed).toEqual(["sess_pinned"]);
+    expect(reads).toBe(1);
   });
 
   it("checkpoints a group owner before sending through the existing Task card", async () => {
@@ -325,9 +324,10 @@ describe("control-plane Feishu concierge host", () => {
     const fake = fakeDaemon();
     const reads: number[] = [];
     Object.assign(fake.daemon, {
-      listFeishuBotTaskMessages: async (_id: string, since: number) => {
-        reads.push(since);
-        return since === 0 ? [{ id: "msg_tool", taskId: "tsk_live", seq: 1, type: "tool_use", tool: "Bash" }] : [];
+      subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
+        reads.push(fromSeq);
+        await onEvents([{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_use", tool: "Bash" }], true);
+        return async () => {};
       },
       getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_live", status: "completed", result: "done", usage: [] }),
     });
@@ -348,11 +348,39 @@ describe("control-plane Feishu concierge host", () => {
       idempotencyKey: "fbo_live" }, { signal: new AbortController().signal, onStarted: async id => { checkpoints.push(id); } });
     expect(test.channel.sent).toHaveLength(0);
     expect(checkpoints).toEqual(["om_existing"]);
-    expect(reads).toEqual([0, 1]);
+    expect(reads).toEqual([0]);
     expect(events).toEqual([
       expect.objectContaining({ kind: "message", message: expect.objectContaining({ type: "tool_use" }) }),
       expect.objectContaining({ kind: "snapshot", snapshot: expect.objectContaining({ status: "completed" }) }),
     ]);
+  });
+
+  it("passes the saved presentation checkpoint unchanged to the trace subscription", async () => {
+    const fake = fakeDaemon();
+    const cursors: number[] = [];
+    const received: number[] = [];
+    Object.assign(fake.daemon, {
+      subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
+        cursors.push(fromSeq);
+        await onEvents([{ seq: fromSeq + 1, ts: "2026-09-28T00:00:00Z", type: "thinking", content: "resumed" }], true);
+        return async () => {};
+      },
+      getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_resume", status: "completed", result: "done", usage: [] }),
+    });
+    const test = host({ daemon: fake.daemon });
+    test.channel.handle.resolveProactiveMention = async () => null;
+    test.channel.handle.streamProactiveTask = async (_chat, _session, stream, _meta, options) => {
+      expect(options.durable?.presentation?.throughSeq).toBe(7);
+      for await (const event of stream) if (event.kind === "message") received.push(event.message.seq);
+      return { messageId: "om_existing" };
+    };
+    await test.conciergeHost.start(assignment());
+    await test.conciergeHost.sendOutbound!({ id: "fbo_resume", claimToken: "lease", chatId: "oc_topic", threadId: "om_root",
+      replyToMessageId: "om_root", body: "", bodyOrigin: "agent", taskId: "tsk_resume", resumeMessageId: "om_existing",
+      idempotencyKey: "fbo_resume", presentation: { version: "native_cot_v1", startedAt: 1, throughSeq: 7, interactions: {} } },
+      { signal: new AbortController().signal, onStarted: async () => {} });
+    expect(cursors).toEqual([7]);
+    expect(received).toEqual([8]);
   });
 
   it("applies live no-mention settings to exactly the configured group", async () => {

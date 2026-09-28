@@ -34,9 +34,9 @@ function harness() {
 }
 
 function event(seq: number, type: string, meta: Record<string, unknown>): TaskStreamEvent {
-  return { kind: "message", message: { id: `msg_${seq}`, taskId: "tsk_card", seq, type,
-    content: null, tool: null, input: null, output: null, toolCallId: null, status: null, meta,
-    createdAt: "2026-09-08T00:00:00Z" } };
+  return { kind: "message", message: { seq, type,
+    content: null, tool: null, input: null, output: null, tool_call_id: null, status: null, meta,
+    ts: "2026-09-08T00:00:00Z" } };
 }
 
 async function* stream(messages: TaskStreamEvent[], status: "completed" | "failed" | "cancelled" = "completed"): AsyncGenerator<TaskStreamEvent> {

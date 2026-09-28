@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import { isKnownTraceEventType, type TraceEvent } from "@multiremi/contracts/trace.js";
 import { cotTextEvents, type CotSample } from "./native-cot.js";
 import { cotPlan, cotToolDisplay, isCotShell, isCotSubagent, type CotListResult } from "./cot-tool-display.js";
 
@@ -7,9 +7,9 @@ interface Tool {
   id: string; name: string; input: Record<string, unknown>; title?: string;
   hidden: boolean; queued: boolean; ended: boolean; firstSeen: number; step?: string;
 }
-const terminal = (status: string | null) => status === "completed" || status === "failed" || status === "cancelled";
+const terminal = (status: string | null | undefined) => status === "completed" || status === "failed" || status === "cancelled";
 
-/** A replayable, presentation-only projection of canonical Task messages.
+/** A replayable, presentation-only projection of canonical trace events.
  * No tool execution, card building, or network calls live here. */
 export class FeishuCotTimeline {
   private readonly tools = new Map<string, Tool>();
@@ -31,7 +31,7 @@ export class FeishuCotTimeline {
   get toolCount(): number { return this.tools.size; }
   answer(fallback: string): string { return this.final.trim() || this.candidate.trim() || fallback.trim(); }
 
-  accept(message: MultiremiTaskMessage): void {
+  accept(message: TraceEvent): void {
     // Resolve deferred titles using only the acknowledged prefix, before any
     // fresh input can alter it. Reconstruct state, but never resend that prefix.
     if (!this.replayDone && message.seq > this.throughSeq) {
@@ -39,6 +39,10 @@ export class FeishuCotTimeline {
       this.replayDone = true;
     }
     this.seq = message.seq;
+    if (!isKnownTraceEventType(message.type)) {
+      this.queue.push([message.type, { ...message }]);
+      return;
+    }
     const nested = Boolean(message.meta?.parent_tool_call_id);
     if (nested) {
       if (message.type === "tool_use") this.recordTool(message, true);
@@ -68,7 +72,7 @@ export class FeishuCotTimeline {
       this.queue.push(() => this.childStates(tool.input));
     } else if (message.type === "tool_result") {
       this.closeText();
-      const key = message.toolCallId ?? [...this.tools.keys()].findLast(k => !this.tools.get(k)!.ended);
+      const key = message.tool_call_id ?? [...this.tools.keys()].findLast(k => !this.tools.get(k)!.ended);
       const tool = key ? this.tools.get(key) : undefined;
       if (!tool || tool.hidden || tool.ended) return;
       tool.input = { ...tool.input, ...message.input }; // terminal frames can carry the first real args
@@ -115,8 +119,8 @@ export class FeishuCotTimeline {
     }
   }
 
-  private recordTool(message: MultiremiTaskMessage, hidden: boolean): Tool {
-    const key = message.toolCallId || `tool:${message.seq}`;
+  private recordTool(message: TraceEvent, hidden: boolean): Tool {
+    const key = message.tool_call_id || `tool:${message.seq}`;
     let tool = this.tools.get(key);
     if (!tool) {
       tool = { id: this.id(key), name: message.tool || "Tool", input: {}, hidden, queued: false, ended: false, firstSeen: this.now() };
