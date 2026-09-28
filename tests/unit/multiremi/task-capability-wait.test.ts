@@ -79,6 +79,96 @@ async function redispatchAsSupervisor(store: MultiremiStore, taskId: string, rea
 }
 
 describe("queued task model capability waits", () => {
+  for (const dedicated of [false, true]) {
+    for (const location of ["local", "other", "archived", "foreign-tenant", "none"] as const) {
+      it(`matches explicit-workspace routing and repair state (${location}, dedicated=${dedicated})`, () => {
+        const store = createLocalStore();
+        const a = store.registerRuntime({ name: "A", provider: "codex", daemonId: "explicit-a", metadata: { runtime_workspaces: 1 } });
+        const b = store.registerRuntime({ name: "B", provider: "codex", daemonId: "explicit-b", metadata: { runtime_workspaces: 1 } });
+        store.updateDaemonDedicated("local", a.daemonId!, dedicated, "local");
+        store.updateDaemonDedicated("local", b.daemonId!, dedicated, "local");
+        const agent = store.createAgent({ name: "Explicit waiter", provider: "codex" });
+        const task = store.createTask({ agentId: agent.id, prompt: "Explicit routing" });
+        if (location !== "none") {
+          let workspaceRuntime = location === "other" ? b : a;
+          if (location === "foreign-tenant") {
+            const tenant = store.createWorkspace({ name: "Foreign tenant", slug: "foreign-explicit" });
+            workspaceRuntime = store.registerRuntime({
+              name: "Foreign A", provider: "codex", daemonId: a.daemonId!, workspaceId: tenant.id,
+              metadata: { runtime_workspaces: 1 },
+            });
+          }
+          const workspace = store.runtimeWorkspaces.create(workspaceRuntime.id, { name: "Explicit files", root_path: "/local/explicit" });
+          // Historical invalid bindings must fail the SQL guards too; creation
+          // already rejects archived and foreign-tenant workspace references.
+          db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+          if (location === "archived") {
+            db!.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
+          }
+        }
+        const verdict = store.describeTaskPlacement(task.id).find((v) => v.runtimeId === a.id)!;
+        const repair = deviceRoutingRepair({
+          projectId: null, projectHasDevices: false, machineBound: false, dedicated,
+          runtimeWorkspaceOnMachine: location === "local",
+        }, "A");
+        expect(verdict.routingOk).toBe(!dedicated || location === "local");
+        expect(verdict.routingOk).toBe(repair === null);
+        if (repair) expect(repair.actions).toEqual(["取消 A 的独享设置"]);
+        const now = Date.now();
+        ageTask(task.id, GRACE_MS, now);
+        expect(() => store.refreshQueuedCapabilityWaitReasons(now)).not.toThrow();
+        if (location === "local" || location === "other" || (location === "none" && !dedicated)) {
+          expect(store.getTask(task.id)?.waitReason).toBeNull();
+          expect(store.claimTask(location === "other" ? b.id : a.id)?.id).toBe(task.id);
+        } else {
+          expect(store.claimTask(a.id)).toBeNull();
+          expect(store.claimTask(b.id)).toBeNull();
+        }
+      });
+    }
+  }
+
+  it("clears stale device and placement waits for an explicit workspace on a dedicated owner", () => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ name: "Owner", provider: "codex", daemonId: "explicit-clear", metadata: { runtime_workspaces: 1 } });
+    store.updateDaemonDedicated("local", runtime.daemonId!, true, "local");
+    const workspace = store.runtimeWorkspaces.create(runtime.id, { name: "Owned files", root_path: "/local/clear" });
+    const agent = store.createAgent({ name: "Recovery", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, runtimeWorkspaceId: workspace.id, prompt: "Recover" });
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    for (const prefix of ["等待项目设备：", "等待任务落点："]) {
+      db!.run("UPDATE multiremi_tasks SET wait_reason = ? WHERE id = ?", [`${prefix}stale`, task.id]);
+      expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 1, alerted: 0 });
+      expect(store.getTask(task.id)?.waitReason).toBeNull();
+    }
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  });
+
+  it("offers only Agent rebinding when a dedicated workspace owner already passes routing", () => {
+    const store = createLocalStore();
+    const owner = store.registerRuntime({ name: "Owner", provider: "codex", daemonId: "explicit-anchor", metadata: { runtime_workspaces: 1 } });
+    const other = store.registerRuntime({ name: "Other", provider: "codex", daemonId: "explicit-bound", metadata: { runtime_workspaces: 1 } });
+    store.updateDaemonDedicated("local", owner.daemonId!, true, "local");
+    store.updateDaemonDedicated("local", other.daemonId!, true, "local");
+    const workspace = store.runtimeWorkspaces.create(owner.id, { name: "Owned files", root_path: "/local/anchor" });
+    const agent = store.createAgent({ name: "Bound elsewhere", provider: "codex", runtimeId: other.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Conflict" });
+    db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, task.id]);
+    const now = Date.now();
+    ageTask(task.id, GRACE_MS, now);
+    expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
+    const reason = store.getTask(task.id)?.waitReason ?? "";
+    expect(reason).toStartWith("等待任务落点：");
+    expect(reason).toContain(`remi agent update ${agent.id} --runtime ${owner.id}`);
+    expect(reason).not.toContain("取消");
+    expect(store.claimTask(owner.id)).toBeNull();
+    store.updateAgent(agent.id, { runtimeId: owner.id });
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(store.getTask(task.id)?.waitReason).toBeNull();
+    expect(store.claimTask(owner.id)?.id).toBe(task.id);
+  });
+
   it("never offers redispatch for a frozen Chat even when it also has an Issue", () => {
     const reason = placementWaitReason({
       constraints: ["Agent 绑定 B", "任务钉住 A"],
@@ -892,7 +982,7 @@ describe("queued task model capability waits", () => {
             const baseline = build();
             const before = baseline.store.describeTaskPlacement(baseline.task.id).find((v) => v.runtimeId === baseline.a.id)!;
             const state = { projectId: baseline.project?.id ?? null, projectHasDevices: hasProject && hasBindings,
-              machineBound: hasProject && hasBindings && boundToA, dedicated };
+              machineBound: hasProject && hasBindings && boundToA, dedicated, runtimeWorkspaceOnMachine: false };
             const repair = deviceRoutingRepair(state, "A");
             expect(before.routingOk, coordinate).toBe(repair === null);
             if (repair) expect(baseline.reason, coordinate).toStartWith("等待项目设备：");
