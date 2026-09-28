@@ -3756,8 +3756,8 @@ runMigrations(this.db);
     return this.issues.findGeneratedIssueByTitle(sourceIssueId, title);
   }
 
-  createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
-    return this.issues.createIssueComment(issueId, input);
+  createIssueComment(issueId: string, input: CreateIssueCommentInput, options: import("./context.js").CreateIssueCommentOptions = {}): MultiremiIssueComment {
+    return this.issues.createIssueComment(issueId, input, options);
   }
 
   createTaskFailureSystemComment(

@@ -98,7 +98,7 @@ export function envelopePriority(entry: EnvelopePriorityEntry): EnvelopePriority
   if (entry.kind === "decision_needed" ||
     (entry.kind === "request" && entry.senderType === "member")) return 1;
   if (
-    (entry.kind === "report" || entry.kind === "final" || entry.kind === "lifecycle") &&
+    (entry.kind === "report" || entry.kind === "final") &&
     (entry.outcome === "failed" || entry.outcome === "blocked" || entry.outcome === "cancelled")
   ) return 2;
   if (

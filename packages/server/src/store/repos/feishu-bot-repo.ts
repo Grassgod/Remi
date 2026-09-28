@@ -2719,6 +2719,8 @@ export class FeishuBotRepo {
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const nowIsoValue = now.toISOString();
       // The reminder lane is materialized here rather than at request creation:
       // a request answered before its window closes must never produce one, and
@@ -3064,6 +3066,8 @@ export class FeishuBotRepo {
            AND (delivery_mode IS NULL OR delivery_mode <> 'split' OR leased_until > ?)`,
       ).get(deliveryId, workspaceId, input.claimToken, now.toISOString()) as Row | null;
       if (!row) return false;
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
       const error = cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed";

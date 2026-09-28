@@ -30,7 +30,7 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
+import { advisoryXactLock, withSavepoint } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -3016,9 +3016,7 @@ export class IssuesRepo {
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
       const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
-      const workspaceId = this.ctx.db.inTransaction
-        ? this.ctx.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      const workspaceId = withSavepoint(this.ctx.db, lookupWorkspace);
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
         type: "comment:created",
@@ -4562,6 +4560,9 @@ export class IssuesRepo {
     input: CreateIssueCommentInput,
     options: CreateIssueCommentOptions = {},
   ): MultiremiIssueComment {
+    if (options.withinTransaction) {
+      return this.createIssueCommentWithinTransaction(issueId, input, options);
+    }
     if (options.deferredEvents) {
       return this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(issueId, input, options))();
     }
@@ -4590,6 +4591,9 @@ export class IssuesRepo {
   ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    const workspaceId = this.ctx.issueWorkspaceId(issueId);
+    if (!workspaceId) throw new Error(`Issue not found: ${issueId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     // Lock before reading Issue/session state so concurrent first comments can
     // both reach the shared seq allocator on SQLite's deferred transactions.
     if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
@@ -4646,17 +4650,7 @@ export class IssuesRepo {
       }
     }
     const sessionEvents = this.ctx.issueSessions();
-    const commentEvent = options.withinTransaction
-      ? sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      })
-      : sessionEvents.appendSessionEvent(issueSessionId, {
+    const commentEvent = sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
         authorType,
         authorId: input.authorId ?? null,
         kind: "message",

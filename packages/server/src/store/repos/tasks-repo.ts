@@ -6029,6 +6029,7 @@ ${placementAfter.sql}
         return null;
       }
       const parent = task.triggerCommentId ? this.ctx.getLogIssueComment(task.triggerCommentId) : null;
+      const deferredEvents = createCommitEventQueue();
       const comment = this.ctx.db.transaction(() => {
         const created = this.ctx.issues().createIssueComment(task.issueId!, {
           issueSessionId: task.issueSessionId,
@@ -6038,10 +6039,11 @@ ${placementAfter.sql}
           taskId: task.id,
           parentId: parent && parent.issueId === task.issueId ? parent.id : null,
           body,
-        });
+        }, { withinTransaction: true, deferredEvents });
         this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.id });
         return created;
       })();
+      this.ctx.emitCommitEvents(deferredEvents);
       return { id: comment.id };
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.

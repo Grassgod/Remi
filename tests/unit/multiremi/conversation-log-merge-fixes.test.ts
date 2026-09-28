@@ -5,6 +5,23 @@ import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as wi
 
 describe("MUL-427 merge rulings", () => {
   for (const backend of ["sqlite", "pg"] as const) {
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: inherited windows include a trailing legacy delegation report`, async () => {
+      await withStore(backend, (store, db) => {
+        const agent = store.createAgent({ name: "Inherited reader", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Legacy return window", workspaceId: "local" });
+        const parent = store.getOrCreateDefaultIssueSession(issue.id);
+        db.run(`INSERT INTO multiremi_session_events
+          (id, session_id, seq, author_type, author_id, kind, body, metadata, created_at)
+          VALUES ('legacy_tail', ?, 1, 'system', NULL, 'delegation_report', 'Trailing legacy report', '{}', ?)`,
+        [parent.id, "2026-09-29T00:00:00.000Z"]);
+        for (const inheritMode of ["snapshot", "follow"] as const) {
+          const child = store.createIssueSession(issue.id, { title: inheritMode, parentSessionId: parent.id, inheritMode });
+          const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: child.id, prompt: "Read inheritance" });
+          expect(store.buildTaskSessionProjection(task.id)!.inheritedSessionProjection!.jsonl).toContain("Trailing legacy report");
+          if (inheritMode === "follow") expect(store.getSessionInheritedContext(child.id)!.parent_max_seq).toBe(1);
+        }
+      });
+    }, 30_000);
     for (const operation of ["create", "update", "delete", "resolve", "unresolve"] as const) {
       it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: ${operation} comment emits every workspace event after its own COMMIT`, async () => {
         await withStore(backend, (store, db) => {

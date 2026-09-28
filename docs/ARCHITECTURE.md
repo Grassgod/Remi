@@ -64,8 +64,9 @@ bot 控制指令携带版本和期望状态。[concierge supervisor](../packages
 PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packages/server/src/store/db/pg-worker.ts)，worker 使用单连接。
 这是真实实现约束，不应被“整体 async/await”概述掩盖。
 嵌套 `transaction()` 在 PostgreSQL 使用 savepoint；外层提交前会拒绝未恢复的语句失败。
-事务回调里凡是允许失败并继续的写入，必须包在嵌套 `transaction()` 里，不得裸 `try/catch`：
+事务回调里允许失败并继续的可选操作通过 `withSavepoint(db, fn)` 隔离，不得只用裸 `try/catch`：
 SQLite 裸 catch 后其余写入仍可提交，而 PostgreSQL 的事务会进入 aborted 状态。
+该 helper 保留外层事务所有权和深度，失败时回滚局部写入并丢弃该 savepoint 的提交后回调。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。

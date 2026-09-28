@@ -55,6 +55,8 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  /** Isolate an optional operation inside the current transaction without owning a new transaction. */
+  savepoint?<T>(fn: () => T): T;
   /**
    * Cross-process mutex keyed by `key`, held for the duration of `fn` and
    * released on every exit path, including a thrown callback.
@@ -147,6 +149,12 @@ export function advisoryLock<T>(db: SqlDatabase, key: string, fn: () => T): T {
  */
 export function advisoryXactLock(db: SqlDatabase, key: string): void {
   db.advisoryXactLock?.call(db, key);
+}
+
+export function withSavepoint<T>(db: SqlDatabase, fn: () => T): T {
+  if (!db.inTransaction) return fn();
+  if (db.savepoint) return db.savepoint(fn);
+  return db.transaction(fn)();
 }
 
 /**
@@ -532,6 +540,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
   private afterCommitFrames: Array<Array<() => void>> = [];
   private peakTransactionDepth = 0;
   private failedAtDepth: number | null = null;
+  private savepointSequence = 0;
   constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
     this.bridge = new PgBridge(url, resultBufferBytes);
   }
@@ -671,6 +680,29 @@ export class PostgresSyncDatabase implements SqlDatabase {
         if (outermost) lockOrderSentinelTransactionEnd();
       }
     };
+  }
+  savepoint<T>(fn: () => T): T {
+    if (!this.inTransaction) throw new Error("savepoint requires an open transaction");
+    const name = `multiremi_optional_${++this.savepointSequence}`;
+    const previousFailure = this.failedAtDepth;
+    this.execute(`SAVEPOINT ${name}`, []);
+    this.afterCommitFrames.push([]);
+    let released = false;
+    try {
+      const result = fn();
+      if (this.failedAtDepth != null) throw new Error("Postgres savepoint contains an unrecovered statement failure");
+      this.execute(`RELEASE SAVEPOINT ${name}`, []);
+      released = true;
+      return result;
+    } catch (error) {
+      this.execute(`ROLLBACK TO SAVEPOINT ${name}`, []);
+      this.failedAtDepth = previousFailure;
+      this.execute(`RELEASE SAVEPOINT ${name}`, []);
+      throw error;
+    } finally {
+      const frame = this.afterCommitFrames.pop()!;
+      if (released) this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
+    }
   }
   /**
    * Queue \`fn\` until the OUTERMOST transaction on this connection commits, and
