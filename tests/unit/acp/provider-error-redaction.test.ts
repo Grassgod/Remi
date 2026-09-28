@@ -59,6 +59,89 @@ describe("provider error privacy", () => {
     expect(error.message.includes("server_error")).toBe(true);
   });
 
+  const sensitiveFields = [
+    "x-api%5Fkey", "x%2Dapi%2Dkey", "x-access%5Ftoken", "refresh_token",
+    "id_token", "client_secret", "clientSecret", "openai_api_key", "private_key",
+    "x_api_key", "session_id", "passwd", "api%255Fkey", "APIKEY", "X-Api-Key",
+    "x-goog-api-key", "privatePassphrase", "serviceCredentials", "gatewayAuth",
+    "providerAuthorization", "browserCookie", "api%25255Fkey",
+  ];
+  const fieldFormats: Array<[string, (name: string, value: string) => string]> = [
+    ["query", (name, value) => `https://invalid.local/?ok=1&${name}=${value}&request_id=req-1234`],
+    ["JSON", (name, value) => JSON.stringify({ [name]: value, model: "gpt-6" })],
+    ["header", (name, value) => `${name}: ${value}`],
+    ["single quotes", (name, value) => `'${name}'='${value}'`],
+    ["object", (name, value) => JSON.stringify({ [name]: { inner: value }, model: "gpt-6" })],
+    ["array", (name, value) => JSON.stringify({ [name]: [{ inner: value }], model: "gpt-6" })],
+  ];
+  const fieldCases = sensitiveFields.flatMap((name) => fieldFormats.map(([label, format]) =>
+    [name, label, format] as const));
+  for (const path of ["direct", "RPC"] as const) {
+    for (const [name, label, format] of fieldCases) {
+      it(`redacts field ${name} in ${label} through ${path}`, () => {
+        const secret = marker();
+        const text = `unexpected status 503, ${format(name, secret)}`;
+        const result = path === "direct" ? redactProviderErrorText(text)
+          : new AcpRpcError(-32603, "Internal error", { errorKind: "server_error", details: text }).message;
+        expect(result.includes(secret)).toBe(false);
+        expect(result.includes("503")).toBe(true);
+        expect(result.includes(name)).toBe(true);
+      });
+    }
+
+    it(`redacts sensitive fields inside non-sensitive diagnostic containers through ${path}`, () => {
+      const secret = marker();
+      const text = JSON.stringify({ error: {
+        type: "api_error", message: `unexpected status 503, https://invalid.local/?x-api%5Fkey=${secret}`,
+        code: "invalid_api_key",
+      }, model: "gpt-6", request_id: "req-1234" });
+      const result = path === "direct" ? redactProviderErrorText(text)
+        : new AcpRpcError(-32603, "Internal error", { details: text }).message;
+      expect(result.includes(secret)).toBe(false);
+      expect(result.includes("invalid_api_key")).toBe(true);
+      expect(result.includes("req-1234")).toBe(true);
+    });
+  }
+
+  it("preserves non-sensitive field values, status text and URL ports byte-for-byte", () => {
+    const texts = [
+      ...[401, 404, 429, 503].map((status) => `unexpected status ${status} from gateway, request id: req-1234, model: gpt-6`),
+      JSON.stringify({ code: "invalid_api_key", type: "model_not_found", max_tokens: 4096,
+        input_tokens: 128, request_id: "req-1234", model: "gpt-6" }),
+      "https://host:8443/v1/responses?request_id=req-1234&model=gpt-6",
+      "monkey=banana", "line 404:",
+    ];
+    for (const text of texts) {
+      expect(redactProviderErrorText(text) === text).toBe(true);
+      expect(new AcpRpcError(-32603, "Internal error", { details: text }).message.includes(JSON.stringify(text))).toBe(true);
+    }
+  });
+
+  const classifiedFields = [
+    [401, "invalid_request_error", "invalid_api_key", "Unauthorized", TaskFailureReason.AgentProviderAuthOrAccess],
+    [404, "invalid_request_error", "model_not_found", "Model gpt-6 is not supported", TaskFailureReason.AgentModelNotFoundOrUnavailable],
+    [429, "invalid_request_error", "too_many_requests", "Too Many Requests", TaskFailureReason.AgentProviderCapacityOrRateLimit],
+    [503, "invalid_request_error", "server_error", "Service Unavailable", TaskFailureReason.AgentProviderServerError],
+    [400, "invalid_request_error", "invalid_request", "model gpt-6: image input is not supported", TaskFailureReason.ApiInvalidRequest],
+  ] as const;
+  for (const entry of ["generic", "codex", "claude"] as const) {
+    for (const [status, type, code, message, reason] of classifiedFields) {
+      it(`preserves wrapped HTTP ${status} classification through ${entry}`, () => {
+        const secret = marker();
+        const text = `unexpected status ${status} from gateway: ${JSON.stringify({ error: {
+          type, code, message: `${message}; https://invalid.local/?x-api%5Fkey=${secret}`,
+          clientSecret: secret,
+        }, max_tokens: 4096, input_tokens: 128, request_id: "req-1234", model: "gpt-6" })}`;
+        const classify = entry === "generic" ? classifyTaskFailure : (value: string) => classifyDaemonTaskFailure(entry, value);
+        expect(classify(text)).toBe(reason);
+        for (const safe of [redactProviderErrorText(text), new AcpRpcError(-32603, "Gateway error", { details: text }).message]) {
+          expect(safe.includes(secret)).toBe(false);
+          expect(classify(safe)).toBe(classify(text));
+        }
+      });
+    }
+  }
+
   it("preserves diagnostic text including status, request ID, model and URL hostname", () => {
     const text = "unexpected status 503 Service Unavailable; request id: req-512e; model: gpt-6; url: https://gateway.example/v1/responses";
     const error = new AcpSessionFailureError(failure(text));
@@ -141,6 +224,21 @@ describe("provider error privacy", () => {
     const elapsedMs = performance.now() - startedAt;
     expect(result === text).toBe(true);
     expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it.each([
+    ["dotted run", () => "ab.".repeat(66_667).slice(0, 200_000)],
+    ["non-sensitive key", () => "keyx".repeat(50_000) + "="],
+    ["encoded key", () => "%41".repeat(66_667).slice(0, 200_000) + ":"],
+    ["quoted fields", () => '"a":"'.repeat(40_000)],
+    ["encoded sensitive fields", () => "x_api%5Fkey= ".repeat(16_667).slice(0, 200_000)],
+    ["unclosed objects", () => "a:{".repeat(66_667).slice(0, 200_000)],
+    ["unclosed arrays", () => "a:[".repeat(66_667).slice(0, 200_000)],
+    ["uppercase key", () => "A".repeat(200_000) + "="],
+  ] as const)("scans 200k %s within the synchronous time budget", (_label, makeText) => {
+    const startedAt = performance.now();
+    redactProviderErrorText(makeText());
+    expect(performance.now() - startedAt).toBeLessThan(500);
   });
 
   it("is idempotent and tolerates malformed URL escapes and credential Unicode", () => {

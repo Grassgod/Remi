@@ -57,21 +57,35 @@ export function redactProviderErrorText(text: string, credentials: readonly stri
   for (const value of [...values].sort((left, right) => right.length - left.length)) {
     text = text.split(value).join("[REDACTED]");
   }
-  // Decode credential names only, leaving URLs and diagnostic text intact.
-  text = text.replace(/(?<![a-z0-9_%-])(?:[a-z0-9_-]|%[0-9a-f]{2})+(?=["']?\s*[:=])/gi, (key) => {
-    let decoded = key;
-    try { decoded = decodeURIComponent(key); } catch { /* Leave malformed names alone. */ }
-    return /^(?:api[_-]?key|auth[_-]?token|access[_-]?token|key|token|password|secret|session|sid|sessionid)$/i.test(decoded)
-      ? decoded : key;
-  });
-  return text
+  text = text
     .replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie)\b["']?\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n"'`}]+)/gi, "$1[REDACTED]")
     .replace(/\b(Bearer|Basic)\s+[^\s"'`,;&}]+/gi, "$1 [REDACTED]")
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
     .replace(/\bsk-[a-z0-9_-]+/gi, "[REDACTED]")
     .replace(/\b(?:ghp|gho)_[a-z0-9]{4,}\b/gi, "[REDACTED]")
-    .replace(/(?<![a-z0-9_/:.@-])[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]")
-    .replace(/(\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|key|token|password|secret|session|sid|sessionid)\b["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`,;&}]+)/gi, "$1[REDACTED]");
+    .replace(/(?<![a-z0-9_/:.@-])[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]");
+
+  const fields = /(?<![a-z0-9_%.-])((?:[a-z0-9_.-]|%[0-9a-f]{2})+)(["']?\s*[:=]\s*)/gi;
+  const value = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[^{}]*\}|\[[^[\]]*\]|[^\s"'`,;&{}[\]]+/y;
+  const sensitiveSuffix = /(?:^|_)(?:api_?key|key|token|secret|password|passwd|passphrase|credentials?|session(?:_?id)?|sid|auth|authorization|cookie)$/;
+  const parts: string[] = [];
+  let copiedUntil = 0;
+  // Only consume sensitive values; diagnostic containers may contain more fields.
+  for (let field = fields.exec(text); field; field = fields.exec(text)) {
+    let key = field[1];
+    for (let pass = 0; pass < 3 && /%[0-9a-f]{2}/i.test(key); pass++) {
+      try { key = decodeURIComponent(key); } catch { break; }
+    }
+    key = key.replace(/(?<![A-Z])([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    if (!sensitiveSuffix.test(key)) continue;
+    value.lastIndex = fields.lastIndex;
+    if (!value.exec(text)) continue;
+    parts.push(text.slice(copiedUntil, fields.lastIndex), "[REDACTED]");
+    copiedUntil = fields.lastIndex = value.lastIndex;
+  }
+  return parts.length ? parts.join("") + text.slice(copiedUntil) : text;
 }
 
 function redactSessionFailure(failure: AcpSessionFailure, credentials: readonly string[]): AcpSessionFailure {
