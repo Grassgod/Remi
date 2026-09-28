@@ -77,9 +77,12 @@ export class ReplicaFollower implements SessionReplicaPort {
   }
 
   writeRowHeight(sessionId: string, seq: number, key: string, height: number): void {
-    // Heights are produced by whichever tab measured the row, so a follower's
-    // write has to reach the leader's database; the view keeps it locally too.
+    // Keep it locally so a re-render in this tab hits, and send it to the leader
+    // so the next leader (or the next tab) hot-starts with the measurement. The
+    // leader's Worker is the only writer of the database, so the local write is
+    // the cache and the message is the persistence.
     this.options.view.writeRowHeight(sessionId, seq, key, height);
+    this.options.broadcast({ type: "replica:rowHeight", sessionId, seq, key, height });
   }
 
   /** Ask the leader for a window (a deep link, or the tail the list needs). */

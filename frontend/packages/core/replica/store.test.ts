@@ -223,6 +223,26 @@ describe("SQL replica storage", () => {
     storage.close();
   });
 
+  test("the height cache is keyed by variant and bucket, and misses on purpose", async () => {
+    // C8's rule, pinned against the real table: an edited row (revision) and a
+    // re-rendered pipeline (render_version) must not inherit the old height, and a
+    // narrower container must not inherit a wider measurement's reservation.
+    const { storage } = await openSqlStorage();
+    const engine = new ReplicaEngine(storage);
+    engine.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    const key = rowHeightKey({ revision: 1, renderVersion: "v1", widthPx: 1440 });
+    engine.writeRowHeight("sess_1", 5, key, 88);
+
+    expect(engine.readRowHeight("sess_1", 5, key)).toBe(88);
+    expect(engine.readRowHeight("sess_1", 5, rowHeightKey({ revision: 2, renderVersion: "v1", widthPx: 1440 }))).toBeNull();
+    expect(engine.readRowHeight("sess_1", 5, rowHeightKey({ revision: 1, renderVersion: "v2", widthPx: 1440 }))).toBeNull();
+    expect(engine.readRowHeight("sess_1", 5, rowHeightKey({ revision: 1, renderVersion: "v1", widthPx: 720 }))).toBeNull();
+    // A second engine on the same database reads what the first wrote: this is the
+    // hot start for the height cache, not just for the window.
+    expect(new ReplicaEngine(storage).readRowHeight("sess_1", 5, key)).toBe(88);
+    engine.close();
+  });
+
   test("every statement the engine runs is in the shared SQL map", () => {
     // A statement spelled inline in one place and not in `schema.ts` is how the
     // Worker and the tests silently diverge; this pins the set.

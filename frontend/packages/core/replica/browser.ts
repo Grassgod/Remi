@@ -209,6 +209,12 @@ class ReplicaFacade implements BrowserReplica {
         leader.leader.close(message.sessionId);
         return;
       }
+      case "replica:rowHeight": {
+        // The leader's view is its read cache, and the Worker is what persists.
+        leader.leader.writeRowHeight(message.sessionId, message.seq, message.key, message.height);
+        this.view.writeRowHeight(message.sessionId, message.seq, message.key, message.height);
+        return;
+      }
       case "replica:query": {
         const view = leader.leader.window(message.sessionId, message.from, message.to);
         this.broadcast({

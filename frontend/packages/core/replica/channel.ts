@@ -51,6 +51,22 @@ export interface ReplicaQueryResultMessage {
   };
 }
 
+/**
+ * A measurement a follower took, on its way to the leader's database.
+ *
+ * The height cache is written by whichever tab measured the row (plan 3/6 §3), but
+ * only the leader's Worker may touch storage — so a follower's measurement travels
+ * here rather than being kept locally, which would make the cache useless to the
+ * tab that renders next.
+ */
+export interface ReplicaRowHeightMessage {
+  type: "replica:rowHeight";
+  sessionId: string;
+  seq: number;
+  key: string;
+  height: number;
+}
+
 /** A tab starts (or stops) watching a session, so the leader knows what to hold. */
 export interface ReplicaOpenMessage {
   type: "replica:open" | "replica:close";
@@ -101,4 +117,5 @@ export type ReplicaChannelMessage =
   | ReplicaAppendedMessage
   | ReplicaClearedMessage
   | ReplicaLeaderChangedMessage
-  | ReplicaAckMessage;
+  | ReplicaAckMessage
+  | ReplicaRowHeightMessage;

@@ -30,8 +30,9 @@ export {
  * `ReplicaEngine` runs the six-step sync protocol over a `ReplicaStorage`;
  * `SqlReplicaStorage` is that storage on SQLite (the Worker's `opfs-sahpool`
  * database, or `node:sqlite` in tests) and `MemoryReplicaStorage` is the no-OPFS
- * fallback. `createReplicaPort` adapts the engine to the C8 port so a caller can
- * swap the two without changing the list.
+ * fallback. `openBrowserReplica` is the entry point the app calls, and the port it
+ * returns is C8's `SessionReplicaPort` — either `ReplicaView` (the leader's
+ * synchronous read cache) or `ReplicaFollower` (a reader tab's).
  */
 export {
   ReplicaEngine,
@@ -65,7 +66,25 @@ export {
   REPLICA_SCHEMA_VERSION,
   SQL,
 } from "./schema.js";
-export { createReplicaPort, type ReplicaPortOptions } from "./port-adapter.js";
-export { REPLICA_CHANNEL, REPLICA_LOCK_PREFIX, replicaLockName, type ReplicaChannelMessage } from "./channel.js";
+export { REPLICA_CHANNEL, REPLICA_LOCK_PREFIX, replicaLockName } from "./channel.js";
 export { ReplicaLeader, type ReplicaLeaderOptions } from "./leader.js";
+export { ReplicaFollower, type ReplicaFollowerOptions } from "./follower.js";
+export { ReplicaView, type SessionViewState } from "./view.js";
+export type {
+  ReplicaChannelMessage,
+  ReplicaRowHeightMessage,
+  ReplicaQueryMessage,
+  ReplicaQueryResultMessage,
+  ReplicaOpenMessage,
+  ReplicaAppendedMessage,
+  ReplicaClearedMessage,
+  ReplicaLeaderChangedMessage,
+  ReplicaAckMessage,
+} from "./channel.js";
+export type { BrowserReplicaEnv, ReplicaWorkerLike } from "./browser.js";
+export type {
+  ReplicaWorkerRequest,
+  ReplicaWorkerResponse,
+  ReplicaWorkerStorage,
+} from "./worker-protocol.js";
 export { openBrowserReplica, type BrowserReplica, type BrowserReplicaOptions } from "./browser.js";
