@@ -1781,6 +1781,12 @@ export interface TaskUsageEntry {
   totalTokens?: number;
 }
 
+export interface TaskDependencyForceInput {
+  source: "comment" | "mention" | "rerun";
+  actorMemberId: string;
+  commentId?: string | null;
+}
+
 export interface CreateTaskInput {
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
@@ -1827,6 +1833,13 @@ export interface CreateTaskInput {
    */
   preserveIssueStatus?: boolean;
   preserve_issue_status?: boolean;
+  /**
+   * Server-internal: a credential-verified member explicitly started an Issue
+   * that is still waiting on prerequisites. Public task creation strips both
+   * spellings before the task funnel sees them.
+   */
+  dependencyForce?: TaskDependencyForceInput;
+  dependency_force?: TaskDependencyForceInput;
   /**
    * Server-internal: exempt this task's Issue transition from guard B.
    * `createTaskHumanRequest` parks the Issue at `in_review` while its owner waits

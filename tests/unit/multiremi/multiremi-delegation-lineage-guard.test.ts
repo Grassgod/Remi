@@ -371,6 +371,47 @@ for (const backend of ["sqlite", "postgres"] as const) {
       }
     }, PG_TEST_TIMEOUT);
 
+    it("keeps an explicit null parent authoritative in the forced-start activity", async () => {
+      await withStore(backend, async (store) => {
+        const f = await fixture(store, "lineage-guard-root");
+        const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
+        const waiting = store.createIssue({
+          title: "Waiting force target",
+          status: "backlog",
+          blockedBy: [prerequisite.id],
+          assigneeType: "agent",
+          assigneeId: f.leaderId,
+        });
+
+        // The HTTP boundary strips both body spellings and stamps camelCase null.
+        // Reattach the same snake alias at the store seam to pin the lower-level
+        // compatibility contract without making the public route trust the body.
+        const updateIssueWithOutcome = store.updateIssueWithOutcome.bind(store);
+        store.updateIssueWithOutcome = ((issueId, input, options) => updateIssueWithOutcome(issueId, {
+          ...input,
+          parentTaskId: null,
+          parent_task_id: f.delegatedTask.id,
+        }, options)) as typeof store.updateIssueWithOutcome;
+
+        const response = await f.app.request(`/api/multiremi/issues/${waiting.id}`, {
+          method: "PATCH",
+          headers: f.memberHeaders,
+          body: JSON.stringify({
+            status: "todo",
+            force: true,
+            parentTaskId: null,
+            parent_task_id: f.delegatedTask.id,
+          }),
+        });
+        expect(response.status).toBe(200);
+        const activity = store.listIssueActivity(waiting.id)
+          .find((entry) => entry.type === "dependency_force_started");
+        expect(activity).toBeDefined();
+        expect(activity?.data).not.toHaveProperty("sourceTaskId");
+        expect(activity?.data).not.toHaveProperty("source_task_id");
+      });
+    }, PG_TEST_TIMEOUT);
+
     it("treats an explicit null parentTaskId as authoritative inside the store", async () => {
       // The store-side half of the rule. Every public route now strips both
       // spellings, so this contract is what keeps a route that stamps an

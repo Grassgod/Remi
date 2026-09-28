@@ -223,8 +223,22 @@ export function formatActivity(
       });
     case "dependency_waiting":
       return t(($) => $.activity.dependency_waiting);
-    case "dependency_force_started":
+    case "dependency_force_started": {
+      if (details.source === "comment") {
+        return t(($) => $.activity.dependency_force_started_comment);
+      }
+      if (details.source === "mention") {
+        const agentId = details.agentId ?? details.agent_id;
+        const agent = agentId && resolveActorName
+          ? resolveActorName("agent", agentId)
+          : agentId ?? "?";
+        return t(($) => $.activity.dependency_force_started_mention, { agent });
+      }
+      if (details.source === "rerun") {
+        return t(($) => $.activity.dependency_force_started_rerun);
+      }
       return t(($) => $.activity.dependency_force_started);
+    }
     case "dependency_satisfied_coalesced":
       return t(($) => $.activity.dependency_satisfied_coalesced);
     case "child_done_parent_skipped":

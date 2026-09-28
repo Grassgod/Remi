@@ -212,6 +212,8 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       max_attempts: _maxAttemptsSnake,
       preserveIssueStatus: _preserveIssueStatus,
       preserve_issue_status: _preserveIssueStatusSnake,
+      dependencyForce: _dependencyForce,
+      dependency_force: _dependencyForceSnake,
       assignmentEventId: _assignmentEventId,
       assignment_event_id: _assignmentEventIdSnake,
       assignmentAuthorType: _assignmentAuthorType,

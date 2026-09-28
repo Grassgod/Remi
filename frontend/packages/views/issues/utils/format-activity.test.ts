@@ -376,8 +376,16 @@ describe("formatActivity — dependency activities", () => {
     expect(formatActivity(activity("dependency_waiting"), t)).toBe("activity.dependency_waiting");
   });
 
-  it("renders a member forced start", () => {
+  it("renders each member force-start source", () => {
     expect(formatActivity(activity("dependency_force_started"), t)).toBe("activity.dependency_force_started");
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "comment" } }), t))
+      .toBe("activity.dependency_force_started_comment");
+    expect(formatActivity(activity("dependency_force_started", {
+      details: { source: "mention", agent_id: "agt_qa" },
+    }), t, (_type, id) => id === "agt_qa" ? "QA" : id))
+      .toBe('activity.dependency_force_started_mention {"agent":"QA"}');
+    expect(formatActivity(activity("dependency_force_started", { details: { source: "rerun" } }), t))
+      .toBe("activity.dependency_force_started_rerun");
   });
 
   it("renders the dependency hold instead of the raw dispatch-skipped reason", () => {
