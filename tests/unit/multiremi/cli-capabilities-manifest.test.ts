@@ -168,15 +168,15 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 677,
+      mapped: 678,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
       // MUL-419 removes daemon-internal routes, including the human-request
       // GET whose authorized read is now a v2 RPC, not a user command.
-      exempt: 82,
+      exempt: 86,
       missing: 0,
-      total: 759,
+      total: 764,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });

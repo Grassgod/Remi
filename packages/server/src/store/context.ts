@@ -16,6 +16,8 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
+export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -200,21 +202,6 @@ export type CreateIssueCommentOptions =
 
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
-/**
- * The Task fields one message batch's fan-out reads: routing (`workspaceId`,
- * `agentId`), Chat scoping, and the wire payload's `issue_id` /
- * `issue_session_id` / `chat_session_id`. MUL-474 narrowed this from the whole
- * `MultiremiTask` so appending a message no longer has to load the prompt.
- */
-export interface TaskMessageFanoutSubject {
-  id: string;
-  workspaceId: string;
-  agentId: string;
-  chatSessionId: string | null;
-  issueId: string | null;
-  issueSessionId: string | null;
-}
-
 export type TaskMessagesListener = (
   event: { task: TaskMessageFanoutSubject; messages: MultiremiTaskMessage[] },
 ) => void;
@@ -372,7 +359,11 @@ export interface IssuesSurface {
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean;
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision;
+  /** MUL-412: one decision by its own id (the Feishu card lane keys on it). */
+  getIssueDecisionAnywhere(decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
+  /** One decision scoped to the Issue it hangs on. */
+  getIssueDecision(issueId: string, decisionId: string): import("@multiremi/contracts/types.js").MultiremiIssueDecision | null;
 }
 
 export interface AgentsSurface {
@@ -431,6 +422,8 @@ export interface AnalyticsSurface {
 export interface WorkspacesSurface {
   getUser(id: string): MultiremiUser | null;
   getUserByFeishuUnionId(unionId: string | null | undefined): MultiremiUser | null;
+  /** MUL-412: the users-table row a Feishu open_id belongs to, if any. */
+  getUserByExternalId(externalId: string | null | undefined): MultiremiUser | null;
   listWorkspaces(): MultiremiWorkspace[];
   getWorkspace(id: string): MultiremiWorkspace | null;
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null;
@@ -670,6 +663,11 @@ export interface RuntimesSurface {
   /** The Runtime row without the derived usage / model / execution-group reads. */
   getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
+  /**
+   * One workspace's Runtimes with the same hydration `listRuntimes` adds, but
+   * with the workspace filter in SQL and the derived reads batched (MUL-473).
+   */
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;
@@ -697,6 +695,50 @@ export interface FeishuBotSurface {
   disableFeishuBotConfigsReferencingAgent(agentId: string, actor?: string | null): string[];
   disableFeishuBotConfigsReferencingRuntime(runtimeId: string, actor?: string | null): string[];
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean;
+  /**
+   * MUL-412: queue (or deliberately skip) the card for an escalated decision.
+   * Runs inside the caller's transaction and writes every event on its queue.
+   */
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /** MUL-412: queue the in-place terminal rewrite for a settled decision. */
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void;
+  /**
+   * MUL-412: may this bot host read and answer decisions on this Issue? The
+   * same active-topic-binding predicate the human-request lane uses.
+   */
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean;
+  /** MUL-412: the operator behind a card click, as a live non-agent member. */
+  resolveFeishuDecisionOperatorMember(
+    workspaceId: string,
+    appId: string,
+    openId: string | null | undefined,
+  ): import("@multiremi/store/repos/feishu-bot-repo.js").IssueDecisionOperatorMemberResolution;
+  /** MUL-412: decision cards a restarting host must re-register. */
+  listFeishuIssueDecisionCards(
+    workspaceId: string,
+    runtimeId: string,
+  ): Array<{
+    decision_id: string;
+    issue_id: string;
+    chat_id: string;
+    message_id: string;
+    recipient_open_id: string;
+  }>;
+  /** MUL-412: the lane a card click answers on. */
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
+    decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
+    issue: MultiremiIssue;
+    chatId: string;
+    messageId: string | null;
+    recipientOpenId: string;
+  } | null;
   prepareFeishuIssueRoundPushesWithinTransaction(input: {
     issue: MultiremiIssue;
     leaderTask: MultiremiTask;

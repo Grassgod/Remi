@@ -1596,6 +1596,20 @@ export interface MultiremiTask {
   /** Return task that has claimed this delegated task's terminal report. */
   delegationReturnTaskId: string | null;
   delegation_return_task_id?: string | null;
+  /** MUL-400 E2b: the Issue Session the delegator was in when it dispatched
+   *  this task. The terminal report returns there, not to the task's own
+   *  Session, so a cross-issue delegation calls the leader back home. */
+  delegatedFromIssueSessionId: string | null;
+  delegated_from_issue_session_id?: string | null;
+  /** MUL-400 E2b: why a task-token dispatch was NOT recorded as a delegation.
+   *  Read at terminal time to explain the silence instead of dropping it. */
+  delegationSkipReason: string | null;
+  delegation_skip_reason?: string | null;
+  /** MUL-400 E2b server-owned origin of a notification round. `child_status`
+   *  marks the E2 parent wake-up, so the delegation-return de-duplication can
+   *  tell a server wake round apart from an agent's manual wake-up task. */
+  wakeSource: string | null;
+  wake_source?: string | null;
   assignmentEventId: string | null;
   assignment_event_id?: string | null;
   /** System event that caused the automation-owned task to be assigned. This
@@ -1877,6 +1891,15 @@ export interface CreateTaskInput {
   delegation_id?: string | null;
   delegatedByAgentId?: string | null;
   delegated_by_agent_id?: string | null;
+  /** MUL-400 E2b server-internal return landing point and skip audit. Public
+   *  task creation strips both; only the task-token route sets them. */
+  delegatedFromIssueSessionId?: string | null;
+  delegated_from_issue_session_id?: string | null;
+  delegationSkipReason?: string | null;
+  delegation_skip_reason?: string | null;
+  /** Server-internal; the task-token route strips both spellings. */
+  wakeSource?: string | null;
+  wake_source?: string | null;
   /** Public dispatch hint. The API validates the referenced delegated task and
    * derives its lineage; callers cannot provide a delegation ID directly. */
   continueTaskId?: string | null;
@@ -2537,6 +2560,12 @@ export interface ListIssuesInput {
   archived_only?: boolean;
   limit?: number;
   offset?: number;
+}
+
+export interface IssueStatusPages {
+  groups: Record<string, { issues: MultiremiIssue[]; total: number; has_more: boolean }>;
+  /** Workspace-wide count, independent of the page's status/assignee/project filters. */
+  archived_total?: number;
 }
 
 export interface AssignIssueInput {
@@ -4416,6 +4445,19 @@ export const FEISHU_DECISION_CARD_CAPABILITY = "feishu_decision_card";
 /** Heartbeat field carrying {@link FEISHU_DECISION_CARD_CAPABILITY}. */
 export const FEISHU_DECISION_CARD_PROTOCOL_VERSION = 1;
 
+/**
+ * Metadata flag an Issue topic's bot host sets when it can render and answer
+ * decision cards (MUL-412). Human requests and decisions share the card
+ * pipeline but not this flag: a host that predates decisions keeps sending
+ * human-request cards while the control plane writes no decision delivery for
+ * it, so an escalation stays on the web workbench instead of becoming a card
+ * nobody can answer.
+ */
+export const FEISHU_ISSUE_DECISION_CARD_CAPABILITY = "feishu_issue_decision_card";
+
+/** Heartbeat field carrying {@link FEISHU_ISSUE_DECISION_CARD_CAPABILITY}. */
+export const FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION = 1;
+
 /** Protocol version a daemon reports in register/heartbeat when it can host the bot. */
 export const FEISHU_CONCIERGE_PROTOCOL_VERSION = 1;
 
@@ -4582,6 +4624,16 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** Reminder deadline for `decision_card` / `decision_reminder`. */
   expiresAt?: string | null;
   expires_at?: string | null;
+  /**
+   * Set on every delivery of an E4 issue decision's card lane (MUL-412). A
+   * decision has no deadline, so `expires_at` stays null for these rows; the
+   * one reminder is scheduled off the decision row's own `reminder_at`.
+   */
+  decisionId?: string;
+  decision_id?: string;
+  /** The Issue the decision hangs on — the one whose topic carries the card. */
+  decisionIssueId?: string;
+  decision_issue_id?: string;
 }
 
 /**

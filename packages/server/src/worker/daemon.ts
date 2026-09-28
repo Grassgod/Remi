@@ -205,6 +205,7 @@ import type {
   MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceArchiveBinding,
+  MultiremiIssueDecision,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
@@ -1169,6 +1170,29 @@ export class MultiremiDaemon {
     recipientOpenId: string;
   }>> {
     return this.client.listFeishuBotDecisionCards(this.options.runtimeId!);
+  }
+
+  /** Issue decision cards this Runtime must re-register after a restart (MUL-412). */
+  listFeishuIssueDecisionCards(): Promise<Array<{
+    decisionId: string;
+    issueId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    return this.client.listFeishuIssueDecisionCards(this.options.runtimeId!);
+  }
+
+  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
+    return this.client.getFeishuIssueDecision(issueId, decisionId);
+  }
+
+  answerFeishuIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: { answer: string; operatorOpenId: string },
+  ): Promise<MultiremiIssueDecision> {
+    return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
   }
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {

@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ApiError, IssueStatusHeldErrorSchema } from "@multiremi/core/api";
 import type { Issue, UpdateIssueRequest } from "@multiremi/core/types";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -18,7 +19,7 @@ const BACKLOG_HINT_LS_KEY = "multimira:backlog-agent-hint-dismissed";
 
 export interface UseIssueActionsResult {
   isPinned: boolean;
-  updateField: (updates: Partial<UpdateIssueRequest>) => void;
+  updateField: (updates: Partial<UpdateIssueRequest>, onSuccess?: () => void) => void;
   togglePin: () => void;
   copyLink: () => Promise<void>;
   openCreateSubIssue: () => void;
@@ -62,17 +63,28 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const issueProjectId = issue?.project_id ?? null;
 
   const updateField = useCallback(
-    (updates: Partial<UpdateIssueRequest>) => {
+    (updates: Partial<UpdateIssueRequest>, onSuccess?: () => void) => {
       if (!issueId) return;
       updateIssue.mutate(
         { id: issueId, ...updates },
         {
-          onError: (err) =>
-            toast.error(
-              err instanceof Error && err.message
-                ? err.message
-                : t(($) => $.detail.update_failed),
-            ),
+          onSuccess,
+          onError: (err) => {
+            const held = err instanceof ApiError && err.status === 409
+              ? IssueStatusHeldErrorSchema.safeParse(err.body)
+              : null;
+            if (held?.success && userId && updates.status) {
+              openModal("issue-force-status", {
+                issueId,
+                identifier: issueIdentifier,
+                status: updates.status,
+                reason: held.data.reason,
+                openChildren: held.data.open_children,
+              });
+              return;
+            }
+            toast.error(err instanceof Error && err.message ? err.message : t(($) => $.detail.update_failed));
+          },
         },
       );
       // Hint: assigning an agent to a backlog issue won't trigger execution
@@ -87,7 +99,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
         openModal("issue-backlog-agent-hint", { issueId });
       }
     },
-    [issueId, issueStatus, updateIssue, openModal, t],
+    [issueId, issueIdentifier, issueStatus, updateIssue, openModal, t, userId],
   );
 
   const togglePin = useCallback(() => {

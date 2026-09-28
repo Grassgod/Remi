@@ -15,6 +15,11 @@
 
 export type ApiRole = "all" | "ui" | "runtime";
 
+export interface ApiRoleConfiguration {
+  role: ApiRole;
+  configured: boolean;
+}
+
 const API_ROLES = ["all", "ui", "runtime"] as const;
 
 /** Response header naming the role that refused the request. */

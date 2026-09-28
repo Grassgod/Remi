@@ -2206,6 +2206,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       delegation_id TEXT,
       delegated_by_agent_id TEXT,
       delegation_return_task_id TEXT,
+      delegated_from_issue_session_id TEXT,
+      delegation_skip_reason TEXT,
+      wake_source TEXT,
       assignment_event_id TEXT,
       assignment_source_event_id TEXT,
       projection_from_seq INTEGER,
@@ -2482,6 +2485,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       history TEXT NOT NULL DEFAULT '[]',
       owner_agent_id TEXT,
       created_by_agent_id TEXT,
+      -- MUL-412: the single text nudge a decision card gets. Decisions never
+      -- expire, so this is a one-shot slot rather than a deadline offset.
+      reminder_sent_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
@@ -2892,11 +2898,26 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_tasks", "delegation_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegated_by_agent_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "delegation_return_task_id TEXT");
+  // MUL-400 E2b: where a cross-issue delegation returns (the delegator's Issue
+  // Session at dispatch time) and why a task-token dispatch was not recorded as
+  // a delegation. Both are add-only: existing rows read NULL, which keeps the
+  // legacy "return to the task's own Session" behaviour for old tasks.
+  addColumnIfMissing(db, "multiremi_tasks", "delegated_from_issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "delegation_skip_reason TEXT");
+  // MUL-400 E2b ruling: server-owned marker for notification rounds the server
+  // generated itself (E2 child-status rounds). NULL means "not a server wake
+  // round", so D4's manual-wakeup lookup can exclude it without trusting any
+  // request-body field. Add-only: existing rows read NULL.
+  addColumnIfMissing(db, "multiremi_tasks", "wake_source TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation_return_pending
     ON multiremi_tasks(issue_session_id, delegated_by_agent_id, delegation_return_task_id, status)`);
+  // MUL-400 E2b: the drain now selects by the return Session, which is not the
+  // task's own Session for a cross-issue delegation.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_delegation_return_target
+    ON multiremi_tasks(delegated_from_issue_session_id, delegated_by_agent_id, delegation_return_task_id, status)`);
   addColumnIfMissing(db, "multiremi_tasks", "issue_session_generation INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "holds_workspace INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
@@ -3266,10 +3287,24 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // Why a decision lane carried plain text instead of a card. NULL means the
   // delivery is a normal card (or not a decision lane at all).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
+  // MUL-412 (E4 x E5): an E4 decision rides the same pipeline. It gets its own
+  // nullable pointer rather than borrowing `human_request_id`, so a delivery
+  // row names exactly one owner and MUL-440 can split lanes by kind without
+  // guessing. `reminder_sent_at` is the one-shot slot for the decision's single
+  // reminder: decisions never expire, so there is no deadline to key it on.
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "decision_id TEXT");
+  // The Issue the decision hangs on. Redundant with the decision row's own
+  // `issue_id`, but the delivery is read on its own when the host reports an
+  // outcome or re-registers a card, and a join for one column on those paths
+  // buys nothing.
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "decision_issue_id TEXT");
+  addColumnIfMissing(db, "multiremi_issue_decisions", "reminder_sent_at TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
     ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_decision
+    ON multiremi_feishu_bot_outbound_deliveries(decision_id, status, available_at)`);
   // MUL-386 C.2: `recall` resolves one OpenViking URI per search hit. It used to
   // call `listProjectDocs`, reading every doc in the project (body included) and
   // comparing URIs in JavaScript — 15.5 MB of bridge payload per request. This

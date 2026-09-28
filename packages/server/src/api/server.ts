@@ -64,6 +64,7 @@ import { registerTaskRoutes } from "./routers/tasks.js";
 import { registerPlatformRoutes } from "./routers/platform.js";
 import {
   evaluateStartupEnv,
+  resolveStartupApiRole,
   normalizeDaemonDirectBaseUrl,
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
@@ -130,11 +131,10 @@ import {
 } from "../observability/request-metrics.js";
 import {
   API_ROLE_HEADER,
-  isApiRoleConfigured,
   isMisdirectedPath,
   misdirectedResponse,
-  resolveApiRole,
   type ApiRole,
+  type ApiRoleConfiguration,
 } from "../config/api-role.js";
 import { DAEMON_PROTOCOL_MIN, DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -169,9 +169,6 @@ import {
   handleBrowserScopeSubscribe,
   handleBrowserScopeUnsubscribe,
   isWebSocketUpgrade,
-  notifyBrowserTaskEvent,
-  notifyBrowserTaskMessages,
-  notifyBrowserWorkspaceEvent,
   parseDaemonWebSocketMessage,
   registerBrowserUserWebSocketClient,
   registerBrowserWebSocketClient,
@@ -188,6 +185,18 @@ import type {
   MultiremiWebSocketData,
   WebhookRateLimitConfig,
 } from "./helpers.js";
+import {
+  createRealtimeFanout,
+  type RealtimeFanout,
+  type RealtimeFanoutOptions,
+} from "./realtime-fanout.js";
+import {
+  createPeerChannel,
+  resolvePeerSecret,
+  resolvePeerUrl,
+  type PeerChannel,
+} from "./peer/peer-channel.js";
+import { registerPeerRoutes } from "./peer/peer-routes.js";
 
 /**
  * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
@@ -270,12 +279,41 @@ export interface MultiremiApiOptions {
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
   /**
-   * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
+   * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
    * exists so a test (and `startMultiremiServer`) can pin the role without env.
    */
   apiRole?: ApiRole;
+  /** Resolved once at startup, including whether the default was configured. */
+  apiRoleConfiguration?: ApiRoleConfiguration;
+  /**
+   * MUL-462: peer channel for the split API. Undefined builds one from
+   * `MULTIREMI_PEER_URL`; null explicitly disables it.
+   */
+  peerChannel?: PeerChannel | null;
+  /**
+   * Shared secret both halves of the peer channel must present. Undefined reads
+   * `MULTIREMI_PEER_SECRET` (falling back to `MULTIREMI_TOKEN`).
+   */
+  peerSecret?: string | null;
+  /**
+   * MUL-462: seam for observing/overriding the realtime fanout this server
+   * builds. The fanout's role is otherwise unobservable from outside: the guard
+   * already prevents the *other* side's sockets from existing, so a process that
+   * wired the wrong role still looks correct until a socket on that side appears.
+   * A wrapper can therefore assert that the fanout got the process's one
+   * effective role.
+   */
+  createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
 }
+
+/**
+ * The only two `/internal/` routes that exist, and so the only two the dashboard
+ * auth middleware may skip. A prefix rule would silently exempt whatever route
+ * someone adds under `/internal/` next; an exact match makes an unguarded new
+ * route meet dashboard auth instead.
+ */
+const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/health"]);
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
@@ -297,24 +335,25 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   // MUL-461: the process's ONE effective role. The guard middleware, the health
-  // payloads and the metrics lines all read this value, so nothing downstream can
-  // disagree with it.
-  const effectiveApiRole = options.apiRole ?? resolveApiRole();
+  // payloads, the realtime fanout and the metrics lines all read this value, so
+  // nothing downstream can disagree with it.
+  const roleConfiguration = options.apiRoleConfiguration ?? resolveStartupApiRole(process.env, options.apiRole);
+  const effectiveApiRole = roleConfiguration.role;
   // With the knob unset (and no injected role) the process IS main: one role, no
-  // routing decision to report. The health payloads only grow `role` once a role was
-  // actually configured, which is what keeps `snapshot-api-routes.ts --check`
-  // byte-identical to main for the default deployment (MUL-461 acceptance ①) while
-  // still answering `role:"runtime"` in a split container.
-  const apiRoleConfigured = options.apiRole !== undefined || isApiRoleConfigured();
+  // routing decision to report. The health payloads only grow `role` once a role
+  // was actually configured, which is what keeps `snapshot-api-routes.ts --check`
+  // byte-identical to main for the default deployment (MUL-461 acceptance ①).
+  const apiRoleConfigured = roleConfiguration.configured;
   // The metrics role is stamped LAST, and from `effectiveApiRole`: an injected
-  // `requestMetrics` object is a transport/tuning override, never a statement about
-  // which process this is. Without the trailing spread a caller that passed
-  // `requestMetrics: { ...opts, role: "all" }` to a runtime process made
-  // `api_slow_request.role` report a role the process does not run as (MUL-461 QA).
-  const requestMetricsOptions = {
-    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+  // `requestMetrics` object is a transport/tuning override, never a statement
+  // about which role this process runs as.
+  const requestMetricsOptions: RequestMetricsOptions = {
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions(effectiveApiRole)),
     role: effectiveApiRole,
   };
+  // MUL-462: a configured peer URL is the split switch — it is what turns this
+  // process into one half of a two-process deployment.
+  const splitConfigured = Boolean(resolvePeerUrl()) || Boolean(options.peerChannel);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(
     options.daemonDirectBaseUrl === undefined
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
@@ -397,6 +436,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         path === "/favicon.ico" ||
         path === "/api/config" ||
         path === "/readyz" ||
+        PEER_INTERNAL_PATHS.has(path) ||
         path.startsWith("/auth/") ||
         path.startsWith("/health") ||
         path.startsWith("/api/remi/releases/") ||
@@ -464,6 +504,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // locally hosted daemon unable to report its own state. Missing or unknown
     // credentials retain the historical anonymous-admin behavior.
     app.use("*", async (c, next) => {
+      // MUL-462: the peer routes authenticate themselves with a shared secret.
+      // Without this a peer secret that happens to collide with a task token
+      // would be rejected as a denied write. Exact paths only — see
+      // PEER_INTERNAL_PATHS.
+      if (PEER_INTERNAL_PATHS.has(c.req.path)) {
+        await next();
+        return;
+      }
       const header = c.req.header("Authorization") ?? "";
       const rawToken = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
       const accessToken = rawToken ? await store.verifyAccessToken(rawToken) : null;
@@ -580,8 +628,30 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
     transport: "websocket",
-    ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
+    // MUL-461 × MUL-462: the two split fields are additive and gated together.
+    // They appear once this process is part of a split EITHER way — a configured
+    // role (MUL-461) or a configured peer (MUL-462) — because each one alone means
+    // an operator is looking at a split process and needs both answers. With
+    // neither set the body stays byte-for-byte main's, which is what the route
+    // snapshot checks.
+    //
+    // `role` is the process's ONE effective role (never a second env read), and
+    // `peer_healthy` is the peer channel's own liveness.
+    ...(apiRoleConfigured || splitConfigured
+      ? {
+        role: effectiveApiRole,
+        peer_healthy: options.peerChannel ? options.peerChannel.healthy() : false,
+      }
+      : {}),
   }));
+  // `/internal/*` is deliberately outside the dashboard auth middleware (see
+  // the `authToken` branch above): the peer authenticates with its own shared
+  // secret, and a deployment that sets `MULTIREMI_PEER_SECRET` to something
+  // other than `MULTIREMI_TOKEN` must still be able to reach these routes.
+  registerPeerRoutes(app, {
+    peer: options.peerChannel ?? null,
+    secret: options.peerSecret === undefined ? resolvePeerSecret() : (options.peerSecret ?? ""),
+  });
   registerWebhookRoutes(app, deps);
   registerScmWebhookRoutes(app, deps);
   app.get("/api/multiremi/health", (c) => c.json(healthBody()));
@@ -769,12 +839,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ...(options.authToken !== undefined
       ? { MULTIREMI_TOKEN: options.authToken ?? undefined }
       : {}),
-    ...(options.apiRole !== undefined ? { MULTIREMI_API_ROLE: options.apiRole } : {}),
     ...(options.daemonDirectBaseUrl !== undefined
       ? { MULTIREMI_DAEMON_DIRECT_BASE_URL: options.daemonDirectBaseUrl ?? undefined }
       : {}),
   };
-  const startupConfig = evaluateStartupEnv(startupEnv);
+  const roleConfiguration = options.apiRoleConfiguration ?? resolveStartupApiRole(startupEnv, options.apiRole);
+  const startupConfig = evaluateStartupEnv(startupEnv, roleConfiguration);
   if (startupConfig.missingRequired.length > 0) {
     const message = `Missing required production environment variables: ${startupConfig.missingRequired.join(", ")}`;
     log.error(`[startup-env] ${message}`);
@@ -806,7 +876,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // Same trailing stamp as `createMultiremiApp`: an injected `requestMetrics`
   // tunes transport and thresholds, and never decides which role this process is.
   const requestMetricsOptions = {
-    ...(options.requestMetrics ?? resolveRequestMetricsOptions()),
+    ...(options.requestMetrics ?? resolveRequestMetricsOptions(effectiveApiRole)),
     role: effectiveApiRole,
   };
   const messaging = backgroundJobs
@@ -843,8 +913,26 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
   // could not simply wait for the next explicit action is repaired once, here.
   if (backgroundJobs) refreshPreNativeCodexSnapshots(store);
+  // MUL-462: the peer channel is off unless `MULTIREMI_PEER_URL` is set, so an
+  // unconfigured deployment keeps the single-process wiring byte for byte.
+  // `options.peerChannel` is the injection point the two-server tests use.
+  // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
+  // no sender, no subscriber, and the routes uniformly answer 401.
+  const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
+    : options.peerChannel;
+  // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
+  // resolved once by startup-env, including an injected role). Resolving it
+  // again here from env would disagree with an injected `apiRole`: a process
+  // pinned to `runtime` for a test would refuse browser paths while still fanning
+  // out browser frames, or the reverse.
   const app = createMultiremiApp({
     ...options,
+    apiRoleConfiguration: roleConfiguration,
     store,
     scheduler,
     realtimeState,
@@ -852,6 +940,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     messagingProviders,
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
+    peerChannel: peer,
   });
   // MUL-367: the per-minute summary belongs to a long-lived server only. Tests
   // build apps with `createMultiremiApp` and must not inherit a timer.
@@ -879,36 +968,38 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
-  const unsubscribeTaskEnqueued = store.onTaskEnqueued((task) => {
-    notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, "task:queued", task);
-    // MUL-462: 换成实时扇出
-    offers.enqueued(task);
-  });
-  const unsubscribeTaskEvent = store.onTaskEvent((event) => {
-    notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
-    // MUL-462: 换成实时扇出
-    downlinks.taskChanged(event.task.runtimeId, event.task.id);
-    if (["task:completed", "task:failed", "task:cancelled"].includes(event.type)) {
-      // MUL-462: 换成实时扇出
-      offers.terminal(event.task.id, event.task.runtimeId);
-      // MUL-462: 换成实时扇出
-      downlinks.kickWorkspace(event.task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
-    }
-  });
-  const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
-    notifyBrowserTaskMessages(store, browserWebSockets, browserScopeWebSockets, task, messages);
-  });
-  const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
-    notifyBrowserWorkspaceEvent(browserWebSockets, browserUserWebSockets, browserScopeWebSockets, event);
-    // MUL-462: 换成实时扇出
-    downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
-    if (event.type === "daemon:models_updated") {
-      // MUL-462: 换成实时扇出
-      offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
-    } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
-      // MUL-462: 换成实时扇出
-      offers.kickWorkspace(event.workspaceId);
-    }
+  // MUL-462: one fanout owns the four store subscriptions. It delivers locally by
+  // the process's effective role and forwards to the peer. `all` (the default)
+  // retains both browser and daemon delivery.
+  const buildFanout = options.createRealtimeFanout ?? createRealtimeFanout;
+  const realtimeFanout = buildFanout({
+    role: effectiveApiRole,
+    store,
+    peer,
+    registries: {
+      browser: browserWebSockets,
+      browserUser: browserUserWebSockets,
+      browserScope: browserScopeWebSockets,
+    },
+    onDaemonTask: ({ type, task }) => {
+      if (type === "task:queued") {
+        offers.enqueued(task);
+        return;
+      }
+      downlinks.taskChanged(task.runtimeId, task.id);
+      if (["task:completed", "task:failed", "task:cancelled"].includes(type)) {
+        offers.terminal(task.id, task.runtimeId);
+        downlinks.kickWorkspace(task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      }
+    },
+    onDaemonWorkspaceEvent: (event) => {
+      downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
+      if (event.type === "daemon:models_updated") {
+        offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
+      } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
+        offers.kickWorkspace(event.workspaceId);
+      }
+    },
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,
@@ -1067,10 +1158,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
     controlPlaneSshMesh?.stop();
-    unsubscribeTaskEnqueued();
-    unsubscribeTaskEvent();
-    unsubscribeTaskMessages();
-    unsubscribeWorkspaceEvent();
+    // Closes the four store subscriptions and the peer channel (queue flush +
+    // its timers), so a stopped server stops POSTing to its peer.
+    realtimeFanout.close();
     scheduler?.stop();
     scmPolling?.stop();
     messaging?.stop();

@@ -45,15 +45,35 @@ export function HumanRequestDock({ taskId }: { taskId: string | null }) {
   );
 }
 
-function HumanRequestCard({ taskId, request }: { taskId: string; request: TaskHumanRequest }) {
+export function HumanRequestCard({
+  taskId,
+  request,
+  onResponded,
+  readOnly = false,
+}: {
+  taskId: string;
+  request: TaskHumanRequest;
+  onResponded?: () => void;
+  readOnly?: boolean;
+}) {
   return request.kind === "permission" ? (
-    <PermissionCard taskId={taskId} request={request} />
+    <PermissionCard taskId={taskId} request={request} onResponded={onResponded} readOnly={readOnly} />
   ) : (
-    <QuestionCard taskId={taskId} request={request} />
+    <QuestionCard taskId={taskId} request={request} onResponded={onResponded} readOnly={readOnly} />
   );
 }
 
-function PermissionCard({ taskId, request }: { taskId: string; request: TaskHumanRequest }) {
+export function PermissionCard({
+  taskId,
+  request,
+  onResponded,
+  readOnly = false,
+}: {
+  taskId: string;
+  request: TaskHumanRequest;
+  onResponded?: () => void;
+  readOnly?: boolean;
+}) {
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
   const options = request.payload.options ?? [];
@@ -66,17 +86,24 @@ function PermissionCard({ taskId, request }: { taskId: string; request: TaskHuma
       </div>
       {title && <div className="mt-1 break-words text-xs text-muted-foreground">{title}</div>}
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {options.map((option) => (
+        {options.map((option) => readOnly ? (
+          <span key={option.optionId} className="rounded border px-2 py-1 text-xs text-muted-foreground">
+            {option.name}
+          </span>
+        ) : (
           <Button
             key={option.optionId}
             size="sm"
             variant={option.kind.startsWith("allow") ? "default" : "outline"}
             disabled={respond.isPending}
-            onClick={() => respond.mutate({
-              taskId,
-              requestId: request.id,
-              response: { option_id: option.optionId },
-            })}
+            onClick={() => respond.mutate(
+              {
+                taskId,
+                requestId: request.id,
+                response: { option_id: option.optionId },
+              },
+              { onSuccess: onResponded },
+            )}
           >
             {option.name}
           </Button>
@@ -89,7 +116,17 @@ function PermissionCard({ taskId, request }: { taskId: string; request: TaskHuma
   );
 }
 
-function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanRequest }) {
+export function QuestionCard({
+  taskId,
+  request,
+  onResponded,
+  readOnly = false,
+}: {
+  taskId: string;
+  request: TaskHumanRequest;
+  onResponded?: () => void;
+  readOnly?: boolean;
+}) {
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
   const questions = request.payload.questions ?? [];
@@ -147,11 +184,20 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
                       (question.multiSelect
                         ? (answers[question.question] ?? "").split(", ").includes(option.label)
                         : answers[question.question] === option.label);
-                    return (
+                    return readOnly ? (
+                      <span
+                        key={option.label}
+                        className="max-w-full rounded border px-2 py-1 text-xs text-muted-foreground"
+                        title={option.description}
+                      >
+                        {option.label}
+                      </span>
+                    ) : (
                       <Button
                         key={option.label}
                         size="sm"
                         variant={selected ? "default" : "outline"}
+                        aria-pressed={selected}
                         title={option.description}
                         className={cn(
                           "h-auto max-w-full whitespace-normal break-words text-left",
@@ -164,14 +210,14 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
                     );
                   })}
                 </div>
-              ) : (
+              ) : !readOnly ? (
                 <Input
                   value={answers[question.question] ?? ""}
                   placeholder={t(($) => $.human_requests.answer_placeholder)}
                   onChange={(event) => setAnswer(question.question, event.target.value)}
                 />
-              )}
-              {question.options.length > 0 && otherFieldKey && (
+              ) : null}
+              {!readOnly && question.options.length > 0 && otherFieldKey && (
                 <Input
                   value={others[question.question] ?? ""}
                   placeholder={t(($) => $.human_requests.other_answer_placeholder)}
@@ -184,15 +230,20 @@ function QuestionCard({ taskId, request }: { taskId: string; request: TaskHumanR
           );
         })}
       </div>
-      <div className="mt-2 flex justify-end">
-        <Button
-          size="sm"
-          disabled={!answered || respond.isPending}
-          onClick={() => respond.mutate({ taskId, requestId: request.id, response: { answers: submitAnswers() } })}
-        >
-          {t(($) => $.human_requests.submit)}
-        </Button>
-      </div>
+      {!readOnly && (
+        <div className="mt-2 flex justify-end">
+          <Button
+            size="sm"
+            disabled={!answered || respond.isPending}
+            onClick={() => respond.mutate(
+              { taskId, requestId: request.id, response: { answers: submitAnswers() } },
+              { onSuccess: onResponded },
+            )}
+          >
+            {t(($) => $.human_requests.submit)}
+          </Button>
+        </div>
+      )}
       {respond.isError && (
         <div className="mt-2 text-xs text-destructive">{t(($) => $.human_requests.response_failed)}</div>
       )}
