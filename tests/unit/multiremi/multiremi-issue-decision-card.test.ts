@@ -19,11 +19,13 @@ import {
   registerIssueDecisionCardInteraction,
 } from "@connectors/feishu/task-interaction.js";
 import { FEISHU_ISSUE_DECISION_CARD_CAPABILITY } from "@multiremi/contracts/types.js";
-import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
+import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 const CARD_OPEN_ID = "ou_the_person";
+const OPERATOR_MISMATCH_TOAST = "本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。";
+const DECISION_FINISHED_TOAST = "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。";
 
 let previousEncryptionKey: string | undefined;
 let previousPublicUrl: string | undefined;
@@ -1135,7 +1137,7 @@ describe("MUL-412 issue decision cards", () => {
       action: { name: marker, form_value: { [`${marker}_answer`]: "yes" } },
     });
     expect(wrongOperator).toEqual({
-      toast: { type: "error", content: "本次没有提交：这条只能由被问的人回答。" },
+      toast: { type: "error", content: OPERATOR_MISMATCH_TOAST },
     });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
 
@@ -1151,7 +1153,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(settled.answeredByMemberId).toBe(member.id);
   });
 
-  it("maps decision callback HTTP failures to complete user-facing toasts", async () => {
+  it("maps all 24 callback failure and terminal combinations to complete user-facing toasts", async () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Callback errors", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
@@ -1164,55 +1166,128 @@ describe("MUL-412 issue decision cards", () => {
       context: { open_message_id: messageId, open_chat_id: "oc_issue_decision" },
       action: { name: `${marker}_o0`, form_value: {} },
     });
+    type Stage = "read" | "submit";
     const cases = [
       {
-        status: 403, code: "decision_member_unmapped", stage: "submit",
+        name: "GET unmapped", stage: "read", response: "http", status: 403, code: "decision_member_unmapped",
         expected: "本次没有提交：飞书身份还未关联到 Remi 成员。请先用飞书登录一次网页端，或在本话题给机器人发一条消息后再试；也可以直接去网页端回答。",
       },
       {
-        status: 403, code: "decision_member_ambiguous", stage: "submit",
+        name: "POST unmapped", stage: "submit", response: "http", status: 403, code: "decision_member_unmapped",
+        expected: "本次没有提交：飞书身份还未关联到 Remi 成员。请先用飞书登录一次网页端，或在本话题给机器人发一条消息后再试；也可以直接去网页端回答。",
+      },
+      {
+        name: "GET ambiguous", stage: "read", response: "http", status: 403, code: "decision_member_ambiguous",
         expected: "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。",
       },
       {
-        status: 403, code: "decision_operator_mismatch", stage: "submit",
-        expected: "本次没有提交：这条只能由被问的人回答。",
+        name: "POST ambiguous", stage: "submit", response: "http", status: 403, code: "decision_member_ambiguous",
+        expected: "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。",
       },
       {
-        status: 404, code: null, stage: "read",
-        expected: "本次没有提交：这个决定已经结束了。",
+        name: "GET mismatch", stage: "read", response: "http", status: 403, code: "decision_operator_mismatch",
+        expected: OPERATOR_MISMATCH_TOAST,
       },
       {
-        status: 500, code: "decision_backend_failed", stage: "submit",
+        name: "POST mismatch", stage: "submit", response: "http", status: 403, code: "decision_operator_mismatch",
+        expected: OPERATOR_MISMATCH_TOAST,
+      },
+      { name: "GET 404", stage: "read", response: "http", status: 404, code: null, expected: DECISION_FINISHED_TOAST },
+      { name: "POST 404", stage: "submit", response: "http", status: 404, code: null, expected: DECISION_FINISHED_TOAST },
+      { name: "GET 409", stage: "read", response: "http", status: 409, code: null, expected: DECISION_FINISHED_TOAST },
+      { name: "POST 409", stage: "submit", response: "http", status: 409, code: null, expected: DECISION_FINISHED_TOAST },
+      {
+        name: "GET 500", stage: "read", response: "http", status: 500, code: "decision_backend_failed",
         expected: "本次没有提交：提交失败，请稍后重试（错误码：decision_backend_failed）。",
       },
+      {
+        name: "POST 500", stage: "submit", response: "http", status: 500, code: "decision_backend_failed",
+        expected: "本次没有提交：提交失败，请稍后重试（错误码：decision_backend_failed）。",
+      },
+      { name: "GET connection refused", stage: "read", response: "refused", expected: "本次没有提交：提交失败，请稍后重试（错误码：ConnectionRefused）。" },
+      { name: "POST connection refused", stage: "submit", response: "refused", expected: "本次没有提交：提交失败，请稍后重试（错误码：ConnectionRefused）。" },
+      { name: "GET timeout", stage: "read", response: "timeout", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "POST timeout", stage: "submit", response: "timeout", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "GET non-JSON error", stage: "read", response: "non_json_error", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "POST non-JSON error", stage: "submit", response: "non_json_error", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "GET 200 non-JSON", stage: "read", response: "non_json_ok", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "POST 200 non-JSON", stage: "submit", response: "non_json_ok", expected: "本次没有提交：提交失败，请稍后重试。" },
+      { name: "GET answered", stage: "read", response: "decision", decisionStatus: "answered", expected: DECISION_FINISHED_TOAST, toastType: "info" },
+      { name: "GET withdrawn", stage: "read", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info" },
+      { name: "POST withdrawn", stage: "submit", response: "decision", decisionStatus: "withdrawn", expected: DECISION_FINISHED_TOAST, toastType: "info" },
     ] as const;
-    for (const [index, testCase] of cases.entries()) {
-      const messageId = `om_callback_error_${index}`;
-      const error = new MultiremiDaemonHttpError(
-        testCase.status,
-        testCase.stage === "read" ? "GET" : "POST",
-        `/api/daemon/issues/${parent.id}/decisions/${decision.id}`,
-        JSON.stringify({ error: "raw server detail must not reach the toast", code: testCase.code }),
-        testCase.code,
-      );
-      const registration = registerIssueDecisionCardInteraction({
-        appId: "cli_issue_decision",
-        chatId: "oc_issue_decision",
-        messageId,
-        recipientOpenId: CARD_OPEN_ID,
-        getDecision: async () => {
-          if (testCase.stage === "read") throw error;
-          return decision;
-        },
-        submit: async () => { throw error; },
-      });
-      try {
-        expect(await handleIssueDecisionInteractionEvent("cli_issue_decision", action(messageId))).toEqual({
-          toast: { type: "error", content: testCase.expected },
+    expect(cases).toHaveLength(23);
+
+    let activeCase: typeof cases[number] | null = null;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const testCase = activeCase;
+        if (!testCase) return new Response("no callback case", { status: 500 });
+        const stage: Stage = request.method === "POST" ? "submit" : "read";
+        const targeted = stage === testCase.stage;
+        if (!targeted) {
+          return Response.json({ decision: { ...decision, status: "escalated" } });
+        }
+        if (testCase.response === "timeout") {
+          await Bun.sleep(100);
+          return Response.json({ decision: { ...decision, status: "escalated" } });
+        }
+        if (testCase.response === "non_json_error") {
+          return new Response("not JSON", { status: 500 });
+        }
+        if (testCase.response === "non_json_ok") {
+          return new Response("not JSON", { status: 200 });
+        }
+        if (testCase.response === "decision") {
+          return Response.json({ decision: { ...decision, status: testCase.decisionStatus } });
+        }
+        if (testCase.response === "http") {
+          return Response.json({
+            error: "raw server detail must not reach the toast",
+            code: testCase.code,
+          }, { status: testCase.status });
+        }
+        return new Response("refused scenarios must use the closed listener", { status: 500 });
+      },
+    });
+    const closedServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unused") });
+    const refusedOrigin = closedServer.url.origin;
+    await closedServer.stop(true);
+    const client = new MultiremiDaemonClient(server.url.origin, "daemon-test-token", { requestTimeoutMs: 25 });
+    const refusedClient = new MultiremiDaemonClient(refusedOrigin, "daemon-test-token", { requestTimeoutMs: 100 });
+    try {
+      for (const [index, testCase] of cases.entries()) {
+        activeCase = testCase;
+        const messageId = `om_callback_error_${index}`;
+        const readClient = testCase.response === "refused" && testCase.stage === "read" ? refusedClient : client;
+        const submitClient = testCase.response === "refused" && testCase.stage === "submit" ? refusedClient : client;
+        const registration = registerIssueDecisionCardInteraction({
+          appId: "cli_issue_decision",
+          chatId: "oc_issue_decision",
+          messageId,
+          recipientOpenId: CARD_OPEN_ID,
+          getDecision: () => readClient.getFeishuIssueDecision(parent.id, decision.id),
+          submit: (answer, operatorOpenId) => submitClient.answerFeishuIssueDecision(
+            parent.id,
+            decision.id,
+            { answer, operatorOpenId },
+          ),
         });
-      } finally {
-        registration.dispose();
+        try {
+          const result = await handleIssueDecisionInteractionEvent("cli_issue_decision", action(messageId));
+          expect(result?.toast, testCase.name).toEqual({
+            type: "toastType" in testCase ? testCase.toastType : "error",
+            content: testCase.expected,
+          });
+        } finally {
+          registration.dispose();
+        }
       }
+    } finally {
+      activeCase = null;
+      await server.stop(true);
     }
   });
 });

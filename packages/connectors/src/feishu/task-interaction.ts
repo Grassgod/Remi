@@ -118,10 +118,10 @@ function issueDecisionFailureToast(error: unknown): string {
     return "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。";
   }
   if (code === "decision_operator_mismatch") {
-    return "本次没有提交：这条只能由被问的人回答。";
+    return "本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。";
   }
   if (status === 404 || status === 409) {
-    return "本次没有提交：这个决定已经结束了。";
+    return "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。";
   }
   return code
     ? `本次没有提交：提交失败，请稍后重试（错误码：${code}）。`
@@ -238,7 +238,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   if (!entry) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
     || object(event.operator).open_id !== entry.recipientOpenId) {
-    return toast("本次没有提交：这条只能由被问的人回答。");
+    return toast("本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。");
   }
   let decision: MultiremiIssueDecision | null = null;
   try {
@@ -248,7 +248,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   }
   if (!decision) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   if (decision.status !== "escalated") {
-    return { ...toast("本次没有提交：这个决定已经结束了。", "info"),
+    return { ...toast("本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", "info"),
       card: { type: "raw", data: buildIssueDecisionCard(decision,
         { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
   }
@@ -273,7 +273,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
   try {
     const settled = await entry.submit(answer, String(object(event.operator).open_id ?? ""));
-    return { ...toast(settled.status === "answered" ? "已提交" : "本次没有提交：这个决定已经结束了。", settled.status === "answered" ? "success" : "info"),
+    return { ...toast(settled.status === "answered" ? "已提交" : "本次没有提交：这个决定已经结束了。请到网页端查看最新结果，不需要再提交。", settled.status === "answered" ? "success" : "info"),
       card: { type: "raw", data: buildIssueDecisionCard(settled,
         { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
   } catch (error) {
