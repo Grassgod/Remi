@@ -75,6 +75,12 @@ function parentNotification(id: string, issueKey: string): InboxItem {
   };
 }
 
+function expectVisibilityReservedArchive(button: HTMLElement, hoverClass: string) {
+  expect(button).toHaveClass("invisible", "inline-flex", hoverClass);
+  expect(button).not.toHaveClass("hidden");
+  expect(button).not.toHaveClass(hoverClass.replace(":visible", ":inline-flex"));
+}
+
 describe("InboxListItem merged autopilot runs", () => {
   it("expands a collapsed row to show every trigger object and duration", () => {
     const latest = run("run-latest", "main", 5, "2026-08-27T10:00:00Z");
@@ -104,14 +110,16 @@ describe("InboxListItem merged autopilot runs", () => {
     fireEvent.click(screen.getByText("Atlas · Remi@release"));
     expect(onItemClick).toHaveBeenCalledWith(earlier);
 
-    fireEvent.click(screen.getByTitle("Archive"));
+    const archive = screen.getByTitle("Archive");
+    expectVisibilityReservedArchive(archive, "group-hover/row:visible");
+    fireEvent.click(archive);
     expect(onArchive).toHaveBeenCalledTimes(1);
     expect(onArchive).toHaveBeenCalledWith([latest, earlier]);
   });
 });
 
 describe("InboxListItem parent notification groups", () => {
-  it("keeps the expand control stationary on hover and offers only per-item archive actions", async () => {
+  it("reserves archive action space and offers only per-item archive actions", async () => {
     const first = parentNotification("child-1", "MUL-2");
     const second = parentNotification("child-2", "MUL-3");
     const onArchive = vi.fn();
@@ -128,20 +136,15 @@ describe("InboxListItem parent notification groups", () => {
     );
 
     const expand = screen.getByRole("button", { name: "Expand notifications" });
-    const row = expand.closest("[data-perf-item]");
-    expect(row).not.toBeNull();
-    const before = expand.getBoundingClientRect();
-    fireEvent.mouseEnter(row!);
-    const after = expand.getBoundingClientRect();
-
-    expect(after.left).toBe(before.left);
-    expect(after.width).toBe(before.width);
     expect(expand).toHaveClass("h-5", "w-5");
     expect(screen.queryByTitle("Archive")).not.toBeInTheDocument();
 
     await userEvent.click(expand);
     const archiveButtons = screen.getAllByTitle("Archive");
     expect(archiveButtons).toHaveLength(2);
+    for (const archive of archiveButtons) {
+      expectVisibilityReservedArchive(archive, "group-hover/child:visible");
+    }
     await userEvent.click(archiveButtons[0]!);
     expect(onArchive).toHaveBeenCalledWith([first]);
   });

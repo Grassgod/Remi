@@ -9,6 +9,11 @@ import type { InboxItem } from "@multiremi/core/types";
 import { InboxDetailLabel, useInboxTitle } from "./inbox-detail-label";
 import { useT } from "../../i18n";
 
+// Keep archive actions in layout while hidden. Using `hidden` and revealing with
+// `inline-flex` shifts the adjacent expand control and can turn a click into archive.
+const ARCHIVE_ACTION_CLASS_NAME =
+  "invisible inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:visible";
+
 // Hook returning a localized relative-time formatter — the i18n equivalent
 // of the previous static `timeAgo` function. Returning a function (rather
 // than a string) keeps call-site usage identical: `timeAgo(dateStr)`.
@@ -117,7 +122,7 @@ export function InboxListItem({
                     event.stopPropagation();
                     onArchive(groupedItems);
                   }}
-                  className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground group-hover/row:visible focus-visible:visible"
+                  className={`${ARCHIVE_ACTION_CLASS_NAME} group-hover/row:visible`}
                 >
                   <Archive className="h-3.5 w-3.5" />
                 </button>
@@ -175,7 +180,7 @@ export function InboxListItem({
                         event.stopPropagation();
                         onArchive([run]);
                       }}
-                      className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground group-hover/child:visible focus-visible:visible"
+                      className={`${ARCHIVE_ACTION_CLASS_NAME} group-hover/child:visible`}
                     >
                       <Archive className="h-3.5 w-3.5" />
                     </button>
