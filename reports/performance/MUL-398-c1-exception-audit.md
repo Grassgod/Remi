@@ -1,6 +1,6 @@
 # MUL-398 C-1 最终例外逐条审计
 
-前后实测基线 main `b95dd2fa`，后续已合入 main `5e3417b4` 并重跑审计；机制与表以本 PR 当前代码为准。MUL-405 新增锁调用，MUL-415 改写已入表的 children 读，MUL-479 新增 context-window 路由。由 `tests/manual/report-pg-reply-c1-audit.ts` 读取集中 Set，生成 404 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
+前后实测基线 main `b95dd2fa`，后续已合入 main `01810898` 并重跑审计；机制与表以本 PR 当前代码为准。MUL-405 新增锁调用，MUL-415 改写已入表的 children 读，MUL-479 新增 context-window 路由；MUL-478 增加既有任务调用链的辅助整行读但未新增路由或例外缺项。由 `tests/manual/report-pg-reply-c1-audit.ts` 读取集中 Set，生成 404 项，避免表与代码漏项。HTTP 注册/实际 Hono origin 的逐项正式用例覆盖全部 HTTP 项；不存在静默删除、挂载前缀改写或参数名替换。
 
 209 `cmt_5ncm70lxe805`：v0.2.83 无单次回包埋点，且当前发布冻结，含埋点版本尚未部署。最先18行全部是 >500ms 慢请求内 **总** DB 字节 ≥6 MiB 的保守超集，并非单条超限证据；其余来自审计或续做/Senior裁定。合入前 Explorer 用 v0.2.83 慢请求总量再核对；快请求只能由源码审计覆盖。行 LIMIT、id 单行、读后裁剪均不能单独证明字节有界。
 
