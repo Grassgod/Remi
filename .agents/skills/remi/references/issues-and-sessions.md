@@ -26,14 +26,14 @@ remi issue runs <issue-id> --json
 remi issue children <issue-id> --json
 remi issue child-progress <issue-id> --json
 remi issue dependency list <issue-id> --json
-remi issue dependency add <issue-id> <dependency-id> --type depends_on --json
+remi issue dependency add <issue-id> <dependency-ref> --type blocked_by --json
 remi label list --json
 remi issue label list <issue-id> --json
 remi comment list <issue-id> --json
 remi comment add <issue-id> --content-file <comment.md> --json
 ```
 
-依赖示例表示当前 Issue 依赖另一个 Issue；写前确认方向，随后 list 核验。子任务创建可用 `issue create --parent`；标签定义用 `label`，Issue 上的绑定用 `issue label`。订阅、反应、自定义字段分别从 `issue subscriber`、`issue reaction`、`issue metadata` 查帮助。
+依赖示例表示当前 Issue 依赖另一个 Issue；`--type` 取 `blocked_by|blocks|related`，默认 `blocked_by`，位置参数与 `--blocked-by` 都接受 key 或 id。写前确认方向，随后 list 核验。子任务创建用 `issue create --parent`，可重复的 `--blocked-by` 声明前置；`issue list --parent` 只看该单的直接子单，`--top-level-only` 只看没有父单的 Issue，同时给出时 `--top-level-only` 生效。标签定义用 `label`，Issue 上的绑定用 `issue label`。订阅、反应、自定义字段分别从 `issue subscriber`、`issue reaction`、`issue metadata` 查帮助。
 
 评论、回复、发布成果都是协作写入，沿用用户已有发送授权。`comment resolve` 解决一条评论，不代表 Issue 完成。批量修改先列出精确目标 ID 并读当前值；`issue batch-update` / `batch-delete` 的 JSON 不能从单条更新参数推断。`issue delete` 与 `issue restore` 的当前归档/恢复行为以目标版本帮助和返回为准，不能用批量删除整理无关任务。
 

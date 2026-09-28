@@ -59,6 +59,13 @@ export function currentTaskParentId(c: Context): string | null {
   return currentTaskAccessToken(c)?.taskId ?? null;
 }
 
+/** A human request is identified only from trusted request credentials. */
+export function humanRequestActor(c: Context): { memberId: string } | null {
+  if (currentTaskAccessToken(c)) return null;
+  if (cleanString(c.req.header("X-Agent-ID"))) return null;
+  return { memberId: authenticatedRequestUserId(c) ?? currentRequestUserId(c) };
+}
+
 export function denyRestrictedTaskIssueCreation(c: Context, store: MultiremiStore): Response | null {
   const code = currentTaskIssueCreationRestrictionCode(c, store);
   if (!code) return null;
