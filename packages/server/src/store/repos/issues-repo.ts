@@ -2549,6 +2549,7 @@ export class IssuesRepo {
       prompt: current.title,
       parentTaskId,
     }, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(task);
     this.ctx.appendIssueActivity(current.id, {
       actorType,
       actorId,
@@ -3161,6 +3162,7 @@ export class IssuesRepo {
           prompt: current.title,
           parentTaskId,
         }, nested, deferredEvents);
+        deferredEvents.enqueuedTasks.push(task);
         this.ctx.appendIssueActivity(dependent.id, {
           actorType: "system",
           actorId: SYSTEM_AUTHOR_ID,
