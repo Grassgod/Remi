@@ -18,6 +18,7 @@
  */
 
 import { FEISHU_IMAGE_MAX_BYTES } from "@connectors/feishu/outbound-images.js";
+import { loadLarkSsoConfig } from "@multiremi/api/helpers/integrations.js";
 import { chatAttachmentValidationError } from "@multiremi/contracts/attachments.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { advancesFeishuPresentation, parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
@@ -91,6 +92,11 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+export type IssueDecisionOperatorMemberResolution =
+  | { status: "resolved"; member: MultiremiWorkspaceMember }
+  | { status: "unmapped" }
+  | { status: "ambiguous" };
 
 const log = createLogger("multiremi-store");
 
@@ -1713,16 +1719,16 @@ export class FeishuBotRepo {
        FROM multiremi_issue_decisions decision
        JOIN multiremi_issues issue ON issue.id = decision.issue_id
        WHERE decision.status = 'escalated' AND decision.reminder_sent_at IS NULL
-         AND decision.created_at <= ?
          AND issue.workspace_id = ?
          AND (
-           SELECT COUNT(*) FROM multiremi_feishu_bot_outbound_deliveries o
+           SELECT o.sent_at FROM multiremi_feishu_bot_outbound_deliveries o
            WHERE o.kind = 'decision_card' AND o.decision_id = decision.id
              AND o.status = 'sent' AND o.external_message_id IS NOT NULL
-             AND o.degraded IS NULL
-         ) > 0
-       ORDER BY decision.created_at ASC, decision.id ASC`,
-    ).all(threshold, workspaceId) as Row[];
+             AND o.degraded IS NULL AND o.sent_at IS NOT NULL
+           ORDER BY o.created_at DESC, o.id DESC LIMIT 1
+         ) <= ?
+       ORDER BY decision.id ASC`,
+    ).all(workspaceId, threshold) as Row[];
     for (const row of due) {
       const decision = this.ctx.issues().getIssueDecision(String(row.issue_id), String(row.id));
       if (!decision || decision.status !== "escalated") continue;
@@ -1841,50 +1847,64 @@ export class FeishuBotRepo {
    * Resolve the Feishu operator behind a card click to a live workspace member
    * (MUL-412, S4 permission contract).
    *
-   * The operator's open_id is the only identity a callback carries, and the
-   * users table is where the deployment stores it: an open_id arrives from SSO
-   * (`external_id`) and from the bot's own inbound events
-   * (`multiremi_feishu_bot_senders.open_id`, which also carries a union_id that
-   * links the same person across apps). Reusing those bindings — rather than
-   * minting a second identity table — is what keeps a click attributing to the
-   * member that person already is.
+   * An open_id is app-scoped. Direct `users.external_id` evidence is therefore
+   * valid only when the configured SSO app is this bot app. Sender evidence is
+   * likewise scoped by workspace + app + open_id before its union_id is used
+   * to find users across apps. Never compare an open_id with a union_id.
    *
-   * Returns null when nothing resolves, when the target is archived, or when it
-   * resolves to an agent member: an agent must never be recorded as the member
-   * who answered.
+   * Sender rows are written by the trusted bot-host daemon API, which does not
+   * independently verify Feishu event signatures. They prove only that this app
+   * has seen the open_id, not that another app's open_id belongs to that person.
+   * The daemon trust boundary is intentionally unchanged here.
    */
   resolveIssueDecisionOperatorMember(
     workspaceId: string,
+    appId: string,
     openId: string | null | undefined,
-  ): MultiremiWorkspaceMember | null {
+  ): IssueDecisionOperatorMemberResolution {
     const id = cleanOptionalString(openId);
-    if (!id) return null;
-    const candidates: string[] = [];
+    const botAppId = cleanOptionalString(appId);
+    if (!id || !botAppId) return { status: "unmapped" };
+    const candidateUserIds = new Set<string>();
     const users = this.ctx.workspaces();
-    const byOpenId = users.getUserByExternalId(id);
-    if (byOpenId) candidates.push(byOpenId.id);
-    const byUnionId = users.getUserByFeishuUnionId(id);
-    if (byUnionId) candidates.push(byUnionId.id);
-    // The bot's own sender log knows the union_id for an open_id it has seen,
-    // which is how a person who never used SSO still resolves.
-    const sender = this.ctx.db.query(
+
+    if (loadLarkSsoConfig()?.appId === botAppId) {
+      const rows = this.ctx.db.query(
+        "SELECT id FROM multiremi_users WHERE external_id = ?",
+      ).all(id) as Row[];
+      for (const row of rows) candidateUserIds.add(String(row.id));
+    }
+
+    const senders = this.ctx.db.query(
       `SELECT union_id FROM multiremi_feishu_bot_senders
-       WHERE workspace_id = ? AND open_id = ? ORDER BY last_seen_at DESC LIMIT 1`,
-    ).get(workspaceId, id) as Row | null;
-    const senderUnionId = cleanOptionalString(sender?.union_id);
-    if (senderUnionId) {
-      const unionUser = users.getUserByFeishuUnionId(senderUnionId);
-      if (unionUser) candidates.push(unionUser.id);
+       WHERE workspace_id = ? AND app_id = ? AND open_id = ?`,
+    ).all(workspaceId, botAppId, id) as Row[];
+    for (const sender of senders) {
+      const unionId = cleanOptionalString(sender.union_id);
+      if (!unionId) continue;
+      const rows = this.ctx.db.query(
+        "SELECT id FROM multiremi_users WHERE feishu_union_id = ?",
+      ).all(unionId) as Row[];
+      for (const row of rows) candidateUserIds.add(String(row.id));
     }
-    for (const userId of candidates) {
-      const member = users.findWorkspaceMemberForUser(userId, workspaceId);
-      if (!member || member.archivedAt) continue;
-      // An agent's own account is never a valid answerer: S4 records the member
-      // who answered, and an agent answer already has its own actor path.
-      if (this.ctx.agents().getAgent(member.id)) continue;
-      return member;
+
+    const candidates = new Map<string, MultiremiWorkspaceMember>();
+    for (const userId of candidateUserIds) {
+      const rows = this.ctx.db.query(
+        "SELECT id FROM multiremi_workspace_members WHERE workspace_id = ? AND user_id = ?",
+      ).all(workspaceId, userId) as Row[];
+      for (const row of rows) {
+        const member = users.getWorkspaceMember(String(row.id));
+        if (!member || member.archivedAt) continue;
+        // An agent's own account is never a valid answerer: S4 records the member
+        // who answered, and an agent answer already has its own actor path.
+        if (this.ctx.agents().getAgent(member.id)) continue;
+        candidates.set(member.id, member);
+      }
     }
-    return null;
+    if (candidates.size === 0) return { status: "unmapped" };
+    if (candidates.size > 1) return { status: "ambiguous" };
+    return { status: "resolved", member: candidates.values().next().value! };
   }
 
   /**
@@ -1895,6 +1915,7 @@ export class FeishuBotRepo {
   getIssueDecisionCardContext(workspaceId: string, decisionId: string): {
     decision: MultiremiIssueDecision;
     issue: MultiremiIssue;
+    appId: string;
     chatId: string;
     messageId: string | null;
     recipientOpenId: string;
@@ -1904,18 +1925,21 @@ export class FeishuBotRepo {
     const issue = this.ctx.issues().getIssue(decision.issueId);
     if (!issue || issue.workspaceId !== workspaceId) return null;
     const row = this.ctx.db.query(
-      `SELECT o.chat_id, o.external_message_id, o.interaction_open_id
+      `SELECT b.app_id, o.chat_id, o.external_message_id, o.interaction_open_id
        FROM multiremi_feishu_bot_outbound_deliveries o
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id AND b.workspace_id = o.workspace_id
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.decision_id = ?
          AND o.degraded IS NULL
        ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
     ).get(workspaceId, decision.id) as Row | null;
+    if (!row) return null;
     return {
       decision,
       issue,
-      chatId: String(row?.chat_id ?? ""),
-      messageId: cleanOptionalString(row?.external_message_id),
-      recipientOpenId: String(row?.interaction_open_id ?? ""),
+      appId: String(row.app_id),
+      chatId: String(row.chat_id ?? ""),
+      messageId: cleanOptionalString(row.external_message_id),
+      recipientOpenId: String(row.interaction_open_id ?? ""),
     };
   }
 

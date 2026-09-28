@@ -600,8 +600,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!operatorOpenId || operatorOpenId !== context.recipientOpenId) {
       return c.json({ error: "please answer from the card addressed to you", code: "decision_operator_mismatch" }, 403);
     }
-    const member = store.resolveFeishuDecisionOperatorMember(context.issue.workspaceId, operatorOpenId);
-    if (!member) return c.json({ error: "operator is not a workspace member", code: "decision_member_unmapped" }, 403);
+    const operator = store.resolveFeishuDecisionOperatorMember(context.issue.workspaceId, context.appId, operatorOpenId);
+    if (operator.status === "unmapped") {
+      return c.json({ error: "operator is not a workspace member", code: "decision_member_unmapped" }, 403);
+    }
+    if (operator.status === "ambiguous") {
+      return c.json({ error: "operator maps to multiple workspace members", code: "decision_member_ambiguous" }, 403);
+    }
+    const member = operator.member;
     if (context.decision.status !== "escalated") {
       // Idempotent: a replayed callback (or a second tap) returns the settled
       // row so the host re-renders the terminal card instead of erroring.

@@ -1904,8 +1904,8 @@ runMigrations(this.db);
     return this.feishuBot.supportsIssueDecisionCard(workspaceId, runtimeId);
   }
 
-  resolveFeishuDecisionOperatorMember(workspaceId: string, openId: string | null | undefined) {
-    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, openId);
+  resolveFeishuDecisionOperatorMember(workspaceId: string, appId: string, openId: string | null | undefined) {
+    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
   }
 
   listFeishuIssueDecisionCards(workspaceId: string, runtimeId: string) {

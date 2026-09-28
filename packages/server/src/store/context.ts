@@ -644,8 +644,9 @@ export interface FeishuBotSurface {
   /** MUL-412: the operator behind a card click, as a live non-agent member. */
   resolveFeishuDecisionOperatorMember(
     workspaceId: string,
+    appId: string,
     openId: string | null | undefined,
-  ): import("@multiremi/contracts/types.js").MultiremiWorkspaceMember | null;
+  ): import("@multiremi/store/repos/feishu-bot-repo.js").IssueDecisionOperatorMemberResolution;
   /** MUL-412: decision cards a restarting host must re-register. */
   listFeishuIssueDecisionCards(
     workspaceId: string,
