@@ -460,6 +460,8 @@ export function ProjectDetail({
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const userId = useAuthStore((s) => s.user?.id);
+  const { pathname } = useNavigation();
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
@@ -484,8 +486,8 @@ export function ProjectDetail({
   const archiveProject = useArchiveProject();
   const restoreProject = useRestoreProject();
   const { data: pinnedItems = [] } = useQuery({
-    ...pinListOptions(wsId, userId ?? ""),
-    enabled: !!userId,
+    ...pinListOptions(wsId, userId ?? "", { enabled: afterFirstScreen }),
+    enabled: !!userId && afterFirstScreen,
   });
   const isPinned = pinnedItems.some((p) => p.item_type === "project" && p.item_id === projectId);
   const createPin = useCreatePin();
