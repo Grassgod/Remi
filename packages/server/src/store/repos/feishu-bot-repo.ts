@@ -1530,11 +1530,18 @@ export class FeishuBotRepo {
     decision: MultiremiIssueDecision,
     deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): void {
+    // MUL-476: the caller's objects may predate a move. Re-read both through the
+    // scoped decision read: a decision whose row, source and target workspaces
+    // differ does not exist and gets no card, and the Issue whose topic and
+    // workspace receive the card is the decision's own current target.
+    const current = this.ctx.issues().getIssueDecision(issue.id, decision.id);
+    if (!current) return;
+    decision = current;
+    issue = this.ctx.issues().getIssue(current.issueId)!;
     // Only the two "a person decides this" states get a card (A3). `pending`
     // belongs to the parent's owner agent, and the two terminal states are
     // already past asking.
     if (decision.status !== "escalated") return;
-    if (decision.issueId !== issue.id) return;
     const workspace = this.ctx.workspaces().getWorkspace(issue.workspaceId);
     if (!workspace) return;
     // Same lenient read as the human-request path: a stored config the current
@@ -1653,6 +1660,9 @@ export class FeishuBotRepo {
     decision: MultiremiIssueDecision,
     deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): void {
+    const current = this.ctx.issues().getIssueDecision(decision.issueId, decision.id);
+    if (!current) return;
+    decision = current;
     if (decision.status !== "answered" && decision.status !== "withdrawn") return;
     if (this.ctx.db.query(
       `SELECT 1 AS present FROM multiremi_feishu_bot_outbound_deliveries
@@ -1662,10 +1672,13 @@ export class FeishuBotRepo {
       `SELECT o.id, o.workspace_id, o.binding_id, o.chat_id, o.thread_id,
               o.external_message_id, o.decision_id, o.degraded
        FROM multiremi_feishu_bot_outbound_deliveries o
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         AND b.workspace_id = o.workspace_id AND b.issue_id = o.decision_issue_id
        WHERE o.kind = 'decision_card' AND o.decision_id = ?
+         AND o.workspace_id = ? AND o.decision_issue_id = ?
          AND o.degraded IS NULL
        ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-    ).get(decision.id) as Row | null;
+    ).get(decision.id, decision.workspaceId, decision.issueId) as Row | null;
     // Nothing to rewrite when the card never left the outbox, was skipped, or
     // went out as text: a degraded decision has no card on screen, and editing
     // the text would replace the question with a receipt.
@@ -1738,10 +1751,13 @@ export class FeishuBotRepo {
       const card = this.ctx.db.query(
         `SELECT o.binding_id, o.chat_id, o.thread_id, o.reply_to_message_id, o.interaction_open_id
          FROM multiremi_feishu_bot_outbound_deliveries o
+         JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+           AND b.workspace_id = o.workspace_id AND b.issue_id = o.decision_issue_id
          WHERE o.kind = 'decision_card' AND o.decision_id = ?
+           AND o.workspace_id = ? AND o.decision_issue_id = ?
            AND o.status = 'sent' AND o.external_message_id IS NOT NULL AND o.degraded IS NULL
          ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-      ).get(decision.id) as Row | null;
+      ).get(decision.id, workspaceId, decision.issueId) as Row | null;
       if (!card) continue;
       // Every check that could skip this row has passed, so the one-shot slot
       // is spent last: running the CAS earlier would burn the nudge on a row
@@ -1807,6 +1823,11 @@ export class FeishuBotRepo {
               decision.issue_id
        FROM multiremi_feishu_bot_outbound_deliveries o
        JOIN multiremi_issue_decisions decision ON decision.id = o.decision_id
+         AND decision.workspace_id = o.workspace_id AND decision.issue_id = o.decision_issue_id
+       JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
+       JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
+       JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
+         AND b.workspace_id = o.workspace_id AND b.issue_id = decision.issue_id
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.status = 'sent'
          AND o.decision_id IS NOT NULL AND o.external_message_id IS NOT NULL
          AND o.interaction_open_id IS NOT NULL AND o.degraded IS NULL
@@ -1929,9 +1950,10 @@ export class FeishuBotRepo {
        FROM multiremi_feishu_bot_outbound_deliveries o
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id AND b.workspace_id = o.workspace_id
        WHERE o.workspace_id = ? AND o.kind = 'decision_card' AND o.decision_id = ?
+         AND o.decision_issue_id = ? AND b.issue_id = o.decision_issue_id
          AND o.degraded IS NULL
        ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
-    ).get(workspaceId, decision.id) as Row | null;
+    ).get(workspaceId, decision.id, decision.issueId) as Row | null;
     if (!row) return null;
     return {
       decision,
@@ -2213,8 +2235,12 @@ export class FeishuBotRepo {
     // A decision lane names its Issue directly: it has no binding of its own
     // reason to resolve, and the asking Task column it would otherwise fall
     // back to is NULL for these rows (MUL-412).
-    const decisionIssueId = this.issueIdInWorkspace(workspaceId, row.decision_issue_id);
-    if (decisionIssueId) return decisionIssueId;
+    const decisionId = cleanOptionalString(row.decision_id);
+    if (decisionId) {
+      const decision = this.ctx.issues().getIssueDecisionAnywhere(decisionId);
+      return decision?.workspaceId === workspaceId && decision.issueId === row.decision_issue_id
+        ? decision.issueId : null;
+    }
     const direct = this.ctx.db.query(
       `SELECT issue_id FROM multiremi_feishu_bot_chat_bindings WHERE id = ? AND workspace_id = ?`,
     ).get(String(row.binding_id), workspaceId) as Row | null;
@@ -2518,6 +2544,14 @@ export class FeishuBotRepo {
          JOIN multiremi_feishu_bot_chat_bindings b ON b.id = o.binding_id
          WHERE o.workspace_id = ? AND b.app_id = ?
            ${decisionFilter}
+           AND (o.decision_id IS NULL OR EXISTS (
+             SELECT 1 FROM multiremi_issue_decisions decision
+             JOIN multiremi_issues target ON target.id = decision.issue_id AND target.workspace_id = decision.workspace_id
+             JOIN multiremi_issues source ON source.id = decision.source_issue_id AND source.workspace_id = decision.workspace_id
+             WHERE decision.id = o.decision_id AND decision.workspace_id = o.workspace_id
+               AND decision.issue_id = o.decision_issue_id
+               AND b.workspace_id = o.workspace_id AND b.issue_id = decision.issue_id
+           ))
            AND NOT EXISTS (
              SELECT 1 FROM multiremi_feishu_bot_round_pushes r
              WHERE r.wake_task_id = o.task_id AND r.binding_id = b.id

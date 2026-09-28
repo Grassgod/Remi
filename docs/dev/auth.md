@@ -33,6 +33,8 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 [IssuesRepo](../../packages/server/src/store/repos/issues-repo.ts)的父子和依赖内容读取只认可同工作区关系，依赖行自身的 `workspace_id` 也必须与两端一致。旧的跨工作区关系在详情、列表、收件箱、分享、决策、父单状态推导和依赖自动开工中视为不存在；子单序列化仍保留不透明的 `parent_issue_id`，不附带对方标题、key 或状态。旧的跨工作区子单因此不再阻止父单结束；本规则不修改或迁移存量关系。
 
+飞书 Issue 决策卡片沿用同一限定：决策行、来源 Issue 和目标 Issue 的工作区必须一致。按决策 ID 读取、卡片入队、回执补丁、消息领取、重启恢复和提醒均过滤失效关系；回调包括终态回放都返回 404；目标 Issue 已移出时，bot host 的 daemon 访问本工作区记录的该决策同样返回 404，其他外部 Issue 仍返回 403。已有出站行不迁移，领取时过滤且不阻塞后面的有效消息；旧消息已发到飞书时无法撤回其既有内容。回执与提醒还要求原始卡片、绑定和目标 Issue 属于决策工作区。
+
 移动检查使用原始关系列。有父单、子单或任意类型依赖的 Issue 均返回 `409 workspace_move_blocked`；必须先单独清除父关系、移除子关系或删除依赖，再移动。即使请求同时清父单和移动，也仍拒绝。`relations.parent`、`children` 和 `dependencies` 只列同工作区的 key，外部关系仅计入 `relations.hidden`。无关系 Issue 仍可移动；[路由](../../packages/server/src/api/routers/issues.ts)先检查来源成员资格，再检查目标成员资格，无权限返回 404。空目标返回 404；`null` 沿用 store 的 `local` 目标规则。`remi issue batch-update --data` 使用同样的规则，CLI 保留该错误码。
 
 批量在写入前预检全部 Issue，发现关系冲突则整批拒绝并返回 `issue_ids`。逐行写入仍各自提交；预检后并发新增关系可能使后续行拒绝，先前行不会回滚。该并发边界不允许形成跨工作区关系，也不代表批量具备整批事务原子性。
@@ -58,6 +60,7 @@ Runtime 的 Codex / Claude Code 自定义连接 GET/PUT 使用 Runtime 可见性
 | Bearer/Cookie、task 权限、daemon 边界与迁移例外 | [multiremi-api-auth.test.ts](../../tests/unit/multiremi/multiremi-api-auth.test.ts) |
 | Agent 操作、私有资源和配置脱敏 | [multiremi-store-agent-authz.test.ts](../../tests/unit/multiremi/multiremi-store-agent-authz.test.ts) |
 | Issue 移动、存量父子/依赖隔离、单工作区 PAT 和 CLI | [multiremi-issue-workspace-boundaries.test.ts](../../tests/unit/multiremi/multiremi-issue-workspace-boundaries.test.ts) |
+| 飞书 Issue 决策卡片、旧跨工作区来源/目标、终态回调与出站隔离 | [multiremi-issue-decision-card-workspace.test.ts](../../tests/unit/multiremi/multiremi-issue-decision-card-workspace.test.ts) |
 | 关系写入锁序、锁后重读及 PG 双连接竞态 | [multiremi-issue-relation-locks.test.ts](../../tests/unit/multiremi/multiremi-issue-relation-locks.test.ts)、[读取限定架构检查](../../tests/arch/issue-relation-reads-workspace-scoped.test.ts) |
 | 生产配置缺项、本地模式与配置脱敏 | [startup-env.test.ts](../../tests/unit/multiremi/startup-env.test.ts) |
 

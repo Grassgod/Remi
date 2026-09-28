@@ -1,7 +1,7 @@
 // Pinned shortcuts, issue/project search, issue subscribers and the member inbox.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -406,12 +406,17 @@ describe("Multiremi API — pins, search, and inbox", () => {
     };
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
+    // MUL-476 refuses this move (a PAT without access to B gets 404; with it,
+    // the child would make it 409 workspace_move_blocked), so the parent can
+    // only be in B as a legacy row from before that rule, which is not migrated.
     const moved = await app.request(`/api/issues/${parent.id}?workspace_id=${workspaceA.id}`, {
       method: "PATCH",
       headers,
       body: JSON.stringify({ workspace_id: workspaceB.id }),
     });
-    expect(moved.status).toBe(200);
+    expect(moved.status).toBe(404);
+    expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceA.id);
+    db!.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [workspaceB.id, parent.id]);
     expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceB.id);
     expect(store.getIssue(child.id)?.workspaceId).toBe(workspaceA.id);
 

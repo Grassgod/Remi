@@ -524,13 +524,32 @@ export class IssuesRepo {
    * A decision by its own id (MUL-412). The Feishu decision-card lane is keyed
    * by decision id alone — a bot host is told the decision, not the parent
    * Issue, and resolving the Issue from the row is what makes the workspace
-   * check possible.
+   * check possible. Same relation rule as {@link getIssueDecision} (MUL-476):
+   * a row whose source or target Issue left its workspace does not exist.
    */
   getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
     const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_decisions WHERE id = ?",
+      `SELECT d.* FROM multiremi_issue_decisions d
+       JOIN multiremi_issues target ON target.id = d.issue_id AND target.workspace_id = d.workspace_id
+       JOIN multiremi_issues source ON source.id = d.source_issue_id AND source.workspace_id = d.workspace_id
+       WHERE d.id = ?`,
     ).get(decisionId) as Row | null;
     return row ? toIssueDecision(row) : null;
+  }
+
+  /**
+   * Whether `workspaceId` recorded the decision row `decisionId` on `issueId`,
+   * wherever that Issue lives now (MUL-476). Deliberately unscoped and
+   * content-free: the daemon card transport asks it only after the Issue guard
+   * has refused `issueId` as foreign to that same workspace, and that pair is
+   * exactly a decision whose target left the workspace that recorded it — a
+   * decision that does not exist, so the callback gets 404 instead of 403.
+   */
+  isIssueDecisionRecordedInWorkspace(workspaceId: string, issueId: string, decisionId: string): boolean {
+    return this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_issue_decisions
+       WHERE id = ? AND issue_id = ? AND workspace_id = ?`,
+    ).get(decisionId, issueId, workspaceId) != null;
   }
 
   countPendingIssueDecisions(issueId: string): number {
