@@ -53,7 +53,11 @@ the configured fallback even when a candidate Runtime supported it.
    structured error kinds, then uses text. Model unavailability precedes auth;
    HTTP status matching excludes request IDs and UUID fragments.
    Availability text must describe the model itself, not an unsupported input
-   feature; `invalid_request_error` is recognized even without an HTTP code.
+   feature. Generic `invalid_request_error` wrappers classify as invalid input
+   only with no HTTP error status or exclusively 400, after specific provider
+   causes such as authentication, quota, rate limits and server errors.
+   Other HTTP error statuses retain their own classification. Code-less input
+   failures remain supported; context-overflow markers are unchanged.
 3. For bridges without negotiated support, the daemon checks only the final
    emitted message in a naturally completed turn. It must be a short text
    message beginning with a known Codex transport error prefix and classify as

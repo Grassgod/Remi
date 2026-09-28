@@ -88,6 +88,36 @@ describe("Multiremi task failure classification", () => {
     expect(classifyDaemonTaskFailure("codex", error)).toBe(TaskFailureReason.ApiInvalidRequest);
   });
 
+  describe.each(["generic", "codex", "claude"])("invalid-request wrapper precedence (%s)", (provider) => {
+    it.each([
+      ['unexpected status 401: {"type":"invalid_request_error","code":"invalid_api_key"}', TaskFailureReason.AgentProviderAuthOrAccess],
+      ["API Error: 403 invalid_request_error", TaskFailureReason.AgentProviderAuthOrAccess],
+      ["unexpected status 429 invalid_request_error", TaskFailureReason.AgentProviderCapacityOrRateLimit],
+      ["unexpected status 502 invalid_request_error", TaskFailureReason.AgentProviderServerError],
+      ["Your credit balance is too low (invalid_request_error)", TaskFailureReason.AgentProviderQuotaLimit],
+      ["API Error: 400 invalid_request_error: model gpt-6: image input is not supported", TaskFailureReason.ApiInvalidRequest],
+      ["invalid_request_error: model gpt-6: image input is not supported", TaskFailureReason.ApiInvalidRequest],
+      ["unexpected status 402 invalid_request_error", TaskFailureReason.AgentProviderQuotaLimit],
+      ["unexpected status 404 invalid_request_error", TaskFailureReason.AgentModelNotFoundOrUnavailable],
+      ["unexpected status 529 invalid_request_error", TaskFailureReason.AgentProviderCapacityOrRateLimit],
+      ["invalid_request_error: invalid api key", TaskFailureReason.AgentProviderAuthOrAccess],
+      ["invalid_request_error: no available accounts", TaskFailureReason.AgentProviderNoAvailableAccount],
+      ["invalid_request_error: rate limit reached", TaskFailureReason.AgentProviderCapacityOrRateLimit],
+      ["invalid_request_error: service unavailable", TaskFailureReason.AgentProviderServerError],
+      ["invalid_request_error: stream disconnected", TaskFailureReason.AgentProviderNetwork],
+      ["API Error: 400, upstream HTTP 401: invalid_request_error", TaskFailureReason.AgentProviderAuthOrAccess],
+      ["API Error: 400, upstream HTTP 502: image input not supported", TaskFailureReason.AgentProviderServerError],
+      ["API Error: 409 invalid_request_error", TaskFailureReason.AgentUnknown],
+      ["invalid_request_error: request id: 502", TaskFailureReason.ApiInvalidRequest],
+      ["audio input not supported", TaskFailureReason.ApiInvalidRequest],
+      ["API Error: 400 invalid_request_error: context_length_exceeded", TaskFailureReason.AgentContextOverflow],
+      ["API Error: 400 invalid_request_error: context window unavailable", TaskFailureReason.ApiInvalidRequest],
+    ])("classifies %s", (error, reason) => {
+      expect(provider === "generic" ? classifyTaskFailure(error) : classifyDaemonTaskFailure(provider, error)).toBe(reason);
+      expect(classifyPoisonedError(error)).toBe(reason === TaskFailureReason.ApiInvalidRequest ? reason : null);
+    });
+  });
+
   it.each(["401", "402", "403", "429", "529", "512"])("does not read HTTP %s from request identifiers", (code) => {
     expect(classifyTaskFailure(`request failed, request id: 0b3f-${code}e-abcd`)).toBe(TaskFailureReason.AgentUnknown);
     expect(classifyTaskFailure(`request failed a${code}b`)).toBe(TaskFailureReason.AgentUnknown);

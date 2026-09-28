@@ -64,6 +64,7 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   }
 
   if (
+    statuses.includes(404) ||
     // Match availability of the model itself, not "model X: image input is
     // not supported" or another unsupported request feature.
     /\bmodel\s+(?:["']?[^\s:"',()[\]{}]+["']?\s+)?(?:is\s+)?(?:not found|not supported|not available)\b/.test(lower) ||
@@ -72,8 +73,6 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   ) {
     return TaskFailureReason.AgentModelNotFoundOrUnavailable;
   }
-
-  if (classifyPoisonedError(lower)) return TaskFailureReason.ApiInvalidRequest;
 
   if (statuses.some((status) => status === 401 || status === 403) || containsAny(
     lower,
@@ -137,6 +136,15 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     return TaskFailureReason.AgentProviderNetwork;
   }
 
+  // Gateways can wrap provider failures in invalid_request_error. Only a 400
+  // or a code-less input error may reach this rule, after specific causes.
+  if (statuses.every((status) => status === 400) && (
+    lower.includes("invalid_request_error") ||
+    /\b(?:image|audio|video|text) input\s+(?:is\s+)?not supported\b/.test(lower)
+  )) {
+    return TaskFailureReason.ApiInvalidRequest;
+  }
+
   if (containsAny(lower, "returned empty output", "returned no parseable output")) {
     return TaskFailureReason.AgentEmptyOrUnparseableOutput;
   }
@@ -164,10 +172,9 @@ export function classifyPoisonedOutput(output: string): TaskFailureReasonValue |
 }
 
 export function classifyPoisonedError(error: string): TaskFailureReasonValue | null {
-  const lower = String(error ?? "").toLowerCase();
-  if (lower.includes("invalid_request_error")
-    || /\b(?:image|audio|video|text) input\s+(?:is\s+)?not supported\b/.test(lower)) return TaskFailureReason.ApiInvalidRequest;
-  return null;
+  // The daemon's early invalid-request check must share the full precedence.
+  const reason = classifyTaskFailure(error);
+  return reason === TaskFailureReason.ApiInvalidRequest ? reason : null;
 }
 
 export function classifyResumeUnsafeTimeout(provider: string, error: string): TaskFailureReasonValue | null {
