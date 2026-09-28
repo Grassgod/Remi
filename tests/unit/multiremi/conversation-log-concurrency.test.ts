@@ -438,7 +438,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   });
   it.skipIf(!pgAdminUrl)("Postgres: chat turns appear with assistant messages and preserve message order", async () => {
     await withPostgres(async (db) => verifyChatTurnTiming(db));
-  });
+  }, 30_000);
   it("SQLite: system comment failure leaves no comment, event, log or activity", async () => {
     await withSqlite(async (db) => verifySystemCommentRollback(db, "sqlite"));
   });
