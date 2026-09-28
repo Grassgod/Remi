@@ -275,3 +275,131 @@ describe("MUL-436 regression 6: sparse cold warm-up", () => {
     expect(out.order).toEqual(["gap:0,2", "data:3,4", "gap:4,5", "data:6,7", "gap:7,10"]);
   });
 });
+
+class ReentrantSink extends RecordingSink {
+  onSend: ((frames: readonly HubFrame[]) => void) | null = null;
+  override send(frames: readonly HubFrame[]): void {
+    super.send(frames);
+    this.onSend?.(frames);
+  }
+}
+
+describe("MUL-436 regression 2a: synchronous patch reentry", () => {
+  it("delivers the patch queued synchronously while sending its base", () => {
+    const hub = make(), out = new ReentrantSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    out.onSend = (frames) => {
+      if (!frames.some((frame) => frame.kind === "entry" && frame.seq === 1)) return;
+      out.onSend = null;
+      patch(hub, 1);
+    };
+    row(hub, 1);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    expect(out.frames.map((frame) => frame.kind)).toEqual(["entry", "patch"]);
+    expect(out.frames.at(-1)?.payload).toMatchObject({ revision: 2, fields: { body_md: "edited" } });
+    expect(out.gaps).toEqual([]);
+  });
+
+  it("delivers a reentrant patch once to both consumers holding its base", () => {
+    const hub = make(), first = new ReentrantSink(), second = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, first);
+    hub.subscribeWithSink("log:s", 0, second);
+    row(hub, 1); hub.flushNow();
+    first.onSend = () => {
+      first.onSend = null;
+      patch(hub, 1);
+    };
+    row(hub, 2);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    for (const out of [first, second]) {
+      expect(out.frames.map((frame) => frame.kind)).toEqual(["entry", "entry", "patch"]);
+      expect(out.frames.at(-1)).toMatchObject({ seq: 1, payload: { revision: 2 } });
+      expect(out.gaps).toEqual([]);
+    }
+  });
+
+  it("preserves both fields when a pending revision triggers a newer patch during send", () => {
+    const hub = make(), first = new ReentrantSink(), second = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, first);
+    hub.subscribeWithSink("log:s", 0, second);
+    row(hub, 1); hub.flushNow();
+    first.onSend = () => {
+      first.onSend = null;
+      patch(hub, 1, { metadata: { resolved: true } }, 3);
+    };
+    patch(hub, 1, { body_md: "edited" }, 2);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    for (const out of [first, second]) {
+      const updates = out.frames.filter((frame) => frame.kind === "patch")
+        .map((frame) => frame.payload as ConversationLogPatch);
+      expect(updates.map((update) => update.revision)).toEqual([2, 3]);
+      expect(Object.assign({}, ...updates.map((update) => update.fields))).toEqual({
+        body_md: "edited", metadata: { resolved: true },
+      });
+      expect(out.gaps).toEqual([]);
+    }
+  });
+
+  it("retains a reentrant patch for a key already handled in this flush", () => {
+    const hub = make(), first = new RecordingSink(), second = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, first);
+    hub.subscribeWithSink("log:s", 0, second);
+    row(hub, 1); hub.flushNow();
+    const trigger = new ReentrantSink();
+    hub.subscribeWithSink("log:trigger", 0, trigger); hub.flushNow();
+    trigger.onSend = () => {
+      trigger.onSend = null;
+      patch(hub, 1);
+    };
+    row(hub, 2);
+    hub.onEntry("trigger", { session_id: "trigger", seq: 1, revision: 1, kind: "message", visibility: "shown" });
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    for (const out of [first, second]) {
+      expect(out.frames.filter((frame) => frame.kind === "patch")).toEqual([{
+        seq: 1, kind: "patch", payload: { session_id: "s", target_seq: 1, revision: 2, fields: { body_md: "edited" } },
+      }]);
+      expect(out.gaps).toEqual([]);
+    }
+  });
+
+  it("merges a reentrant patch into a later key's pending revision without duplicating it", () => {
+    const hub = make(), first = new RecordingSink(), second = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, first);
+    hub.subscribeWithSink("log:s", 0, second);
+    row(hub, 1); hub.flushNow();
+    const trigger = new ReentrantSink();
+    hub.subscribeWithSink("log:trigger", 0, trigger);
+    trigger.onSend = () => {
+      trigger.onSend = null;
+      patch(hub, 1, { metadata: { resolved: true } }, 3);
+    };
+    hub.onEntry("trigger", { session_id: "trigger", seq: 1, revision: 1, kind: "message", visibility: "shown" });
+    patch(hub, 1, { body_md: "edited" }, 2);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    for (const out of [first, second]) {
+      expect(out.frames.filter((frame) => frame.kind === "patch")).toEqual([{
+        seq: 1, kind: "patch", payload: {
+          session_id: "s", target_seq: 1, revision: 3,
+          fields: { body_md: "edited", metadata: { resolved: true } },
+        },
+      }]);
+      expect(out.gaps).toEqual([]);
+    }
+  });
+
+  it("reports a reentrant edit as a gap to a consumer without the base", () => {
+    const hub = make(), owner = new ReentrantSink(), baseless = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, owner);
+    row(hub, 1); hub.flushNow();
+    hub.subscribeWithSink("log:s", 1, baseless);
+    owner.onSend = () => {
+      owner.onSend = null;
+      patch(hub, 1);
+    };
+    row(hub, 2);
+    hub.flushNow(); hub.flushNow(); hub.flushNow();
+    expect(owner.frames.filter((frame) => frame.kind === "patch")).toHaveLength(1);
+    expect(baseless.frames.map((frame) => frame.kind)).toEqual(["entry"]);
+    expect(baseless.gaps).toEqual([{ from: 1, to: 1 }]);
+  });
+});

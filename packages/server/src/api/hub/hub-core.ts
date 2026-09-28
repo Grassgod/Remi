@@ -920,11 +920,13 @@ export class HubImpl implements ObservableLiveHub {
     const keys = [...this.flushDirty];
     this.flushDirty = new Set();
     for (const key of keys) {
+      const changes = this.liveChanges.get(key);
+      // Detach before callbacks: reentrant patches must enter a fresh queue.
+      this.liveChanges.delete(key);
       const stream = this.ring.get(key);
       const set = this.subscribers.get(key);
       if (!stream || !set) continue;
       this.ring.touch(stream);
-      const changes = this.liveChanges.get(key);
       for (const subscriber of set) {
         if (!subscriber.active) continue;
         if (changes) {
@@ -949,7 +951,6 @@ export class HubImpl implements ObservableLiveHub {
         if (more) this.flushDirty.add(key);
       }
     }
-    for (const key of keys) this.liveChanges.delete(key);
     if (this.flushDirty.size > 0) {
       this.flushScheduled = false;
       this.scheduleFlushFor([...this.flushDirty][0]!);
