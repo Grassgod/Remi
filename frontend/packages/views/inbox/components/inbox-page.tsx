@@ -556,7 +556,7 @@ export function InboxPage() {
                 isSelected={entry.items.some((item) => inboxItemSelectionKey(item) === selectedKey)}
                 onClick={() => handleSelect(entry.item)}
                 onItemClick={handleSelect}
-                onArchive={() => handleArchive(inboxDisplayEntryIds(entry))}
+                onArchive={(itemsToArchive) => handleArchive(itemsToArchive.map((item) => item.id))}
               />
             ))}
           </section>

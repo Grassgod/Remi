@@ -30,6 +30,8 @@
     "mark_group_read": "本组标为已读",
     "mark_done_tooltip": "标为已完成",
     "archive_tooltip": "归档",
+    "expand_group": "展开通知",
+    "collapse_group": "收起通知",
     "feishu_source": "飞书消息",
     "time": {
       "just_now": "刚刚",
@@ -73,7 +75,9 @@
     "feishu_message_notification": "飞书消息",
     "feishu_reply_draft": "飞书回复草稿",
     "feishu_issue_proposal": "飞书 Issue 提议",
-    "feishu_ingest_connection_alert": "飞书拉取告警"
+    "feishu_ingest_connection_alert": "飞书拉取告警",
+    "child_issue_terminal": "子单状态",
+    "decision_requested": "待你决定"
   },
   "labels": {
     "set_status_to": "状态设为",

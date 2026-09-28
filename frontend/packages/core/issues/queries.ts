@@ -21,6 +21,7 @@ import { BOARD_STATUSES } from "./config";
 export interface IssueSortParam {
   sort_by?: ListIssuesParams["sort_by"];
   sort_direction?: ListIssuesParams["sort_direction"];
+  top_level_only?: boolean;
 }
 
 export const issueKeys = {
@@ -116,7 +117,7 @@ export const issueKeys = {
 
 export type MyIssuesFilter = Pick<
   ListIssuesParams,
-  "assignee_id" | "assignee_ids" | "creator_id" | "project_id" | "involves_user_id"
+  "assignee_id" | "assignee_ids" | "creator_id" | "project_id" | "involves_user_id" | "top_level_only"
 >;
 
 export type AssigneeGroupedIssuesFilter = Omit<
@@ -210,11 +211,11 @@ async function fetchFirstPages(filter: MyIssuesFilter = {}, sort?: IssueSortPara
  * total — pagination on the "All" scope is out of scope; the first
  * 50-per-status × 3 widening (deduped) is what the page renders.
  */
-async function fetchAllMyFirstPages(userId: string, sort?: IssueSortParam): Promise<ListIssuesCache> {
+async function fetchAllMyFirstPages(userId: string, sort?: IssueSortParam, topLevelOnly = false): Promise<ListIssuesCache> {
   const [byAssignee, byCreator, byInvolves] = await Promise.all([
-    fetchFirstPages({ assignee_id: userId }, sort),
-    fetchFirstPages({ creator_id: userId }, sort),
-    fetchFirstPages({ involves_user_id: userId }, sort),
+    fetchFirstPages({ assignee_id: userId, top_level_only: topLevelOnly }, sort),
+    fetchFirstPages({ creator_id: userId, top_level_only: topLevelOnly }, sort),
+    fetchFirstPages({ involves_user_id: userId, top_level_only: topLevelOnly }, sort),
   ]);
   const byStatus: ListIssuesCache["byStatus"] = {};
   for (const status of PAGINATED_STATUSES) {
@@ -404,7 +405,7 @@ export function myIssueListOptions(
     queryKey: issueKeys.myListSorted(wsId, scope, filter, sort),
     queryFn: () =>
       scope === "all" && userId
-        ? fetchAllMyFirstPages(userId, sort)
+        ? fetchAllMyFirstPages(userId, sort, filter.top_level_only)
         : fetchFirstPages(filter, sort),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
@@ -524,9 +525,9 @@ export function childIssueProgressOptions(
     queryFn: () => api.getChildIssueProgress(),
     enabled: options.enabled ?? true,
     select: (data) => {
-      const map = new Map<string, { done: number; total: number }>();
+      const map = new Map<string, { done: number; total: number; cancelled: number; blocked: number; waiting: number; active: number }>();
       for (const entry of data.progress) {
-        map.set(entry.parent_issue_id, { done: entry.done, total: entry.total });
+        map.set(entry.parentIssueId, entry);
       }
       return map;
     },

@@ -11,6 +11,7 @@ import {
   nullableString,
   parseJson,
   resolveOptionalStringField,
+  resolveCamelOrSnakeString,
   searchMatch,
   searchRank,
   toJson,
@@ -135,6 +136,13 @@ function parentStatusGuardEnabled(): boolean {
  */
 export type ChildTerminalOutcome = "done" | "failed" | "blocked" | "cancelled";
 
+export type SquadLeaderDelegationDecision =
+  | { ok: true; delegatedFromIssueSessionId: string | null }
+  | { ok: false; reason: "source_not_issue_task" | "source_side_session" | "source_not_squad_leader"
+      | "target_not_squad_member" | "cross_issue_no_lineage" | "self_dispatch" | null };
+
+const DELEGATION_TREE_MAX_DEPTH = 16;
+
 /** `null` for statuses that are not a child ending. */
 function childTerminalOutcome(status: string): ChildTerminalOutcome | null {
   switch (status) {
@@ -232,11 +240,11 @@ function emptyChildIssueProgress(parentIssueId: string): MultiremiIssueChildProg
  * subquery mirrors {@link IssuesRepo.listUnmetPrerequisites} for the whole
  * workspace in one statement instead of hydrating every child.
  */
-const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
-              SUM(CASE WHEN status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
-              SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
-              SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
-              SUM(CASE WHEN status = 'backlog' AND id IN (
+const CHILD_PROGRESS_SELECT = `SELECT child.parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN child.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END) AS done,
+              SUM(CASE WHEN child.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+              SUM(CASE WHEN child.status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+              SUM(CASE WHEN child.status = 'backlog' AND child.id IN (
                     SELECT CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END
                     FROM multiremi_issue_dependencies d
                     JOIN multiremi_issues prereq ON prereq.id = CASE
@@ -245,17 +253,11 @@ const CHILD_PROGRESS_SELECT = `SELECT parent_issue_id, COUNT(*) AS total,
                     END
                     WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
                   ) THEN 1 ELSE 0 END) AS waiting,
-              SUM(CASE WHEN status NOT IN ('done', 'completed', 'closed', 'cancelled', 'blocked')
-                        AND NOT (status = 'backlog' AND id IN (
-                          SELECT CASE WHEN d.type = 'blocks' THEN d.depends_on_issue_id ELSE d.issue_id END
-                          FROM multiremi_issue_dependencies d
-                          JOIN multiremi_issues prereq ON prereq.id = CASE
-                            WHEN d.type = 'blocks' THEN d.issue_id
-                            ELSE d.depends_on_issue_id
-                          END
-                          WHERE d.type IN ('blocked_by', 'blocks') AND prereq.status <> 'done'
-                        )) THEN 1 ELSE 0 END) AS active
-       FROM multiremi_issues`;
+              SUM(CASE WHEN child.status IN ('todo', 'in_progress', 'in_review') THEN 1 ELSE 0 END) AS active
+       FROM multiremi_issues child
+       JOIN multiremi_issues parent
+         ON parent.id = child.parent_issue_id
+        AND parent.workspace_id = child.workspace_id`;
 
 /** `result` is stored JSON; "has a result" means non-empty output text. */
 function storedTaskResultHasOutput(value: unknown): boolean {
@@ -1538,9 +1540,9 @@ export class IssuesRepo {
   listChildIssueProgress(workspaceId = "local"): MultiremiIssueChildProgress[] {
     const rows = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE workspace_id = ? AND parent_issue_id IS NOT NULL
-       GROUP BY parent_issue_id
-       ORDER BY parent_issue_id ASC`,
+       WHERE child.workspace_id = ? AND child.parent_issue_id IS NOT NULL
+       GROUP BY child.parent_issue_id
+       ORDER BY child.parent_issue_id ASC`,
     ).all(workspaceId) as Row[];
     return rows.map(toChildIssueProgress);
   }
@@ -1548,8 +1550,8 @@ export class IssuesRepo {
   getChildIssueProgress(parentIssueId: string): MultiremiIssueChildProgress {
     const row = this.ctx.db.query(
       `${CHILD_PROGRESS_SELECT}
-       WHERE parent_issue_id = ?
-       GROUP BY parent_issue_id`,
+       WHERE child.parent_issue_id = ?
+       GROUP BY child.parent_issue_id`,
     ).get(parentIssueId) as Row | null;
     return row ? toChildIssueProgress(row) : emptyChildIssueProgress(parentIssueId);
   }
@@ -2013,7 +2015,9 @@ export class IssuesRepo {
         dependencyId: id,
         dependsOnIssueId,
         type,
-        ...sourceTaskActivityData(activity.sourceTaskId ?? input.parentTaskId ?? input.parent_task_id),
+        ...sourceTaskActivityData(
+          activity.sourceTaskId ?? resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
+        ),
       },
     }, deferredEvents);
     const stored = this.getIssueDependency(id)!;
@@ -2375,7 +2379,7 @@ export class IssuesRepo {
       cancelledTasks = this.unassignIssueWithinTransaction(id, {
         actorType: input.actorType ?? "system",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents);
     }
     if (forceStartAttempt) {
@@ -2385,7 +2389,7 @@ export class IssuesRepo {
         ownerId: nextAssigneeId,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, collector, deferredEvents);
     }
     const next = this.getIssue(id)!;
@@ -2395,7 +2399,7 @@ export class IssuesRepo {
       previousStatus: current.status,
       actorType: "system",
       actorId: null,
-      automationSourceTaskId: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+      automationSourceTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
     });
     // MUL-400 S1c (QA round 1): every audit row below commits with the status
     // write above. The events go on the caller's queue, so a rollback leaves
@@ -2428,7 +2432,7 @@ export class IssuesRepo {
           previous_status: current.status,
           openChildren: this.countOpenChildIssues(id),
           open_children: this.countOpenChildIssues(id),
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         },
       }, deferredEvents);
     }
@@ -2501,7 +2505,7 @@ export class IssuesRepo {
       this.notifyChildStatusChange(
         previous,
         updated,
-        cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
         collector,
       );
       // MUL-400 E1 re-derivation for re-parenting: moving a child away is a child
@@ -2653,7 +2657,7 @@ export class IssuesRepo {
         assignee_type: issue.assigneeType,
         assigneeId: issue.assigneeId,
         assignee_id: issue.assigneeId,
-        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id ?? null),
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
       },
     }, deferredEvents);
   }
@@ -3602,6 +3606,7 @@ export class IssuesRepo {
       childStatus: child.status,
       readinessLines,
     });
+    const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
     const comment = this.createSystemIssueCommentWithinTransaction(parent.id, body, {
       type: "child_status_parent_notification",
       childIssueId: child.id,
@@ -3609,7 +3614,7 @@ export class IssuesRepo {
       outcome,
       childStatus: child.status,
       child_status: child.status,
-    }, deferredEvents);
+    }, deferredEvents, null, issueSessionId);
     return { tasks: this.triggerParentAssigneeForChildDone(parent, comment, outcome, parentTaskId, nested, deferredEvents), comment };
   }
 
@@ -3869,7 +3874,7 @@ export class IssuesRepo {
     // Postgres, which has no savepoints.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const issueSessionId = this.ctx.issueSessions().getOrCreateDefaultIssueSession(parent.id).id;
+      const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
       const queued = this.findQueuedTaskForIssueAndAgent(parent.id, agent.id, issueSessionId);
       if (queued) {
         const appended = appendChildStatusReport(queued.prompt, {
@@ -3916,6 +3921,7 @@ export class IssuesRepo {
         prompt: childDoneParentTaskPrompt(systemComment, outcome),
         parentTaskId,
         preserveIssueStatus: true,
+        wakeSource: "child_status",
       }, nested, deferredEvents);
       this.ctx.appendIssueActivity(parent.id, {
         actorType: "system",
@@ -3938,6 +3944,16 @@ export class IssuesRepo {
       }, deferredEvents);
       return [task];
     })();
+  }
+
+  private childDoneReturnSessionId(parentIssueId: string, triggeringTaskId: string | null): string {
+    const triggering = triggeringTaskId ? this.ctx.tasks().getTask(triggeringTaskId) : null;
+    const delegatedSessionId = triggering?.delegatedFromIssueSessionId;
+    const delegatedSession = delegatedSessionId
+      ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
+    return delegatedSession?.issueId === parentIssueId
+      ? delegatedSession.id
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -4002,7 +4018,7 @@ export class IssuesRepo {
       const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents))();
       this.ctx.emitCommitEvents(deferredEvents);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
@@ -4062,14 +4078,14 @@ export class IssuesRepo {
           taskId: null,
           task_id: null,
           deferred: true,
-          ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
           cancelled: 0,
         },
       });
       this.recordDependencyDispatchSkipped(
         { ...current, assigneeType, assigneeId },
         unmetDependencies,
-        { actorType, actorId, parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null },
+        { actorType, actorId, parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id") },
       );
       if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
       return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
@@ -4097,7 +4113,8 @@ export class IssuesRepo {
         issueId: id,
         workspaceId: current.workspaceId,
         prompt: input.prompt?.trim() || current.title,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        // Same authoritative-camelCase read as the other task-creation paths.
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       });
     }
     if (assigneeType === "member") {
@@ -4130,7 +4147,7 @@ export class IssuesRepo {
         to_id: assigneeId,
         taskId: task?.id ?? null,
         task_id: task?.id ?? null,
-        ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id),
+        ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         cancelled,
       },
     });
@@ -4170,7 +4187,7 @@ export class IssuesRepo {
         unmet,
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,
-        parentTaskId: input.parentTaskId ?? input.parent_task_id ?? null,
+        parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents);
       return;
     }
@@ -5188,8 +5205,7 @@ export class IssuesRepo {
   getInboxItem(id: string): MultiremiInboxItem | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
     if (!row) return null;
-    const issueId = nullableString(row.issue_id);
-    return toInboxItem(row, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row])[0] ?? null;
   }
 
   listInboxItems(memberId?: string | null, workspaceId?: string): MultiremiInboxItem[] {
@@ -5316,8 +5332,7 @@ export class IssuesRepo {
     if (!existing) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   archiveInboxItem(id: string): MultiremiInboxItem {
@@ -5325,8 +5340,7 @@ export class IssuesRepo {
     if (!rowBefore) throw new Error(`Inbox item not found: ${id}`);
     this.ctx.db.run("UPDATE multiremi_inbox_items SET archived = 1, read = 1 WHERE id = ?", [id]);
     const row = this.ctx.db.query("SELECT * FROM multiremi_inbox_items WHERE id = ?").get(id) as Row | null;
-    const issueId = nullableString(row!.issue_id);
-    return toInboxItem(row!, issueId ? this.getIssue(issueId) : null);
+    return this.hydrateInboxRows([row!])[0]!;
   }
 
   countUnreadInboxItems(memberId?: string | null, workspaceId?: string): number {
@@ -5840,22 +5854,61 @@ export class IssuesRepo {
   }
 
   private hydrateInboxRows(rows: Row[]): MultiremiInboxItem[] {
-    const issueIds = [...new Set(rows.map((row) => nullableString(row.issue_id)).filter((id): id is string => Boolean(id)))];
-    const issuesById = new Map<string, MultiremiIssue>();
+    const scopedKey = (workspaceId: string, issueId: string) => `${workspaceId}\0${issueId}`;
+    const issueIdsByWorkspace = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const issueId = nullableString(row.issue_id);
+      if (!issueId) continue;
+      const workspaceId = String(row.workspace_id ?? "local");
+      const ids = issueIdsByWorkspace.get(workspaceId) ?? new Set<string>();
+      ids.add(issueId);
+      issueIdsByWorkspace.set(workspaceId, ids);
+    }
+    const issuesByScope = new Map<string, MultiremiIssue>();
     // Keep below SQLite's default bind-variable limit. PostgreSQL benefits from the same bounded queries.
-    for (let offset = 0; offset < issueIds.length; offset += 400) {
-      const chunk = issueIds.slice(offset, offset + 400);
-      const placeholders = chunk.map(() => "?").join(", ");
-      const issueRows = this.ctx.db.query(
-        `SELECT * FROM multiremi_issues WHERE id IN (${placeholders})`,
-      ).all(...chunk) as Row[];
-      for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
-        issuesById.set(issue.id, issue);
+    for (const [workspaceId, issueIds] of issueIdsByWorkspace) {
+      const ids = [...issueIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const issueRows = this.ctx.db.query(
+          `SELECT * FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const issue of this.hydrateIssues(issueRows.map((row) => toIssue(row)))) {
+          issuesByScope.set(scopedKey(workspaceId, issue.id), issue);
+        }
+      }
+    }
+    const parentIdsByWorkspace = new Map<string, Set<string>>();
+    for (const issue of issuesByScope.values()) {
+      if (!issue.parentIssueId) continue;
+      const ids = parentIdsByWorkspace.get(issue.workspaceId) ?? new Set<string>();
+      ids.add(issue.parentIssueId);
+      parentIdsByWorkspace.set(issue.workspaceId, ids);
+    }
+    const parentsByScope = new Map<string, Pick<MultiremiIssue, "id" | "key" | "title">>();
+    for (const [workspaceId, parentIds] of parentIdsByWorkspace) {
+      const ids = [...parentIds];
+      for (let offset = 0; offset < ids.length; offset += 400) {
+        const chunk = ids.slice(offset, offset + 400);
+        const placeholders = chunk.map(() => "?").join(", ");
+        const parentRows = this.ctx.db.query(
+          `SELECT id, issue_key, title FROM multiremi_issues WHERE workspace_id = ? AND id IN (${placeholders})`,
+        ).all(workspaceId, ...chunk) as Row[];
+        for (const row of parentRows) {
+          const id = String(row.id);
+          parentsByScope.set(scopedKey(workspaceId, id), { id, key: String(row.issue_key), title: String(row.title) });
+        }
       }
     }
     return rows.map((row) => {
+      const workspaceId = String(row.workspace_id ?? "local");
       const issueId = nullableString(row.issue_id);
-      return toInboxItem(row, issueId ? issuesById.get(issueId) ?? null : null);
+      const issue = issueId ? issuesByScope.get(scopedKey(workspaceId, issueId)) ?? null : null;
+      const parent = issue?.parentIssueId
+        ? parentsByScope.get(scopedKey(workspaceId, issue.parentIssueId)) ?? null
+        : (row.type === "child_issue_terminal" || row.type === "decision_requested") ? issue : null;
+      return toInboxItem(row, issue, parent);
     });
   }
 
@@ -6090,7 +6143,7 @@ export class IssuesRepo {
         if (wakeup.task) tasks.push(wakeup.task);
         continue;
       }
-      if (comment.authorType === "agent" && !leaderDelegation) {
+      if (comment.authorType === "agent" && !leaderDelegation.ok) {
         this.recordCommentMentionSkipped(
           issue,
           comment,
@@ -6139,10 +6192,10 @@ export class IssuesRepo {
       // keeps one provider conversation and receives a delta; a teammate that
       // has never been delegated to still gets a fresh lane, and `remi task
       // create` remains the explicit way to start an independent one.
-      const continuedDelegation = leaderDelegation
+      const continuedDelegation = leaderDelegation.ok
         ? this.latestDelegatedTaskForAgent(issue.id, agent.id, comment.authorId, comment.issueSessionId)
         : null;
-      const delegationId = leaderDelegation
+      const delegationId = leaderDelegation.ok
         ? continuedDelegation?.delegationId ?? createId("dlg")
         : null;
       let task: MultiremiTask;
@@ -6249,30 +6302,101 @@ export class IssuesRepo {
     return targets;
   }
 
+  /**
+   * MUL-400 E2b: is a task-token dispatch a squad-leader delegation, and where
+   * does its terminal report return?
+   *
+   * The same-issue branch is the pre-E2b rule, byte for byte: the leader's own
+   * task, its own Session, a squad-owned issue, and a teammate. A dispatch to a
+   * *different* issue is the E2b extension: the delegator's issue must still be
+   * the squad's, its task must carry a main Session, and the target issue must
+   * sit in the delegator's own subtree or in the subtree of its parent (child,
+   * grandchild, sibling, sibling's descendant), walking up at most 16 levels
+   * with a visited set. The return always lands on the delegator's Issue
+   * Session, never on the child issue's Session.
+   *
+   * A failed cross-issue judgement returns a reason that the task carries to
+   * its terminal hook, so the silence that hid MUL-383 becomes auditable. The
+   * same-issue branch returns `reason: null`: its behaviour is deliberately
+   * unchanged, so a non-delegating same-issue dispatch stays exactly as quiet as
+   * it is today.
+   */
   isSquadLeaderDelegation(input: {
     issue: MultiremiIssue;
     sourceTask: MultiremiTask | null;
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): SquadLeaderDelegationDecision {
     const { issue, sourceTask, authorAgentId, targetAgentId, issueSessionId } = input;
-    if (
-      !authorAgentId
-      || !sourceTask
-      || sourceTask.agentId !== authorAgentId
-      || sourceTask.issueId !== issue.id
-      || sourceTask.issueSessionId !== issueSessionId
-      || issue.assigneeType !== "squad"
-      || !issue.assigneeId
-    ) return false;
-    const squad = this.ctx.squads().getSquad(issue.assigneeId);
-    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return false;
-    return this.ctx.squads().listSquadMembers(squad.id).some((member) =>
-      member.memberType === "agent"
-      && member.memberId === targetAgentId
-      && member.memberId !== authorAgentId
+    if (!authorAgentId || !sourceTask || sourceTask.agentId !== authorAgentId) {
+      return { ok: false, reason: null };
+    }
+    if (sourceTask.issueId === issue.id) {
+      if (
+        sourceTask.issueSessionId !== issueSessionId
+        || issue.assigneeType !== "squad"
+        || !issue.assigneeId
+      ) return { ok: false, reason: null };
+      const squad = this.ctx.squads().getSquad(issue.assigneeId);
+      if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) return { ok: false, reason: null };
+      const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+        member.memberType === "agent"
+        && member.memberId === targetAgentId
+        && member.memberId !== authorAgentId
+      );
+      if (!teammate) return { ok: false, reason: null };
+      return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId! };
+    }
+
+    if (!sourceTask.issueId || !sourceTask.issueSessionId) {
+      return { ok: false, reason: "source_not_issue_task" };
+    }
+    const sourceIssue = this.getIssue(sourceTask.issueId);
+    if (!sourceIssue || sourceIssue.workspaceId !== issue.workspaceId) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    const sourceSession = this.ctx.issueSessions().getIssueSession(sourceTask.issueSessionId);
+    if (!sourceSession || sourceSession.inheritMode !== "none") {
+      return { ok: false, reason: "source_side_session" };
+    }
+    if (sourceIssue.assigneeType !== "squad" || !sourceIssue.assigneeId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    const squad = this.ctx.squads().getSquad(sourceIssue.assigneeId);
+    if (!squad || squad.archivedAt || squad.leaderId !== authorAgentId) {
+      return { ok: false, reason: "source_not_squad_leader" };
+    }
+    if (targetAgentId === authorAgentId) return { ok: false, reason: "self_dispatch" };
+    const teammate = this.ctx.squads().listSquadMembers(squad.id).some((member) =>
+      member.memberType === "agent" && member.memberId === targetAgentId
     );
+    if (!teammate) return { ok: false, reason: "target_not_squad_member" };
+    if (!this.isIssueInDelegationTree(sourceIssue, issue)) {
+      return { ok: false, reason: "cross_issue_no_lineage" };
+    }
+    return { ok: true, delegatedFromIssueSessionId: sourceTask.issueSessionId };
+  }
+
+  /**
+   * MUL-400 E2b scope rule: the target issue is the delegator's own issue, a
+   * descendant of it, or a descendant of its parent (which covers siblings and
+   * their subtrees). Bounded to 16 hops with a visited set, so a malformed
+   * parent chain cannot loop and a deep tree cannot cost unbounded reads.
+   */
+  private isIssueInDelegationTree(sourceIssue: MultiremiIssue, targetIssue: MultiremiIssue): boolean {
+    if (sourceIssue.id === targetIssue.id) return true;
+    const allowedRoots = new Set<string>([sourceIssue.id]);
+    if (sourceIssue.parentIssueId) allowedRoots.add(sourceIssue.parentIssueId);
+    const seen = new Set<string>();
+    let cursor: string | null = targetIssue.id;
+    for (let depth = 0; cursor && depth <= DELEGATION_TREE_MAX_DEPTH; depth += 1) {
+      if (allowedRoots.has(cursor)) return true;
+      if (seen.has(cursor)) return false;
+      seen.add(cursor);
+      cursor = this.getIssue(cursor)?.parentIssueId ?? null;
+    }
+    return false;
   }
 
   private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {
@@ -6767,12 +6891,13 @@ function issueMatchesListFilter(
   if (projectIds.length && (!issue.projectId || !projectIds.includes(issue.projectId))) return false;
   if (input.includeNoProject && issue.projectId !== null) return false;
   if (input.topLevelOnly ?? input.top_level_only ?? false) {
-    if (issue.parentIssueId !== null) return false;
+    if (issue.parentIssueId !== null && (!parentResolver || parentResolver(issue.parentIssueId) !== null)) return false;
   } else {
     const parentId = input.parentId ?? input.parent_id;
     if (parentId) {
       const parent = parentResolver?.(parentId) ?? parentId;
       if (issue.parentIssueId !== parent) return false;
+      if (parentResolver && issue.parentIssueId && parentResolver(issue.parentIssueId) === null) return false;
     }
   }
   if (input.metadata) {
@@ -6830,11 +6955,19 @@ function buildIssueListWhere(input: ListIssuesInput): { where: string; params: u
   // MUL-400 E3: hierarchy filters. `top_level_only` wins over `parent_id` so a
   // caller can pass both without ambiguity.
   if (input.topLevelOnly ?? input.top_level_only ?? false) {
-    clauses.push("parent_issue_id IS NULL");
+    clauses.push(`(parent_issue_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM multiremi_issues parent
+      WHERE parent.id = multiremi_issues.parent_issue_id
+        AND parent.workspace_id = multiremi_issues.workspace_id
+    ))`);
   } else {
     const parentId = input.parentId ?? input.parent_id;
     if (parentId) {
-      clauses.push("parent_issue_id = ?");
+      clauses.push(`parent_issue_id = ? AND EXISTS (
+        SELECT 1 FROM multiremi_issues parent
+        WHERE parent.id = multiremi_issues.parent_issue_id
+          AND parent.workspace_id = multiremi_issues.workspace_id
+      )`);
       params.push(parentId);
     }
   }

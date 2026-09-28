@@ -4,7 +4,13 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, CheckCircle2, ChevronRight, Loader2, RotateCcw, Square, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@multiremi/core/api";
+import { api, ApiError } from "@multiremi/core/api";
+import { useUpdateIssue } from "@multiremi/core/issues/mutations";
+import { Button } from "@multiremi/ui/components/ui/button";
+import {
+  AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@multiremi/ui/components/ui/alert-dialog";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
@@ -353,6 +359,8 @@ function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Agen
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const [retrying, setRetrying] = useState(false);
+  const [dependencyHold, setDependencyHold] = useState(false);
+  const forceStart = useUpdateIssue();
   const label = useStatusLabel(task);
   const trigger = useTriggerText(task);
   const time = task.completed_at ? timeAgo(task.completed_at) : "—";
@@ -374,7 +382,12 @@ function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Agen
     try {
       await api.rerunIssue(issueId, task.id);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.retry_failed));
+      if (e instanceof ApiError && e.status === 409
+        && (e.body as { code?: unknown } | undefined)?.code === "dependencies_unmet") {
+        setDependencyHold(true);
+      } else {
+        toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.retry_failed));
+      }
     } finally {
       // Reset on both success and failure: the past row stays mounted
       // (its task.id is unchanged), so leaving `retrying` true on success
@@ -384,6 +397,7 @@ function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Agen
   };
 
   return (
+    <>
     <RowShell task={task}>
       <TriggerText text={trigger} task={task} agentModel={agentModel} agentThinkingLevel={agentThinkingLevel} />
       <RowStatus title={failureLabel ?? label}>
@@ -417,6 +431,26 @@ function PastRow({ task, issueId, agentModel, agentThinkingLevel }: { task: Agen
         )}
       </RowActions>
     </RowShell>
+    <AlertDialog open={dependencyHold} onOpenChange={setDependencyHold}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(($) => $.execution_log.dependencies_unmet_title)}</AlertDialogTitle>
+          <AlertDialogDescription>{t(($) => $.execution_log.dependencies_unmet_description)}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t(($) => $.execution_log.dependencies_unmet_cancel)}</AlertDialogCancel>
+          <Button
+            disabled={forceStart.isPending}
+            onClick={() => void forceStart.mutateAsync({ id: issueId, status: "todo", force: true })
+              .then(() => setDependencyHold(false))
+              .catch((error: unknown) => toast.error(error instanceof Error ? error.message : t(($) => $.execution_log.force_start_failed)))}
+          >
+            {t(($) => $.execution_log.force_start)}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
