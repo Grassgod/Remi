@@ -377,14 +377,7 @@ export function SharedTask({
 }
 
 export function traceEventToMessage(event: SharedTaskTracePage["events"][number]): Record<string, unknown> {
-  return {
-    seq: event.seq,
-    type: event.type,
-    content: event.content ?? null,
-    output: event.output ?? null,
-    input: event.input ?? null,
-    meta: event.meta ?? null,
-  };
+  return { ...event };
 }
 
 function findActor(actors: SharedIssueActor[], type: string, id: string | null): SharedIssueActor | null {

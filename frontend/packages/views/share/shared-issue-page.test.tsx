@@ -106,4 +106,51 @@ describe("SharedTask trace expansion", () => {
       expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === newText)).toBeInTheDocument();
     }
   });
+
+  it.each([
+    { type: "text", content: "same text" },
+    { type: "tool_result", output: "same output" },
+    { type: "tool_use", input: { command: "ls" } },
+    { type: "tool_result", tool: "Bash", tool_call_id: "call_qa", status: "completed", output: "" },
+    { type: "execution", meta: { model: "test-model", phase: "start" } },
+    { type: "usage", meta: { input_tokens: 12, output_tokens: 34 } },
+    { type: "future_type", meta: { future_field: "preserved" }, extension: "unknown information" },
+  ])("preserves legacy presentation for $type ($content$output)", async (fields) => {
+    const event = {
+      seq: 1, ts: "2026-09-28T00:00:00Z", tool: null, content: null,
+      output: null, input: null, tool_call_id: null, status: null, meta: null, ...fields,
+    };
+    const { ts, tool_call_id, ...commonFields } = event;
+    const legacy = { ...commonFields, id: "msg_legacy", taskId: task.id, createdAt: ts, toolCallId: tool_call_id };
+    getSharedTaskTrace.mockResolvedValue(page({ events: [event], next_after_seq: 1, head: 1 }));
+    renderTask();
+    await userEvent.setup().click(screen.getByText("agt_share"));
+    const newText = messageText(traceEventToMessage(event));
+    await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === newText)).toBeInTheDocument());
+    const oldText = messageText(legacy);
+    if (event.content || event.output || event.input) {
+      expect(newText).toBe(oldText);
+    } else {
+      const { id, taskId, createdAt, toolCallId, ...oldFields } = JSON.parse(oldText);
+      expect(JSON.parse(newText)).toEqual({ ...oldFields, ts: createdAt, tool_call_id: toolCallId });
+      expect(newText).toBe(JSON.stringify(event, null, 2));
+      expect(newText).not.toContain(id);
+      expect(newText).not.toContain(taskId);
+    }
+  });
+
+  it("QA B5: retains legacy tool identity and status when payload text is empty", async () => {
+    const event = {
+      seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
+      tool_call_id: "call_qa", status: "completed", content: null, output: "", input: null,
+    };
+    getSharedTaskTrace.mockResolvedValue(page({ events: [event], next_after_seq: 1, head: 1 }));
+    renderTask();
+    await userEvent.setup().click(screen.getByText("agt_share"));
+    await waitFor(() => {
+      const pre = screen.getByText((_, element) => element?.tagName === "PRE" && Boolean(element.textContent?.includes("call_qa")));
+      expect(pre).toHaveTextContent("Bash");
+      expect(pre).toHaveTextContent("completed");
+    });
+  });
 });
