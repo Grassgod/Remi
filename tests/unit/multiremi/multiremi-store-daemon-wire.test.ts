@@ -56,11 +56,11 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toEqual(mention);
     response = { runtime_id: "rt_bot", pending_feishu_outbound: { id: "fbo_test", mention: { mode: "everyone" } } };
     expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toBeUndefined();
-    response = { status: "ok", mention_open_id: "ou_owner" };
+    response = { ok: true, mention_open_id: "ou_owner" };
     expect(await client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", "ou_owner")).toBe("ou_owner");
-    expect(requests).toEqual([{ type: "feishu.outbound_result", partition: "rt:rt_bot", wait: true,
+    expect(requests).toEqual([{ type: "feishu.outbound_result", partition: "rt:rt_bot", wait: true, timeoutMs: 30_000,
       payload: { runtime_id: "rt_bot", request_id: "fbo_test", claim_token: "lease", status: "prepared", mention_open_id: "ou_owner" } }]);
-    response = { status: "ok" };
+    response = { ok: true };
     await expect(client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", null)).rejects.toThrow("checkpoint response");
   });
 
