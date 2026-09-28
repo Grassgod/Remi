@@ -115,6 +115,18 @@ describe("FeishuBotEndpoints control routes", () => {
     });
   });
 
+  it.each([undefined, null, { code: "issue_topic_config_invalid", message: "Invalid stored recipient" }])(
+    "parses the optional Issue topic validation warning (%j)", async (invalid) => {
+      const response = {
+        workspace_id: "ws_1",
+        config: { enabled: true, chat_id: "oc_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+        ...(invalid === undefined ? {} : { invalid }),
+      };
+      const { api } = endpoints(response);
+      await expect(api.getIssueTopicConfig("ws_1")).resolves.toEqual(response);
+    },
+  );
+
   it("sends the Issue topic project filter without changing null semantics", async () => {
     const { api, fetchMock } = endpoints({
       workspace_id: "ws_1",
