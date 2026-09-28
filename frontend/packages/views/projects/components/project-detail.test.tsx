@@ -21,7 +21,16 @@ const state = vi.hoisted(() => ({
   issuesError: false,
   issuesErrorValue: null as unknown,
   members: [] as unknown[],
+  agentRunningFilter: false,
+  snapshotPending: false,
+  snapshot: [] as unknown[],
 }));
+
+beforeEach(() => {
+  state.agentRunningFilter = false;
+  state.snapshotPending = false;
+  state.snapshot = [];
+});
 
 const refetchIssues = vi.hoisted(() => vi.fn());
 const updateProject = vi.hoisted(() => vi.fn());
@@ -45,6 +54,8 @@ vi.mock("@tanstack/react-query", () => ({
         };
       case "members":
         return { data: state.members };
+      case "snapshot":
+        return { data: state.snapshot, isPending: state.snapshotPending };
       default:
         return { data: undefined };
     }
@@ -137,7 +148,7 @@ vi.mock("@multiremi/core/issues/stores/view-store-context", () => ({
       includeNoAssignee: false,
       creatorFilters: [],
       labelFilters: [],
-      agentRunningFilter: false,
+      agentRunningFilter: state.agentRunningFilter,
     }),
 }));
 
@@ -322,6 +333,20 @@ describe("ProjectDetail issues surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(refetchIssues).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the snapshot before showing the running-agent filtered rows", () => {
+    state.agentRunningFilter = true;
+    state.snapshotPending = true;
+    state.issues = [{ id: "issue-filtered", status: "todo" }];
+    renderDetail();
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("list-view")).not.toBeInTheDocument();
+    cleanup();
+    state.snapshotPending = false;
+    state.snapshot = [{ status: "running", issue_id: "issue-filtered" }];
+    renderDetail();
+    expect(screen.getByTestId("list-view")).toHaveTextContent("1");
   });
 
   it("falls back to the generic hint when the error carries no message", () => {

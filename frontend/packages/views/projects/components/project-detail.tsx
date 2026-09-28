@@ -141,16 +141,16 @@ function ProjectIssuesContent({
   // also the row set when the running-agent filter is on, so it stays ungated
   // in that state (see issues-page.tsx).
   const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
-  const { data: snapshot = [] } = useQuery(
+  const snapshotQuery = useQuery(
     agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || agentRunningFilter }),
   );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const task of snapshot) {
+    for (const task of snapshotQuery.data ?? []) {
       if (task.status === "running" && task.issue_id) ids.add(task.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   const issues = useMemo(
     () => filterIssues(projectIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, projectFilters: [], includeNoProject: false, labelFilters, agentRunningFilter, runningIssueIds }),
@@ -214,7 +214,7 @@ function ProjectIssuesContent({
   // an unresolved (or failed) fetch is indistinguishable from an empty
   // project, and a project with hundreds of issues opens on a confident
   // "No issues linked — create one" CTA.
-  if (isPending) {
+  if (isPending || (agentRunningFilter && snapshotQuery.isPending)) {
     return (
       <div className="flex flex-1 min-h-0 flex-col gap-2 p-4">
         {Array.from({ length: 6 }).map((_, index) => (
