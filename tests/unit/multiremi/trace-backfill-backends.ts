@@ -43,6 +43,8 @@ async function adminExec(sql: string): Promise<void> {
 export interface OpenedStore {
   store: MultiremiStore;
   db: SqlDatabase;
+  /** The Postgres URL of this case's database; `null` for the in-memory SQLite store. */
+  url: string | null;
   close(): Promise<void>;
 }
 
@@ -63,7 +65,7 @@ function sqliteBackend(): StoreBackend {
       const db = Object.assign(raw as unknown as SqlDatabase, { dialect: "sqlite" as const });
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
-      return { store, db, close: async () => raw.close() };
+      return { store, db, url: null, close: async () => raw.close() };
     },
     async dispose() {},
   };
@@ -91,11 +93,13 @@ function postgresBackend(available: boolean, label: string): StoreBackend {
       await ensureTemplate();
       const name = `${prefix}_${++counter}`;
       await adminExec(`CREATE DATABASE ${name} TEMPLATE ${template}`);
-      const db = new PostgresSyncDatabase(pgDatabaseUrl(name));
+      const url = pgDatabaseUrl(name);
+      const db = new PostgresSyncDatabase(url);
       const store = new MultiremiStore(db);
       return {
         store,
         db,
+        url,
         close: async () => {
           db.close();
           await adminExec(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);

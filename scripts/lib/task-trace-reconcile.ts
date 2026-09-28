@@ -33,6 +33,7 @@ import {
   deriveTraceEnd,
   deriveTraceHeader,
   iterateTaskRows,
+  TRACE_BACKFILL_GROUPS,
   TRACE_BACKFILL_METADATA_KIND,
   TRACE_EVENT_KEYS,
   traceEventDigest,
@@ -43,6 +44,7 @@ import {
   type TraceBackfillAssignment,
   type TraceBackfillGroup,
 } from "./task-trace-backfill.js";
+import { sampleWithoutReplacement, seededRandom } from "./seeded-random.js";
 
 export type TraceReconcileMismatch =
   | "seq_set"
@@ -263,6 +265,63 @@ function readArchiveRow(db: SqlDatabase, archiveId: string) {
     subjectKind: String(raw.subject_kind || "issue"),
     subjectId: String(raw.subject_id || raw.issue_id || ""),
   };
+}
+
+export interface TraceReconcileSample {
+  seed: string;
+  requested: number;
+  taskIds: Set<string>;
+  by_group: Record<TraceBackfillGroup, { candidates: number; sampled: number; sampled_render: number; sampled_none: number }>;
+}
+
+/**
+ * A seeded random sample of backfilled tasks (rendered and `none`) that covers
+ * every group with candidates: the size is split evenly across groups, and
+ * what a small group cannot use goes to the others.
+ */
+export function selectTraceReconcileSample(
+  assignment: TraceBackfillAssignment,
+  options: { size: number; seed: string },
+): TraceReconcileSample {
+  const candidates = Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, [] as string[]])) as Record<
+    TraceBackfillGroup,
+    string[]
+  >;
+  const noneIds = new Set<string>();
+  for (const subject of assignment.subjects) {
+    candidates[subject.group].push(...subject.renderTaskIds, ...subject.noneTaskIds);
+    for (const taskId of subject.noneTaskIds) noneIds.add(taskId);
+  }
+  // Sorted, so the same seed picks the same tasks whatever order the database returned.
+  for (const group of TRACE_BACKFILL_GROUPS) candidates[group].sort();
+
+  const quota = Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, 0])) as Record<TraceBackfillGroup, number>;
+  let remaining = options.size;
+  while (remaining > 0) {
+    const open = TRACE_BACKFILL_GROUPS.filter((group) => quota[group] < candidates[group].length);
+    if (open.length === 0) break;
+    for (const group of open) {
+      if (remaining === 0) break;
+      quota[group]++;
+      remaining--;
+    }
+  }
+
+  const random = seededRandom(options.seed);
+  const taskIds = new Set<string>();
+  const byGroup = {} as TraceReconcileSample["by_group"];
+  for (const group of TRACE_BACKFILL_GROUPS) {
+    const picked = sampleWithoutReplacement(random, candidates[group], quota[group]);
+    for (const taskId of picked) taskIds.add(taskId);
+    const none = picked.filter((taskId) => noneIds.has(taskId)).length;
+    byGroup[group] = {
+      candidates: candidates[group].length,
+      sampled: picked.length,
+      sampled_render: picked.length - none,
+      sampled_none: none,
+    };
+  }
+  return { seed: options.seed, requested: options.size, taskIds, by_group: byGroup };
 }
 
 function sameSeqSet(left: number[], right: number[]): boolean {
