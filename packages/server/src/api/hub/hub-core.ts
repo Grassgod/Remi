@@ -86,6 +86,8 @@ export const HUB_KNOWN_HEAD_LIMIT = 1024;
 export const HUB_FLUSH_SAMPLES = 256;
 /** Hole waits kept for the `/readyz` p95. */
 export const HUB_HOLE_WAIT_SAMPLES = 256;
+/** Non-initial row revisions remembered per consumer; forgotten bases need gaps. */
+const HUB_DELIVERED_REVISION_LIMIT = 1024;
 
 /**
  * The read side the hub may use.
@@ -216,6 +218,8 @@ interface HubSubscriber {
   cursor: number;
   /** Contiguous ranges actually delivered; gap-skipped rows are never patch bases. */
   readonly delivered: HubSeqRange[];
+  /** Revision 1 needs no slot; higher revisions are bounded and tied to held bases. */
+  readonly deliveredRevisions: Map<number, number>;
   /** Edits that require a reread, bounded to one conservative range while paused. */
   changeGap: HubSeqRange | null;
   lagging: boolean;
@@ -229,6 +233,11 @@ interface HubSubscriber {
 interface PendingFrame {
   readonly frame: HubFrame;
   readonly at: number;
+}
+
+interface LiveChange {
+  readonly frame: HubFrame;
+  readonly fieldRevisions: Map<string, number>;
 }
 
 function defaultWarn(message: string): void {
@@ -288,7 +297,7 @@ export class HubImpl implements ObservableLiveHub {
    * watching, and dropping it as a "replay" would lose every in-place edit. These
    * are delivered to active subscribers on the next flush and then forgotten.
    */
-  private readonly liveChanges = new Map<HubStreamKey, HubFrame[]>();
+  private readonly liveChanges = new Map<HubStreamKey, LiveChange[]>();
   private readonly flushSamples: number[] = [];
   private readonly holeWaitSamples: number[] = [];
   private readonly closedTasks = new Set<string>();
@@ -694,22 +703,36 @@ export class HubImpl implements ObservableLiveHub {
   }
 
   private queueLiveChange(key: HubStreamKey, frame: HubFrame): void {
+    const incoming = frame.payload as ConversationLogPatch;
+    const change: LiveChange = {
+      frame,
+      fieldRevisions: new Map(Object.keys(incoming.fields).map((field) => [field, incoming.revision])),
+    };
     const list = this.liveChanges.get(key);
     if (!list) {
-      this.liveChanges.set(key, [frame]);
+      this.liveChanges.set(key, [change]);
       return;
     }
-    // Patches contain deltas, so a newer revision cannot replace earlier fields.
-    const index = list.findIndex((existing) => existing.seq === frame.seq && existing.kind === frame.kind);
+    const index = list.findIndex((existing) => existing.frame.seq === frame.seq);
     if (index >= 0) {
-      const previous = list[index]!.payload as ConversationLogPatch;
-      const incoming = frame.payload as ConversationLogPatch;
-      const [older, newer] = previous.revision <= incoming.revision
-        ? [previous, incoming] : [incoming, previous];
-      list[index] = { ...frame, payload: { ...newer, fields: { ...older.fields, ...newer.fields } } };
+      const existing = list[index]!;
+      const previous = existing.frame.payload as ConversationLogPatch;
+      const fields = { ...previous.fields };
+      const fieldRevisions = new Map(existing.fieldRevisions);
+      // A merged frame's revision does not describe every field in its delta.
+      for (const [field, value] of Object.entries(incoming.fields)) {
+        if (incoming.revision >= (fieldRevisions.get(field) ?? -1)) {
+          Object.assign(fields, { [field]: value });
+          fieldRevisions.set(field, incoming.revision);
+        }
+      }
+      list[index] = {
+        frame: { ...frame, payload: { ...previous, revision: Math.max(previous.revision, incoming.revision), fields } },
+        fieldRevisions,
+      };
     } else {
-      list.push(frame);
-      list.sort((a, b) => a.seq - b.seq);
+      list.push(change);
+      list.sort((a, b) => a.frame.seq - b.frame.seq);
     }
   }
 
@@ -930,9 +953,11 @@ export class HubImpl implements ObservableLiveHub {
       for (const subscriber of set) {
         if (!subscriber.active) continue;
         if (changes) {
-          for (const frame of changes) {
+          for (const change of changes) {
+            const frame = change.frame;
             if (frame.seq <= subscriber.cursor &&
-              (subscriber.lagging || !this.hasDelivered(subscriber, frame.seq))) {
+              (subscriber.lagging || !this.hasDelivered(subscriber, frame.seq)
+                || !this.advancesRevision(subscriber, change))) {
               this.deferChangeGap(subscriber, frame.seq);
             }
           }
@@ -944,7 +969,8 @@ export class HubImpl implements ObservableLiveHub {
         }
         if (changes && changes.length > 0 && !subscriber.lagging) {
           // A gap advances the replay cursor without delivering a patch base.
-          const applicable = changes.filter((frame) => this.hasDelivered(subscriber, frame.seq));
+          const applicable = changes.filter((change) => this.hasDelivered(subscriber, change.frame.seq))
+            .map((change) => change.frame);
           if (applicable.length > 0) this.send(subscriber, applicable);
         }
         const more = this.deliverOneBatch(subscriber, stream);
@@ -1007,10 +1033,14 @@ export class HubImpl implements ObservableLiveHub {
         subscriber.sink.send(frames);
       }
       for (const frame of frames) {
-        if (frame.kind === "patch") continue;
-        const last = subscriber.delivered.at(-1);
-        if (last && last.to + 1 === frame.seq) last.to = frame.seq;
-        else subscriber.delivered.push({ from: frame.seq, to: frame.seq });
+        if (frame.kind !== "patch") {
+          const last = subscriber.delivered.at(-1);
+          if (last && last.to + 1 === frame.seq) last.to = frame.seq;
+          else subscriber.delivered.push({ from: frame.seq, to: frame.seq });
+        }
+        if (frame.kind !== "trace") {
+          this.rememberDeliveredRevision(subscriber, frame.seq, (frame.payload as B0ConversationLogEntry).revision);
+        }
       }
     } catch (error) {
       this.warn(`subscriber for ${subscriber.key} threw: ${errorText(error)}`);
@@ -1028,6 +1058,23 @@ export class HubImpl implements ObservableLiveHub {
     return subscriber.delivered.some((range) => range.from <= seq && seq <= range.to);
   }
 
+  private advancesRevision(subscriber: HubSubscriber, change: LiveChange): boolean {
+    const revision = subscriber.deliveredRevisions.get(change.frame.seq) ?? 1;
+    if ((change.frame.payload as ConversationLogPatch).revision <= revision) return false;
+    // Even a higher envelope may conceal an old field the client cannot order.
+    return [...change.fieldRevisions.values()].every((fieldRevision) => fieldRevision > revision);
+  }
+
+  private rememberDeliveredRevision(subscriber: HubSubscriber, seq: number, revision: number): void {
+    if (!(revision > 1)) return;
+    subscriber.deliveredRevisions.delete(seq);
+    subscriber.deliveredRevisions.set(seq, revision);
+    while (subscriber.deliveredRevisions.size > HUB_DELIVERED_REVISION_LIMIT) {
+      const oldest = subscriber.deliveredRevisions.keys().next().value!;
+      this.forgetDelivered(subscriber, oldest, oldest);
+    }
+  }
+
   private deferChangeGap(subscriber: HubSubscriber, seq: number): void {
     const gap = subscriber.changeGap;
     const from = Math.min(gap?.from ?? seq, seq);
@@ -1035,6 +1082,13 @@ export class HubImpl implements ObservableLiveHub {
     subscriber.changeGap = { from, to };
     // A reread is asynchronous: until a new base is delivered, another patch must
     // also become a gap. The conservative range may invalidate unchanged rows.
+    this.forgetDelivered(subscriber, from, to);
+  }
+
+  private forgetDelivered(subscriber: HubSubscriber, from: number, to: number): void {
+    for (const seq of subscriber.deliveredRevisions.keys()) {
+      if (from <= seq && seq <= to) subscriber.deliveredRevisions.delete(seq);
+    }
     const held = subscriber.delivered.splice(0);
     for (const range of held) {
       if (range.to < from || range.from > to) subscriber.delivered.push(range);
@@ -1120,6 +1174,7 @@ export class HubImpl implements ObservableLiveHub {
       requested: fromSeq,
       cursor: fromSeq,
       delivered: [],
+      deliveredRevisions: new Map(),
       changeGap: null,
       lagging: false,
       active: true,

@@ -403,3 +403,83 @@ describe("MUL-436 regression 2a: synchronous patch reentry", () => {
     expect(baseless.gaps).toEqual([{ from: 1, to: 1 }]);
   });
 });
+
+describe("MUL-436 regression 3 A1: per-field revisions", () => {
+  for (const order of [[2, 4, 3], [4, 2, 3]]) {
+    it(`keeps each field's latest revision and null in queue order ${order.join(",")}`, () => {
+      const hub = make(), out = new RecordingSink();
+      hub.subscribeWithSink("log:s", 0, out);
+      row(hub, 1); hub.flushNow();
+      for (const revision of order) {
+        const fields = revision === 2 ? { body_html: "old html", metadata: { version: 2 } }
+          : revision === 3 ? { body_html: null, metadata: { version: 3 } }
+          : { body_md: "latest body" };
+        patch(hub, 1, fields, revision);
+      }
+      hub.flushNow();
+      expect(out.frames.filter((frame) => frame.kind === "patch")).toEqual([{
+        seq: 1, kind: "patch", payload: {
+          session_id: "s", target_seq: 1, revision: 4,
+          fields: { body_md: "latest body", body_html: null, metadata: { version: 3 } },
+        },
+      }]);
+    });
+  }
+
+  it("reproduces three-revision field rollback with the default scheduler", async () => {
+    const hub = make({ scheduleFlush: (callback) => { setImmediate(callback); } }), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out); row(hub, 1); await settle();
+    patch(hub, 1, { body_html: "old html", metadata: { version: 2 } }, 2);
+    patch(hub, 1, { body_md: "latest body" }, 4);
+    patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3);
+    await settle();
+    expect(out.frames.filter((frame) => frame.kind === "patch")).toEqual([{
+      seq: 1, kind: "patch", payload: {
+        session_id: "s", target_seq: 1, revision: 4,
+        fields: { body_md: "latest body", body_html: null, metadata: { version: 3 } },
+      },
+    }]);
+  });
+
+  it("gaps a late lower revision after the consumer has received a higher one", () => {
+    const hub = make(), current = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, current);
+    row(hub, 1); hub.flushNow();
+    patch(hub, 1, { body_md: "latest body" }, 4); hub.flushNow();
+    patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3); hub.flushNow();
+    expect(current.frames.filter((frame) => frame.kind === "patch")
+      .map((frame) => (frame.payload as ConversationLogPatch).revision)).toEqual([4]);
+    expect(current.gaps).toEqual([{ from: 1, to: 1 }]);
+    patch(hub, 1, { body_md: "next" }, 5); hub.flushNow();
+    expect(current.frames.filter((frame) => frame.kind === "patch")).toHaveLength(1);
+    expect(current.gaps).toEqual([{ from: 1, to: 1 }, { from: 1, to: 1 }]);
+  });
+
+  it("gaps older fields concealed inside a higher coalesced revision", () => {
+    const hub = make(), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    row(hub, 1); hub.flushNow();
+    patch(hub, 1, { body_html: "current html" }, 4); hub.flushNow();
+    patch(hub, 1, { body_html: null, metadata: { version: 3 } }, 3);
+    patch(hub, 1, { body_md: "next body" }, 5); hub.flushNow();
+    expect(out.frames.filter((frame) => frame.kind === "patch")).toHaveLength(1);
+    expect(out.gaps).toEqual([{ from: 1, to: 1 }]);
+  });
+
+  it("bounds revision history and gaps edits after their revision proof is forgotten", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 1 } } }), out = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, out);
+    for (let seq = 1; seq <= 1100; seq++) {
+      row(hub, seq); hub.flushNow();
+      patch(hub, seq, { body_md: "revision four" }, 4); hub.flushNow();
+    }
+    const subscriber = [...(hub as unknown as {
+      subscribers: Map<string, Set<{ deliveredRevisions: Map<number, number> }>>;
+    }).subscribers.get("log:s")!][0]!;
+    expect(subscriber.deliveredRevisions.size).toBeLessThanOrEqual(1024);
+    const before = out.frames.length;
+    patch(hub, 1, { metadata: { version: 5 } }, 5); hub.flushNow();
+    expect(out.frames.length).toBe(before);
+    expect(out.gaps).toEqual([{ from: 1, to: 1 }]);
+  });
+});
