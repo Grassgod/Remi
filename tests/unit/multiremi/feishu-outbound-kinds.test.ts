@@ -4,15 +4,19 @@ import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
 
 let key: string | undefined;
 let jobs: string | undefined;
+let kinds: string | undefined;
 beforeEach(() => {
   key = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   jobs = process.env.MULTIREMI_BACKGROUND_JOBS;
+  kinds = process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+  process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS = "1";
 });
 afterEach(() => {
   if (key === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = key;
   if (jobs === undefined) delete process.env.MULTIREMI_BACKGROUND_JOBS; else process.env.MULTIREMI_BACKGROUND_JOBS = jobs;
+  if (kinds === undefined) delete process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS; else process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS = kinds;
   resetMultiremiTestEnv();
 });
 const rows = (taskId: string) => db!.query(`SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ? ORDER BY kind, unit_key`).all(taskId) as any[];
@@ -119,5 +123,43 @@ describe("Feishu outbound kind leases", () => {
     process.env.MULTIREMI_BACKGROUND_JOBS = "1";
     expect(claim(f).map(row => row.kind).sort()).toEqual(["cot", "receipt"]);
     expect(rows(taskId).find(row => row.kind === "result_card")).toBeDefined();
+  });
+
+  it("stops at six expired split leases, audits the receipt once, and rejects late reports", () => {
+    const f = configureKindBot(createLocalStore());
+    const taskId = f.inbound("expired").taskId;
+    const start = Date.now() + 1_000;
+    let batch = claim(f, new Date(start));
+    const receiptId = batch.find(row => row.kind === "receipt")!.id;
+    for (let attempt = 1; attempt < 6; attempt++) {
+      const late = batch.find(row => row.id === receiptId)!;
+      const now = new Date(start + attempt * 121_000);
+      expect(f.store.reportFeishuBotOutbound("local", f.runtimeId, receiptId,
+        { claimToken: late.claimToken, status: "sent" }, now)).toBe(false);
+      batch = claim(f, now);
+      expect(batch.find(row => row.id === receiptId)).toBeDefined();
+    }
+    expect(claim(f, new Date(start + 6 * 121_000))).toEqual([]);
+    expect(rows(taskId).map(row => [row.status, row.attempt_count])).toEqual([["failed", 6], ["failed", 6]]);
+    expect(f.store.listFeishuBotAudit("local").filter(row => row.action === "receipt_failed")).toHaveLength(1);
+    claim(f, new Date(start + 7 * 121_000));
+    expect(f.store.listFeishuBotAudit("local").filter(row => row.action === "receipt_failed")).toHaveLength(1);
+  });
+
+  it("rolls new Tasks back to legacy while draining already split Tasks without resending their result", () => {
+    const f = configureKindBot(createLocalStore());
+    const splitTask = f.inbound("beforerollback").taskId;
+    for (const row of claim(f)) expect(report(f, row, "sent")).toBe(true);
+    process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS = "0";
+    f.store.completeTask(splitTask, { output: "Drain this result" });
+    const legacyTask = f.inbound("afterrollback").taskId;
+    const batch = claim(f);
+    expect(batch.find(row => row.taskId === legacyTask)?.kind).toBeUndefined();
+    expect(batch.find(row => row.taskId === splitTask)?.kind).toBe("result_card");
+    for (const row of batch) expect(report(f, row, "sent")).toBe(true);
+    for (const row of claim(f)) expect(report(f, row, "sent")).toBe(true);
+    expect(rows(legacyTask)).toHaveLength(1);
+    expect(rows(splitTask).find(row => row.kind === "result_card").status).toBe("sent");
+    expect(claim(f)).toEqual([]);
   });
 });

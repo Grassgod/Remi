@@ -26,7 +26,7 @@ function verify(db: SqlDatabase, dialect: "sqlite" | "postgres") {
   db.run(`INSERT INTO ${table}(id, task_id, kind, unit_key) VALUES ('receipt2', 'task', 'receipt', 'om2:completed')`);
   db.run(`INSERT INTO ${table}(id, task_id, kind) VALUES ('decision3', NULL, 'decision_card')`);
   ensureFeishuOutboundKindsSchema(db, dialect);
-  expect(db.query(`SELECT COUNT(*) AS n FROM ${table}`).get()).toEqual({ n: 7 });
+  expect(Number((db.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number | string }).n)).toBe(7);
 }
 
 describe("C5 outbound schema on SQLite", () => {

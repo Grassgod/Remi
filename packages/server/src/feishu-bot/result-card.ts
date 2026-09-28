@@ -1,6 +1,5 @@
 import type { MultiremiTask, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
-import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
 import { formatCardStats, formatExecutionSubtitle } from "@connectors/feishu/card-metadata.js";
 import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
 
@@ -27,6 +26,6 @@ export function buildFeishuTaskResult(task: MultiremiTask, messages: MultiremiTa
   const text = task.status === "failed" ? `${answer}${answer ? "\n\n" : ""}**执行失败：** ${task.error || "请查看工作台任务详情"}`
     : task.status === "cancelled" ? `${answer}${answer ? "\n\n" : ""}任务已取消。` : answer || "任务已完成，未返回文字结果。";
   const elapsed = Math.max(0, Math.round((Date.parse(task.completedAt ?? "") - Date.parse(task.startedAt ?? task.createdAt)) / 1000));
-  return { text, card: buildFinalCard({ text, agentName: execution.agentName, sessionId: task.sessionId,
-    subtitle: formatExecutionSubtitle(execution), stats: formatCardStats(Number.isFinite(elapsed) ? elapsed : 0, context, timeline.toolCount) }) };
+  return { text, agentName: execution.agentName, sessionId: task.sessionId,
+    subtitle: formatExecutionSubtitle(execution), stats: formatCardStats(Number.isFinite(elapsed) ? elapsed : 0, context, timeline.toolCount) };
 }
