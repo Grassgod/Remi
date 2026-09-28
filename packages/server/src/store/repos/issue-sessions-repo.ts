@@ -490,14 +490,8 @@ export class IssueSessionsRepo {
     if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
     const sinceSeq = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
     const toSeq = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
-    const rows = toSeq == null
-      ? this.ctx.db.query(
-        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
-      ).all(sessionId, sinceSeq) as Row[]
-      : this.ctx.db.query(
-        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
-      ).all(sessionId, sinceSeq, toSeq) as Row[];
-    return rows.map(toSessionEvent);
+    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId), { includeMarkerTargetSeq: true })
+      .filter((event) => event.seq > sinceSeq && (toSeq == null || event.seq <= toSeq));
   }
 
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
