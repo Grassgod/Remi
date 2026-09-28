@@ -203,6 +203,62 @@ function waitForWorkerMessage<T extends Record<string, unknown>>(
   });
 }
 
+/**
+ * MUL-402 ② (cmt_78bx01xhb75x) / (c) (cmt_gestk2r6imjh): `maxTransactionDepth`
+ * counts only the top-level BEGIN, so the depth-1 cases also check the control
+ * statements the bridge sent in the same window. Before the outer COMMIT there is
+ * no second BEGIN and no early COMMIT; nested levels send only SAVEPOINT /
+ * RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT. Same recording as B5's
+ * multiremi-parent-status-pg-depth.test.ts.
+ */
+function recordTransactionControl(database: PostgresSyncDatabase): (label: string) => void {
+  let controls: Array<{ sql: string; inTransaction: boolean }> = [];
+  const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+  const execute = target.execute.bind(database);
+  target.execute = (sql, params) => {
+    const command = sql.trim().toUpperCase();
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+      controls.push({ sql: command, inTransaction: database.inTransaction });
+    }
+    return execute(sql, params);
+  };
+  // The log covers the same window as the depth peak.
+  const reset = database.resetTransactionDepthStats.bind(database);
+  database.resetTransactionDepthStats = () => {
+    reset();
+    controls = [];
+  };
+  return (label) => {
+    let outerOpen = false;
+    const savepoints: string[] = [];
+    for (const control of controls) {
+      const detail = `${label}: ${control.sql}`;
+      if (control.sql === "BEGIN") {
+        expect(outerOpen, detail).toBe(false);
+        expect(control.inTransaction, detail).toBe(false);
+        outerOpen = true;
+      } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(savepoints, detail).toHaveLength(0);
+        outerOpen = false;
+      } else {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+        const name = control.sql.split(" ").at(-1)!;
+        if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+        else {
+          expect(savepoints.at(-1), detail).toBe(name);
+          if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+        }
+      }
+    }
+    expect(outerOpen, label).toBe(false);
+    expect(savepoints, label).toHaveLength(0);
+  };
+}
+
 // Decide skip-vs-run at collection time (top-level await); the throwaway DB and
 // store are built in beforeAll so a probe failure never leaves half-open state.
 const pgAvailable = await probePostgres();
@@ -216,6 +272,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
   let pointerQueryCount = 0;
+  let assertTransactionControl: (label: string) => void;
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
@@ -225,6 +282,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // Constructing the store runs migrate(): all CREATE TABLE / ALTER / index DDL
     // flows through translateSqliteToPg. A mis-translation would throw right here.
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    assertTransactionControl = recordTransactionControl(db);
     store = new MultiremiStore(db, {
       taskTraceQuery: (sql, params) => {
         pointerQueryCount++;
@@ -327,6 +385,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       });
       stop();
       expect(db.maxTransactionDepth).toBe(1);
+      // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+      assertTransactionControl(`${source} exemption`);
       expect(eventStates).toEqual([false]);
       expect(store.getTask(task.id)?.status).toBe("queued");
       const activities = store.listIssueActivity(issue.id).filter((row) => row.type === "dependency_gate_exempted");
@@ -354,6 +414,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("active exempt round");
     expect(store.getIssue(issue.id)?.status).toBe("backlog");
     expect(store.listTasksForIssue(issue.id).map((row) => row.id)).toEqual([task.id]);
     expect(store.listIssueActivity(issue.id).filter((row) =>
@@ -3267,6 +3329,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(prereq.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("(a) prerequisite done");
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
@@ -3284,6 +3348,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(first.id, { status: "done" });
     store.updateIssue(second.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("(b) two prerequisites");
     expect(store.getIssue(bothWaiting.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(bothWaiting.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
@@ -3299,6 +3365,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(forced.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("(c) member forced start");
     expect(store.getIssue(forced.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(forced.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
   });
@@ -3328,6 +3396,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(prereq.id, { status: "done" });
 
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("auto-start dispatch fails");
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     // Still waiting, so the automatic path can pick it up again once a human
     // fixes the owner: backlog + unmet prerequisite is the retryable state.
@@ -3668,6 +3738,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // The prerequisite's own transition is untouched, and the depth stayed 1.
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     expect(db.maxTransactionDepth).toBe(1);
+    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    assertTransactionControl("automatic start step fails");
 
     // And the retry after a fixed owner really starts it, through public assign.
     db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
