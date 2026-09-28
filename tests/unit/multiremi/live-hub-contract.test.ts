@@ -207,8 +207,8 @@ describe("live hub contract", () => {
     expect([...clientFrames, ...serverFrames]).not.toContain("auth_ack" as never);
   });
 
-  it("only ships the local transport adapter, and it reports itself as such", () => {
-    expect([...HUB_TRANSPORT_KINDS]).toEqual(["local"]);
+  it("keeps local fan-out inert when peer transport is available", () => {
+    expect([...HUB_TRANSPORT_KINDS]).toEqual(["local", "peer"]);
     const transport: HubTransport = createLocalHubTransport();
     expect(transport.kind).toBe("local");
     expect(transport.healthy?.()).toBe(true);

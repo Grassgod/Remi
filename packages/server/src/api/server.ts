@@ -71,12 +71,14 @@ import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
 import {
   createHub,
+  type HubFillReader,
   type HubImpl,
   type ObservableLiveHub,
 } from "./hub/hub-core.js";
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { createPeerHubTransport } from "./hub/peer-hub-transport.js";
 import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
 import { hubHealthPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
@@ -289,6 +291,8 @@ export interface MultiremiApiOptions {
   hub?: LiveHub | ObservableLiveHub | null;
   /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
   hubRingLimits?: Partial<HubRingLimits>;
+  /** B1 reader for log warm-up and peer reconciliation. */
+  hubFill?: HubFillReader | null;
   /**
    * MUL-461: the API role this process serves. Undefined reads `MULTIREMI_API_ROLE`;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
@@ -333,12 +337,13 @@ export interface MultiremiApiOptions {
   createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
 }
 
-function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole): LiveHub | null {
+function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole, peer: PeerChannel | null = options.peerChannel ?? null): LiveHub | null {
   if (options.liveHub !== undefined) return options.liveHub;
   if (options.hub !== undefined) return options.hub;
   return createHub({
-    transport: createLocalHubTransport(),
+    transport: peer?.enabled ? createPeerHubTransport({ peer }) : createLocalHubTransport(),
     role: apiRole,
+    fill: options.hubFill,
     ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
   });
 }
@@ -354,7 +359,7 @@ const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/he
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const platformUpdaterToken = options.platformUpdaterToken
     ?? process.env.MULTIREMI_PLATFORM_UPDATER_TOKEN
     ?? "";
@@ -915,7 +920,16 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
-  const liveHub = resolveAppHub(options, effectiveApiRole);
+  // Create the shared channel before the Hub so both server subscriptions and
+  // the realtime fanout use the same process identity and queue.
+  const peerUrl = resolvePeerUrl();
+  const peerSecret = options.peerSecret === undefined
+    ? resolvePeerSecret()
+    : (options.peerSecret ?? "");
+  const peer = options.peerChannel === undefined
+    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
+    : options.peerChannel;
+  const liveHub = resolveAppHub(options, effectiveApiRole, peer);
   if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
@@ -976,7 +990,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   if (backgroundJobs) store.startNotificationDeliverySweeper();
   bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
-  const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
@@ -989,13 +1003,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // `options.peerChannel` is the injection point the two-server tests use.
   // `null` (not a disabled channel) is what keeps the pre-split behaviour exact:
   // no sender, no subscriber, and the routes uniformly answer 401.
-  const peerUrl = resolvePeerUrl();
-  const peerSecret = options.peerSecret === undefined
-    ? resolvePeerSecret()
-    : (options.peerSecret ?? "");
-  const peer = options.peerChannel === undefined
-    ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
-    : options.peerChannel;
   // MUL-462: the fanout gets the SAME effective role the guard enforces (MUL-461,
   // resolved once by startup-env, including an injected role). Resolving it
   // again here from env would disagree with an injected `apiRole`: a process
