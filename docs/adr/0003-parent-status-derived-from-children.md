@@ -118,7 +118,33 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
 
-8. **Every guarded path runs at transaction depth 1.** When this was decided,
+8. **Guard decisions and child membership writes share the parent row lock.**
+   The API writer locks its Issue before guard A. The SCM effect locks the
+   linked Issue before reading child membership, unfinished-child count, grant
+   and A1, and retains that lock through the status/effect transaction. Child
+   creation, moving an Issue under a new parent (including a terminal child),
+   and reopening a `done`/`cancelled` child lock that same parent before writing.
+   This also covers Agent assignment's direct terminal-to-`todo` write, whose
+   locks and assignment update commit before task creation opens its transaction.
+   Lock order is workspace lifecycle (when required), existing child Issue,
+   then parent Issue; a parent's guarded decision reads children without locking
+   their rows. A write serialized after parent closure may still introduce an
+   unfinished child under that closed parent; the closed-parent policy above
+   remains in effect. The guarantee is a current count at the parent's decision,
+   not a prohibition on later child writes.
+   Re-derivation does not lock the parent before counting: its conditional
+   `in_review` → `in_progress` UPDATE locks the row and re-checks the status
+   after any wait; a child added or reopened after the count is a child event
+   of its own; closing a child never takes that lock, so an earlier lock would
+   not make the count more current. The old parent's re-parenting hook owns a
+   separate post-commit transaction.
+   [The two-connection regression](../../tests/unit/multiremi/multiremi-parent-status-race.test.ts)
+   exercises both orders 20 times for API/SCM and creation, attachment, and
+   reopening from each terminal status through PATCH or Agent assignment.
+   SQLite's writer lock can reject the
+   contender with `BUSY`; PostgreSQL waits on the parent row.
+
+   **Every guarded path runs at transaction depth 1.** When this was decided,
    `PostgresSyncDatabase.transaction()` was a bare `BEGIN`/`COMMIT`, so a nested
    `transaction()` inside an open one committed the outer transaction early,
    released its row locks, and turned the outer `ROLLBACK` into a no-op. Since

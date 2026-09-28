@@ -18,11 +18,11 @@ import { Markdown } from "./markdown";
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
 /** Pending permission and AskUserQuestion forms for any in-flight task. */
-export function HumanRequestDock({ taskId }: { taskId: string | null }) {
+export function HumanRequestDock({ taskId, enabled = true }: { taskId: string | null; enabled?: boolean }) {
   const { t } = useT("chat");
   const { data, error, isFetching, refetch } = useQuery({
     ...humanRequestsOptions(taskId ?? ""),
-    enabled: Boolean(taskId),
+    enabled: enabled && Boolean(taskId),
   });
   if (taskId && error) {
     return (

@@ -26,9 +26,18 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     ] }),
     listRuntimeWorkspaces: async () => [{ id: "rws-a", name: "Local workbench", root_path: "/work", cwd: ".", daemon_id: "daemon-a", status: "available" }],
     listRuntimes: async () => [],
-    listChatSessions: async () => backend.sessions,
-    listChatMessagesPage: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
-    getPendingChatTask: async () => backend.pending,
+    listChatSessions: async () => {
+      listChatSessionsCalls();
+      return backend.sessions;
+    },
+    listChatMessagesPage: async () => {
+      listChatMessagesPageCalls();
+      return { messages: [], limit: 50, has_more: false, next_cursor: null };
+    },
+    getPendingChatTask: async () => {
+      getPendingChatTaskCalls();
+      return backend.pending;
+    },
     createChatSession: backend.create,
     updateChatSession: backend.update,
     sendChatMessage: backend.send,
@@ -71,6 +80,36 @@ vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, disabled }: { onSend: (va
 import { ApiError } from "@multiremi/core/api";
 import { ChatWindow } from "./chat-window";
 
+const listChatSessionsCalls = vi.hoisted(() => vi.fn());
+const listChatMessagesPageCalls = vi.hoisted(() => vi.fn());
+const getPendingChatTaskCalls = vi.hoisted(() => vi.fn());
+
+/**
+ * MUL-472 b: the floating window must not preload the conversation while it is
+ * minimised. `mount()` uses `presentation="page"` (always visible) for the
+ * other suites, so this one drives the floating presentation.
+ */
+function mountFloatingOpen(open: boolean) {
+  const values = new Map<string, string>();
+  const store = createChatStore({ storage: {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value); },
+    removeItem: key => { values.delete(key); },
+  } });
+  store.getState().setActiveSession(session.id);
+  store.getState().setOpen(open);
+  registerChatStore(store);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const result = render(
+    <QueryClientProvider client={client}>
+      <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, runtimes: enRuntimes } }}>
+        <ChatWindow />
+      </I18nProvider>
+    </QueryClientProvider>,
+  );
+  return { ...result, store, client };
+}
+
 const session: ChatSession = {
   id: "chat-a", workspace_id: "workspace-a", agent_id: "agent-a", creator_id: "user-a",
   project_id: "project-a", title: "Chat", status: "active", has_unread: false, pinned: false,
@@ -98,6 +137,9 @@ function mount(active: boolean = false) {
 }
 
 beforeEach(() => {
+  listChatSessionsCalls.mockReset();
+  listChatMessagesPageCalls.mockReset();
+  getPendingChatTaskCalls.mockReset();
   backend.sessions = [];
   backend.pending = {};
   backend.create.mockReset().mockImplementation(async (data) => {
@@ -303,5 +345,36 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(store.getState().draftProjectId).toBeNull();
     expect(screen.getByRole("button", { name: "Work location: Automatic" })).toBeEnabled();
+  });
+});
+
+describe("minimised chat window preloads nothing (MUL-472 b)", () => {
+  it("does not fetch sessions, messages or the pending task while closed", async () => {
+    mountFloatingOpen(false);
+
+    // Give the queries a couple of macrotasks to start if they were enabled.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(listChatSessionsCalls).not.toHaveBeenCalled();
+    expect(listChatMessagesPageCalls).not.toHaveBeenCalled();
+    expect(getPendingChatTaskCalls).not.toHaveBeenCalled();
+  });
+
+  it("starts fetching as soon as the window is opened", async () => {
+    const { store } = mountFloatingOpen(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(listChatSessionsCalls).not.toHaveBeenCalled();
+
+    await act(async () => {
+      store.getState().setOpen(true);
+    });
+
+    await waitFor(() => expect(listChatSessionsCalls).toHaveBeenCalled());
+    await waitFor(() => expect(getPendingChatTaskCalls).toHaveBeenCalled());
+    await waitFor(() => expect(listChatMessagesPageCalls).toHaveBeenCalled());
   });
 });

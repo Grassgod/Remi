@@ -28,6 +28,9 @@ export const workbenchKeys = {
   all: (wsId: string) => [...issueKeys.all(wsId), "workbench"] as const,
   status: (wsId: string, status: IssueStatus) =>
     [...workbenchKeys.all(wsId), status] as const,
+  /** Sidebar badge roll-up over `WORKBENCH_PENDING_STATUSES` (MUL-472 c). */
+  pendingCount: (wsId: string) =>
+    [...workbenchKeys.all(wsId), "pending-count"] as const,
   blocked: (wsId: string) => workbenchKeys.status(wsId, "blocked"),
 };
 
@@ -37,10 +40,16 @@ export const workbenchKeys = {
  * issues/my-issues pages cache — ws-updaters patch that shape in place, so
  * this key gets plain invalidation instead (see issues/ws-updaters.ts).
  */
-export function workbenchIssuesOptions(wsId: string, status: IssueStatus) {
+export function workbenchIssuesOptions(
+  wsId: string,
+  status: IssueStatus,
+  /** MUL-472 b: `false` defers the request; a cached list still renders. */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: workbenchKeys.status(wsId, status),
     queryFn: () => api.listIssues({ status, limit: WORKBENCH_PAGE_SIZE, offset: 0 }),
+    enabled: options.enabled ?? true,
   });
 }
 
@@ -76,19 +85,42 @@ export function partitionReviewIssues(
 
 /**
  * Count of issues waiting on a human or blocked after a failed task, for the
- * sidebar badge. Shares both cache entries with the workbench page, so the
- * badge adds no requests while that page is mounted.
+ * sidebar badge.
+ *
+ * MUL-472 c: one request for both statuses (`statuses=in_review,blocked`, the
+ * comma list the server already accepts) instead of two, deferred with the rest
+ * of the shell. `limit` stays at 1 because the badge reads only `total`, and
+ * `countIssues` ignores the limit — so the response is one row instead of the
+ * two 200-row lists the old pair pulled down on every page.
+ *
+ * The row data stays under the per-status `workbenchKeys.status` entries: the
+ * workbench page needs the buckets, this key only needs the roll-up total.
  */
-export function useWorkbenchPendingCount(wsId: string | null | undefined): number {
-  const { data: reviewCount } = useQuery({
-    ...workbenchIssuesOptions(wsId ?? "", "in_review"),
-    enabled: !!wsId,
+export const WORKBENCH_PENDING_STATUSES: readonly IssueStatus[] = ["in_review", "blocked"];
+
+export function workbenchPendingCountOptions(
+  wsId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return queryOptions({
+    queryKey: workbenchKeys.pendingCount(wsId),
+    queryFn: () =>
+      api.listIssues({
+        statuses: [...WORKBENCH_PENDING_STATUSES],
+        limit: 1,
+      }),
+    enabled: options.enabled ?? true,
     select: (res) => res.total,
   });
-  const { data: blockedCount } = useQuery({
-    ...workbenchIssuesOptions(wsId ?? "", "blocked"),
-    enabled: !!wsId,
-    select: (res) => res.total,
+}
+
+export function useWorkbenchPendingCount(
+  wsId: string | null | undefined,
+  /** MUL-472 c: the badge request is part of the shell, so it waits with it. */
+  enabled = true,
+): number {
+  const { data } = useQuery({
+    ...workbenchPendingCountOptions(wsId ?? "", { enabled: enabled && !!wsId }),
   });
-  return (reviewCount ?? 0) + (blockedCount ?? 0);
+  return data ?? 0;
 }

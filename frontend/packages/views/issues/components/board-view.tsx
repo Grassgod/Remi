@@ -140,7 +140,11 @@ export function BoardView({
   const sortLabel = sortBy !== "position"
     ? t(($) => $.board.ordered_by, { field: t(($) => $.display[`sort_${sortFieldKey}` as keyof typeof $.display]) })
     : null;
-  const { getActorName } = useActorName();
+  // Actor names are the assignee board's column labels, not row decoration.
+  const { getActorName } = useActorName({
+    squadsEnabled: grouping === "assignee" ? true : undefined,
+    agentsEnabled: grouping === "assignee" ? true : undefined,
+  });
   const myIssuesOpts = myIssuesScope
     ? { scope: myIssuesScope, filter: myIssuesFilter ?? {} }
     : undefined;

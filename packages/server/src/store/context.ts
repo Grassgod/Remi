@@ -469,6 +469,7 @@ export interface NotificationChannelsSurface {
   }): void;
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): { delivered: number; dropped: number };
 }
@@ -529,6 +530,8 @@ export interface TasksSurface {
     deferredEvents: CommitEventQueue,
   ): MultiremiTask;
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
+  /** Caller owns the transaction and post-commit notifications; emits no events. */
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): import("@multiremi/contracts/types.js").MultiremiTaskSteerMessage;
   ensureDelegationWakeup(input: {
     sourceTaskId: string;
     requiredEventSeq: number;
