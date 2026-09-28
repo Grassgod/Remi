@@ -59,6 +59,21 @@ export function currentRequestUserId(c: Context): string {
   return currentAuth(c).requestUserId;
 }
 
+/**
+ * MUL-448: the anonymous compatibility mode, told apart from a credentialed
+ * request by the verification result the auth middleware already produced.
+ *
+ * `currentAuth` carries no access token and no verified user for the master
+ * token and for auth-disabled deployments - the two deployments that
+ * historically let a request name its own identity through the body or the
+ * `X-Agent-ID`/`X-Task-ID` headers. Every other request (member PAT, login JWT,
+ * task token, daemon token) is credentialed and must derive identity from it.
+ */
+export function isAnonymousCompatibilityRequest(c: Context): boolean {
+  const auth = currentAuth(c);
+  return !auth.accessToken && !auth.jwtUserId;
+}
+
 export function authenticatedRequestUserId(c: Context): string | null {
   return currentAuth(c).userId;
 }
