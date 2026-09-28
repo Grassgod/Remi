@@ -2,6 +2,11 @@ export { WSProvider, useWS } from "./provider";
 export type { WSProviderProps } from "./provider";
 export { useWSEvent, useWSReconnect } from "./hooks";
 export {
+  resetStreamSubscriptionCountsForTesting,
+  useLogStreamSubscription,
+  useTraceStreamSubscription,
+} from "./streams";
+export {
   useChatScopeSubscription,
   useTaskScopeSubscription,
 } from "./use-task-scope-subscription";

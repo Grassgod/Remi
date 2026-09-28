@@ -328,6 +328,28 @@ export function sendFrameToBrowserWorkspaceClientsFiltered(
   }
 }
 
+/**
+ * Who owns the chat session an invalidation event is about.
+ *
+ * The session row is the authority; a deleted session has none left, which is
+ * exactly the `chat:session_deleted` case, so the event's own actor is the
+ * fallback — `emitChatEvent` stamps the session's creator there
+ * (`store/context.ts:833`). `null` means the creator could not be resolved, and
+ * the caller drops the event rather than broadcasting private chat state.
+ */
+export function chatEventCreatorId(
+  store: MultiremiStore | null | undefined,
+  event: { chatSessionId?: string; payload: Record<string, unknown>; actorId?: string | null },
+): string | null {
+  const chatSessionId = chatEventSessionId(event);
+  if (chatSessionId) {
+    const session = store?.getChatSession(chatSessionId);
+    if (session?.creatorId) return session.creatorId;
+  }
+  const actorId = cleanString(event.actorId);
+  return actorId || null;
+}
+
 export function notifyBrowserWorkspaceEvent(
   workspaceRegistry: BrowserWebSocketRegistry,
   userRegistry: BrowserUserWebSocketRegistry,
@@ -340,6 +362,12 @@ export function notifyBrowserWorkspaceEvent(
     actorType?: string;
     actorId?: string | null;
   },
+  /**
+   * MUL-438: chat lifecycle invalidations need the session's creator, which the
+   * event payload does not carry. Only the chat branch reads it; every other
+   * caller may omit it.
+   */
+  options: { store?: MultiremiStore | null } = {},
 ): void {
   const envelope = {
     type: event.type,
@@ -356,6 +384,19 @@ export function notifyBrowserWorkspaceEvent(
   };
   if (isChatRealtimeEvent(event.type)) {
     const chatSessionId = chatEventSessionId(event);
+    // MUL-438: the chat lifecycle signals are per-session invalidations, not
+    // stream data. They used to ride the `chat` scope, which the C0 plan deletes
+    // at C12; routing them to the creator's user registry keeps a reconnecting
+    // client's chat caches correct without the scope, and keeps the payload out
+    // of every other workspace member's socket. `chat:message` stays on the scope
+    // until C12 (plan 2/6 §2's compatibility rule).
+    if (CHAT_CREATOR_ROUTED_EVENTS.has(event.type)) {
+      const creatorId = chatEventCreatorId(options.store, event);
+      if (creatorId) {
+        notifyBrowserUserEventByAudience(userRegistry, creatorId, frames, undefined, event.workspaceId);
+      }
+      return;
+    }
     if (chatSessionId) notifyBrowserScopeClientsByAudience(scopeRegistry, "chat", chatSessionId, frames);
     return;
   }
@@ -469,11 +510,21 @@ function notifyBrowserUserEventByAudience(
   userId: string,
   frames: BrowserWorkspaceEventFrames,
   excludeWorkspaceId?: string,
+  /**
+   * MUL-438: when set, only sockets bound to this workspace receive the frame.
+   *
+   * The user registry is keyed by user, and one user can hold a socket in every
+   * workspace they belong to; a private chat invalidation belongs to exactly one
+   * of them. Without this a workspace-B tab would be handed a workspace-A
+   * session's title.
+   */
+  onlyWorkspaceId?: string,
 ): void {
   const clients = registry.get(userId);
   if (!clients?.size) return;
   for (const client of [...clients]) {
     if (client.data.kind === "browser" && excludeWorkspaceId && client.data.workspaceId === excludeWorkspaceId) continue;
+    if (client.data.kind === "browser" && onlyWorkspaceId && client.data.workspaceId !== onlyWorkspaceId) continue;
     try {
       client.sendText(browserWorkspaceEventFrame(client, frames));
     } catch {
@@ -486,6 +537,18 @@ function notifyBrowserUserEventByAudience(
     }
   }
 }
+
+/**
+ * Chat invalidations that belong to the session's creator rather than to the
+ * `chat` scope (MUL-438, plan 2/6 §2's 事件归属调整).
+ */
+export const CHAT_CREATOR_ROUTED_EVENTS: ReadonlySet<string> = new Set([
+  "chat:done",
+  "chat:queue_updated",
+  "chat:session_read",
+  "chat:session_deleted",
+  "chat:session_updated",
+]);
 
 export function isChatRealtimeEvent(type: string): boolean {
   return type === "chat:message"
