@@ -22,6 +22,7 @@ import {
   type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
+import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
   TRANSIENT_RETRY_FAILURE_REASONS,
@@ -99,6 +100,42 @@ import {
 const log = createLogger("multiremi-store");
 
 type Row = Record<string, unknown>;
+
+/**
+ * The Task columns the daemon identity guard, the task-level handlers and the
+ * task-message fan-out need — every scalar field they read, and none of the big
+ * payload columns (`prompt`, `result`, `usage`).
+ *
+ * MUL-474: the guard used to pull `SELECT *` and then the handler pulled it
+ * again, so a single 2.5 s poll shipped the full (>=100 KB) prompt across the
+ * Postgres bridge three times. Reads of this projection are cached per request
+ * under the same table scope `getTask` uses, so a write anywhere in the request
+ * invalidates them exactly like the full row.
+ */
+export interface MultiremiTaskIdentity {
+  id: string;
+  workspaceId: string;
+  runtimeId: string | null;
+  status: MultiremiTaskStatus;
+  agentId: string;
+  chatSessionId: string | null;
+  issueId: string | null;
+  issueSessionId: string | null;
+}
+
+/** One Task's snapshot fields, projected without the prompt/plugin payload columns. */
+export interface TaskStatusSnapshot {
+  id: string;
+  workspaceId: string;
+  status: MultiremiTaskStatus;
+  result: string | null;
+  error: string | null;
+  sessionId: string | null;
+  workDir: string | null;
+  usage: TaskUsageEntry[];
+  startedAt: string | null;
+  completedAt: string | null;
+}
 
 const TASK_AUTOPILOT_LOOKUP_BATCH_SIZE = 500;
 
@@ -1413,8 +1450,79 @@ export class TasksRepo {
   }
 
   getTask(id: string): MultiremiTask | null {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(id) as Row | null;
+    const row = this.readTaskRow(id);
     return row ? this.withTaskAutopilotRun(toTask(row)) : null;
+  }
+
+  /**
+   * The Task row, cached for the life of the request.
+   *
+   * One request reads this row from the auth guard, from the handler and again
+   * from a store method the handler calls; the cache is request-scoped and every
+   * write to `multiremi_tasks` clears it, so a read that follows a write in the
+   * same request still reaches the database (same contract as the Runtime row:
+   * see `runtimes-repo.readRuntimeRow`).
+   */
+  private readTaskRow(id: string): Row | null {
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_tasks", "row", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached;
+    }
+    const row = this.ctx.db.query("SELECT * FROM multiremi_tasks WHERE id = ?").get(id) as Row | null;
+    cache?.set(key, row);
+    return row;
+  }
+
+  /**
+   * MUL-474: the guard and the task-level handlers only ever look at identity,
+   * workspace, status and routing fields. Reading the whole row — `prompt`
+   * (>=100 KB in production), `result`, `usage`, the duplicated plugin snapshot —
+   * made every 2.5 s poll pay for columns nobody read.
+   */
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
+    const cache = activeRequestReadCache();
+    const key = cacheKey("multiremi_tasks", "identity", id);
+    if (cache) {
+      const cached = cache.get<Row | null>(key);
+      if (cached !== undefined) return cached ? toTaskIdentity(cached) : null;
+    }
+    const row = this.ctx.db.query(
+      `SELECT id, workspace_id, runtime_id, status, agent_id, chat_session_id, issue_id, issue_session_id
+       FROM multiremi_tasks WHERE id = ?`,
+    ).get(id) as Row | null;
+    cache?.set(key, row);
+    return row ? toTaskIdentity(row) : null;
+  }
+
+  /**
+   * MUL-474: the `status` route's response fields, without the prompt.
+   *
+   * The Feishu host renders `getFeishuBotTaskSnapshot` from this, so the shape is
+   * a contract: every field the route returned before is still returned, and the
+   * `result` / `session_id` / `work_dir` fallbacks are the same ones
+   * {@link toTask} applies.
+   */
+  getTaskStatusSnapshot(id: string): TaskStatusSnapshot | null {
+    const row = this.ctx.db.query(
+      `SELECT id, workspace_id, status, result, error, session_id, work_dir, usage, started_at, completed_at
+       FROM multiremi_tasks WHERE id = ?`,
+    ).get(id) as Row | null;
+    if (!row) return null;
+    const storedResult = normalizeStoredTaskResult(row.result);
+    return {
+      id: String(row.id),
+      workspaceId: String(row.workspace_id ?? "local"),
+      status: String(row.status) as MultiremiTaskStatus,
+      result: storedResult.output,
+      error: nullableString(row.error),
+      sessionId: nullableString(row.session_id) ?? storedResult.sessionId,
+      workDir: nullableString(row.work_dir) ?? storedResult.workDir,
+      usage: parseJson<TaskUsageEntry[]>(row.usage, []),
+      startedAt: nullableString(row.started_at),
+      completedAt: nullableString(row.completed_at),
+    };
   }
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {
@@ -3094,7 +3202,10 @@ export class TasksRepo {
 
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     if (messages.length === 0) return [];
-    const task = this.getTask(taskId);
+    // MUL-474: identity only. The fan-out below routes and authorizes by these
+    // fields, so neither this read nor the post-write re-read needs `prompt`,
+    // `result` or `usage`.
+    const task = this.getTaskIdentity(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     const current = this.ctx.db.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?")
       .get(taskId) as { seq: number } | null;
@@ -3158,7 +3269,7 @@ export class TasksRepo {
       .filter((row) => changedSeqSet.has(Number(row.seq)))
       .map(toTaskMessage);
     // Listeners see only rows that changed, using their persisted, sanitized values.
-    this.ctx.notifyTaskMessages(this.getTask(taskId) ?? task, changed);
+    this.ctx.notifyTaskMessages(this.getTaskIdentity(taskId) ?? task, changed);
     return changed;
   }
 
@@ -5200,6 +5311,19 @@ function normalizeRepos(rawRepos: unknown[], defaultBranchFor?: (url: string) =>
     repos.push({ url, ...(description ? { description } : {}), ...(defaultBranch ? { defaultBranch } : {}) });
   }
   return repos;
+}
+
+function toTaskIdentity(row: Row): MultiremiTaskIdentity {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    runtimeId: nullableString(row.runtime_id),
+    status: String(row.status) as MultiremiTaskStatus,
+    agentId: String(row.agent_id),
+    chatSessionId: nullableString(row.chat_session_id),
+    issueId: nullableString(row.issue_id),
+    issueSessionId: nullableString(row.issue_session_id),
+  };
 }
 
 function toTask(row: Row): MultiremiTask {
