@@ -81,6 +81,8 @@ export class ReplicaLeader {
   private readonly tokens = new Map<string, string>();
   private readonly pendingOpens = new Set<string>();
   private generation = 0;
+  private epoch = 0;
+  private clearing = false;
   /**
    * Sessions with a read in flight.
    *
@@ -192,6 +194,9 @@ export class ReplicaLeader {
 
   /** Drop everything: logout, a user mismatch or a schema upgrade. */
   clear(reason: "logout" | "user_mismatch" | "schema_upgrade"): void {
+    if (this.disposed || this.clearing) return;
+    this.clearing = true;
+    this.invalidateDatabase();
     this.post({ type: "clear", reason });
   }
 
@@ -230,6 +235,7 @@ export class ReplicaLeader {
 
   private async onWorkerMessage(message: ReplicaWorkerResponse): Promise<void> {
     if (this.disposed) return;
+    if (message.epoch !== undefined && message.epoch !== this.epoch) return;
     if ("sessionId" in message && !this.isCurrent(message.sessionId, message.token)) return;
     switch (message.type) {
       case "ready": {
@@ -239,7 +245,7 @@ export class ReplicaLeader {
       }
       case "opened": {
         if (!this.pendingOpens.delete(message.sessionId)) return;
-        if (message.cleared) this.clearAndBroadcast(message.cleared);
+        if (message.cleared) { this.clearAndBroadcast(message.cleared); return; }
         // Paint what the database already held before the socket answers: on a
         // takeover this is the previous leader's window, and showing it is what
         // keeps the handoff from flashing an empty list.
@@ -312,9 +318,9 @@ export class ReplicaLeader {
    */
   private post(request: ReplicaWorkerRequest): void {
     if (this.disposed) return;
-    this.options.worker.postMessage("sessionId" in request
-      ? { ...request, token: this.tokens.get(request.sessionId) }
-      : request);
+    this.options.worker.postMessage({ ...request, epoch: this.epoch,
+      ...("sessionId" in request ? { token: this.tokens.get(request.sessionId) } : {}),
+    });
   }
 
   private requestOpen(sessionId: string): void {
@@ -329,9 +335,21 @@ export class ReplicaLeader {
   }
 
   private clearAndBroadcast(reason: "logout" | "user_mismatch" | "schema_upgrade"): void {
+    if (!this.clearing) this.invalidateDatabase();
+    this.clearing = false;
     this.options.view.dropAll();
     this.options.onCleared?.(reason);
     this.options.broadcast({ type: "replica:cleared", reason });
+  }
+
+  private invalidateDatabase(): void {
+    this.epoch += 1;
+    for (const sessionId of this.openCounts.keys()) this.options.subscription.unsubscribe(sessionId);
+    this.openCounts.clear();
+    this.owners.clear();
+    this.tokens.clear();
+    this.pendingOpens.clear();
+    this.options.view.dropAll();
   }
 
   /**

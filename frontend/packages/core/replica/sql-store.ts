@@ -138,6 +138,7 @@ export class SqlReplicaStorage implements ReplicaStorage {
    * owner; a logout leaves it empty on purpose so the next user starts clean.
    */
   clearDatabase(): void {
+    this.statement(SQL.deleteAllMeta).run([]);
     this.statement(SQL.deleteAllEntries).run([]);
     this.statement(SQL.deleteAllRanges).run([]);
     this.statement(SQL.deleteAllHeads).run([]);

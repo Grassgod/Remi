@@ -112,6 +112,13 @@ export class ReplicaFollower implements SessionReplicaPort {
     this.requested.clear();
   }
 
+  invalidate(): void {
+    this.pending.clear();
+    for (const sessionId of this.requested) this.closed.add(sessionId);
+    this.requested.clear();
+    this.options.view.dropAll();
+  }
+
   dispose(): void {
     for (const sessionId of [...this.requested]) this.close(sessionId);
     this.disposed = true;
@@ -151,20 +158,8 @@ export class ReplicaFollower implements SessionReplicaPort {
         return;
       }
       case "replica:cleared": {
-        this.options.view.dropAll();
+        this.invalidate();
         this.options.onCleared?.(message.reason);
-        // Reset the "already announced" memory, or `getSnapshot` would never
-        // announce this session again and the fresh database would stay empty on
-        // this tab — the clear would look like a permanent loss of data.
-        const sessions = [...this.requested];
-        this.requested.clear();
-        for (const sessionId of sessions) {
-          this.requested.add(sessionId);
-          // Announce first: the leader refcounts opens, and after a clear its own
-          // subscription is gone too.
-          this.options.broadcast({ type: "replica:open", sessionId });
-          this.request(sessionId);
-        }
         return;
       }
       case "replica:leader": {

@@ -93,7 +93,7 @@ export type ReplicaWorkerRequest = (
   | ReplicaWorkerWriteHeightMessage
   | ReplicaWorkerClearMessage
   | ReplicaWorkerSnapshotMessage
-) & { token?: string };
+) & { token?: string; epoch?: number };
 
 export interface ReplicaWorkerReadyMessage {
   type: "ready";
@@ -179,4 +179,4 @@ export type ReplicaWorkerResponse = (
   | ReplicaWorkerHeightMessage
   | ReplicaWorkerClearedMessage
   | ReplicaWorkerErrorMessage
-) & { token?: string };
+) & { token?: string; epoch?: number };

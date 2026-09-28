@@ -174,7 +174,7 @@ class ReplicaFacade implements BrowserReplica {
       view,
       broadcast: (message) => this.broadcast(message),
       requestWindow: (input) => this.broadcast({ type: "replica:query", ...input }),
-      onCleared: options.onCleared,
+      onCleared: (reason) => { this.wanted.clear(); options.onCleared?.(reason); },
       nextRequestId: () => `${options.tabId}:${++this.requestCounter}`,
     });
     if (channel) {
@@ -207,6 +207,9 @@ class ReplicaFacade implements BrowserReplica {
     const leader = this.leader;
     if (!leader) return;
     switch (message.type) {
+      case "replica:clear":
+        leader.leader.clear(message.reason);
+        return;
       case "replica:open": {
         // Another tab is showing this session; refcount it so the subscription
         // outlives whichever tab is in front.
@@ -268,7 +271,9 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   private async becomeLeader(): Promise<void> {
-    const session = await startLeader(this.options, this.env, this.view, (message) => this.broadcast(message), this.wanted);
+    const session = await startLeader({ ...this.options, onCleared: (reason) => {
+      this.wanted.clear(); this.follower.invalidate(); this.options.onCleared?.(reason);
+    } }, this.env, this.view, (message) => this.broadcast(message), this.wanted);
     if (this.disposed) {
       session.leader.dispose();
       session.bridge.terminate?.();
@@ -338,7 +343,8 @@ class ReplicaFacade implements BrowserReplica {
     }
     // A follower cannot delete the database; the leader's `replica:cleared`
     // broadcast is what drops every tab's cache.
-    this.view.dropAll();
+    this.follower.invalidate();
+    this.broadcast({ type: "replica:clear", reason });
   }
 
   get isLeader(): boolean {
@@ -384,6 +390,8 @@ class ReplicaFacade implements BrowserReplica {
 function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaView): BrowserReplica {
   const engine = new ReplicaEngine(new MemoryReplicaStorage());
   const openSessions = new Set<string>();
+  let generation = 0;
+  let disposed = false;
 
   const refreshView = (sessionId: string): void => {
     const snapshot = engine.snapshot(sessionId);
@@ -397,6 +405,7 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
   return {
     port: view,
     open: (sessionId) => {
+      if (disposed) return;
       if (openSessions.has(sessionId)) return;
       openSessions.add(sessionId);
       const opened = engine.openSession({ sessionId, userId: options.userId, workspaceId: options.workspaceId });
@@ -406,6 +415,7 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
     close: (sessionId) => {
       if (!openSessions.delete(sessionId)) return;
       options.unsubscribe(sessionId);
+      generation += 1;
     },
     resubscribe: (sessionId) => {
       if (!openSessions.has(sessionId)) return;
@@ -413,26 +423,40 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
       options.subscribe(sessionId, engine.resumeFrom(sessionId));
     },
     loadWindow: async (sessionId, range) => {
+      const current = generation;
       const entries = await options.readRange(sessionId, range);
+      if (disposed || generation !== current || !openSessions.has(sessionId)) return;
       engine.writeWindow(sessionId, entries, range);
       refreshView(sessionId);
     },
     frames: (sessionId, frames) => {
+      if (disposed || !openSessions.has(sessionId)) return;
       engine.frames(sessionId, frames);
       refreshView(sessionId);
     },
     ack: (sessionId, ack) => {
+      if (disposed || !openSessions.has(sessionId)) return;
       engine.ack(sessionId, ack);
       refreshView(sessionId);
     },
     clear: (reason) => {
+      if (disposed) return;
+      generation += 1;
+      for (const sessionId of openSessions) options.unsubscribe(sessionId);
+      openSessions.clear();
       engine.clear(reason);
       view.dropAll();
+      options.onCleared?.(reason);
     },
     isLeader: true,
     storage: "memory",
     degraded: true,
-    dispose: () => engine.close(),
+    dispose: () => {
+      if (disposed) return;
+      disposed = true; generation += 1;
+      for (const sessionId of openSessions) options.unsubscribe(sessionId);
+      openSessions.clear(); engine.close();
+    },
   };
 }
 
@@ -543,7 +567,7 @@ function createWorkerBridge(options: BrowserReplicaOptions, env: BrowserReplicaE
   return {
     postMessage: (message) => {
       for (const response of handleInline(engine, options, message)) {
-        for (const listener of [...listeners]) listener({ ...response, token: message.token });
+        for (const listener of [...listeners]) listener({ ...response, token: message.token, epoch: message.epoch });
       }
     },
     onMessage: (listener) => {

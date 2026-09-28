@@ -79,25 +79,26 @@ export class ReplicaEngine {
     cleared: ReplicaClearEvent | null;
   } {
     const schemaVersion = this.storage.readMeta(META_SCHEMA_VERSION);
+    let cleared: ReplicaClearEvent | null = null;
     if (schemaVersion !== null && schemaVersion !== String(REPLICA_SCHEMA_VERSION)) {
       this.clear("schema_upgrade");
-      return { fromSeq: 1, state: this.storage.readState(input.sessionId), cleared: { reason: "schema_upgrade" } };
+      cleared = { reason: "schema_upgrade" };
     }
 
     const storedUser = this.storage.readMeta(META_USER_ID);
     const storedWorkspace = this.storage.readMeta(META_WORKSPACE_ID);
     if (storedUser !== null && (storedUser !== input.userId || storedWorkspace !== input.workspaceId)) {
       this.clear("user_mismatch");
-      return { fromSeq: 1, state: this.storage.readState(input.sessionId), cleared: { reason: "user_mismatch" } };
+      cleared = { reason: "user_mismatch" };
     }
 
-    if (schemaVersion === null) this.storage.writeMeta(META_SCHEMA_VERSION, String(REPLICA_SCHEMA_VERSION));
-    if (storedUser === null) this.storage.writeMeta(META_USER_ID, input.userId);
-    if (storedWorkspace === null) this.storage.writeMeta(META_WORKSPACE_ID, input.workspaceId);
+    this.storage.writeMeta(META_SCHEMA_VERSION, String(REPLICA_SCHEMA_VERSION));
+    this.storage.writeMeta(META_USER_ID, input.userId);
+    this.storage.writeMeta(META_WORKSPACE_ID, input.workspaceId);
 
     this.knownSessions.add(input.sessionId);
     const state = this.storage.readState(input.sessionId);
-    return { fromSeq: subscribeFromSeq(state), state, cleared: null };
+    return { fromSeq: subscribeFromSeq(state), state, cleared };
   }
 
   /** Drop one session's rows (a `log_version` change, step 2). */

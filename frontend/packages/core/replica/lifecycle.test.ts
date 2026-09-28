@@ -24,6 +24,21 @@ function leaderHarness() {
 }
 
 describe("page and subscription lifetimes", () => {
+  test("clear cancels worker replies and follower window replies from the previous database", () => {
+    const h = leaderHarness(); h.leader.open("session");
+    const request = h.requests.at(-1)!;
+    h.leader.clear("logout");
+    h.leader.handleWorkerMessage(h.opened(request, 8));
+    expect(h.subscriptions).toEqual([]);
+    const view = new ReplicaView();
+    const follower = new ReplicaFollower({ view, broadcast: () => {}, requestWindow: () => {} });
+    follower.getSnapshot("session");
+    follower.handle({ type: "replica:cleared", reason: "logout" });
+    follower.handle({ type: "replica:window", sessionId: "session", requestId: "req_1",
+      entries: [], snapshot: { head: 8, fresh: true, ready: true } });
+    expect(view.getSnapshot("session")).toMatchObject({ head: null, ready: false, fresh: false });
+  });
+
   test("late opened after close or dispose never subscribes", () => {
     for (const action of ["close", "dispose"] as const) {
       const h = leaderHarness(); h.leader.open("session");

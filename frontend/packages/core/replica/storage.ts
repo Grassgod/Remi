@@ -124,6 +124,7 @@ export class MemoryReplicaStorage implements ReplicaStorage {
   }
 
   clearDatabase(): void {
+    this.meta.clear();
     this.entries.clear();
     this.states.clear();
     this.heights.clear();

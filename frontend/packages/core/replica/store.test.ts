@@ -141,7 +141,10 @@ describe("SQL replica storage", () => {
     expect(opened.cleared).toEqual({ reason: "user_mismatch" });
     expect(opened.fromSeq).toBe(1);
     expect(second.readWindow("sess_1", 0, 10)).toEqual([]);
-    expect(storage.readMeta(META_USER_ID)).toBe("user_1");
+    expect(storage.readMeta(META_USER_ID)).toBe("user_2");
+    second.frames("sess_1", [entryFrame(1)]);
+    expect(second.openSession({ sessionId: "sess_1", userId: "user_2", workspaceId: "ws_1" }).cleared).toBeNull();
+    expect(second.readWindow("sess_1", 0, 10)).toHaveLength(1);
     second.close();
   });
 

@@ -146,14 +146,13 @@ export class ReplicaWorkerHost {
 
   async handle(request: ReplicaWorkerRequest): Promise<void> {
     const emit = this.options.post ?? ((message: ReplicaWorkerResponse) => self.postMessage(message));
-    const post = (message: ReplicaWorkerResponse) => emit({ ...message, token: request.token });
+    const post = (message: ReplicaWorkerResponse) => emit({ ...message, token: request.token, epoch: request.epoch });
     try {
       if (request.type === "init") {
         this.databaseName = this.options.databaseName ?? replicaDatabaseName(request.userId, request.workspaceId);
         const opened = await openReplicaStorage(this.databaseName, this.options.storage ?? request.storage);
         this.identity = { userId: request.userId, workspaceId: request.workspaceId };
         this.engine = new ReplicaEngine(opened.storage);
-        this.engine.onClear = (reason) => post({ type: "cleared", reason });
         this.storageKind = opened.storageKind;
         post({ type: "ready", storage: opened.storageKind, degraded: opened.degraded });
         return;
@@ -164,6 +163,7 @@ export class ReplicaWorkerHost {
         post({ type: "error", request: request.type, message: "replica worker received a request before init" });
         return;
       }
+      engine.onClear = (reason) => post({ type: "cleared", reason });
 
       switch (request.type) {
         case "open": {

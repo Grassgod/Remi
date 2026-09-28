@@ -88,6 +88,11 @@ export interface ReplicaClearedMessage {
   reason: "logout" | "user_mismatch" | "schema_upgrade";
 }
 
+export interface ReplicaClearMessage {
+  type: "replica:clear";
+  reason: ReplicaClearedMessage["reason"];
+}
+
 /**
  * The leader changed hands.
  *
@@ -116,6 +121,7 @@ export type ReplicaChannelMessage = (
   | ReplicaOpenMessage
   | ReplicaAppendedMessage
   | ReplicaClearedMessage
+  | ReplicaClearMessage
   | ReplicaLeaderChangedMessage
   | ReplicaAckMessage
   | ReplicaRowHeightMessage
