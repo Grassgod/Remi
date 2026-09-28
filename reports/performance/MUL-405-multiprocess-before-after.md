@@ -346,6 +346,7 @@ MUL-386（PR #255，`fd52ff9e`）合入 main 后，按本单「观测」行给�
 409 的 `get/reset maxTransactionDepth` 只是读写计数器；它新增的
 `query(... FOR UPDATE).get(...)` 也返回上述语句包装，并未直接调用 bridge。
 哨兵规则、开关、CI 默认开启、afterCommit 行为均保持第四轮实现。
+第七轮 fix8 补齐 PG 高位字符标识符与执行型 EXPLAIN 的分类；哨兵只保证 server 实际发出的语句类型，未使用的动态 SQL 包装/自定义函数不分析内层效果，未引用的锁定 CTE 继续保守记账以避免漏掉总会执行的数据修改型 CTE。
 
 409 的 “keep the force lock order” 是 `4a75ee87`：可能 dispatch 的请求，
 先锁 workspace 行，再锁 Issue 行。该路径不取 N，与本单 W→D 一致。

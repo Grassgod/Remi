@@ -29,6 +29,15 @@
  * what caught `archiveAgent` writing `UPDATE multiremi_agents` before the audit
  * number lock.
  *
+ * Scope: this is a guard for SQL actually emitted by the server, not a complete
+ * PostgreSQL interpreter. DO, CALL, SQL PREPARE/EXECUTE, DECLARE/FETCH cursors,
+ * COPY (query), CREATE TABLE AS, SELECT INTO, materialized views and calls to
+ * user-defined SQL functions are not emitted by protected server transactions;
+ * their inner effects are not analyzed. Database.prepare() is an API, not SQL
+ * PREPARE. EXPLAIN ANALYZE does execute SQL and classifies its entire inner
+ * statement. WITH bodies are deliberately counted even when unreferenced:
+ * pruning them could miss data-modifying CTEs, which always execute.
+ *
  * SQLite has no advisory locks, so on SQLite N never appears and only the W/D
  * relation is enforced. PostgreSQL enforces all three.
  *
@@ -45,7 +54,7 @@ const RANK: Record<LockOrderClass, number> = { W: 0, N: 1, D: 2 };
 /** The workspace lifecycle row lock (`StoreContext.lockWorkspaceRuntimeLifecycle`). */
 const WORKSPACE_ROW_LOCK = /UPDATE\s+multiremi_workspaces\s+SET\s+updated_at\s*=\s*updated_at/i;
 
-interface SqlToken { text: string; kind: "word" | "identifier" | "literal" | "symbol" }
+interface SqlToken { text: string; kind: "word" | "identifier" | "literal" | "symbol"; value?: string }
 interface SqlGroup { tokens: SqlNode[] }
 type SqlNode = SqlToken | SqlGroup;
 interface SelectLocks { tables: string[]; classes: LockOrderClass[] }
@@ -64,6 +73,10 @@ function identifier(node: SqlNode | undefined): string | null {
     ? node.text : null;
 }
 
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+}
+
 /** SQL lexical boundaries matter: comments and literals cannot acquire locks. */
 function sqlNodes(sql: string): SqlNode[] {
   const root: SqlNode[] = [];
@@ -71,7 +84,7 @@ function sqlNodes(sql: string): SqlNode[] {
   for (let i = 0; i < sql.length;) {
     const nodes = stack[stack.length - 1]!;
     const ch = sql[i]!;
-    if (/\s/.test(ch)) { i += 1; continue; }
+    if (/[ \t\n\r\f\v]/.test(ch)) { i += 1; continue; }
     if (sql.startsWith("--", i)) {
       const end = sql.indexOf("\n", i + 2);
       i = end < 0 ? sql.length : end + 1;
@@ -90,16 +103,17 @@ function sqlNodes(sql: string): SqlNode[] {
     if (ch === "'") {
       const escaped = /(?:^|[^\w$])E$/i.test(sql.slice(0, i));
       i += 1;
+      const start = i;
       while (i < sql.length) {
         if (escaped && sql[i] === "\\") i += 2;
         else if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
         else if (sql[i++] === "'") break;
       }
-      nodes.push({ text: "", kind: "literal" });
+      nodes.push({ text: "", kind: "literal", value: sql.slice(start, i - 1).replace(/''/g, "'") });
       continue;
     }
-    if (ch === "$" && /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(sql.slice(i))) {
-      const delimiter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i))![0];
+    const delimiter = ch === "$" ? /^\$(?:[A-Za-z_\u0080-\u{10ffff}][A-Za-z_0-9\u0080-\u{10ffff}]*)?\$/u.exec(sql.slice(i))?.[0] : undefined;
+    if (delimiter) {
       const end = sql.indexOf(delimiter, i + delimiter.length);
       i = end < 0 ? sql.length : end + delimiter.length;
       nodes.push({ text: "", kind: "literal" });
@@ -128,9 +142,10 @@ function sqlNodes(sql: string): SqlNode[] {
       i += 1;
       continue;
     }
-    const word = /^[A-Za-z_][\w$]*/.exec(sql.slice(i));
+    // PG scan.l accepts every high-bit byte; UTF-8 identifiers retain non-ASCII case.
+    const word = /^[A-Za-z_\u0080-\u{10ffff}][A-Za-z_0-9$\u0080-\u{10ffff}]*/u.exec(sql.slice(i));
     if (word) {
-      nodes.push({ text: word[0].toLowerCase(), kind: "word" });
+      nodes.push({ text: asciiLower(word[0]), kind: "word" });
       i += word[0].length;
     } else {
       nodes.push({ text: ch, kind: "symbol" });
@@ -266,8 +281,55 @@ function selectLocks(nodes: SqlNode[], inheritedCtes: ReadonlySet<string> = new 
   return { tables: refs.flatMap((ref) => ref.tables), classes };
 }
 
+const EXPLAIN_BOOLEAN_OPTIONS = new Set(["verbose", "costs", "settings", "generic_plan", "buffers", "wal", "timing", "summary", "memory"]);
+const EXPLAIN_STATEMENTS = new Set(["select", "with", "insert", "update", "delete", "merge", "values", "declare", "create", "refresh", "execute"]);
+
+function explainExecutes(options: SqlNode[]): boolean {
+  const entries: SqlNode[][] = [[]];
+  for (const node of options) {
+    if (symbol(node, ",")) entries.push([]);
+    else entries[entries.length - 1]!.push(node);
+  }
+  let executes = false;
+  for (const entry of entries) {
+    const name = identifier(entry[0]);
+    if (!name || entry.length > 2) return true;
+    const option = asciiLower(name);
+    const argument = entry[1];
+    if (argument && !("text" in argument)) return true;
+    const value = argument ? asciiLower(argument.value ?? argument.text) : undefined;
+    if (option === "analyze" || option === "analyse") {
+      executes ||= value === undefined || !["false", "off", "0"].includes(value);
+    } else if (EXPLAIN_BOOLEAN_OPTIONS.has(option)) {
+      if (value !== undefined && !["true", "on", "1", "false", "off", "0"].includes(value)) return true;
+    } else if (option === "format") {
+      if (value === undefined || !["text", "xml", "json", "yaml"].includes(value)) return true;
+    } else if (option === "serialize") {
+      if (value !== undefined && !["none", "text", "binary"].includes(value)) return true;
+    } else return true; // Unknown or malformed options must not hide executed SQL.
+  }
+  return executes;
+}
+
+function classifyExplain(nodes: SqlNode[]): LockOrderClass[] {
+  const options = nodes[1];
+  if (options && "tokens" in options) {
+    return explainExecutes(options.tokens) ? classifyStatementNodes(nodes.slice(2)) : [];
+  }
+  if (keyword(options, "analyze") || keyword(options, "analyse")) {
+    return classifyStatementNodes(nodes.slice(keyword(nodes[2], "verbose") ? 3 : 2));
+  }
+  const start = keyword(options, "verbose") ? 2 : 1;
+  if (nodes[start] && "text" in nodes[start]! && EXPLAIN_STATEMENTS.has(nodes[start]!.text)) return [];
+  // Fall back to the inner command if the legacy option syntax cannot be parsed.
+  const inner = nodes.findIndex((node, i) => i >= start && "text" in node
+    && node.kind === "word" && EXPLAIN_STATEMENTS.has(node.text));
+  return classifyStatementNodes(nodes.slice(inner < 0 ? start : inner));
+}
+
 function classifyStatementNodes(nodes: SqlNode[]): LockOrderClass[] {
-  if (nodes.length === 0 || keyword(nodes[0], "pragma") || keyword(nodes[0], "explain")) return [];
+  if (nodes.length === 0 || keyword(nodes[0], "pragma")) return [];
+  if (keyword(nodes[0], "explain")) return classifyExplain(nodes);
   // Transaction characteristics do not acquire row locks (e.g. S9-3a snapshots).
   if (keyword(nodes[0], "set") && keyword(nodes[1], "transaction")) return [];
   if (keyword(nodes[0], "select") || keyword(nodes[0], "with")) {

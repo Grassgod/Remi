@@ -60,6 +60,34 @@ describe.skipIf(!adminUrl)("MUL-405 native PG locking SELECT", () => {
     });
   }
 
+  for (const [label, sql] of [
+    ["unquoted Unicode OF alias", "SELECT \u540d.id FROM multiremi_issues AS \u540d WHERE \u540d.id = 'issue' FOR UPDATE OF \u540d"],
+    ["EXPLAIN ANALYZE", "EXPLAIN ANALYZE SELECT id FROM multiremi_issues WHERE id = 'issue' FOR UPDATE"],
+    ["EXPLAIN (ANALYZE TRUE, FORMAT JSON)", "EXPLAIN (ANALYZE TRUE, FORMAT JSON) SELECT id FROM multiremi_issues WHERE id = 'issue' FOR UPDATE"],
+  ]) {
+    it(`negative control: ${label} holds D and rejects subsequent W`, () => {
+      let held = false;
+      expect(() => db.transaction(() => {
+        db.query(sql!).all();
+        expect(() => observeRowLock("multiremi_issues", "issue")).toThrow("could not obtain lock on row");
+        expect(observeRowLock("multiremi_workspaces", "workspace")?.id).toBe("workspace");
+        held = true;
+        db.run(workspaceLock, "workspace");
+      })()).toThrow("MUL-405 lock order violated");
+      expect(held).toBe(true);
+      expect(observeRowLock("multiremi_issues", "issue")?.id).toBe("issue");
+    });
+
+    it(`positive control: W before ${label} commits`, () => {
+      db.transaction(() => {
+        db.run(workspaceLock, "workspace");
+        db.query(sql!).all();
+        expect(() => observeRowLock("multiremi_issues", "issue")).toThrow("could not obtain lock on row");
+      })();
+      expect(observeRowLock("multiremi_issues", "issue")?.id).toBe("issue");
+    });
+  }
+
   it("OF locks only the named alias: reading a joined workspace does not take W", () => {
     expect(() => db.transaction(() => {
       db.query(`SELECT i.id FROM multiremi_issues i
