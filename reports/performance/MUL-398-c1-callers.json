@@ -13,7 +13,7 @@
   {
     "key": "POST /api/daemon/scm/git-credentials",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 159,
+    "line": 162,
     "hazards": [
       "getTask"
     ]
@@ -21,16 +21,32 @@
   {
     "key": "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 513,
+    "line": 524,
     "hazards": [
       "getAgent",
       "listSkillFiles"
     ]
   },
   {
+    "key": "GET /api/daemon/issues/:issueId/decisions/:decisionId",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 567,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
+    "key": "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer",
+    "file": "packages/server/src/api/routers/daemon.ts",
+    "line": 588,
+    "hazards": [
+      "getIssue"
+    ]
+  },
+  {
     "key": "POST /api/daemon/runtimes/:runtimeId/tasks/claim",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 931,
+    "line": 1033,
     "hazards": [
       "getAgent",
       "getAgentLite",
@@ -53,7 +69,7 @@
   {
     "key": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 995,
+    "line": 1097,
     "hazards": [
       "getTask"
     ]
@@ -61,7 +77,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/start",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1000,
+    "line": 1102,
     "hazards": [
       "getTask"
     ]
@@ -69,7 +85,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/dispatch-lease",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1012,
+    "line": 1114,
     "hazards": [
       "getTask"
     ]
@@ -77,7 +93,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1021,
+    "line": 1123,
     "hazards": [
       "getTask"
     ]
@@ -85,7 +101,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/human-requests",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1040,
+    "line": 1142,
     "hazards": [
       "getTask"
     ]
@@ -93,7 +109,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1065,
+    "line": 1167,
     "hazards": [
       "getTask"
     ]
@@ -101,7 +117,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1078,
+    "line": 1180,
     "hazards": [
       "getTask"
     ]
@@ -109,7 +125,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/progress",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1093,
+    "line": 1195,
     "hazards": [
       "getTask"
     ]
@@ -117,7 +133,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/messages",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1109,
+    "line": 1211,
     "hazards": [
       "listTaskMessages"
     ]
@@ -125,7 +141,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/prompt",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1130,
+    "line": 1232,
     "hazards": [
       "getTask",
       "getTaskPrompt"
@@ -134,7 +150,7 @@
   {
     "key": "GET /api/daemon/tasks/:taskId/messages",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1153,
+    "line": 1255,
     "hazards": [
       "listTaskMessages"
     ]
@@ -142,7 +158,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/session",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1164,
+    "line": 1266,
     "hazards": [
       "getTask"
     ]
@@ -150,7 +166,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/workspace",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1181,
+    "line": 1283,
     "hazards": [
       "getTask"
     ]
@@ -158,7 +174,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/complete",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1239,
+    "line": 1341,
     "hazards": [
       "getTask"
     ]
@@ -166,7 +182,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/fail",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1268,
+    "line": 1370,
     "hazards": [
       "getTask"
     ]
@@ -174,7 +190,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/usage",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1287,
+    "line": 1389,
     "hazards": [
       "getTask"
     ]
@@ -182,7 +198,7 @@
   {
     "key": "GET /api/daemon/tasks/:taskId/steer",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1330,
+    "line": 1432,
     "hazards": [
       "getTask"
     ]
@@ -190,7 +206,7 @@
   {
     "key": "POST /api/daemon/tasks/:taskId/steer/consume",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1339,
+    "line": 1441,
     "hazards": [
       "getTask"
     ]
@@ -198,7 +214,7 @@
   {
     "key": "GET /api/daemon/issues/:issueId/gc-check",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1349,
+    "line": 1451,
     "hazards": [
       "getIssue"
     ]
@@ -206,7 +222,7 @@
   {
     "key": "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1358,
+    "line": 1460,
     "hazards": [
       "getIssue"
     ]
@@ -214,7 +230,7 @@
   {
     "key": "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1431,
+    "line": 1533,
     "hazards": [
       "getChatSession"
     ]
@@ -222,7 +238,7 @@
   {
     "key": "GET /api/daemon/autopilot-runs/:runId/gc-check",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1436,
+    "line": 1538,
     "hazards": [
       "getAutopilotRun"
     ]
@@ -230,7 +246,7 @@
   {
     "key": "GET /api/daemon/tasks/:taskId/gc-check",
     "file": "packages/server/src/api/routers/daemon.ts",
-    "line": 1441,
+    "line": 1543,
     "hazards": [
       "getTask"
     ]
@@ -300,7 +316,7 @@
   {
     "key": "POST /api/workspaces",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 142,
+    "line": 143,
     "hazards": [
       "getAgent",
       "listAgentSkills",
@@ -311,7 +327,7 @@
   {
     "key": "PUT /api/workspaces/:id/issue-topics",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 269,
+    "line": 277,
     "hazards": [
       "getProject"
     ]
@@ -319,7 +335,7 @@
   {
     "key": "GET /api/workspaces/:id/repository-wikis",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 501,
+    "line": 509,
     "hazards": [
       "getTask"
     ]
@@ -327,7 +343,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 602,
+    "line": 610,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -343,7 +359,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 658,
+    "line": 666,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -359,7 +375,7 @@
   {
     "key": "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 757,
+    "line": 765,
     "hazards": [
       "advanceScheduledTargetRuns",
       "getAutopilot",
@@ -371,7 +387,7 @@
   {
     "key": "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 822,
+    "line": 830,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -387,7 +403,7 @@
   {
     "key": "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 872,
+    "line": 880,
     "hazards": [
       "getAgent",
       "getAutopilotRun",
@@ -403,7 +419,7 @@
   {
     "key": "DELETE /api/workspaces/:id/repos/:repositoryId",
     "file": "packages/server/src/api/routers/workspaces.ts",
-    "line": 1003,
+    "line": 1011,
     "hazards": [
       "getProject",
       "listProjects"

@@ -1,10 +1,11 @@
 # MUL-398 C-1: 8 MiB 默认与 64 MiB 过渡例外
 
-日期：2026-09-28。任务 `tsk_499cfoxcyliw`。PR [#318](https://github.com/Grassgod/Remi/pull/318)，保持 Draft，等待 QA 与带头大哥合入。数据库目标仅本地 `postgres://…`；本报告不是 209 实测或上线证明。
+日期：2026-09-29。任务 `tsk_499cfoxcyliw` 续跑。PR [#318](https://github.com/Grassgod/Remi/pull/318)，保持 Draft，等待 QA 与带头大哥合入。数据库目标仅本地 `postgres://…`；本报告不是 209 实测或上线证明。
 
 ## 基线、授权与停止条件解决
 
 - 在受管 `agent/MUL-398` 上从 `4c077d60` fetch 后 merge `origin/main b95dd2fa`，合并提交 `4d370c6b`，无冲突。未创建/切换/重置分支，没有 rebase/force push。
+- 网关中断后补审计提交 `439a42cc`，随后 merge `origin/main a30a8817`（含MUL-412/459/466），合并提交 `84831dd0`，无冲突；在合并后的代码上重跑调用链审计并补两条新daemon decision入口。
 - [预检停止报告](MUL-398-c1-preflight-stop.md) 与原脚本保留；预检 main `e47b7759` 的结果不是本轮 before。本轮 before 是 main `b95dd2fa`，env `0`；after 是 C-1 实现，env 未设置。
 - 预检两项停止条件按续做裁定及 Senior `cmt_tvxpad98uqtz` 解决：独立 `<background>` 项保留64 MiB；daemon POST messages 与 HTTP peer 也保留64 MiB，分页算法不改。
 - 完整读过 MUL-398「授权更新」「范围 C」「验收3」、Explorer `cmt_5ncm70lxe805`、停止评论 `cmt_ivh834b1tmc0`、裁决请求 `cmt_w4doexd8w1w6` 和正式裁决 `cmt_tvxpad98uqtz`。
@@ -21,13 +22,13 @@
 
 ## 审计与最终例外表
 
-完整逐条审计见 [392项例外表](MUL-398-c1-exception-audit.md)：每条列出 method+实际Hono模式、来源、表/大列、LIMIT/投影、具体调用方、进表理由及收回条件。集中常量由生成脚本读取，正式用例逐项验证391条HTTP模式真实注册和 `currentDbReplyOrigin()` 产出；没有前缀改写、参数名替换、消失条目或静默丢弃。
+完整逐条审计见 [394项例外表](MUL-398-c1-exception-audit.md)：每条列出 method+实际Hono模式、来源、表/大列、LIMIT/投影、具体调用方、进表理由及收回条件。集中常量由生成脚本读取，正式用例逐项验证393条HTTP模式真实注册和 `currentDbReplyOrigin()` 产出；没有前缀改写、参数名替换、消失条目或静默丢弃。
 
 来源为 **209请求总量18条超集 ∪ 审计 ∪ 后台裁定 ∪ daemon POST / HTTP peer分页裁定**。209仍为v0.2.83，缺少单次回包埋点；零条事件不代表安全。旧日志只覆盖 >500ms 慢请求，请求 `db_bytes` 是所有SQL回包总和。快请求风险由代码审计补足，行数 LIMIT 或读后裁剪不能证明字节有界。
 
 覆盖 task/chat messages、autopilot payload/result/schedule_prompt、knowledge、SQL文档/修订正文、task prompts、session events/results、comments/timeline、归档metadata及相关actor/getter/写后回读。Trace/归档文件正文在外部存储；SQL归档metadata仍无字节cap，因此归档相关路径也保守进表。本轮没有排除已识别风险项，repository-wikis 的原18候选亦保留。
 
-补全审计发现原166项遗漏项目指令、agent指令、skill正文以及鉴权/写后回读的辅助路径。`ProjectsRepo` 的 `p.*` 含无字节cap的instructions/delta_instructions；`AgentsSkillsRepo` 的lite只跳过skill文件水合，agent行仍为`SELECT *`；skill/file集合正文也无总字节界。使用 [解析调用链脚本](../../tests/manual/audit-pg-reply-c1-callers.ts) 通过TypeScript checker解析实际声明和import别名，对704个字面量handler记录364条可能大列读取，见 [callers.json](MUL-398-c1-callers.json)，补入226条原表未覆盖的HTTP入口。条件、鉴权和回调路径保守纳入，不是226条生产超限证据；未根据静态分析排除任何路由。正式PG护栏用例也覆盖新增projects/agents/skills例外的24 MiB回复。
+补全审计发现原166项遗漏项目指令、agent指令、skill正文以及鉴权/写后回读的辅助路径。`ProjectsRepo` 的 `p.*` 含无字节cap的instructions/delta_instructions；`AgentsSkillsRepo` 的lite只跳过skill文件水合，agent行仍为`SELECT *`；skill/file集合正文也无总字节界。使用 [解析调用链脚本](../../tests/manual/audit-pg-reply-c1-callers.ts) 通过TypeScript checker解析实际声明和import别名，对706个字面量handler记录366条可能大列读取，见 [callers.json](MUL-398-c1-callers.json)，补入226条原表未覆盖的HTTP入口，再补新main两条daemon decision入口。条件、鉴权和回调路径保守纳入，不是228条生产超限证据；未根据静态分析排除任何路由。正式PG护栏用例也覆盖新增projects/agents/skills例外的24 MiB回复。
 
 四条附加HTTP入口来源明确为 `advanceScheduledTargetRuns` 无界读：multiremi run、run-scheduled、trigger 与 repository wiki build。收回条件与后台项相同。另有 canonical autopilot trigger 已在18条内。**Senior对真实规模的判断是该读远小于6 MiB（按autopilot分组）；20×512 KiB只是契约演示，不是209生产风险实测。** 本轮未访问209、未重新查库验证该规模判断。
 
@@ -120,7 +121,9 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 
 ## 正式测试与变异
 
-新增正式用例涵盖env取值/非法告警、391条真实注册Hono模式、background独立项、三上下文8行/普通1行、metrics0真实PG护栏、queued长样本。生产/测试默认一致的hermetic守卫保留；新增AST调用方守卫。
+新增正式用例涵盖env取值/非法告警、393条真实注册Hono模式、background独立项、三上下文8行/普通1行、metrics0真实PG护栏、queued长样本。生产/测试默认一致的hermetic守卫保留；新增AST调用方守卫。
+
+静态调用链审计在CI中以 `bun tests/manual/audit-pg-reply-c1-callers.ts --check` 运行，当前实测8.4秒；新增候选必须进表。删去新main的一条daemon decision例外后架构测试1 pass/1 fail，报缺少该route key；恢复后重新验证。
 
 首轮PG全量为3898 pass / 2 fail，均是既有peer小上限探针：原来没有请求上下文，现在会命中已授权的后台64 MiB例外。保留其原断言与样本，将小上限探针包在非例外fixture请求上下文中，真实peer入口的8行由C-1正式用例单独覆盖。该文件随后7 pass / 0 fail；128 KiB探针仍拒绝262,384 B回包并发送header-only refetch，未改分页算法、未跳过用例或放宽断言。最终全量结果以下述最终head检查为准。
 

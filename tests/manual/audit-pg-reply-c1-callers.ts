@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
+import { DB_REPLY_TRANSITION_EXCEPTIONS } from "../../packages/server/src/observability/request-metrics.js";
 
 const root = resolve(import.meta.dir, "../..");
 const server = join(root, "packages/server/src");
@@ -110,5 +111,9 @@ const found = routes.flatMap(route => {
   for (const target of route.calls) for (const name of risk.get(target) ?? []) hazards.add(name);
   return hazards.size ? [{ key: route.key, file: route.file, line: route.line, hazards: [...hazards].sort() }] : [];
 });
-writeFileSync(join(root, "reports/performance/MUL-398-c1-callers.json"), JSON.stringify(found, null, 2) + "\n");
-console.log(`Audited ${routes.length} literal route handlers; ${found.length} conservative large-column callers.`);
+const missing = found.filter(row => !DB_REPLY_TRANSITION_EXCEPTIONS.has(row.key));
+if (missing.length) throw new Error(`Large-column callers absent from transition exceptions: ${missing.map(row => row.key).join(", ")}`);
+if (!process.argv.includes("--check")) {
+  writeFileSync(join(root, "reports/performance/MUL-398-c1-callers.json"), JSON.stringify(found, null, 2) + "\n");
+}
+console.log(`Audited ${routes.length} literal route handlers; ${found.length} conservative large-column callers; 0 missing exceptions.`);
