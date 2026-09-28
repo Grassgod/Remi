@@ -34,8 +34,21 @@ use `--workspace`, `--statuses`/`--status`, `--priority`, `--assignee-type`,
 `--assignee`, `--assignee-ids`, `--project`, `--project-ids`, `--parent`,
 `--metadata`, and hyphenated forms of the Boolean flags. Assignee references
 use the shared resolver, including user IDs, member IDs, Agent IDs and names.
+The compatibility list query also accepts the legacy `assignee_type` spelling
+when `assignee_types` is absent; the plural takes precedence, including when
+empty. Native queries retain `assigneeTypes`/`assignee_types` only. The CLI sends
+`assignee_types` for `--assignee-type`.
 Like the existing list, ordering is `updated_at DESC`; `sort_by`, `sort_order`,
 `creator_id` and `involves_user_id` currently have no effect.
+
+`remi issue children <key-or-id>` accepts either reference. Both children batch
+routes resolve `parent_ids` to parent IDs and deduplicate those IDs before
+listing children. Compatibility requests use `workspace_id`; native requests
+also accept `workspaceId`, which takes precedence. Without a workspace query,
+references use the existing unscoped resolver. Unknown or unresolved ambiguous
+references and inaccessible parents are skipped; children must also pass the
+existing workspace access check. Compatibility responses retain snake_case
+Issue fields, while native responses retain camelCase.
 
 `include_archived_total=true` (CLI `--include-archived-total`) adds the
 workspace-wide archived count, independent of other list filters. Omission
