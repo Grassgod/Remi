@@ -15,11 +15,14 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
     return runtime.ok;
   };
   const taskGuard = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
-    if (!await authorized(frame, session)) return denied("authority_revoked");
+    if (!await authorized(frame, session)) return { ...denied("authority_revoked"), http_status: 403, http_code: "daemon_identity_forbidden" };
     if (typeof frame.payload.task_id !== "string") return denied();
     const task = store.getTaskIdentity(frame.payload.task_id);
-    if (!task) return denied("task_not_found");
-    if (task.runtimeId !== frame.rt) return denied("authority_revoked");
+    if (!task) return { ...denied("task_not_found"), http_status: 404, http_code: null };
+    if (task.runtimeId !== frame.rt) return { ...denied("authority_revoked"), http_status: 403, http_code: "daemon_identity_forbidden" };
+    const refusal = daemonTaskRuntimeIdentityDenial(store, session.ownerAccessToken, frame.payload.task_id);
+    if (refusal) return { ok: false, code: refusal.status === 404 ? "task_not_found" : "authority_revoked",
+      message: refusal.body.error, retryable: false, http_status: refusal.status, http_code: refusal.body.code ?? null };
     return null;
   };
   layer.registerRpcHandler("steer.consume", async (frame, session) => {
