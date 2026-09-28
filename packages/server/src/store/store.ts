@@ -2024,6 +2024,10 @@ runMigrations(this.db);
     return this.feishuBot.prepareOutboundMention(workspaceId, runtimeId, deliveryId, claimToken, openId, now);
   }
 
+  getFeishuBotOutboundReportState(workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string) {
+    return this.feishuBot.getOutboundReportState(workspaceId, runtimeId, deliveryId, claimToken);
+  }
+
   reportFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,

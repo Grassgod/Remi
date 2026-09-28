@@ -8,6 +8,7 @@ import {
   MultiremiDaemonClient,
   MultiremiDaemonHttpError,
 } from "@multiremi/client.js";
+import { captureReports } from "../../fixtures/report-session.js";
 
 const originalFetch = globalThis.fetch;
 const temporaryRoots: string[] = [];
@@ -121,14 +122,16 @@ describe("MultiremiDaemonClient request deadlines", () => {
     expect(task?.projectContexts[0]?.repos).toEqual(task?.repos);
   });
 
-  it("reports complete baseline refs and commits to the workspace API", async () => {
-    let body: any;
+  it("reports complete baseline refs and commits through the reliable workspace frame", async () => {
+    let httpCalls = 0;
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body));
+      httpCalls++;
       return Response.json({});
     }) as typeof fetch;
     const baseCommit = "a".repeat(40);
-    await new MultiremiDaemonClient("https://remi.example", "daemon-token").reportIssueWorkspace("tsk_default", {
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const calls = captureReports(client);
+    await client.reportIssueWorkspace("tsk_default", {
       runtimeId: "runtime-1", rootPath: "/work", branchName: "agent/MUL-278", status: "ready",
       repos: [{
         repoUrl: "https://example.test/repo.git", repoName: "repo", worktreePath: "/work/repo",
@@ -136,13 +139,15 @@ describe("MultiremiDaemonClient request deadlines", () => {
         status: "ready", dirty: false, error: null,
       }],
     });
-    expect(body.repos[0]).toMatchObject({ base_ref: "refs/remotes/origin/workflow-dev", base_commit: baseCommit });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ type: "task.workspace", partition: "tsk_default", wait: false });
+    expect((calls[0]!.payload.repos as any[])[0]).toMatchObject({ base_ref: "refs/remotes/origin/workflow-dev", base_commit: baseCommit });
+    expect(httpCalls).toBe(0);
   });
 
   it.each([
     ["GET", "/api/daemon/ssh-mesh/config?runtime_id=runtime-1", (client: MultiremiDaemonClient) => client.getSshMeshConfig("runtime-1")],
     ["POST", "/api/daemon/heartbeat", (client: MultiremiDaemonClient) => client.heartbeatRuntime("runtime-1")],
-    ["PUT", "/api/daemon/runtimes/runtime-1/models", (client: MultiremiDaemonClient) => client.updateRuntimeModels("runtime-1", [])],
   ] as const)("bounds a stalled %s request without automatically replaying it", async (method, path, request) => {
     let attempts = 0;
     globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
@@ -158,6 +163,17 @@ describe("MultiremiDaemonClient request deadlines", () => {
     expect((error as Error).message).toContain(`${method} ${path} timed out after 30ms`);
     expect(isTerminalDaemonAuthorityError(error)).toBe(false);
     expect(attempts).toBe(1);
+  });
+
+  it("queues one model snapshot immediately without HTTP even while HTTP is stalled", async () => {
+    let httpCalls = 0;
+    globalThis.fetch = (() => { httpCalls++; return new Promise(() => {}); }) as unknown as typeof fetch;
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    const calls = captureReports(client);
+    expect(await client.updateRuntimeModels("runtime-1", [])).toEqual([]);
+    expect(calls).toEqual([{ type: "runtime.model_list_result", partition: "rt:runtime-1", wait: false,
+      payload: { runtime_id: "runtime-1", models: [], supported: true, model_profile: undefined } }]);
+    expect(httpCalls).toBe(0);
   });
 
   it.each([200, 503])("keeps the deadline active while reading an HTTP %s response body", async (status) => {
@@ -718,6 +734,7 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     }) as unknown as typeof globalThis.fetch;
 
     const client = new MultiremiDaemonClient("https://remi.example/", "daemon-token");
+    const reports = captureReports(client);
     await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc");
     await client.getIssueSessionArchiveStatus("runtime/1", "issue/1", "revision/1", "abc", true);
     await client.initIssueSessionArchive("runtime/1", "issue/1", {
@@ -745,7 +762,6 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
       ["POST", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/failure"],
       ["PUT", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/archive%2F1/content?attempt=7"],
       ["POST", "https://remi.example/api/daemon/runtimes/runtime%2F1/issues/issue%2F1/session-archives/archive%2F1/complete?attempt=7"],
-      ["POST", "https://remi.example/api/daemon/issues/issue%2F1/workspace/cleaned"],
     ]);
     expect(requests.every(({ headers }) => headers.get("authorization") === "Bearer daemon-token")).toBe(true);
     expect(JSON.parse(String(requests[3]?.body))).toEqual({
@@ -756,7 +772,10 @@ describe("MultiremiDaemonClient Issue session archive wire", () => {
     expect(requests[4]?.headers.get("content-length")).toBe("13");
     expect(requests[4]?.body).not.toBeInstanceOf(Uint8Array);
     expect(uploadedBody).toBe("archive-bytes");
-    expect(JSON.parse(String(requests[6]?.body))).toEqual({
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ type: "gc.workspace_cleaned", wait: true });
+    expect(reports[0]!.payload).toEqual({
+      issue_id: "issue/1",
       runtime_id: "runtime/1",
       archive_id: "archive/1",
       source_revision: "revision/1",

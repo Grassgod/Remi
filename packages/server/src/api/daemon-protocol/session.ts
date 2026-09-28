@@ -201,6 +201,8 @@ export interface DaemonSessionOptions {
   onReply?(frame: DaemonParsedFrame): void;
   /** Dispatch an uplink RPC frame. Returning null means "not wired here". */
   onRpc?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
+  onEvent?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
+  onBestEffort?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
   /** Observability hook, called once per dispatched frame. */
   onFrame?(sample: WsFrameSample): void;
   /** Connection ended, for any reason. Called at most once. */
@@ -545,7 +547,7 @@ export class DaemonProtocolSession {
       let direction: "uplink" | "rpc" = category === "rpc" ? "rpc" : "uplink";
       switch (category) {
         case "best_effort":
-          errorCode = this.handleBestEffort(frame);
+          errorCode = await this.handleBestEffort(frame);
           break;
         case "ack": {
           // A standalone `ack` frame carries the number in its payload; the
@@ -562,7 +564,7 @@ export class DaemonProtocolSession {
           errorCode = await this.handleRpc(frame);
           break;
         case "event":
-          errorCode = this.handleEvent(frame);
+          errorCode = await this.handleEvent(frame);
           break;
         case "handshake":
           direction = "uplink";
@@ -773,7 +775,7 @@ export class DaemonProtocolSession {
     this.close(rejection.code, rejection.hint);
   }
 
-  private handleBestEffort(frame: DaemonParsedFrame): string | null {
+  private async handleBestEffort(frame: DaemonParsedFrame): Promise<string | null> {
     if (frame.type === "hb") {
       const reply = this.options.onHeartbeat?.({
         daemonId: this.daemonId,
@@ -785,8 +787,8 @@ export class DaemonProtocolSession {
       this.sendReply(frame.id ?? "", reply ?? { ok: true });
       return null;
     }
-    // `runtime.ready` and `concierge.status` belong to A-3/A-4. Accepting them
-    // here keeps the transport from rejecting a frame a later sub-issue owns.
+    const reply = await this.options.onBestEffort?.(frame);
+    if (reply && frame.id) this.sendReply(frame.id, reply);
     return null;
   }
 
@@ -830,7 +832,14 @@ export class DaemonProtocolSession {
     return errorCode;
   }
 
-  private handleEvent(frame: DaemonParsedFrame): string | null {
+  private async handleEvent(frame: DaemonParsedFrame): Promise<string | null> {
+    const reply = await this.options.onEvent?.(frame);
+    if (reply !== null && reply !== undefined) {
+      const replyTo = frame.seq !== null ? String(frame.seq) : frame.id;
+      if (replyTo) this.sendReply(replyTo, reply);
+      return typeof reply === "object" && (reply as { ok?: unknown }).ok === false
+        ? String((reply as { code?: unknown }).code ?? "invalid_report") : null;
+    }
     // A-1 carries no business frames: the uplink events and `trace.append` arrive
     // here, and the transport-level exchange A-1 owns is the sequence and the
     // reply. The honest answer today is a deterministic refusal the sender can tell

@@ -145,10 +145,13 @@ RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
 日志口径就不成立，因此一并改成 RPC；不做批量合并。
+仅 `gc.*` 的失败应答（`DaemonGcErrorReply`）可附 `operation_error: {status, code, message}`，
+保留原 HTTP 业务错误的状态码、`code`（没有时为 null）和 `error` 文案；daemon 包装器还原同一个
+`MultiremiDaemonHttpError`，维护调用点的判断不变。此字段不属于通用 `DaemonProtocolErrorReply`。
 
 ### 1.6 错误码与 close code
 
-错误码共 18 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 4 个、
+错误码共 19 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 5 个、
 offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_error`）。
 
 `DAEMON_RETRYABLE_ERROR_CODES` 有 `daemon_busy`、`daemon_timeout` 与 `server_error`；其余都是
@@ -157,8 +160,9 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 `server_error` 是服务端自己处理某一帧时抛异常时给出的答复（可重试）：它表示「这一次是我的问题，
 你按退避重发就好」，而不是「你的帧不对」。这类异常同时会往 stdout 写一条 warn，只带帧类型、方向、
 会话 id 与异常的类名，不带异常内容和 payload。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
-`invalid_report`）会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
+`invalid_report`）表示确定性失败；其中 `authority_revoked`、`invalid_report` 会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
 （`isTerminalDaemonAuthorityError` 的 401/403/410）。
+`task_not_found` 清掉整个 outbox 分区并记 warn（§2.1）；这条规则不适用于不进入 outbox 的 RPC。
 
 报送类错误码取代 HTTP 状态码：
 
@@ -168,6 +172,7 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 | 401 / 403 / 410 | `authority_revoked` |
 | 其他确定性 4xx | `invalid_report` |
 | `start` 的 400「已离开 dispatched」（原本就是成功） | `start_replayed` |
+| 409 `steer_pending` | `steer_pending` |
 
 close code。协议**只显式列出四个终态码**，其余一律默认重连：
 
@@ -249,6 +254,10 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 泵按 id 顺序单泵发送，滑动窗口取 64 帧或 1 MiB 先到者；服务端逐帧回 `res{re: seq}`，`ok` 即删行。
 `ok:false` 且 `retryable:false` → 该分区（task 或 runtime）进入 blocked，与今天
 `isPermanentDeliveryError` 的语义一致。
+例外是 `task_not_found`：daemon 清掉整个分区并记 warn，任务已被删除，重放没有意义；
+`steer_pending` 也不进入 blocked，daemon 删除这一行，将结果交回正在等待的执行端。
+没有执行端等待时（重启重放或等待超时），改报 `task.fail`，原因 `runtime_recovery`，
+说明完成时有未注入的 steer，执行端已不在，并记 warn。
 
 `outbox_events.task_id` 语义扩展为分区键：runtime 级记录写 `rt:<runtime_id>`。每分区内保序，
 分区间可并行。断线期间照常入库，重连后从最小未删 id 续发。
@@ -301,6 +310,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | `task.usage` | task id + provider + model | 合并 |
 | `task.complete` / `task.fail` | task id | 已终态即 ok |
 | `runtime.*_result` | request id | 状态机 pending→running→completed/failed 只能前进 |
+| `feishu.outbound_result` | delivery id + claim_token | 租约已不是当前的即 ok（不写库，记 warn），应答带 `lease_lost:true`，在等结果的发送方据此停止；相同终态和没有推进的 streaming 检查点也吸收，不带 `lease_lost`。`prepared` 成功应答带 `mention_open_id`（open_id 或 null） |
 | `plugin.state` | request id | 同上 |
 | `runtime.archive_sessions` | request id | 状态机 pending→sent→acked→completed/failed 只能前进 |
 | `runtime.archive_sessions_result` | request id | 已终态即 ok；重复结果被幂等吸收 |

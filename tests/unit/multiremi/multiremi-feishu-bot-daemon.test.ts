@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 /**
  * Control-plane delivery of the Feishu concierge assignment (MUL-206).
  *
@@ -11,7 +12,13 @@
  * two connectors answer the same Feishu app.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
+import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { daemonReportTransport } from "@multiremi/worker/report-transport.js";
+import { deliverFeishuOutbound } from "@multiremi/worker/feishu-outbound.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
@@ -121,14 +128,167 @@ async function report(
   runtimeId: string,
   body: Record<string, unknown>,
 ) {
-  return scaffolded.app.request(`/api/daemon/runtimes/${runtimeId}/feishu-bot/status`, {
-    method: "POST",
-    headers: daemonHeaders(scaffolded.tokens[runtimeId]!),
-    body: JSON.stringify(body),
-  });
+  return reportFrame(scaffolded.store, "concierge.status", { runtime_id: runtimeId, ...body }, { headers: daemonHeaders(scaffolded.tokens[runtimeId]!), authToken: "MASTER" });
+}
+
+function queuedClient(test: Scaffold, canSend = () => true, timeoutMs = 30_000) {
+  const box = new MultiremiTaskReportOutbox({ path: ":memory:", canSend, deliver: async row => {
+    const frame = outboxRecordFrame(row);
+    const result = await reportFrame(test.store, frame.t, frame.p as Record<string, unknown>, {
+      headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER",
+    });
+    if (result.ok === false) throw new DaemonProtocolRpcError(result.code, result.retryable);
+    return result;
+  } });
+  const client = new MultiremiDaemonClient("http://unused", "unused", { requestTimeoutMs: timeoutMs });
+  client.setReportTransport(daemonReportTransport({} as never, () => "rt_a", () => box));
+  return { client, box };
 }
 
 describe("Feishu bot control-plane delivery", () => {
+  it("absorbs a sent result replay without another write or activity and drains its runtime partition", async () => {
+    const test = await scaffold();
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    const submitted = test.store.submitFeishuBotMessage("local", "rt_a", {
+      revision: 1, externalSessionKey: "oc_replay", externalMessageId: "om_replay", chatId: "oc_replay",
+      text: "start", deliveryMode: "native_cot_v1",
+    });
+    const delivery = test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)!;
+    const payload = { runtime_id: "rt_a", request_id: delivery.id, claim_token: delivery.claimToken,
+      status: "sent", external_message_id: "om_result" };
+    const send = (type: string, p: Record<string, unknown>) => reportFrame(test.store, type, p, {
+      headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER",
+    });
+    expect(await send("feishu.outbound_result", payload)).toEqual({ ok: true });
+    const before = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id);
+    const activities = db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity").get();
+    const received: string[] = [];
+    const box = new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async row => {
+      const frame = outboxRecordFrame(row);
+      const result = await send(frame.t, frame.p as Record<string, unknown>);
+      if (!result.ok) throw new DaemonProtocolRpcError(result.code, result.retryable);
+      received.push(frame.t);
+    } });
+    try {
+      box.enqueue("rt:rt_a", "feishu.outbound_result", payload);
+      box.enqueue("rt:rt_a", "runtime.model_list_result", { runtime_id: "rt_a", models: [{ id: "after-replay" }] });
+      await box.flushAll();
+      expect(received).toEqual(["feishu.outbound_result", "runtime.model_list_result"]);
+      expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
+      expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id)).toEqual(before);
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity").get()).toEqual(activities);
+      expect(test.store.getTask(submitted.taskId!)).not.toBeNull();
+    } finally { await box.close(); }
+  });
+
+  it("absorbs an old failed result after re-leasing and a wrong token without changing the current lease", async () => {
+    const test = await scaffold();
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    test.store.submitFeishuBotMessage("local", "rt_a", { revision: 1, externalSessionKey: "oc_failed_replay",
+      externalMessageId: "om_failed_replay", chatId: "oc_failed_replay", text: "start", deliveryMode: "native_cot_v1" });
+    const first = test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)!;
+    const payload = { runtime_id: "rt_a", request_id: first.id, claim_token: first.claimToken,
+      status: "failed", error: "transient", retryable: true };
+    const send = (p: Record<string, unknown>) => reportFrame(test.store, "feishu.outbound_result", p, {
+      headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER",
+    });
+    expect(await send(payload)).toEqual({ ok: true });
+    const second = test.store.claimFeishuBotOutbound("local", "rt_a", new Date(Date.now() + 10_000), true, true)!;
+    expect(second.claimToken).not.toBe(first.claimToken);
+    const current = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(first.id);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await send(payload)).toEqual({ ok: true, lease_lost: true });
+      expect(await send({ ...payload, claim_token: "wrong-lease", status: "sent" })).toEqual({ ok: true, lease_lost: true });
+      expect(warn.mock.calls).toHaveLength(2);
+      expect(warn.mock.calls.every(call => JSON.stringify(call).includes(first.id))).toBe(true);
+      expect(warn.mock.calls.every(call => JSON.stringify(call).includes('"status":"sending"'))).toBe(true);
+      expect(warn.mock.calls.every(call => !JSON.stringify(call).includes("claim_token"))).toBe(true);
+    } finally { warn.mockRestore(); }
+    expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(first.id)).toEqual(current);
+    expect(await send({ ...payload, status: "invalid" })).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
+    const removed = await test.app.request(`/api/daemon/runtimes/rt_a/feishu-bot/outbound/${first.id}/result`, {
+      method: "POST", headers: daemonHeaders(test.tokens.rt_a!), body: JSON.stringify(payload),
+    });
+    expect(removed.status).toBe(404);
+    expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(first.id)).toEqual(current);
+  });
+
+  it("stops a streaming sender when renewal loses the lease, without changing the current row or blocking", async () => {
+    const test = await scaffold();
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    test.store.submitFeishuBotMessage("local", "rt_a", { revision: 1, externalSessionKey: "oc_renew_lost",
+      externalMessageId: "om_renew_lost", chatId: "oc_renew_lost", text: "start", deliveryMode: "native_cot_v1" });
+    const delivery = test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)!;
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET claim_token = 'replacement' WHERE id = ?", [delivery.id]);
+    const before = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id);
+    const { client, box } = queuedClient(test);
+    let apiSends = 0;
+    try {
+      await expect(deliverFeishuOutbound(delivery, { signal: new AbortController().signal, renewMs: 2,
+        send: async ({ signal }) => {
+          apiSends++;
+          await new Promise<void>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+          apiSends++;
+          return { messageId: "not-sent" };
+        },
+        report: input => client.reportFeishuBotOutboundResult("rt_a", delivery.id, input),
+      })).rejects.toMatchObject({ name: "MultiremiDaemonHttpError", status: 409, code: "stale_lease" });
+      expect(apiSends).toBe(1);
+      expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id)).toEqual(before);
+      expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
+    } finally { await box.close(); }
+  });
+
+  it("does not send after a prepared checkpoint loses its lease", async () => {
+    const test = await scaffold();
+    await report(test, "rt_a", { applied_revision: 1, state: "online" });
+    test.store.submitFeishuBotMessage("local", "rt_a", { revision: 1, externalSessionKey: "oc_prepare_lost",
+      externalMessageId: "om_prepare_lost", chatId: "oc_prepare_lost", text: "start", deliveryMode: "native_cot_v1" });
+    const delivery = test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)!;
+    db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET claim_token = 'replacement' WHERE id = ?", [delivery.id]);
+    const before = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id);
+    const { client, box } = queuedClient(test);
+    let apiSends = 0;
+    try {
+      await expect(deliverFeishuOutbound(delivery, { signal: new AbortController().signal,
+        prepareMention: openId => client.prepareFeishuBotOutboundMention("rt_a", delivery.id, delivery.claimToken, openId),
+        send: async ({ prepareMention }) => { await prepareMention!("ou_owner"); apiSends++; return { messageId: "not-sent" }; },
+        report: input => client.reportFeishuBotOutboundResult("rt_a", delivery.id, input),
+      })).rejects.toMatchObject({ name: "MultiremiDaemonHttpError", status: 409, code: "stale_lease" });
+      expect(apiSends).toBe(0);
+      expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id)).toEqual(before);
+      expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
+    } finally { await box.close(); }
+  });
+
+  it("deletes restarted prepared and streaming checkpoints without a waiting sender and delivers the next runtime report", async () => {
+    const test = await scaffold();
+    const { box } = queuedClient(test);
+    try {
+      for (const status of ["prepared", "streaming"]) box.enqueue("rt:rt_a", "feishu.outbound_result", {
+        runtime_id: "rt_a", request_id: "deleted-delivery", claim_token: "former-lease", status, mention_open_id: null,
+      });
+      box.enqueue("rt:rt_a", "runtime.model_list_result", { runtime_id: "rt_a", models: [{ id: "after-checkpoints" }] });
+      await box.flushAll();
+      expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
+      expect(test.store.listRuntimeModels("rt_a").map(model => model.id)).toEqual(["after-checkpoints"]);
+    } finally { await box.close(); }
+  });
+
+  for (const status of ["prepared", "streaming"] as const) {
+    it(`bounds ${status} checkpoint waiting by the former HTTP request timeout`, async () => {
+      const test = await scaffold();
+      const { client, box } = queuedClient(test, () => false, 5);
+      try {
+        const pending = status === "prepared" ? client.prepareFeishuBotOutboundMention("rt_a", "delivery", "lease", null)
+          : client.reportFeishuBotOutboundResult("rt_a", "delivery", { status, claimToken: "lease" });
+        await expect(pending).rejects.toMatchObject({ name: "MultiremiDaemonRequestTimeoutError", timeoutMs: 5 });
+        expect(box.stats()).toMatchObject({ pending: 1, blocked: 0 });
+      } finally { await box.close(); }
+    });
+  }
+
   it("lets only the selected transport stream and answer a Chat executed by another provider", async () => {
     const test = await scaffold();
     test.store.registerRuntime({ id: "rt_claude", name: "Claude executor", provider: "claude",
@@ -145,7 +305,7 @@ describe("Feishu bot control-plane delivery", () => {
     for (const endpoint of ["status", "messages"]) {
       expect((await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_a!),
-      })).status).toBe(200);
+      })).status).toBe(endpoint === "messages" ? 404 : 200);
       expect((await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_b!),
       })).status).toBe(403);
@@ -159,8 +319,8 @@ describe("Feishu bot control-plane delivery", () => {
     });
     expect(sent.status).toBe(200);
     const messages = await test.app.request(`${taskPath}/messages`, { headers: daemonHeaders(test.tokens.rt_a!) });
-    expect(messages.status).toBe(200);
-    expect(await messages.json()).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
+    expect(messages.status).toBe(404);
+    expect(test.store.listTaskMessages(submitted.taskId)).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
     const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
       payload: { question: "Continue?" } });
     const answer = await test.app.request(`${taskPath}/human-requests/${question.id}/respond`, {
@@ -262,28 +422,28 @@ describe("Feishu bot control-plane delivery", () => {
     });
     expect(snapshot.status).toBe(200);
     expect(await snapshot.json()).toMatchObject({ receipt_message_ids: ["om_question", "om_followup"] });
-    const update = (claim: string, patch: object, runtimeToken = test.tokens.rt_a!) => test.app.request(
-      `/api/daemon/runtimes/rt_a/feishu-bot/outbound/${delivery.id}/result`, { method: "POST",
-        headers: daemonHeaders(runtimeToken), body: JSON.stringify({ status: "streaming", claim_token: claim, ...patch }) });
+    const update = (claim: string, patch: object, runtimeToken = test.tokens.rt_a!) => reportFrame(test.store, "feishu.outbound_result", { runtime_id: "rt_a", request_id: delivery.id, status: "streaming", claim_token: claim, ...patch }, { headers: daemonHeaders(runtimeToken), authToken: "MASTER" });
     const presentation = { ...delivery.presentation, throughSeq: 9, interactionOpenId: "ou_requester",
       cot: { status: "active", cotId: "cot_native", messageId: "om_process", runStarted: true },
       interactions: { hr_1: { messageId: "om_approval", receiptStatus: "responded" } } };
-    expect((await update(delivery.claim_token, { presentation }, test.tokens.rt_b!)).status).toBe(403);
-    expect((await update(delivery.claim_token, { presentation: { ...presentation, throughSeq: -1 } })).status).toBe(400);
-    expect((await update(delivery.claim_token, { presentation })).status).toBe(200);
-    expect((await update(delivery.claim_token, { presentation: { ...presentation, throughSeq: 8 } })).status).toBe(409);
-    expect((await update(delivery.claim_token, { presentation: { ...presentation, interactions: {} } })).status).toBe(409);
-    expect((await update(delivery.claim_token, { presentation: { ...presentation, cot: { ...presentation.cot, cotId: "cot_other" } } })).status).toBe(409);
+    expect(await update(delivery.claim_token, { presentation }, test.tokens.rt_b!)).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
+    expect(await update(delivery.claim_token, { presentation: { ...presentation, throughSeq: -1 } })).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
+    expect((await update(delivery.claim_token, { presentation })).ok).toBe(true);
+    const saved = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id);
+    expect(await update(delivery.claim_token, { presentation: { ...presentation, throughSeq: 8 } })).toEqual({ ok: true });
+    expect(await update(delivery.claim_token, { presentation: { ...presentation, interactions: {} } })).toEqual({ ok: true });
+    expect(await update(delivery.claim_token, { presentation: { ...presentation, cot: { ...presentation.cot, cotId: "cot_other" } } })).toEqual({ ok: true });
+    expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id)).toEqual(saved);
     db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET leased_until = ? WHERE id = ?", [new Date(Date.now() - 1).toISOString(), delivery.id]);
-    expect((await update(delivery.claim_token, { presentation })).status).toBe(409);
+    expect(await update(delivery.claim_token, { presentation })).toEqual({ ok: true, lease_lost: true });
     const recovered = await next();
     expect(recovered.presentation).toEqual(presentation);
     expect(recovered.receipt_message_ids).toEqual(["om_question", "om_followup"]);
     expect(recovered.claim_token).not.toBe(delivery.claim_token);
-    expect((await update(delivery.claim_token, { presentation })).status).toBe(409);
+    expect(await update(delivery.claim_token, { presentation })).toEqual({ ok: true, lease_lost: true });
     const final = { ...presentation, resultMessageId: "om_final", cot: { ...presentation.cot, status: "finished" } };
-    expect((await update(recovered.claim_token, { presentation: final })).status).toBe(200);
-    expect((await update(recovered.claim_token, { status: "sent", external_message_id: "om_final" })).status).toBe(200);
+    expect((await update(recovered.claim_token, { presentation: final })).ok).toBe(true);
+    expect((await update(recovered.claim_token, { status: "sent", external_message_id: "om_final" })).ok).toBe(true);
     expect(await next()).toBeUndefined();
     expect(db!.query("SELECT external_message_id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id))
       .toEqual({ external_message_id: "om_final", status: "sent" });
@@ -302,11 +462,8 @@ describe("Feishu bot control-plane delivery", () => {
         const delivery = test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)!;
         expect(delivery).toBeTruthy();
         id = delivery.id;
-        const response = await test.app.request(`/api/daemon/runtimes/rt_a/feishu-bot/outbound/${id}/result`, {
-          method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
-          body: JSON.stringify({ claim_token: delivery.claimToken, status: "failed", error: "test refusal", retryable: !permanent }),
-        });
-        expect(response.status).toBe(200);
+        const response = await reportFrame(test.store, "feishu.outbound_result", { runtime_id: "rt_a", request_id: id, claim_token: delivery.claimToken, status: "failed", error: "test refusal", retryable: !permanent }, { headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" });
+        expect(response.ok).toBe(true);
         db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET available_at = ? WHERE id = ?", [new Date(Date.now() - 1).toISOString(), id]);
       }
       expect(test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, true)).toBeNull();
@@ -455,14 +612,16 @@ describe("Feishu bot control-plane delivery", () => {
     expect(await (await heartbeat(test, "rt_a")).json()).not.toHaveProperty("pending_feishu_outbound");
     const current = await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION })).json();
     expect(current.pending_feishu_outbound).toMatchObject({ task_id: submitted.taskId, resume_message_id: null, body: "" });
-    const renew = (token: string, runtimeToken = test.tokens.rt_a!) => test.app.request(
-      "/api/daemon/runtimes/rt_a/feishu-bot/outbound/fbo_stream/result", { method: "POST",
-        headers: daemonHeaders(runtimeToken), body: JSON.stringify({ status: "streaming", claim_token: token, external_message_id: "om_card" }) });
-    expect((await renew("wrong")).status).toBe(409);
-    expect((await renew(current.pending_feishu_outbound.claim_token, test.tokens.rt_b!)).status).toBe(403);
-    expect((await renew(current.pending_feishu_outbound.claim_token)).status).toBe(200);
+    const renew = (token: string, runtimeToken = test.tokens.rt_a!) => reportFrame(test.store, "feishu.outbound_result", { runtime_id: "rt_a", request_id: "fbo_stream", status: "streaming", claim_token: token, external_message_id: "om_card" }, { headers: daemonHeaders(runtimeToken), authToken: "MASTER" });
+    const saved = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_stream'").get();
+    expect(await renew("wrong")).toEqual({ ok: true, lease_lost: true });
+    expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_stream'").get()).toEqual(saved);
+    expect(await renew(current.pending_feishu_outbound.claim_token, test.tokens.rt_b!)).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
+    expect((await renew(current.pending_feishu_outbound.claim_token)).ok).toBe(true);
     db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET leased_until = ? WHERE id = 'fbo_stream'", [new Date(Date.now() - 1).toISOString()]);
-    expect((await renew(current.pending_feishu_outbound.claim_token)).status).toBe(409);
+    const expired = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_stream'").get();
+    expect(await renew(current.pending_feishu_outbound.claim_token)).toEqual({ ok: true, lease_lost: true });
+    expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'fbo_stream'").get()).toEqual(expired);
     const recovered = await (await heartbeat(test, "rt_a", { feishu_concierge_protocol: FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION })).json();
     expect(recovered.pending_feishu_outbound).toMatchObject({ task_id: submitted.taskId, resume_message_id: "om_card" });
   });
@@ -516,19 +675,10 @@ describe("Feishu bot control-plane delivery", () => {
       idempotency_key: "fbo_http",
     });
 
-    const result = await test.app.request(
-      "/api/daemon/runtimes/rt_a/feishu-bot/outbound/fbo_http/result",
-      {
-        method: "POST",
-        headers: daemonHeaders(test.tokens.rt_a!),
-        body: JSON.stringify({
-          claim_token: body.pending_feishu_outbound.claim_token,
+    const result = await reportFrame(test.store, "feishu.outbound_result", { runtime_id: "rt_a", request_id: "fbo_http", claim_token: body.pending_feishu_outbound.claim_token,
           status: "sent",
-          external_message_id: "om_outbound_sent",
-        }),
-      },
-    );
-    expect(result.status).toBe(200);
+          external_message_id: "om_outbound_sent", }, { headers: daemonHeaders(test.tokens.rt_a!), authToken: "" });
+    expect(result.ok).toBe(true);
     expect((await (await heartbeat(test, "rt_a")).json())).not.toHaveProperty("pending_feishu_outbound");
   });
 
@@ -832,8 +982,8 @@ describe("Feishu bot control-plane delivery", () => {
       error_message: `Feishu rejected ${APP_SECRET}`,
     });
 
-    expect(reported.status).toBe(200);
-    expect((await reported.json()).directive).toMatchObject({ desired_state: "running" });
+    expect(reported).toEqual({ sent: true });
+    expect(test.store.feishuBotDirectiveForRuntime("local", "rt_a")).toMatchObject({ desired_state: "running" });
     const status = await (await test.app.request("/api/workspaces/local/feishu-bot/status", { headers: MASTER })).json();
     expect(status).toMatchObject({ status: "failed", error_code: "invalid_credentials", applied_revision: 1 });
     // The daemon redacts, and the control plane redacts again on the way in:
@@ -844,9 +994,10 @@ describe("Feishu bot control-plane delivery", () => {
   it("rejects a runtime state it does not recognise", async () => {
     const test = await scaffold();
 
+    const before = test.store.feishuBotStatusSnapshot("local");
     const bogus = await report(test, "rt_a", { applied_revision: 1, state: "haunted" });
-
-    expect(bogus.status).toBe(400);
+    expect(bogus).toEqual({ sent: true });
+    expect(test.store.feishuBotStatusSnapshot("local")).toEqual(before);
     expect(test.store.listFeishuBotRuntimeStatuses("local")).toEqual([]);
   });
 });

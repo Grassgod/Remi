@@ -143,6 +143,7 @@ import {
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
+import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "./daemon-protocol/report-handlers.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
@@ -862,6 +863,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     dbCounters: () => readProcessDbCounters(),
   });
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
+  registerDaemonReportHandlers(daemonProtocol, store);
+  registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();

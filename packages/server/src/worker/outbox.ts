@@ -1,9 +1,13 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { createLogger } from "@shared/logger.js";
 import type { TaskMessageInput } from "@multiremi/contracts/types.js";
 import { MultiremiDaemonHttpError } from "./client.js";
+import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
+import { DAEMON_FRAME_MAX_BYTES, DAEMON_UPLINK_WINDOW_FRAMES, DAEMON_UPLINK_WINDOW_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { outboxRecordBytes } from "./report-frames.js";
 import {
   coalesceTaskMessages,
   DEFAULT_TASK_MESSAGE_BATCH_COUNT,
@@ -20,7 +24,16 @@ export type MultiremiOutboxKind =
   | "usage"
   | "workspace"
   | "complete"
-  | "fail";
+  | "fail"
+  | "runtime.update_result"
+  | "runtime.command_result"
+  | "runtime.model_list_result"
+  | "runtime.local_skills_result"
+  | "runtime.directory_scan_result"
+  | "runtime.local_skill_import_result"
+  | "runtime.bot_menu_result"
+  | "feishu.outbound_result"
+  | "plugin.state";
 
 const TERMINAL_KINDS = new Set<MultiremiOutboxKind>(["complete", "fail"]);
 
@@ -50,8 +63,9 @@ export type MultiremiOutboxDrainResult = "delivered" | "blocked" | "aborted";
 export interface MultiremiTaskReportOutboxOptions {
   /** SQLite file path; ":memory:" for tests. Parent directory is created. */
   path: string;
-  /** Sends one record to the API; throws MultiremiDaemonHttpError on HTTP errors. */
-  deliver: (record: MultiremiOutboxRecord) => Promise<void>;
+  /** Sends one reliable frame and waits for its individual res. */
+  deliver: (record: MultiremiOutboxRecord) => Promise<void | Record<string, unknown>>;
+  canSend?: () => boolean;
   /** Bounded exponential backoff schedule; the last entry repeats. */
   backoffScheduleMs?: number[];
   /** Soft cap for the on-disk queue; oldest NON-terminal rows are dropped over it. */
@@ -67,28 +81,25 @@ const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
 const DISCARDED_TASK_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /**
- * Durable per-task report queue. Every task-scoped API report is written here
- * first and delivered strictly in per-task seq order by a background pump, so
- * a transient API outage (restart, 5xx, network) retries with bounded backoff
- * instead of unwinding the agent's provider session. Terminal events
- * (complete/fail) are enqueued last and therefore always delivered after the
- * messages/usage that precede them; they are never dropped by the size cap.
- *
- * Permanent authority errors (401/403/410) and other deterministic 4xx stop
- * the pump for that task with a recorded diagnostic instead of retrying
- * forever. The one deliberate exception: a 400 replay of "start" means the
- * task already left dispatched — that is success, not an error.
+ * One durable process-wide pump. Row ids are reliable WS seqs; each task or
+ * rt: partition is ordered, while independent partitions share the bounded
+ * frame/byte window. Terminal reports are never dropped by the soft size cap.
+ * Permanent errors block a partition; task_not_found discards it instead,
+ * and steer_pending hands completion back to the executor or reports recovery.
  */
 export class MultiremiTaskReportOutbox {
   private readonly db: Database;
-  private readonly deliver: (record: MultiremiOutboxRecord) => Promise<void>;
+  private readonly deliver: MultiremiTaskReportOutboxOptions["deliver"];
   private readonly backoff: number[];
   private readonly maxBytes: number;
   private readonly onTaskBlocked: ((taskId: string, error: string) => void) | null;
   private readonly deliveryBatchSize: number;
-  private readonly pumps = new Map<string, Promise<void>>();
-  private readonly wakes = new Map<string, () => void>();
+  private readonly inFlight = new Map<string, { bytes: number; done: Promise<void> }>();
+  private readonly canSend: () => boolean;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private scheduled = false;
   private readonly drainWaiters = new Map<string, Array<(result: MultiremiOutboxDrainResult) => void>>();
+  private readonly recordWaiters = new Map<number, { taskId: string; resolve(value: Record<string, unknown>): void; reject(error: Error): void }>();
   private closed = false;
 
   constructor(options: MultiremiTaskReportOutboxOptions) {
@@ -132,14 +143,16 @@ export class MultiremiTaskReportOutbox {
       );
     `);
     this.deliver = options.deliver;
+    this.canSend = options.canSend ?? (() => true);
     this.backoff = options.backoffScheduleMs?.length ? options.backoffScheduleMs : DEFAULT_BACKOFF_MS;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.onTaskBlocked = options.onTaskBlocked ?? null;
     this.deliveryBatchSize = Math.max(1, Math.floor(options.deliveryBatchSize ?? DEFAULT_TASK_MESSAGE_BATCH_COUNT));
+    this.db.run("UPDATE outbox_events SET next_attempt_at = NULL WHERE status = 'pending'");
   }
 
   /** Persist a report and wake the task's delivery pump. Never throws on queue pressure. */
-  enqueue(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
+  enqueue(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): number | null {
     if (this.closed) throw new Error("outbox is closed");
     const terminal = TERMINAL_KINDS.has(kind);
     const discarded = this.db.query(
@@ -149,19 +162,73 @@ export class MultiremiTaskReportOutbox {
       const total = Number(this.readMeta("dropped_total") ?? 0) + 1;
       this.writeMeta("dropped_total", String(total));
       log.debug(`outbox discarded ${kind} report for tombstoned task ${taskId}`);
-      return;
+      return null;
     }
-    const seqRow = this.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM outbox_events WHERE task_id = ?",
-    ).get(taskId) as { seq: number };
-    const seq = Number(seqRow.seq) + 1;
+    const idRow = this.db.query("SELECT seq FROM sqlite_sequence WHERE name = 'outbox_events'").get() as { seq: number } | null;
+    const id = Number(idRow?.seq ?? 0) + 1;
+    const oversized = outboxRecordBytes({ id, taskId, kind, payload, seq: id, terminal, attempts: 0 }) > DAEMON_FRAME_MAX_BYTES;
+    const blocked = this.readMeta(`blocked:${taskId}`) !== null || oversized;
     this.db.run(
       `INSERT INTO outbox_events (idempotency_key, task_id, kind, payload, seq, terminal, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      [`${taskId}:${kind}:${seq}`, taskId, kind, JSON.stringify(payload), seq, terminal ? 1 : 0, new Date().toISOString()],
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [randomUUID(), taskId, kind, JSON.stringify(oversized ? {} : payload), id, terminal ? 1 : 0, blocked ? "blocked" : "pending", new Date().toISOString()],
     );
+    if (oversized) this.blockPartition(taskId, "protocol_violation: encoded report exceeds 1 MiB");
     this.enforceSizeCap();
     this.ensurePump(taskId);
+    return id;
+  }
+
+  enqueueAndWait(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>, timeoutMs = 30_000, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const id = this.enqueue(taskId, kind, payload);
+    if (id === null) return Promise.resolve({ ok: true });
+    const blocked = this.readMeta(`blocked:${taskId}`);
+    if (blocked) return Promise.reject(new DaemonProtocolRpcError(this.readMeta(`blocked-code:${taskId}`) ?? "protocol_violation", false));
+    return new Promise((resolve, reject) => {
+      const clear = () => { clearTimeout(timer); signal?.removeEventListener("abort", interrupted); };
+      const interrupted = () => {
+        clear();
+        this.recordWaiters.delete(id);
+        if (terminal) resolve({ ok: true, queued: true });
+        else reject(new DaemonProtocolRpcError("daemon_unreachable", true));
+      };
+      const terminal = TERMINAL_KINDS.has(kind);
+      const timer = setTimeout(() => {
+        clear();
+        this.recordWaiters.delete(id);
+        log.warn(`outbox result wait timed out for ${taskId} (${kind} id ${id}); retained for replay`);
+        if (terminal) resolve({ ok: true, queued: true });
+        else reject(new DaemonProtocolRpcError("daemon_timeout", true));
+      }, timeoutMs);
+      this.recordWaiters.set(id, { taskId,
+        resolve: value => { clear(); resolve(value); },
+        reject: error => { clear(); reject(error); },
+      });
+      signal?.addEventListener("abort", interrupted, { once: true });
+      if (signal?.aborted) interrupted();
+    });
+  }
+
+  /** Copy old provider queues once; their files remain recoverable. */
+  importLegacy(path: string, runtimeId?: string): void {
+    if (path === ":memory:") return;
+    const source = new Database(path, { readonly: true });
+    try {
+      const prefix = createHash("sha256").update(path).digest("hex");
+      const rows = source.query("SELECT * FROM outbox_events ORDER BY id").all() as Array<Record<string, unknown>>;
+      this.db.transaction(() => {
+        for (const row of rows) {
+          const key = `imported:${prefix}:${row.idempotency_key}`;
+          if (this.readMeta(key)) continue;
+          const record = toRecord(row);
+          const id = this.enqueue(record.taskId, record.kind, { ...record.payload, ...(runtimeId ? { runtime_id: runtimeId } : {}) });
+          if (row.status === "blocked" && id !== null) this.blockPartition(record.taskId, "legacy permanent delivery error");
+          this.writeMeta(key, "1");
+        }
+      })();
+    } finally { source.close(); }
+    const backup = `${path}.migrated-v2`;
+    renameSync(path, existsSync(backup) ? `${path}.${randomUUID()}.migrated-v2` : backup);
   }
 
   /** Resolves when the task queue is empty (delivered), blocked, or the signal aborts. */
@@ -204,10 +271,11 @@ export class MultiremiTaskReportOutbox {
     return rows.map((row) => String(row.task_id));
   }
 
-  taskIdsWithPendingTerminal(): string[] {
+  taskIdsWithPendingTerminal(runtimeId?: string): string[] {
     const rows = this.db.query(
-      "SELECT DISTINCT task_id FROM outbox_events WHERE status = 'pending' AND terminal = 1",
-    ).all() as Array<{ task_id: string }>;
+      `SELECT DISTINCT task_id FROM outbox_events WHERE status = 'pending' AND terminal = 1
+       AND (? IS NULL OR json_extract(payload, '$.runtime_id') = ?)`,
+    ).all(runtimeId ?? null, runtimeId ?? null) as Array<{ task_id: string }>;
     return rows.map((row) => String(row.task_id));
   }
 
@@ -240,10 +308,17 @@ export class MultiremiTaskReportOutbox {
       return Number(result.changes);
     });
     const purged = purge();
+    for (const [id, waiter] of this.recordWaiters) {
+      if (waiter.taskId === taskId && !this.db.query("SELECT id FROM outbox_events WHERE id = ?").get(id)) {
+        waiter.resolve({ ok: true, discarded: true });
+        this.recordWaiters.delete(id);
+      }
+    }
+    this.db.run("DELETE FROM outbox_meta WHERE key IN (?, ?)", [`blocked:${taskId}`, `blocked-code:${taskId}`]);
 
     // The pump may be in retry backoff, and drain waiters otherwise only settle
     // from ensurePump().finally(). Re-evaluate both immediately after deletion.
-    this.wakes.get(taskId)?.();
+    this.ensurePump(taskId);
     const state = this.taskDrainState(taskId);
     if (state) this.settleDrainWaiters(taskId, state);
     return purged;
@@ -281,15 +356,20 @@ export class MultiremiTaskReportOutbox {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
     this.closed = true;
-    for (const wake of this.wakes.values()) wake();
-    await Promise.allSettled([...this.pumps.values()]);
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    for (const waiter of this.recordWaiters.values()) waiter.reject(new DaemonProtocolRpcError("daemon_unreachable", true));
+    this.recordWaiters.clear();
     for (const [taskId] of this.drainWaiters) this.settleDrainWaiters(taskId, "aborted");
+    await Promise.allSettled([...this.inFlight.values()].map(item => item.done));
     this.db.close();
   }
 
   private taskDrainState(taskId: string): MultiremiOutboxDrainResult | null {
     if (this.closed) return "aborted";
+    if (this.readMeta(`blocked:${taskId}`) !== null) return "blocked";
     const row = this.db.query(
       "SELECT status FROM outbox_events WHERE task_id = ? ORDER BY seq ASC LIMIT 1",
     ).get(taskId) as { status: string } | null;
@@ -306,75 +386,147 @@ export class MultiremiTaskReportOutbox {
   }
 
   private ensurePump(taskId: string): void {
-    if (this.closed) return;
-    // An active pump already observes newly appended rows on its next loop.
-    // Waking its retry sleep here would let a high-volume token stream bypass
-    // backoff and hammer an unavailable API once per token.
-    if (this.pumps.has(taskId)) return;
-    const run = this.runPump(taskId)
-      .catch((error) => {
-        log.error(`outbox pump for ${taskId} crashed: ${error instanceof Error ? error.message : String(error)}`);
-      })
-      .finally(() => {
-        this.pumps.delete(taskId);
-        this.wakes.delete(taskId);
-        const state = this.taskDrainState(taskId);
-        if (state) this.settleDrainWaiters(taskId, state);
-        // New rows may have raced the pump teardown; restart if so.
-        else this.ensurePump(taskId);
-      });
-    this.pumps.set(taskId, run);
+    if (this.closed || this.scheduled) return;
+    this.scheduled = true;
+    queueMicrotask(() => {
+      this.scheduled = false;
+      if (!this.closed) this.runPump();
+    });
   }
 
-  private async runPump(taskId: string): Promise<void> {
-    while (!this.closed) {
+  private runPump(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    const rows = this.db.query(`SELECT task_id, MIN(id) AS id FROM outbox_events
+      GROUP BY task_id ORDER BY id`).all() as Array<{ task_id: string; id: number }>;
+    let bytes = [...this.inFlight.values()].reduce((total, item) => total + item.bytes, 0);
+    let nextWake = Number.POSITIVE_INFINITY;
+    for (const row of rows) {
+      if (!this.canSend()) { nextWake = Math.min(nextWake, 100); break; }
+      const taskId = row.task_id;
+      if (this.inFlight.has(taskId)) continue;
       const delivery = this.nextDelivery(taskId);
-      if (!delivery) return;
-      if (delivery.blocked) return;
-      const { record, recordIds } = delivery;
-      try {
-        await this.deliver(record);
-        this.deleteRecords(recordIds);
-      } catch (error) {
-        if (isDeliveredEquivalent(error, record)) {
-          this.deleteRecords(recordIds);
-          continue;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        if (isPermanentDeliveryError(error)) {
-          const blocked = this.db.run(
-            `UPDATE outbox_events SET status = 'blocked', last_error = ?
-             WHERE task_id = ? AND status = 'pending'
-               AND EXISTS (SELECT 1 FROM outbox_events WHERE id = ?)`,
-            [message.slice(0, 2_000), taskId, record.id],
-          );
-          // purgeTask may have deleted the in-flight record while deliver()
-          // awaited. In that case, do not let its stale failure block terminal
-          // rows that a keepTerminal tombstone still permits.
-          if (Number(blocked.changes) === 0) continue;
-          log.error(`outbox for task ${taskId} blocked on permanent error: ${message}`);
-          this.onTaskBlocked?.(taskId, message);
-          this.settleDrainWaiters(taskId, "blocked");
-          return;
-        }
-        const attempts = record.attempts + 1;
-        const delay = this.backoff[Math.min(attempts - 1, this.backoff.length - 1)]!;
-        const updated = this.db.run(
-          "UPDATE outbox_events SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
-          [attempts, Date.now() + delay, message.slice(0, 2_000), record.id],
-        );
-        if (Number(updated.changes) === 0) continue;
-        if (attempts === 1 || attempts % 10 === 0) {
-          log.warn(`outbox delivery for task ${taskId} (${record.kind} seq ${record.seq}) failed, retrying in ${delay}ms: ${message}`);
-        }
-        await this.sleepWithWake(taskId, record.id, delay);
+      if (!delivery || delivery.blocked || this.readMeta(`blocked:${taskId}`) !== null) continue;
+      const retry = this.db.query("SELECT next_attempt_at FROM outbox_events WHERE id = ?").get(delivery.record.id) as { next_attempt_at: number | null };
+      const delay = Number(retry.next_attempt_at ?? 0) - Date.now();
+      if (delay > 0) { nextWake = Math.min(nextWake, delay); continue; }
+      const frameBytes = outboxRecordBytes(delivery.record);
+      if (frameBytes > DAEMON_FRAME_MAX_BYTES) {
+        this.blockPartition(taskId, "protocol_violation: persisted report exceeds 1 MiB");
+        continue;
       }
+      if (this.inFlight.size >= DAEMON_UPLINK_WINDOW_FRAMES || bytes + frameBytes > DAEMON_UPLINK_WINDOW_BYTES) break;
+      bytes += frameBytes;
+      const done = Promise.resolve().then(() => this.deliverRecord(delivery)).finally(() => {
+        this.inFlight.delete(taskId);
+        if (this.closed) return;
+        const state = this.taskDrainState(taskId);
+        if (state) this.settleDrainWaiters(taskId, state);
+        this.ensurePump(taskId);
+      });
+      this.inFlight.set(taskId, { bytes: frameBytes, done });
+    }
+    if (Number.isFinite(nextWake)) {
+      this.timer = setTimeout(() => { this.timer = null; this.ensurePump(""); }, Math.max(1, nextWake));
+      this.timer.unref?.();
+    }
+  }
+
+  private async deliverRecord({ record, recordIds }: OutboxDelivery): Promise<void> {
+    const taskId = record.taskId;
+    if (!this.db.query("SELECT id FROM outbox_events WHERE id = ? AND status = 'pending'").get(record.id)) return;
+    try {
+      const reply = await this.deliver(record);
+      this.deleteRecords(recordIds);
+      for (const id of recordIds) {
+        this.recordWaiters.get(id)?.resolve(reply ?? { ok: true });
+        this.recordWaiters.delete(id);
+      }
+    } catch (error) {
+      if (error instanceof DaemonProtocolRpcError && error.code === "steer_pending" && record.kind === "complete") {
+        if (this.closed) return;
+        const waiter = this.recordWaiters.get(record.id);
+        this.deleteRecords(recordIds);
+        this.recordWaiters.delete(record.id);
+        if (waiter) waiter.reject(error);
+        else {
+          log.warn(`outbox completion for ${taskId} rejected by steer barrier without a waiting executor; reporting runtime_recovery`);
+          this.enqueue(taskId, "fail", { runtime_id: record.payload.runtime_id,
+            session_id: record.payload.session_id ?? record.payload.sessionId,
+            work_dir: record.payload.work_dir ?? record.payload.workDir,
+            failure_reason: "runtime_recovery", error: "完成时有未注入的 steer，执行端已不在" });
+        }
+        return;
+      }
+      if (error instanceof DaemonProtocolRpcError && error.code === "task_not_found") {
+        log.warn(`outbox partition ${taskId} discarded: task_not_found`);
+        this.purgeTask(taskId);
+        for (const id of recordIds) {
+          this.recordWaiters.get(id)?.resolve({ ok: true, discarded: true });
+          this.recordWaiters.delete(id);
+        }
+        return;
+      }
+      if (isDeliveredEquivalent(error, record)) {
+        this.deleteRecords(recordIds);
+        for (const id of recordIds) {
+          this.recordWaiters.get(id)?.resolve({ ok: true });
+          this.recordWaiters.delete(id);
+        }
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (isPermanentDeliveryError(error)) {
+        const blocked = this.db.run(
+          `UPDATE outbox_events SET status = 'blocked', last_error = ?
+           WHERE task_id = ? AND status = 'pending'
+             AND EXISTS (SELECT 1 FROM outbox_events WHERE id = ?)`,
+          [message.slice(0, 2_000), taskId, record.id],
+        );
+        // purgeTask may have deleted the in-flight record while deliver()
+        // awaited. In that case, do not let its stale failure block terminal
+        // rows that a keepTerminal tombstone still permits.
+        if (Number(blocked.changes) === 0) return;
+        this.blockPartition(taskId, message, error instanceof DaemonProtocolRpcError ? error.code : "invalid_report");
+        for (const id of recordIds) {
+          this.recordWaiters.get(id)?.reject(error instanceof Error ? error : new Error(message));
+          this.recordWaiters.delete(id);
+        }
+        return;
+      }
+      const attempts = record.attempts + 1;
+      const delay = this.backoff[Math.min(attempts - 1, this.backoff.length - 1)]!;
+      const updated = this.db.run(
+        "UPDATE outbox_events SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
+        [attempts, Date.now() + delay, message.slice(0, 2_000), record.id],
+      );
+      if (Number(updated.changes) === 0) return;
+      if (attempts === 1 || attempts % 10 === 0) {
+        log.warn(`outbox delivery for task ${taskId} (${record.kind} seq ${record.seq}) failed, retrying in ${delay}ms: ${message}`);
+      }
+    }
+  }
+
+  private blockPartition(taskId: string, error: string, code = "protocol_violation"): void {
+    const first = this.readMeta(`blocked:${taskId}`) === null;
+    this.writeMeta(`blocked:${taskId}`, error.slice(0, 2_000));
+    this.writeMeta(`blocked-code:${taskId}`, code);
+    this.db.run("UPDATE outbox_events SET status = 'blocked', last_error = ? WHERE task_id = ?", [error.slice(0, 2_000), taskId]);
+    if (first) {
+      log.error(`outbox partition ${taskId} blocked on permanent error: ${error}`);
+      this.onTaskBlocked?.(taskId, error);
+    }
+    this.settleDrainWaiters(taskId, "blocked");
+    for (const [id, waiter] of this.recordWaiters) {
+      if (waiter.taskId !== taskId) continue;
+      waiter.reject(new DaemonProtocolRpcError(code, false));
+      this.recordWaiters.delete(id);
     }
   }
 
   private nextDelivery(taskId: string): OutboxDelivery | null {
     const rows = this.db.query(
-      "SELECT * FROM outbox_events WHERE task_id = ? ORDER BY seq ASC LIMIT ?",
+      "SELECT * FROM outbox_events WHERE task_id = ? ORDER BY id ASC LIMIT ?",
     ).all(taskId, this.deliveryBatchSize) as Array<Record<string, unknown>>;
     const firstRow = rows[0];
     if (!firstRow) return null;
@@ -418,27 +570,6 @@ export class MultiremiTaskReportOutbox {
     }
     const placeholders = recordIds.map(() => "?").join(", ");
     this.db.run(`DELETE FROM outbox_events WHERE id IN (${placeholders})`, recordIds);
-  }
-
-  private async sleepWithWake(taskId: string, recordId: number, ms: number): Promise<void> {
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (this.wakes.get(taskId) === finish) this.wakes.delete(taskId);
-        resolve();
-      };
-      const timer = setTimeout(finish, ms);
-      // unref keeps a retrying pump from pinning the process open after stop().
-      (timer as unknown as { unref?: () => void }).unref?.();
-      this.wakes.set(taskId, finish);
-      // Close the tiny purge-before-wake-registration race: once the wake is
-      // installed, a missing record means there is no backoff left to observe.
-      const row = this.db.query("SELECT 1 AS present FROM outbox_events WHERE id = ?").get(recordId);
-      if (!row) finish();
-    });
   }
 
   /**
@@ -517,6 +648,7 @@ const DROPPABLE_KINDS = new Set<MultiremiOutboxKind>(["progress", "session_pin",
  * any 4xx exactly like their old fire-and-forget call sites logged-and-moved-on.
  */
 function isDeliveredEquivalent(error: unknown, record: MultiremiOutboxRecord): boolean {
+  if (error instanceof DaemonProtocolRpcError) return record.kind === "start" && error.code === "start_replayed";
   if (!(error instanceof MultiremiDaemonHttpError)) return false;
   if (record.kind === "start" && error.status === 400) return true;
   if (DROPPABLE_KINDS.has(record.kind) && error.status >= 400 && error.status < 500) {
@@ -532,6 +664,7 @@ function isDeliveredEquivalent(error: unknown, record: MultiremiOutboxRecord): b
  * they park the queue in `blocked` with a diagnostic instead.
  */
 function isPermanentDeliveryError(error: unknown): boolean {
+  if (error instanceof DaemonProtocolRpcError) return !error.retryable;
   if (!(error instanceof MultiremiDaemonHttpError)) return false;
   return error.status >= 400 && error.status < 500;
 }

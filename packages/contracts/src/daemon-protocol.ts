@@ -276,6 +276,12 @@ export interface DaemonProtocolOkReply {
   ok: true;
 }
 
+/** feishu.outbound_result acknowledges stale leases without blocking the queue. */
+export type DaemonFeishuOutboundOkReply = DaemonProtocolOkReply & {
+  mention_open_id?: string | null;
+  lease_lost?: true;
+};
+
 /** `res` payload on failure. `retryable` tells the sender whether to replay. */
 export interface DaemonProtocolErrorReply {
   ok: false;
@@ -283,6 +289,11 @@ export interface DaemonProtocolErrorReply {
   message: string;
   retryable: boolean;
 }
+
+/** Only gc.* replies retain the business error from the former HTTP endpoint. */
+export type DaemonGcErrorReply = DaemonProtocolErrorReply & {
+  operation_error?: { status: number; code: string | null; message: string };
+};
 
 export type DaemonProtocolReply = DaemonProtocolOkReply | DaemonProtocolErrorReply;
 
@@ -565,6 +576,7 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   "authority_revoked",
   "invalid_report",
   "start_replayed",
+  "steer_pending",
   // offer rejections and dispatch
   "capacity",
   "claims_paused",

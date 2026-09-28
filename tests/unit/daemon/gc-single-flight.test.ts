@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { writeIssueSessionArchiveReceipt } from "@daemon/agent-runtime/workspace/session-archive.js";
 import type { MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
@@ -10,8 +11,15 @@ import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multi
 
 describe("daemon Session archive GC orchestration", () => {
   const roots: string[] = [];
+  const outboxes: MultiremiTaskReportOutbox[] = [];
+  const reports = () => {
+    const outbox = new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async () => {} });
+    outboxes.push(outbox);
+    return () => outbox;
+  };
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const outbox of outboxes.splice(0)) await outbox.close();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -100,6 +108,7 @@ describe("daemon Session archive GC orchestration", () => {
         }),
       },
       registerCurrentRuntime: async () => "rt_shutdown",
+      ensureOutbox: reports(),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},
@@ -159,6 +168,7 @@ describe("daemon Session archive GC orchestration", () => {
       activeTaskIds: new Set<string>(),
       activeTaskAborts: new Set<AbortController>(),
       issueWorkspaceLifecycleLocks: locker,
+      ensureOutbox: reports(),
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
         renewTaskDispatchLease: async () => "dispatched",
@@ -302,6 +312,7 @@ describe("daemon Session archive GC orchestration", () => {
         getHeartbeatStatus: () => ({ protocol_version: 1, state: "disabled", peers: [] }),
       },
       registerCurrentRuntime: async () => "rt_barrier",
+      ensureOutbox: reports(),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},

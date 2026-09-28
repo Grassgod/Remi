@@ -7,9 +7,10 @@ import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
 import { antigravityCliVersion, resolveAntigravityExecutable } from "@acp/antigravity.js";
 import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
-import { mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport } from "./report-transport.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -43,6 +44,7 @@ import {
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
   DaemonProtocolClient,
+  DaemonProtocolRpcError,
   type DaemonProtocolClientOptions,
   type DaemonProtocolLane,
 } from "./daemon-protocol-client.js";
@@ -379,7 +381,6 @@ const AUTHORITY_PROBE_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 480_000, 90
 const DEFAULT_AUTHORITY_PROBE_MAX_MS = 900_000;
 const DEFAULT_TASK_DRAIN_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS = 30_000;
-const OUTBOX_RECONCILE_CONCURRENCY = 6;
 const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
   "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
@@ -768,6 +769,7 @@ export class MultiremiDaemon {
   private outbox: MultiremiTaskReportOutbox | null = null;
   private outboxAbort: AbortController | null = null;
   private readonly outboxPath: string;
+  private readonly legacyOutboxPath: string;
   private readonly outboxBackoffMs: number[] | undefined;
   private readonly outboxMaxBytes: number | undefined;
   private restartRequestedFlag = false;
@@ -1019,12 +1021,17 @@ export class MultiremiDaemon {
       this.options.daemonId ?? this.options.runtimeName,
       this.options.provider,
     ].join("|")).digest("hex").slice(0, 16);
-    this.outboxPath = options.outboxPath
+    this.legacyOutboxPath = options.outboxPath
       ?? join(
         process.env.MULTIREMI_OUTBOX_DIR
           ?? join(process.env.MULTIREMI_STATE_DIR ?? join(homedir(), ".multiremi"), "outbox"),
         `${this.options.provider}-${outboxIdentity}.db`,
       );
+    const processOutboxIdentity = createHash("sha256").update([
+      this.options.serverUrl, this.options.workspaceId ?? "local", this.options.daemonId ?? this.options.runtimeName,
+    ].join("|")).digest("hex").slice(0, 16);
+    this.outboxPath = options.outboxPath === ":memory:" ? ":memory:"
+      : join(dirname(this.legacyOutboxPath), `v2-${processOutboxIdentity}.db`);
     this.outboxBackoffMs = options.outboxBackoffMs;
     this.outboxMaxBytes = options.outboxMaxBytes
       ?? numberEnv(process.env.MULTIREMI_OUTBOX_MAX_BYTES, 256 * 1024 * 1024);
@@ -1053,7 +1060,7 @@ export class MultiremiDaemon {
         runtime_id: this.options.runtimeId,
         provider: this.options.provider,
         max_concurrency: this.options.maxConcurrency,
-        active_task_ids: [...this.activeTaskIds],
+        active_task_ids: [...new Set([...this.activeTaskIds, ...(this.outbox?.taskIdsWithPendingTerminal(this.options.runtimeId) ?? [])])],
       } : null,
       heartbeat: () => ({
         active_task_count: this.activeTaskCount,
@@ -1085,8 +1092,11 @@ export class MultiremiDaemon {
         await this.stopAfterTerminalAuthority();
       },
       onStateChange: () => this.wakeClaim(),
+      readyToConnect: () => this.supervisorReady(),
     };
     this.protocolClient.addLane(this.protocolLane);
+    this.client.setReportTransport(daemonReportTransport(this.protocolClient, () => this.options.runtimeId, () => this.ensureOutbox(),
+      this.options.taskDrainTimeoutMs, () => this.pollAbort.signal));
   }
 
   async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
@@ -1236,13 +1246,9 @@ export class MultiremiDaemon {
     try {
       await this.registerCurrentRuntime();
       this.assertWorkspaceRootOwner();
-      // Replay reports left over from a previous run BEFORE recover-orphans:
-      // recoverOrphans marks in-flight tasks failed, so an undelivered
-      // complete/fail must land first or a finished task gets mislabelled.
-      // Purely non-terminal history has a bounded startup wait and may continue
-      // in the background; tasks with terminal reports must settle first.
-      await this.reconcilePendingOutboxTasks(outbox);
-      await this.flushStartupOutbox(outbox);
+      // Replay never holds startup waiting for a socket. The temporary HTTP
+      // recovery below is guarded against pending terminal reports instead.
+      outbox.pumpAll();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
       this.assertWorkspaceRootOwner();
       this.startGcLoop();
@@ -1254,7 +1260,7 @@ export class MultiremiDaemon {
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
-      await this.client.recoverOrphans(this.options.runtimeId!);
+      if (await this.canRecoverOrphans(outbox)) await this.client.recoverOrphans(this.options.runtimeId!);
       this.ready = true;
       this.onReadyChange(true);
       // A co-resident provider becoming ready is not enough to claim work.
@@ -1369,7 +1375,7 @@ export class MultiremiDaemon {
       const outbox = this.outbox;
       this.outbox = null;
       if (outbox) {
-        await outbox.close().catch((error) => {
+        await releaseDaemonOutbox(this.protocolClient).catch((error) => {
           log.warn(`outbox close failed: ${error instanceof Error ? error.message : String(error)}`);
         });
       }
@@ -1511,6 +1517,7 @@ export class MultiremiDaemon {
       this.runtimeRegistrationGeneration++;
       this.clearDesiredAgentPlugins();
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+      this.startReportReplay();
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
@@ -1518,7 +1525,31 @@ export class MultiremiDaemon {
     this.runtimeRegistrationGeneration++;
     this.clearDesiredAgentPlugins();
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
+    this.startReportReplay();
     return this.options.runtimeId;
+  }
+
+  private startReportReplay(): void {
+    const outbox = this.ensureOutbox();
+    if (existsSync(this.legacyOutboxPath)) outbox.importLegacy(this.legacyOutboxPath, this.options.runtimeId ?? undefined);
+    this.protocolClient.startLane(this.protocolLane);
+    outbox.pumpAll();
+  }
+
+  private async canRecoverOrphans(outbox: MultiremiTaskReportOutbox): Promise<boolean> {
+    const pending = outbox.taskIdsWithPendingTerminal(this.options.runtimeId ?? undefined);
+    if (!pending.length) return true;
+    if (this.protocolClient.connectionState() === "connected") {
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), this.options.outboxStartupFlushTimeoutMs);
+      const stop = () => abort.abort();
+      this.pollAbort.signal.addEventListener("abort", stop, { once: true });
+      try { await Promise.all(pending.map(taskId => outbox.waitForTaskDrain(taskId, abort.signal))); }
+      finally { clearTimeout(timer); this.pollAbort.signal.removeEventListener("abort", stop); }
+      if (!outbox.taskIdsWithPendingTerminal(this.options.runtimeId ?? undefined).length) return true;
+    }
+    log.warn("skipping HTTP recoverOrphans: this runtime has undelivered terminal reports");
+    return false;
   }
 
   private applyWorkspaceRegistrationState(response: MultiremiDaemonRegisterResponse): void {
@@ -2893,7 +2924,7 @@ export class MultiremiDaemon {
    * never unwinds the agent's provider session.
    */
   private enqueueTaskReport(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
-    this.ensureOutbox().enqueue(taskId, kind, payload);
+    this.ensureOutbox().enqueue(taskId, kind, { ...payload, runtime_id: payload.runtime_id ?? this.options.runtimeId });
   }
 
   /**
@@ -2905,7 +2936,7 @@ export class MultiremiDaemon {
   private ensureOutbox(): MultiremiTaskReportOutbox {
     if (!this.outbox) {
       this.outboxAbort ??= new AbortController();
-      this.outbox = new MultiremiTaskReportOutbox({
+      this.outbox = acquireDaemonOutbox(this.protocolClient, {
         path: this.outboxPath ?? ":memory:",
         deliver: (record) => this.deliverOutboxRecord(record),
         ...(this.outboxBackoffMs ? { backoffScheduleMs: this.outboxBackoffMs } : {}),
@@ -2934,22 +2965,6 @@ export class MultiremiDaemon {
       if (result === "blocked") {
         log.error(`task ${taskId} still has undelivered reports blocked on a permanent error`);
       } else if (result === "aborted" && timedOut) {
-        try {
-          const status = await this.client.getTaskStatus(taskId);
-          if (status === "completed" || status === "failed" || status === "cancelled") {
-            const purged = outbox.purgeTask(taskId);
-            log.warn(
-              `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms after reaching ${status}; `
-              + `discarded ${purged} stale report(s) instead of replaying them indefinitely`,
-            );
-            return "delivered";
-          }
-        } catch (error) {
-          log.warn(
-            `could not reconcile timed-out outbox reports for task ${taskId}; preserving them: `
-            + (error instanceof Error ? error.message : String(error)),
-          );
-        }
         log.warn(
           `task ${taskId} report delivery exceeded ${this.options.taskDrainTimeoutMs}ms; `
           + "continuing while the durable outbox retries in the background",
@@ -2964,139 +2979,13 @@ export class MultiremiDaemon {
     }
   }
 
-  private async reconcilePendingOutboxTasks(outbox: MultiremiTaskReportOutbox): Promise<void> {
-    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
-    const terminalSet = new Set(terminalTaskIds);
-    const taskIds = [
-      ...terminalTaskIds,
-      ...outbox.pendingTaskIds().filter((taskId) => !terminalSet.has(taskId)),
-    ];
-    let nextIndex = 0;
-    const reconcile = async () => {
-      while (nextIndex < taskIds.length) {
-        const taskId = taskIds[nextIndex++]!;
-        try {
-          const status = await this.client.getTaskStatus(taskId);
-          if (status === "completed" || status === "failed" || status === "cancelled") {
-            const purged = outbox.purgeTask(taskId);
-            log.debug(`purged ${purged} stale outbox report(s) for terminal task ${taskId} (${status})`);
-          }
-        } catch (error) {
-          if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-            const purged = outbox.purgeTask(taskId);
-            log.debug(`purged ${purged} stale outbox report(s) for missing task ${taskId}`);
-            continue;
-          }
-          // Status lookup and delivery use the same control-plane dependency.
-          // Preserve unknown tasks so a transient failure cannot lose reports.
-          log.warn(
-            `could not reconcile persisted outbox task ${taskId}; preserving its reports: `
-            + (error instanceof Error ? error.message : String(error)),
-          );
-        }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(OUTBOX_RECONCILE_CONCURRENCY, taskIds.length) }, () => reconcile()),
-    );
-  }
-
-  private async flushStartupOutbox(outbox: MultiremiTaskReportOutbox): Promise<void> {
-    const terminalTaskIds = outbox.taskIdsWithPendingTerminal();
-    const terminalTaskSet = new Set(terminalTaskIds);
-    const historicalTaskIds = outbox.pendingTaskIds().filter((taskId) => !terminalTaskSet.has(taskId));
-    const flushAbort = new AbortController();
-    const shutdownSignal = this.outboxAbort?.signal;
-    const onShutdown = () => flushAbort.abort();
-    if (shutdownSignal?.aborted) flushAbort.abort();
-    else shutdownSignal?.addEventListener("abort", onShutdown, { once: true });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      flushAbort.abort();
-    }, this.options.outboxStartupFlushTimeoutMs);
-    timer.unref?.();
-    try {
-      await Promise.all(historicalTaskIds.map((taskId) => outbox.waitForTaskDrain(taskId, flushAbort.signal)));
-    } finally {
-      clearTimeout(timer);
-      shutdownSignal?.removeEventListener("abort", onShutdown);
-    }
-    if (timedOut) {
-      log.warn(
-        `startup non-terminal outbox replay exceeded ${this.options.outboxStartupFlushTimeoutMs}ms; `
-        + "continuing those historical deliveries in the background",
-      );
-      outbox.pumpAll();
-    }
-
-    // Reconciliation removed tasks already terminal on the server. Every
-    // remaining local terminal row is therefore authoritative completion or
-    // failure evidence for an in-flight server task. Do not let orphan
-    // recovery overwrite it, even when ordinary history took too long.
-    const terminalResults = await Promise.all(terminalTaskIds.map(async (taskId) => ({
-      taskId,
-      result: await outbox.waitForTaskDrain(taskId, shutdownSignal),
-    })));
-    const unsettled = terminalResults.filter(({ result }) => result !== "delivered");
-    if (unsettled.length > 0) {
-      throw new Error(
-        `startup terminal outbox replay did not complete for ${unsettled
-          .map(({ taskId, result }) => `${taskId} (${result})`)
-          .join(", ")}`,
-      );
-    }
-  }
-
   /** Outbox → API dispatch. Each call is idempotent server-side (seq upsert / status guards). */
   private async deliverOutboxRecord(record: MultiremiOutboxRecord): Promise<void> {
-    const payload = record.payload as Record<string, any>;
-    switch (record.kind) {
-      case "start":
-        await this.client.startTask(record.taskId);
-        return;
-      case "prompt":
-        await this.client.reportTaskPrompt(record.taskId, {
-          mode: payload.mode === "delta" ? "delta" : "bootstrap",
-          prompt: String(payload.prompt ?? ""),
-          sha256: String(payload.sha256 ?? ""),
-        });
-        return;
-      case "session_pin":
-        await this.client.pinTaskSession(record.taskId, payload.sessionId ?? null, payload.workDir ?? null);
-        return;
-      case "progress":
-        await this.client.reportProgress(record.taskId, String(payload.summary ?? ""), payload.step, payload.total);
-        return;
-      case "messages":
-        await this.client.reportTaskMessages(record.taskId, Array.isArray(payload.messages) ? payload.messages : []);
-        return;
-      case "usage":
-        await this.client.reportTaskUsage(record.taskId, Array.isArray(payload.usage) ? payload.usage : []);
-        return;
-      case "workspace":
-        await this.client.reportIssueWorkspace(record.taskId, {
-          runtimeId: String(payload.runtimeId ?? ""),
-          rootPath: String(payload.rootPath ?? ""),
-          branchName: String(payload.branchName ?? ""),
-          status: payload.status,
-          repos: Array.isArray(payload.repos) ? payload.repos : [],
-        });
-        return;
-      case "complete":
-        await this.client.completeTask(record.taskId, String(payload.output ?? ""), payload.sessionId ?? null, payload.workDir ?? null);
-        return;
-      case "fail":
-        await this.client.failTask(
-          record.taskId,
-          String(payload.error ?? "Task failed"),
-          payload.sessionId ?? null,
-          payload.workDir ?? null,
-          payload.failureReason ?? null,
-        );
-        return;
-      default:
-        throw new Error(`unknown outbox record kind: ${String(record.kind)}`);
+    if (record.kind !== "messages") throw new Error("non-message reports use WS");
+    try { await this.client.reportTaskMessages(record.taskId, Array.isArray(record.payload.messages) ? record.payload.messages : []); }
+    catch (error) {
+      if (error instanceof MultiremiDaemonHttpError && error.status === 404) throw new DaemonProtocolRpcError("task_not_found", false);
+      throw error;
     }
   }
 
@@ -4364,10 +4253,7 @@ export class MultiremiDaemon {
           return { output: candidate, sessionId: finalSessionId, workDir, usage, completed: false };
         }
         await this.client.pinTaskSession(task.id, finalSessionId, workDir);
-        // Flush the outbox before flipping the task terminal: a queued
-        // "progress" record delivered after completion would be rejected by
-        // the server's terminal-status guard and wedge the outbox.
-        await this.awaitTaskReportDrain(task.id);
+        // The single pump preserves this partition's order through completion.
         await this.client.reportProgress(task.id, "Agent execution completed", 3, 3);
         await this.client.reportTaskUsage(task.id, usage);
         try {
@@ -5028,5 +4914,6 @@ function sleep(ms: number): Promise<void> {
 
 /** completeTask refused because an unconsumed steer won the race (server steer barrier). */
 function isSteerPendingConflict(err: unknown): boolean {
-  return err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending";
+  return (err instanceof MultiremiDaemonHttpError && err.status === 409 && err.code === "steer_pending")
+    || (err instanceof DaemonProtocolRpcError && err.code === "steer_pending");
 }

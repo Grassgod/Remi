@@ -2173,6 +2173,20 @@ export class FeishuBotRepo {
       && attachment.sizeBytes <= FEISHU_IMAGE_MAX_BYTES ? attachment : null;
   }
 
+  getOutboundReportState(workspaceId: string, runtimeId: string, deliveryId: string, claimToken: string): {
+    status: string; currentRuntime: boolean; currentLease: boolean;
+  } {
+    const config = this.getConfig(workspaceId);
+    const row = this.ctx.db.query(
+      `SELECT status, claim_token, leased_until FROM multiremi_feishu_bot_outbound_deliveries
+       WHERE id = ? AND workspace_id = ?`,
+    ).get(deliveryId, workspaceId) as Row | null;
+    const currentRuntime = config?.runtimeId === runtimeId;
+    return { status: row ? String(row.status) : "deleted", currentRuntime,
+      currentLease: currentRuntime && row?.status === "sending" && row.claim_token === claimToken
+        && String(row.leased_until ?? "") > nowIso() };
+  }
+
   reportOutbound(
     workspaceId: string,
     runtimeId: string,

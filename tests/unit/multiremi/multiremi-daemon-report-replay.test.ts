@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { reportFrame } from "../../fixtures/report-session.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -21,13 +22,11 @@ describe("daemon report replay idempotency", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
 
-    const complete = () => app.request(`/api/daemon/tasks/${task.id}/complete`, {
-      method: "POST",
-      headers: HEADERS,
-      body: JSON.stringify({ output: "最终结论:一切正常。", session_id: "sess-1", work_dir: "/tmp/w" }),
+    const complete = () => reportFrame(store, "task.complete", {
+      task_id: task.id, output: "最终结论:一切正常。", session_id: "sess-1", work_dir: "/tmp/w",
     });
     const first = await complete();
-    expect(first.status).toBe(200);
+    expect(first).toEqual({ ok: true });
     expect(store.getTask(task.id)?.status).toBe("completed");
     const commentsAfterFirst = store.listIssueComments(issue.id).length;
     const activitiesAfterFirst = store.listIssueActivity(issue.id).filter((a) => a.type === "task_completed").length;
@@ -37,19 +36,15 @@ describe("daemon report replay idempotency", () => {
 
     // Replay the exact same terminal event (outbox retry after a lost ack).
     const second = await complete();
-    expect(second.status).toBe(200);
-    expect((await second.json()).status).toBe("completed");
+    expect(second).toEqual({ ok: true });
+    expect(store.getTask(task.id)?.status).toBe("completed");
     expect(store.listIssueComments(issue.id).length).toBe(commentsAfterFirst);
     expect(store.listIssueActivity(issue.id).filter((a) => a.type === "task_completed").length).toBe(activitiesAfterFirst);
     expect(store.listTasks().length).toBe(tasksAfterFirst);
 
     // A late fail replay after completion must not flip the status or spawn retries.
-    const failReplay = await app.request(`/api/daemon/tasks/${task.id}/fail`, {
-      method: "POST",
-      headers: HEADERS,
-      body: JSON.stringify({ error: "late duplicate failure" }),
-    });
-    expect(failReplay.status).toBe(200);
+    const failReplay = await reportFrame(store, "task.fail", { task_id: task.id, error: "late duplicate failure" });
+    expect(failReplay).toEqual({ ok: true });
     expect(store.getTask(task.id)?.status).toBe("completed");
     expect(store.listTasks().length).toBe(tasksAfterFirst);
   });
@@ -83,12 +78,8 @@ describe("daemon report replay idempotency", () => {
 
     const usage = { usage: [{ provider: "claude", model: "m1", input_tokens: 10, output_tokens: 5, total_tokens: 15 }] };
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify(usage),
-      });
-      expect(response.status).toBe(200);
+      const response = await reportFrame(store, "task.usage", { task_id: task.id, ...usage });
+      expect(response).toEqual({ ok: true });
     }
     expect(store.getTask(task.id)?.usage).toHaveLength(1);
     expect(store.getTask(task.id)?.usage[0]).toMatchObject({ inputTokens: 10, outputTokens: 5 });
@@ -97,12 +88,8 @@ describe("daemon report replay idempotency", () => {
     const prompt = "do the thing";
     const sha256 = new Bun.CryptoHasher("sha256").update(prompt).digest("hex");
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await app.request(`/api/daemon/tasks/${task.id}/prompt`, {
-        method: "POST",
-        headers: HEADERS,
-        body: JSON.stringify({ mode: "bootstrap", prompt, sha256 }),
-      });
-      expect(response.status).toBe(200);
+      const response = await reportFrame(store, "task.prompt", { task_id: task.id, mode: "bootstrap", prompt, sha256 });
+      expect(response).toEqual({ ok: true });
     }
     expect(store.getTaskPrompt(task.id)?.prompt).toBe(prompt);
   });

@@ -52,6 +52,7 @@ export interface DaemonProtocolIdentity {
 /** An RPC handler a later sub-issue registers. */
 export type DaemonProtocolRpcHandler = (
   frame: DaemonParsedFrame,
+  session: DaemonProtocolSession,
 ) => Promise<unknown | null> | unknown | null;
 
 export interface DaemonProtocolLayerOptions {
@@ -76,6 +77,8 @@ export class DaemonProtocolLayer {
   private readonly metrics: WsFrameMetricsRuntime | null;
   /** RPC handlers registered by later sub-issues, keyed by frame type. */
   private readonly rpcHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly eventHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly bestEffortHandlers = new Map<string, DaemonProtocolRpcHandler>();
 
   constructor(options: DaemonProtocolLayerOptions) {
     this.store = options.store;
@@ -97,7 +100,7 @@ export class DaemonProtocolLayer {
   /** Open a v2 session for an upgraded socket. */
   openSession(socket: DaemonProtocolSocket, identity: DaemonProtocolIdentity): DaemonProtocolSession {
     const sessionId = createId("dws");
-    const session = new DaemonProtocolSession({
+    const session: DaemonProtocolSession = new DaemonProtocolSession({
       sessionId,
       socket,
       registry: this.registry,
@@ -106,7 +109,9 @@ export class DaemonProtocolLayer {
       authorizeRuntime: (daemonId, runtimeId) => this.authorizeRuntime(identity, daemonId, runtimeId),
       onHeartbeat: (heartbeat) => this.handleHeartbeat(heartbeat),
       onFrame: (sample) => this.metrics?.record(sample),
-      onRpc: (frame) => this.dispatchRpc(frame),
+      onRpc: (frame) => this.rpcHandlers.get(frame.type)?.(frame, session) ?? null,
+      onEvent: (frame) => this.eventHandlers.get(frame.type)?.(frame, session) ?? null,
+      onBestEffort: (frame) => this.bestEffortHandlers.get(frame.type)?.(frame, session) ?? null,
     });
     return session;
   }
@@ -200,15 +205,17 @@ export class DaemonProtocolLayer {
     this.rpcHandlers.set(frameType, handler);
   }
 
+  registerEventHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
+    this.eventHandlers.set(frameType, handler);
+  }
+
+  registerBestEffortHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
+    this.bestEffortHandlers.set(frameType, handler);
+  }
+
   /** Close every live session with 4001 (server shutdown). */
   closeAll(reason = "server shutting down"): void {
     for (const session of this.registry.listSessions()) session.closeForServerShutdown();
-  }
-
-  private async dispatchRpc(frame: DaemonParsedFrame): Promise<unknown | null> {
-    const handler = this.rpcHandlers.get(frame.type);
-    if (!handler) return null;
-    return handler(frame);
   }
 
   /**

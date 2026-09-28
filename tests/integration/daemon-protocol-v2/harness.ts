@@ -9,7 +9,7 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
-import type { MultiremiDaemon } from "@multiremi/daemon.js";
+import type { MultiremiDaemon, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 
@@ -80,6 +80,10 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
+    runtimeIds?: string[];
+    outboxBackoffMs?: number[];
+    providerFactory?: MultiremiDaemonProviderFactory;
+    beforeStart?: (harness: DaemonProtocolHarness) => void | Promise<void>;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
   } = {}): Promise<DaemonProtocolHarness> {
@@ -88,18 +92,19 @@ export class DaemonProtocolHarness {
       h.store.ensureLocalWorkspace();
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId: "dmn_fixture" });
       h.startServer();
-      h.daemons = instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map(provider => ({
-        serverUrl: h.url, token: token.token, daemonId: "dmn_fixture", runtimeId: options.runtimeId,
+      h.daemons = instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map((provider, index) => ({
+        serverUrl: h.url, token: token.token, daemonId: "dmn_fixture", runtimeId: options.runtimeIds?.[index] ?? options.runtimeId,
         runtimeName: "protocol fixture", provider, workspaceId: "local", daemonPort: 0,
         workspacesRoot: join(h.root, "workspaces"), repoCacheRoot: join(h.root, "repos"),
         pluginCacheRoot: join(h.root, "plugins"), outboxPath: join(h.root, `${provider}-outbox.db`),
+        outboxBackoffMs: options.outboxBackoffMs,
         gcEnabled: false, pollIntervalMs: 25, claimIdleMaxMs: 30_000,
         onReadyChange: ready => { if (ready) options.onReady?.(h.daemons.find(daemon => (daemon as any).options.provider === provider)!, h); },
-        providerFactory: () => ({
+        providerFactory: options.providerFactory ?? (() => ({
           async *sendStream() { yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "fixture" }] } as any; },
           getLastResponse: () => ({ text: "fixture", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
           close: async () => {},
-        }),
+        })),
         sshMeshManager: { getHeartbeatStatus: () => ({ status: "disabled" }), reconcile: async () => {}, cleanupForRetirement: async () => {} },
         protocolClientOptions: {
           cliVersion: DAEMON_MIN_CLI_VERSION,
@@ -112,6 +117,7 @@ export class DaemonProtocolHarness {
           },
         },
       })));
+      await options.beforeStart?.(h);
       return h;
     } catch (error) { await h.dispose(); throw error; }
   }
@@ -142,11 +148,11 @@ export class DaemonProtocolHarness {
     });
   }
 
-  async startDaemon(): Promise<void> {
+  async startDaemon(options: { waitForSocket?: boolean } = {}): Promise<void> {
     this.runError = null;
     this.runs = this.daemons.map(daemon => daemon.start());
     for (const run of this.runs) void run.catch(error => { this.runError = error; });
-    await waitFor(() => this.client.connectionState() === "connected" || !!this.runError, "daemon handshake");
+    await waitFor(() => (options.waitForSocket === false ? this.daemons.every(daemon => (daemon as any).supervisorReady()) : this.client.connectionState() === "connected") || !!this.runError, "daemon startup");
     if (this.runError) throw this.runError;
   }
 
