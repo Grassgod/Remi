@@ -38,6 +38,8 @@ function patch(hub: HubImpl, seq: number, fields: ConversationLogPatch["fields"]
 
 class RecordingSink implements HubSubscriberSink {
   buffered = 0;
+  afterSend: (() => void) | null = null;
+  afterGap: (() => void) | null = null;
   readonly frames: HubFrame[] = [];
   readonly gaps: HubSeqRange[] = [];
   readonly order: string[] = [];
@@ -45,16 +47,65 @@ class RecordingSink implements HubSubscriberSink {
   send(frames: readonly HubFrame[]): void {
     this.frames.push(...frames);
     this.order.push(`data:${frames.map((frame) => frame.seq).join(",")}`);
+    this.afterSend?.();
   }
   gap(from: number, to: number): void {
     this.gaps.push({ from, to });
     this.order.push(`gap:${from},${to}`);
+    this.afterGap?.();
   }
 }
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 12; i++) await new Promise<void>((resolve) => setImmediate(resolve));
 }
+
+describe("MUL-436 regression 4A: callback unsubscription", () => {
+  for (const defaultScheduling of [false, true]) {
+    for (const siblings of defaultScheduling ? [false, true] : [false]) {
+      for (const callback of ["send", "gap"] as const) {
+        it(`stops the old subscription after ${callback} (${defaultScheduling ? "default" : "manual"}, siblings=${siblings})`, async () => {
+          const hub = make(defaultScheduling ? { scheduleFlush: (fire) => { setImmediate(fire); } } : {});
+          const old = new RecordingSink();
+          const replacement = new RecordingSink();
+          const sibling = new RecordingSink();
+          const subscription = hub.subscribeWithSink("log:s", 0, old);
+          if (siblings) hub.subscribeWithSink("log:s", 0, sibling);
+          const flush = async () => {
+            if (defaultScheduling) await settle();
+            else for (let i = 0; i < 4; i++) hub.flushNow();
+          };
+          row(hub, 1); await flush();
+          if (callback === "gap") { patch(hub, 1, undefined, 4); await flush(); }
+          const replace = () => {
+            old.afterSend = null;
+            old.afterGap = null;
+            subscription.unsubscribe();
+            hub.subscribeWithSink("log:s", 1, replacement);
+            row(hub, 2);
+          };
+          if (callback === "send") old.afterSend = replace;
+          else old.afterGap = replace;
+          patch(hub, 1, undefined, callback === "send" ? 2 : 3); await flush();
+          expect(old.frames.map((frame) => [frame.kind, frame.seq])).toEqual([["entry", 1], ["patch", 1]]);
+          expect(replacement.frames.map((frame) => [frame.kind, frame.seq])).toEqual([["entry", 2]]);
+          if (siblings) expect(sibling.frames.filter((frame) => frame.kind === "entry").map((frame) => frame.seq)).toEqual([1, 2]);
+          expect(hub.snapshot().subscriptions).toBe(siblings ? 2 : 1);
+        });
+      }
+    }
+  }
+
+  it("stops replay when the ring gap callback unsubscribes", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 1 } } });
+    const sink = new RecordingSink();
+    const subscription = hub.subscribeWithSink("log:s", 0, sink);
+    sink.afterGap = () => subscription.unsubscribe();
+    row(hub, 1); row(hub, 2); hub.flushNow();
+    expect(sink.gaps).toHaveLength(1);
+    expect(sink.frames).toEqual([]);
+  });
+});
 
 function reader(head: number, seqs: number[]): HubFillReader {
   return {

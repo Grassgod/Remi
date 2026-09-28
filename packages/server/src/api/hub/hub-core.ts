@@ -969,12 +969,14 @@ export class HubImpl implements ObservableLiveHub {
           subscriber.changeGap = null;
           this.notifyGap(subscriber, gap.from, gap.to);
         }
+        if (!subscriber.active) continue;
         if (changes && changes.length > 0 && !subscriber.lagging) {
           // A gap advances the replay cursor without delivering a patch base.
           const applicable = changes.filter((change) => this.hasDelivered(subscriber, change.frame.seq))
             .map((change) => change.frame);
           if (applicable.length > 0) this.send(subscriber, applicable);
         }
+        if (!subscriber.active) continue;
         const more = this.deliverOneBatch(subscriber, stream);
         if (more) this.flushDirty.add(key);
       }
@@ -991,10 +993,11 @@ export class HubImpl implements ObservableLiveHub {
   private deliverOneBatch(subscriber: HubSubscriber, stream: HubRingStream): boolean {
     // A paused subscriber is the drain callback's business, not the flush loop's:
     // returning true here would spin `setImmediate` until the socket drained.
-    if (subscriber.lagging) return false;
+    if (!subscriber.active || subscriber.lagging) return false;
     if (hasUnservableAfter(stream, subscriber.cursor)) {
       this.reportGap(subscriber, firstServableSeq(stream) - 1);
     }
+    if (!subscriber.active) return false;
     const entries = this.ring.entriesAfter(stream, subscriber.cursor);
     if (entries.length === 0) {
       if (subscriber.cursor < stream.headSeq) this.reportGap(subscriber, stream.headSeq);
@@ -1003,6 +1006,7 @@ export class HubImpl implements ObservableLiveHub {
     if (entries[0]!.frame.seq > subscriber.cursor + 1) {
       this.reportGap(subscriber, entries[0]!.frame.seq - 1);
     }
+    if (!subscriber.active) return false;
     const batch: HubFrame[] = [];
     let bytes = 0;
     let index = 0;
@@ -1016,14 +1020,15 @@ export class HubImpl implements ObservableLiveHub {
     }
     subscriber.cursor = batch[batch.length - 1]!.seq;
     this.send(subscriber, batch);
-    if (subscriber.lagging) return false;
+    if (!subscriber.active || subscriber.lagging) return false;
     const next = entries[index];
     const gapEnd = next ? next.frame.seq - 1 : stream.headSeq;
     if (gapEnd > subscriber.cursor) this.reportGap(subscriber, gapEnd);
-    return index < entries.length;
+    return subscriber.active && index < entries.length;
   }
 
   private send(subscriber: HubSubscriber, frames: readonly HubFrame[]): void {
+    if (!subscriber.active) return;
     const listener = subscriber.traceListener;
     try {
       if (listener && subscriber.traceTaskId) {
@@ -1034,6 +1039,7 @@ export class HubImpl implements ObservableLiveHub {
       } else {
         subscriber.sink.send(frames);
       }
+      if (!subscriber.active) return;
       for (const frame of frames) {
         if (frame.kind !== "patch") {
           const last = subscriber.delivered.at(-1);
@@ -1048,13 +1054,14 @@ export class HubImpl implements ObservableLiveHub {
     } catch (error) {
       this.warn(`subscriber for ${subscriber.key} threw: ${errorText(error)}`);
     }
+    if (!subscriber.active) return;
     let buffered = 0;
     try {
       buffered = subscriber.sink.getBufferedAmount();
     } catch {
       buffered = 0;
     }
-    if (buffered > this.limits.laggingBytes) subscriber.lagging = true;
+    if (subscriber.active && buffered > this.limits.laggingBytes) subscriber.lagging = true;
   }
 
   private hasDelivered(subscriber: HubSubscriber, seq: number): boolean {
@@ -1150,10 +1157,12 @@ export class HubImpl implements ObservableLiveHub {
     const from = subscriber.cursor;
     if (upTo < from) return;
     this.notifyGap(subscriber, from, upTo);
+    if (!subscriber.active) return;
     subscriber.cursor = upTo;
   }
 
   private notifyGap(subscriber: HubSubscriber, from: number, to: number): void {
+    if (!subscriber.active) return;
     if (subscriber.sink.gap) {
       try {
         subscriber.sink.gap(from, to);
