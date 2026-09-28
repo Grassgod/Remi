@@ -41,6 +41,7 @@ const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
+const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
 const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
@@ -2492,6 +2493,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       history TEXT NOT NULL DEFAULT '[]',
       owner_agent_id TEXT,
       created_by_agent_id TEXT,
+      -- MUL-412: the single text nudge a decision card gets. Decisions never
+      -- expire, so this is a one-shot slot rather than a deadline offset.
+      reminder_sent_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
@@ -3288,10 +3292,24 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // Why a decision lane carried plain text instead of a card. NULL means the
   // delivery is a normal card (or not a decision lane at all).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
+  // MUL-412 (E4 x E5): an E4 decision rides the same pipeline. It gets its own
+  // nullable pointer rather than borrowing `human_request_id`, so a delivery
+  // row names exactly one owner and MUL-440 can split lanes by kind without
+  // guessing. `reminder_sent_at` is the one-shot slot for the decision's single
+  // reminder: decisions never expire, so there is no deadline to key it on.
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "decision_id TEXT");
+  // The Issue the decision hangs on. Redundant with the decision row's own
+  // `issue_id`, but the delivery is read on its own when the host reports an
+  // outcome or re-registers a card, and a join for one column on those paths
+  // buys nothing.
+  addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "decision_issue_id TEXT");
+  addColumnIfMissing(db, "multiremi_issue_decisions", "reminder_sent_at TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
     ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_decision
+    ON multiremi_feishu_bot_outbound_deliveries(decision_id, status, available_at)`);
   // MUL-386 C.2: `recall` resolves one OpenViking URI per search hit. It used to
   // call `listProjectDocs`, reading every doc in the project (body included) and
   // comparing URIs in JavaScript — 15.5 MB of bridge payload per request. This
@@ -3319,6 +3337,19 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
         model_id TEXT NOT NULL,
         levels TEXT NOT NULL DEFAULT '[]',
         default_level TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, engine, model_id)
+      );
+    `);
+  });
+  runMigrationOnce(db, GATEWAY_MODEL_CONTEXT_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_context (
+        workspace_id TEXT NOT NULL,
+        engine TEXT NOT NULL CHECK(engine = 'claude'),
+        model_id TEXT NOT NULL,
+        context_window TEXT NOT NULL CHECK(context_window = '1m'),
         updated_by TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY(workspace_id, engine, model_id)

@@ -27,6 +27,7 @@ import {
 import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
@@ -313,6 +314,16 @@ export class IssueDecisionError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
 }
 
+/**
+ * MUL-412. `idempotent` marks the Feishu card path, where a replayed callback
+ * or a double tap must return the settled row instead of writing a second
+ * answer. The HTTP answer route leaves it off: a member re-answering from the
+ * web or CLI is a deliberate revision (S4).
+ */
+export interface AnswerIssueDecisionOptions {
+  idempotent?: boolean;
+}
+
 export type IssueDeletionBlockCode =
   | "issue_not_found"
   | "issue_has_active_tasks"
@@ -490,6 +501,19 @@ export class IssuesRepo {
     return row ? toIssueDecision(row) : null;
   }
 
+  /**
+   * A decision by its own id (MUL-412). The Feishu decision-card lane is keyed
+   * by decision id alone — a bot host is told the decision, not the parent
+   * Issue, and resolving the Issue from the row is what makes the workspace
+   * check possible.
+   */
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE id = ?",
+    ).get(decisionId) as Row | null;
+    return row ? toIssueDecision(row) : null;
+  }
+
   countPendingIssueDecisions(issueId: string): number {
     const row = this.ctx.db.query(
       `SELECT
@@ -587,6 +611,9 @@ export class IssuesRepo {
           body: title, data: { decision_id: id, kind, direct: true },
         }, events);
         this.notifyDecisionRequested(target, decision, events);
+        // A3: only the two "a person must decide this" cases get a card. A row
+        // the parent's owner agent answers itself stays in the web workbench.
+        this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(target, decision, events);
       }
       return decision;
     })();
@@ -595,7 +622,13 @@ export class IssuesRepo {
     return created;
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
     const answer = String(input.answer ?? "").trim();
     const reason = String(input.reason ?? "").trim();
     const overturn = String(input.overturn ?? "").trim();
@@ -615,6 +648,13 @@ export class IssuesRepo {
         throw new IssueDecisionError(403, "only the parent owner task can answer a pending decision");
       }
       if (decision.status === "withdrawn") throw new IssueDecisionError(409, "decision was withdrawn");
+      // A card click is a single-shot interaction: Feishu redelivers callbacks,
+      // a person can double-tap, and the card is still on screen after the web
+      // answered it. Replaying one must not append a second history entry, a
+      // second activity or a second wakeup. A deliberate re-answer from the web
+      // or CLI keeps the documented member-overturns-agent behavior, so the
+      // guard lives on the card path only.
+      if (options.idempotent && decision.status === "answered") return decision;
       const record: MultiremiIssueDecisionAnswer = {
         answererType: actor.type, answererId: actor.id, answer, reason,
         overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
@@ -645,6 +685,10 @@ export class IssuesRepo {
         this.queueDecisionRound(parent, owner, `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`, changes, events);
       }
       this.decisionEvent(events, "decision:updated", result);
+      // In-place terminal rewrite. The delivery row is written inside this
+      // transaction so a rollback leaves neither an answer nor a patch, and the
+      // realtime event is queued rather than emitted mid-transaction.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.tasks().runCollectedChildStatusChanges(changes);
@@ -672,6 +716,8 @@ export class IssuesRepo {
       }, events);
       this.notifyDecisionRequested(parent, result, events);
       this.decisionEvent(events, "decision:updated", result);
+      // S5b: the escalation is what turns a web-only decision into a card.
+      this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(parent, result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
@@ -697,6 +743,9 @@ export class IssuesRepo {
       this.ctx.db.run("UPDATE multiremi_issue_decisions SET status = 'withdrawn', updated_at = ? WHERE id = ?", [nowIso(), decision.id]);
       const result = this.getIssueDecision(issueId, decisionId)!;
       this.decisionEvent(events, "decision:updated", result);
+      // A withdrawn decision is a terminal state of its own (E4 has no expiry),
+      // so the card on screen is rewritten rather than left actionable.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
@@ -804,6 +853,10 @@ export class IssuesRepo {
     // get them here. N is taken before the MAX(issue_number) read below.
     this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
+    // Child membership and guarded parent decisions serialize on the parent row.
+    if (parentIssueId && !lockIssueRowWithinTransaction(this.ctx.db, parentIssueId)) {
+      throw new Error(`Parent issue not found: ${parentIssueId}`);
+    }
     const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
     if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
     if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");
@@ -2298,13 +2351,21 @@ export class IssuesRepo {
     // until commit, while SQLite serializes the writer transaction. Re-read
     // only after acquiring it so a user terminal transition and a worker
     // lifecycle transition can never derive writes from the same stale row.
-    const locked = this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
-    if (locked.changes === 0) throw new Error(`Issue not found: ${id}`);
+    if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
+    // Keep workspace -> child -> parent order. A new membership (even a closed
+    // child) changes A4; reopening changes the unfinished-child count as well.
+    if (nextParentIssueId && (nextParentIssueId !== current.parentIssueId
+      || (isTerminalIssueStatus(current.status) && !isTerminalIssueStatus(nextStatus)))) {
+      if (!lockIssueRowWithinTransaction(this.ctx.db, nextParentIssueId)) {
+        throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      }
+    }
     let nextRuntimeWorkspaceId = resolveOptionalStringField(input, "runtimeWorkspaceId", "runtime_workspace_id", current.runtimeWorkspaceId ?? null);
     const picksProject = hasAnyField(input, "projectId", "project_id") && Boolean(nextProjectId);
     const picksDirectory = hasAnyField(input, "runtimeWorkspaceId", "runtime_workspace_id") && Boolean(nextRuntimeWorkspaceId);
@@ -2355,7 +2416,6 @@ export class IssuesRepo {
     }
 
     const updatedAt = nowIso();
-    const nextStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : current.status;
     // MUL-400 E3 gate 2: dependency and parent-grant guards are both decided
     // while the same Issue row lock is held.
     this.assertDependenciesMetForStatus(id, current, nextStatus, input, deferredEvents);
@@ -2584,7 +2644,8 @@ export class IssuesRepo {
       // new parent is covered by the hook above.
       if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
         const oldParent = this.getIssue(previous.parentIssueId);
-        if (oldParent) this.rederiveParentStatus(oldParent, updated, collector, hookEvents);
+        if (oldParent) this.ctx.db.transaction(() =>
+          this.rederiveParentStatus(oldParent, updated, collector, hookEvents))();
       }
     } catch (err) {
       // The hook's own transaction rolled back, so its transitions and events
@@ -3600,6 +3661,12 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): void {
     if (parent.status !== "in_review") return;
+    // No parent row lock before counting (MUL-471). The conditional UPDATE below
+    // takes that lock and re-checks `in_review` after any wait, so a concurrent
+    // parent decision turns it into a no-op. A child added or reopened after
+    // this count is a child event of its own, and closing a child never takes
+    // the lock, so an earlier lock would not make the count below any more
+    // current.
     const openChildren = this.countOpenChildIssues(parent.id);
     if (openChildren === 0) return;
     const now = nowIso();
@@ -4174,18 +4241,25 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
-    this.ctx.db.run(
-      `UPDATE multiremi_issues
-       SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
-       WHERE id = ?`,
-      [
-        assigneeType,
-        assigneeId,
-        taskAgent ? "todo" : current.status,
-        now,
-        id,
-      ],
-    );
+    const writeAssignment = () => {
+      if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+      if (!lockIssueRowWithinTransaction(this.ctx.db, id)) throw new Error(`Issue not found: ${id}`);
+      const locked = this.getIssue(id)!;
+      // Agent assignment also reopens a settled Issue, independently of PATCH.
+      if (taskAgent && locked.parentIssueId && isTerminalIssueStatus(locked.status)) {
+        if (!lockIssueRowWithinTransaction(this.ctx.db, locked.parentIssueId)) {
+          throw new Error(`Parent issue not found: ${locked.parentIssueId}`);
+        }
+      }
+      this.ctx.db.run(
+        `UPDATE multiremi_issues
+         SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
+         WHERE id = ?`,
+        [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
+      );
+    };
+    if (this.ctx.db.inTransaction) writeAssignment();
+    else this.ctx.db.transaction(writeAssignment)();
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {

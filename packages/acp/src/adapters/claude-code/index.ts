@@ -162,6 +162,7 @@ export class ClaudeAdapter implements AgentAdapter {
     // Both survive the bridge's options literal: `...userProvidedOptions` is
     // spread at dist/acp-agent.js:4433 and no later key overrides either one.
     if (options.model) claudeOpts.model = options.model;
+    if (options.claudeEnv) claudeOpts.env = options.claudeEnv;
     // Inline SDK settings override project/local routing while retaining their
     // unrelated hooks, permissions and Plugin settings. Never include secrets.
     if (options.claudeSettings) claudeOpts.settings = options.claudeSettings;

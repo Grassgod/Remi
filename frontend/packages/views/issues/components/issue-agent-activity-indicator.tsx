@@ -9,10 +9,12 @@ import {
 } from "@multiremi/ui/components/ui/hover-card";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import type { AgentTask } from "@multiremi/core/types";
 import { cn } from "@multiremi/ui/lib/utils";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { AgentActivityHoverContent } from "../../agents/components/agent-activity-hover-content";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 interface IssueAgentActivityIndicatorProps {
@@ -52,7 +54,15 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
 }: IssueAgentActivityIndicatorProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const { pathname } = useNavigation();
+  // MUL-472 b: the per-row dot is a decoration, so it waits with the page. The
+  // shared cache still feeds it when another consumer (the running-agent
+  // filter, the chip) has already fetched the snapshot — `enabled: false` only
+  // stops *this* subscription from issuing the request.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "page" });
+  const { data: snapshot = [] } = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const { runningTasks, awaitingTasks, queuedTasks, agentIds, opacity, label } = useMemo(() => {
     const running: AgentTask[] = [];

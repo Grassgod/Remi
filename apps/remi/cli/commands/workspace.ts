@@ -193,6 +193,19 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       ],
       reasoningLevelsBody,
     ),
+    scopedWrite(
+      "workspace.relay.context-window.update",
+      ["workspace", "relay", "context-window", "update"],
+      "Enable or clear the 1M context declaration for a Claude gateway model",
+      "/relay-config/:engine/context-window", "PUT",
+      [
+        refPositional("engine"),
+        { name: "model", type: "string", valueName: "model-id", description: "Gateway model id" },
+        { name: "one-million", type: "boolean", description: "Enable 1M; confirm the model supports it" },
+        { name: "clear", type: "boolean", description: "Use the standard context window" },
+      ],
+      contextWindowBody,
+    ),
     scopedRead("workspace.bot-menu.get", ["workspace", "bot-menu", "get"], "Read the workspace Feishu bot menu", "/bot-menu"),
     scopedWrite(
       "workspace.bot-menu.update",
@@ -567,6 +580,15 @@ async function reasoningLevelsBody(invocation: CommandInvocation): Promise<Recor
     levels: clear ? [] : levels,
     default_level: clear ? undefined : stringOption(invocation, "default-level") ?? undefined,
   });
+}
+
+async function contextWindowBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const model = stringOption(invocation, "model");
+  if (!model) throw new CliError("usage", "workspace relay context-window update requires --model");
+  const enabled = booleanOption(invocation, "one-million") === true;
+  const clear = booleanOption(invocation, "clear") === true;
+  if (enabled === clear) throw new CliError("usage", "choose exactly one of --one-million or --clear");
+  return requestBody(invocation, { model, one_million: enabled });
 }
 
 async function envBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
