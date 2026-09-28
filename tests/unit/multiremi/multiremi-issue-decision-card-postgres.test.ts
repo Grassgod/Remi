@@ -297,10 +297,6 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       expect(results.map(message => message.type)).toEqual(["result", "result"]);
       const deliveries = results.map(message => message.delivery ?? null);
       const taken = deliveries.filter((row): row is { id: string; kind: string } => row !== null);
-      expect(taken).toHaveLength(1);
-      expect(taken[0]!.kind).toBe("decision_reminder");
-      expect(deliveries.filter(row => row === null)).toHaveLength(1);
-
       const exitCodes = await Promise.all(processes.map((child, index) =>
         beforeBarrierTimeout(child.exited, `worker ${index + 1} exit`)));
       const errors = await Promise.all(stderr);
@@ -308,7 +304,12 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       const rows = db.query(
         "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_reminder' AND decision_id = ?",
       ).get(decision.id) as { n: string | number };
-      expect(Number(rows.n)).toBe(1);
+      expect({
+        claimed: taken.length,
+        unclaimed: deliveries.filter(row => row === null).length,
+        reminderRows: Number(rows.n),
+      }).toEqual({ claimed: 1, unclaimed: 1, reminderRows: 1 });
+      expect(taken[0]!.kind).toBe("decision_reminder");
       completed = true;
     } finally {
       if (!completed) {
