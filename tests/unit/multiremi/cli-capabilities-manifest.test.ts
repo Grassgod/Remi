@@ -203,6 +203,8 @@ describe("CLI capabilities manifest", () => {
       .toEqual({ command: "workspace.relay.reasoning-levels.get" });
     expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
       .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/context-window"])
+      .toEqual({ command: "workspace.relay.context-window.update" });
     expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
       command: "remi workspace relay reasoning-levels update",
       mutation: "write",

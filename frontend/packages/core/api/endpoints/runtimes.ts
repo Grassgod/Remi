@@ -81,6 +81,8 @@ import {
   RelayReasoningLevelSaveResultSchema,
   type RelayReasoningLevelsResponse,
   RelayReasoningLevelsResponseSchema,
+  type RelayContextWindowSaveResult,
+  RelayContextWindowSaveResultSchema,
   RuntimeDirectoryScanRequestSchema,
   RuntimeProvisionListResponseSchema,
   RuntimeProvisionResponseSchema,
@@ -243,6 +245,20 @@ export class RuntimesEndpoints {
     );
     return parseStrictResponse(raw, RelayReasoningLevelSaveResultSchema, {
       endpoint: "PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels",
+    });
+  }
+
+  async putRelayContextWindow(
+    workspaceId: string,
+    engine: "claude",
+    data: { model: string; one_million: boolean },
+  ): Promise<RelayContextWindowSaveResult> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/context-window`,
+      { method: "PUT", body: JSON.stringify({ model: data.model, one_million: data.one_million }) },
+    );
+    return parseStrictResponse(raw, RelayContextWindowSaveResultSchema, {
+      endpoint: "PUT /api/workspaces/:id/relay-config/:engine/context-window",
     });
   }
 

@@ -363,8 +363,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // protocol traffic, so they move the swept/full totals from 70/71 to 72/73.
     // MUL-462 adds two /internal/peer/* routes. Both roles serve /internal, so
     // the swept inventory grows from 769 to 771 while these refusal totals stay put.
-    // MUL-467's POST /api/issues/:id/workspace/abandon is browser/CLI traffic that
-    // ui serves, so the swept inventory grows to 772 with these totals unchanged.
+    // MUL-467's workspace abandonment POST and MUL-479's context-window PUT are
+    // browser/CLI traffic served by ui. The swept inventory is now 773 while
+    // these daemon-only refusal totals remain unchanged.
     expect(misdirected, routeCountHint("ui")).toHaveLength(72);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(73);
   });
@@ -384,14 +385,16 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
+    // MUL-479's context-window PUT is workspace admin/browser traffic, outside
+    // every runtime allowlist prefix; ui serves it and runtime refuses it.
     // MUL-395: /api/issues/status-pages is browser/CLI traffic, outside the
     // runtime allowlist. UI serves it; runtime refuses this one new route.
     // MUL-462's two /internal/peer/* routes increase the swept inventory by two,
-    // but runtime serves both, so the refusal totals remain 692/694.
-    // MUL-467: POST /api/issues/:id/workspace/abandon is browser/CLI traffic outside
-    // the runtime allowlist, so runtime refuses it and the totals move to 693/695.
-    expect(refused, routeCountHint("runtime")).toBe(693);
-    expect(refused + 2, routeCountHint("runtime")).toBe(695);
+    // but runtime serves both, so they leave the refusal totals unchanged.
+    // MUL-467's abandonment POST and MUL-479's context-window PUT are outside
+    // the runtime allowlist; together they move the totals to 694/696.
+    expect(refused, routeCountHint("runtime")).toBe(694);
+    expect(refused + 2, routeCountHint("runtime")).toBe(696);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

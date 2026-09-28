@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { ChevronLeft } from "lucide-react";
 import { useNavigation } from "../../navigation";
+import { useAfterFirstScreen, useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multiremi/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
@@ -80,6 +81,7 @@ export function IssueDetail({
   const { t } = useT("issues");
   const id = issueId;
   const router = useNavigation();
+  const { pathname } = router;
   const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
 
@@ -105,7 +107,8 @@ export function IssueDetail({
   }, [id, queryClient, timelinePrimer.data]);
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
   const sessions = useIssueSessionSelection(
     id,
     initialIssueSessionId,
@@ -247,6 +250,16 @@ export function IssueDetail({
   const loading = issueLoading
     || membersQuery.isPending
     || (!!issue && childIssuesQuery.isPending);
+
+  // MUL-472 b: the *main* content of an issue route is the scroll body, and
+  // `IssueDetailMain` publishes for it once the timeline settled and the reveal
+  // hook un-hid it. This component only covers the states with no body at all:
+  // a settled query with no issue (404 / deleted) or a failed load must still
+  // open the gate, or the deferred shell chrome would never appear on them.
+  // Publishing "the issue row exists" here would be wrong: that row lives inside
+  // the still-hidden content wrapper and lands ~400 ms before the timeline row
+  // the user actually reads.
+  useRouteContentReady(pathname, !issueLoading && !issue);
 
   // Shared issue actions (mutations, pin, copy-link, modal dispatch, etc.).
   // Called before the `if (!issue)` early return so hook order stays stable.
