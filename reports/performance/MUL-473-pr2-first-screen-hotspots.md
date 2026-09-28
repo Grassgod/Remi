@@ -16,7 +16,9 @@ The resumed checkout was on `agent/MUL-473`, with no unpushed PR2 commits. Its a
 
 ## Attachment immutability and authorization
 
-All on-disk upload writers were checked: `attachments.ts` task upload (lines 59-63), ordinary upload (142-148), and daemon inbound upload (`daemon.ts` 705-709). Each mints a fresh `createUploadAttachmentId()` before writing. Task and daemon uploads use `wx`; ordinary uploads write a newly minted path. Chat send attaches existing bytes rather than overwriting a file. `UPDATE multiremi_attachments` in issue/chat/Feishu repositories and migrations changes parent links/workspace association, not file bytes or filenames. There is no upload path that overwrites bytes under an existing id; the id is therefore the content version.
+Correction after QA `cmt_7ek38b3tgtit`: the original immutability audit was incorrect. At `25e613dc`, the ordinary upload used non-exclusive `writeFile` before INSERT. A random-id collision could overwrite an existing file even though the primary-key INSERT then failed. The task and daemon writers used `wx`, but their cleanup could also unlink a preexisting colliding file. Minting an id alone did not establish immutability.
+
+Rework R1 routes all three writers through `persistUploadedAttachments` in `api/helpers/uploads.ts`. It opens each path with `wx`, records ownership only after successful exclusive creation, closes the handle before the existing atomic INSERT callback, and removes only that attempt's owned files on failure. EEXIST and attachment primary-key collisions retry with new ids, at most three attempts; other failures clean up and propagate. Chat batches retain their existing single transaction for rows, message and outbox. Full-UUID upload ids prevent the former 48-bit id space from being reused after hard deletion; existing ids and read URLs remain unchanged. See the rework report for the deletion and validation audit, collision tests and mutation evidence.
 
 The private-chat regression uses a valid member credential with the correct ETag for someone else's attachment. The baseline and optimized route both return **403**, body `{"error":"not your chat session"}`, without an ETag. Unsigned requests with a correct validator return 401. Authorized exact, weak, list, and wildcard validators return 304 with an empty body and no Content-Length; a stale validator returns the original bytes. Unknown attachments and missing files retain their 404 errors.
 
@@ -71,6 +73,8 @@ The database helper uses in-memory SQLite when `MULTIREMI_TEST_POSTGRES_URL` is 
 These same query counts match on SQLite and real PG. Each runtime scale also asserts one usage, one execution-group, and one model read. Goldens check both the HTTP responses and legacy per-runtime hydration; a task usage update is immediately reflected by the new list.
 
 The capture issues summary first with a fresh credential, then content and runtimes. Main's MUL-474 throttle removes a subsequent `last_used_at` write, so those counts changed from 4/7 to 3/6 after merging main. The response golden differs from the original `7bd32800` capture only in its generated `source` label. The runtime growth test primes authentication once before both measurements, so both use the same warm state; its equality assertion is unchanged. No e implementation or throttle test was added by this PR.
+
+Rework R2 explicitly orders both `listRuntimes` and `listRuntimesForWorkspace` by `updated_at DESC, id DESC`. The non-tied wire golden remains unchanged. Equal timestamps were previously unordered: PostgreSQL's QA fixture order is now specified on both backends; SQLite's former tied order is intentionally allowed to change. The runtime endpoint returns an unpaginated array, so pagination is not an acceptance claim.
 
 ## PR1 guard changes
 

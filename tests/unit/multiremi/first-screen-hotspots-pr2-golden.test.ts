@@ -73,3 +73,22 @@ it("hydrates usage, groups and models exactly like the old per-runtime reads", a
     expect(updated!.inputTokens).toBeGreaterThanOrEqual(73);
   } finally { await harness.dispose(); }
 }, 20000);
+
+it("orders equal-timestamp runtimes by id DESC on both list paths, excluding foreign rows", async () => {
+  const harness = await createPr2Harness({ runtimes: 10, foreignRuntimes: 50 });
+  try {
+    harness.db.run("UPDATE multiremi_runtimes SET updated_at = ?", "2026-09-26T08:00:00.000Z");
+    // The old PG query's observed tie order is now an explicit cross-backend contract.
+    const expected = [9, 8, 7, 6, 5, 4, 3, 2, 1].map(n => `rt_pr2_${n}`).concat("rt_hotspot");
+    const legacy = harness.store.listRuntimes();
+    expect(legacy.map(runtime => runtime.id)).toEqual([...legacy.map(runtime => runtime.id)].sort().reverse());
+    expect(legacy.filter(runtime => runtime.workspaceId === "local").map(runtime => runtime.id)).toEqual(expected);
+    expect(harness.store.listRuntimesForWorkspace("local").map(runtime => runtime.id)).toEqual(expected);
+    await (await harness.app.request("/api/runtimes", { headers: harness.headers })).arrayBuffer();
+    harness.probe.reset();
+    const response = await harness.app.request("/api/runtimes", { headers: harness.headers });
+    expect(response.status).toBe(200);
+    expect((await response.json() as Array<{ id: string }>).map(runtime => runtime.id)).toEqual(expected);
+    expect(harness.probe.statements).toBe(6);
+  } finally { await harness.dispose(); }
+}, 20000);

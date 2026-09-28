@@ -532,7 +532,7 @@ export class RuntimesRepo {
        LEFT JOIN multiremi_daemon_profiles profile
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
-       ORDER BY runtime.updated_at DESC`,
+       ORDER BY runtime.updated_at DESC, runtime.id DESC`,
     ).all() as Row[];
     return rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
   }
@@ -543,7 +543,7 @@ export class RuntimesRepo {
    *
    * The old list hydrates all deployment rows before the caller filters them.
    * Narrowing first avoids derived reads for foreign workspaces. A NULL
-   * workspace still means `local`, and `updated_at DESC` order is preserved.
+   * workspace still means `local`; both lists use `updated_at DESC, id DESC`.
    */
   listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
     const rows = this.ctx.db.query(
@@ -553,7 +553,7 @@ export class RuntimesRepo {
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
        WHERE COALESCE(runtime.workspace_id, 'local') = ?
-       ORDER BY runtime.updated_at DESC`,
+       ORDER BY runtime.updated_at DESC, runtime.id DESC`,
     ).all(workspaceId) as Row[];
     return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId);
   }

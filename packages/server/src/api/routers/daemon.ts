@@ -1,8 +1,6 @@
 import type { Hono } from "hono";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
-import { createUploadAttachmentId, detectContentTypeFromFilename, uploadAbsolutePath, uploadRelativePath,
+import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
@@ -700,20 +698,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       externalSessionKey: stringFormValue(form.get("external_session_key")) ?? "",
       externalMessageId: stringFormValue(form.get("external_message_id")) ?? "" };
     const workspaceId = runtime.workspaceId ?? "local";
-    let path: string | undefined;
     try {
       store.assertFeishuBotInboundAttachmentScope(workspaceId, runtimeId, scope);
-      const id = createUploadAttachmentId();
       const filename = sanitizeChatAttachmentFilename(file.name);
-      path = uploadAbsolutePath(uploadRelativePath(workspaceId, id, filename));
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, new Uint8Array(await file.arrayBuffer()), { flag: "wx" });
-      const attachment = store.createFeishuBotInboundAttachment(workspaceId, runtimeId, scope, {
-        id, filename, url: `/api/attachments/${id}/content`,
-        contentType: detectContentTypeFromFilename(filename), sizeBytes: file.size });
+      const attachment = await persistUploadedAttachments(workspaceId, [{ filename,
+        bytes: new Uint8Array(await file.arrayBuffer()), contentType: detectContentTypeFromFilename(filename) }],
+        ([input]) => store.createFeishuBotInboundAttachment(workspaceId, runtimeId, scope, input!));
       return c.json({ attachment }, 201);
     } catch (error) {
-      if (path) await unlink(path).catch(() => undefined);
       if (error instanceof FeishuBotConfigError) return c.json({ error: error.message, code: error.code }, error.status as 400 | 403 | 409);
       return c.json({ error: error instanceof Error ? error.message : "attachment upload failed" }, 400);
     }

@@ -2,7 +2,6 @@ import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import type { Hono } from "hono";
 import {
   MAX_UPLOAD_SIZE,
-  createUploadAttachmentId,
   currentWorkspaceRole,
   denyAttachmentAccess,
   denyAttachmentCreationAccess,
@@ -11,17 +10,15 @@ import {
   loadChatSessionForCurrentUser,
   issueMutationActor,
   localAttachmentFileResponse,
+  persistUploadedAttachments,
   readJson,
   safeFilename,
   stringFormValue,
-  uploadAbsolutePath,
-  uploadRelativePath,
   uploadedAttachmentPath,
 } from "../helpers.js";
 import { attachmentCompatibilityResponse, cleanString, currentTaskAccessToken } from "../wire/index.js";
 import type { CreateAttachmentInput } from "@multiremi/contracts/types.js";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { unlink } from "node:fs/promises";
 import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -52,21 +49,13 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
       const error = chatAttachmentValidationError(filename, file.size);
       if (error) return c.json({ error }, file.size > CHAT_ATTACHMENT_MAX_BYTES ? 413 : 400);
     }
-    const paths: string[] = [];
     try {
-      const inputs: CreateAttachmentInput[] = [];
-      for (const { file, filename } of uploads) {
-        const id = createUploadAttachmentId();
-        const path = uploadAbsolutePath(uploadRelativePath(task.workspaceId, id, filename));
-        await mkdir(dirname(path), { recursive: true });
-        paths.push(path);
-        await writeFile(path, new Uint8Array(await file.arrayBuffer()), { flag: "wx" });
-        inputs.push({ id, filename, url: `/api/attachments/${id}/content`,
-          contentType: detectContentTypeFromFilename(filename), sizeBytes: file.size });
-      }
-      return c.json(store.sendChatAttachments(task.id, inputs, content), 202);
+      const files = uploads.map(({ file, filename }) => ({ filename,
+        bytes: async () => new Uint8Array(await file.arrayBuffer()), contentType: detectContentTypeFromFilename(filename) }));
+      const delivery = await persistUploadedAttachments(task.workspaceId, files,
+        inputs => store.sendChatAttachments(task.id, inputs, content));
+      return c.json(delivery, 202);
     } catch (error) {
-      await Promise.all(paths.map(path => unlink(path).catch(() => undefined)));
       return c.json({ error: error instanceof Error ? error.message : "attachment delivery failed" }, 400);
     }
   });
@@ -139,26 +128,18 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
       actorType: stringFormValue(form.get("uploaderType") ?? form.get("uploader_type")) ?? undefined,
       actorId: stringFormValue(form.get("uploaderId") ?? form.get("uploader_id")),
     });
-    const attachmentId = createUploadAttachmentId();
     const safeName = safeFilename(file.name || "upload.bin");
-    const relativePath = uploadRelativePath(workspaceId, attachmentId, safeName);
-    const absolutePath = uploadAbsolutePath(relativePath);
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, new Uint8Array(await file.arrayBuffer()));
-    const attachment = store.createAttachment({
-      id: attachmentId,
-      workspaceId,
-      issueId: issue?.id ?? comment?.issueId ?? null,
-      commentId,
-      chatSessionId: chatSession?.session.id ?? null,
-      uploaderType,
-      uploaderId,
-      filename: safeName,
-      url: `/api/attachments/${attachmentId}/content`,
-      contentType: file.type || detectContentTypeFromFilename(safeName),
-      sizeBytes: file.size,
-    });
-    return c.json({ attachment, ...attachmentCompatibilityResponse(attachment) });
+    try {
+      const attachment = await persistUploadedAttachments(workspaceId, [{ filename: safeName,
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        contentType: file.type || detectContentTypeFromFilename(safeName) }],
+        ([input]) => store.createAttachment({ ...input!,
+          issueId: issue?.id ?? comment?.issueId ?? null, commentId,
+          chatSessionId: chatSession?.session.id ?? null, uploaderType, uploaderId }));
+      return c.json({ attachment, ...attachmentCompatibilityResponse(attachment) });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "attachment upload failed" }, 400);
+    }
   });
 
   app.get("/api/attachments/:id", (c) => {
