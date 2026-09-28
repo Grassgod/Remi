@@ -65,8 +65,8 @@ export function redactProviderErrorText(text: string, credentials: readonly stri
     .replace(/\b(?:ghp|gho)_[a-z0-9]{4,}\b/gi, "[REDACTED]")
     .replace(/(?<![a-z0-9_/:.@-])[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]");
 
-  const fields = /(?<![a-z0-9_%.-])((?:[a-z0-9_.-]|%[0-9a-f]{2})+)(["']?\s*[:=]\s*)/gi;
-  const value = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[^{}]*\}|\[[^[\]]*\]|[^\s"'`,;&{}[\]]+/y;
+  // Group 2 is the escape level of a JSON key such as {\"api_key\": ...}.
+  const fields = /(?<![a-z0-9_%.-])((?:[a-z0-9_.-]|%[0-9a-f]{2})+)(\\*)["']?\s*[:=]\s*/gi;
   const sensitiveSuffix = /(?:^|_)(?:api_?key|key|token|secret|password|passwd|passphrase|credentials?|session(?:_?id)?|sid|auth|authorization|cookie)$/;
   const parts: string[] = [];
   let copiedUntil = 0;
@@ -80,12 +80,52 @@ export function redactProviderErrorText(text: string, credentials: readonly stri
       .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
       .toLowerCase().replace(/[^a-z0-9]+/g, "_");
     if (!sensitiveSuffix.test(key)) continue;
-    value.lastIndex = fields.lastIndex;
-    if (!value.exec(text)) continue;
+    const end = sensitiveValueEnd(text, fields.lastIndex, field[2].length);
+    if (end <= fields.lastIndex) continue;
     parts.push(text.slice(copiedUntil, fields.lastIndex), "[REDACTED]");
-    copiedUntil = fields.lastIndex = value.lastIndex;
+    copiedUntil = fields.lastIndex = end;
   }
   return parts.length ? parts.join("") + text.slice(copiedUntil) : text;
+}
+
+/** Truncated values are redacted too: strings end at EOL and containers at EOT. */
+function sensitiveValueEnd(text: string, start: number, level: number): number {
+  let index = start;
+  while (text[index] === "\\") index++;
+  const first = text[index];
+  if (first === '"' || first === "'") return stringEnd(text, index + 1, first, index - start);
+  if (first === "{" || first === "[") return containerEnd(text, index, level);
+  const bare = /(?:[^\s"'`,;&{}[\]\\]|\\+(?![\\"']))+/y;
+  bare.lastIndex = start;
+  return bare.test(text) ? bare.lastIndex : -1;
+}
+
+// A quote escaped `level` times closes when its backslash run is level mod 2 * (level + 1).
+function stringEnd(text: string, from: number, quote: string, level: number): number {
+  let run = 0;
+  for (let index = from; index < text.length; index++) {
+    const char = text[index];
+    if (char === "\\") { run++; continue; }
+    if (char === "\r" || char === "\n") return index;
+    if (char === quote && run < level) return index - run;
+    if (char === quote && run % (2 * level + 2) === level) return index + 1;
+    run = 0;
+  }
+  return text.length;
+}
+
+function containerEnd(text: string, from: number, level: number): number {
+  let depth = 0;
+  let run = 0;
+  for (let index = from; index < text.length; index++) {
+    const char = text[index];
+    if (char === "\\") { run++; continue; }
+    if ((char === '"' || char === "'") && run % (2 * level + 2) === level) index = stringEnd(text, index + 1, char, level) - 1;
+    else if (char === "{" || char === "[") depth++;
+    else if ((char === "}" || char === "]") && --depth === 0) return index + 1;
+    run = 0;
+  }
+  return text.length;
 }
 
 function redactSessionFailure(failure: AcpSessionFailure, credentials: readonly string[]): AcpSessionFailure {

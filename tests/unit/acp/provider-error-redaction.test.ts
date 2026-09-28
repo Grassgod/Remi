@@ -103,6 +103,88 @@ describe("provider error privacy", () => {
     });
   }
 
+  const unterminated = (text: string, secret: string) => text.slice(0, text.indexOf(secret) + secret.length);
+  const unparseableFormats: Array<[string, (value: string) => string]> = [
+    ["unclosed object", (value) => `password={${value}`],
+    ["unclosed array", (value) => `api_key=[${value}`],
+    ["unclosed double quote", (value) => `{"api_key": "${value}`],
+    ["unclosed single quote", (value) => `api_key='${value}`],
+    ["nested object", (value) => JSON.stringify({ credentials: { a: { b: value } }, model: "gpt-6" })],
+    ["truncated JSON", (value) => unterminated(JSON.stringify({ error: "bad", api_key: value, model: "gpt-6" }), value)],
+    ["escaped JSON", (value) => JSON.stringify(JSON.stringify({ api_key: value, model: "gpt-6" }))],
+    ["double-escaped JSON", (value) => JSON.stringify(JSON.stringify(JSON.stringify({ api_key: value, model: "gpt-6" })))],
+    ["escaped JSON in a message", (value) => JSON.stringify({ error: { message: `upstream: ${JSON.stringify({ api_key: value })}` } })],
+    ["truncated escaped JSON", (value) => unterminated(JSON.stringify(JSON.stringify({ api_key: value, model: "gpt-6" })), value)],
+    ["escaped nested object", (value) => JSON.stringify(JSON.stringify({ credentials: { a: { b: value } } }))],
+  ];
+  for (const path of ["direct", "RPC"] as const) {
+    it.each(unparseableFormats)(`redacts an unparseable %s value through ${path}`, (_label, format) => {
+      const secret = marker();
+      const text = `unexpected status 503, ${format(secret)}`;
+      const result = path === "direct" ? redactProviderErrorText(text)
+        : new AcpRpcError(-32603, "Internal error", { errorKind: "server_error", details: text }).message;
+      expect(result.includes(secret)).toBe(false);
+      expect(result.includes("503")).toBe(true);
+    });
+  }
+
+  it("redacts a value cut by upstream truncation where the RPC detail limit falls inside it", () => {
+    const secret = marker();
+    const body = JSON.stringify({ error: { type: "server_error", message: "x".repeat(380) }, api_key: secret });
+    const text = `unexpected status 503: ${body.slice(0, body.indexOf(secret) + 24)}`;
+    for (const result of [redactProviderErrorText(text),
+      new AcpRpcError(-32603, "Internal error", { details: text }).message,
+      new AcpRpcError(-32603, "Internal error", text).message]) {
+      expect(result.includes(secret.slice(0, 12))).toBe(false);
+      expect(result.includes("503")).toBe(true);
+    }
+  });
+
+  it("keeps diagnostics before an unterminated sensitive value byte-for-byte", () => {
+    const secret = marker();
+    const prefix = 'unexpected status 404 from gateway: {"error":{"type":"invalid_request_error","code":"model_not_found"},'
+      + '"request_id":"req-1234","api_key":';
+    for (const text of [`${prefix}"${secret}`, `${prefix}{"value":"${secret}`, `${prefix}${JSON.stringify(secret)},"model":"gpt-6"}`]) {
+      const direct = redactProviderErrorText(text);
+      const rpc = new AcpRpcError(-32603, "Internal error", { details: text }).message;
+      expect(direct.includes(secret) || rpc.includes(secret)).toBe(false);
+      expect(direct.startsWith(prefix)).toBe(true);
+      expect(rpc.includes(JSON.stringify(prefix).slice(1, -1))).toBe(true);
+    }
+  });
+
+  it("does not consume unterminated non-sensitive values", () => {
+    for (const text of ["model={gpt-6", 'message: "Service Unavailable', "request_id='req-1234", "error=[upstream",
+      '{\\"type\\": \\"server_error', '{"error": {"message": "upstream closed', "path=C:\\\\tmp\\\\run"]) {
+      expect(redactProviderErrorText(text) === text).toBe(true);
+    }
+  });
+
+  it.each([
+    ["an escaped value ending in a backslash", (value: string) => JSON.stringify(JSON.stringify({ api_key: `${value}\\`, model: "gpt-6" })),
+      '"{\\"api_key\\":[REDACTED],\\"model\\":\\"gpt-6\\"}"'],
+    ["a raw value ending in a backslash", (value: string) => JSON.stringify({ api_key: `${value}\\`, model: "gpt-6" }),
+      '{"api_key":[REDACTED],"model":"gpt-6"}'],
+    ["an escaped value with inner quotes", (value: string) => JSON.stringify(JSON.stringify({ api_key: `"${value}"`, model: "gpt-6" })),
+      '"{\\"api_key\\":[REDACTED],\\"model\\":\\"gpt-6\\"}"'],
+    ["an escaped value closed by its outer string", (value: string) => `{"message":"{\\"api_key\\":\\"${value}","code":"model_not_found"}`,
+      '{"message":"{\\"api_key\\":[REDACTED]","code":"model_not_found"}'],
+    ["a quoted value before a line break", (value: string) => `api_key="${value}\nunexpected status 503`,
+      "api_key=[REDACTED]\nunexpected status 503"],
+    ["closing brackets inside nested strings", (value: string) => JSON.stringify({ credentials: { key: `}]${value}`, list: ["]", value] }, model: "gpt-6" }),
+      '{"credentials":[REDACTED],"model":"gpt-6"}'],
+    ["escaped closing brackets inside nested strings", (value: string) => JSON.stringify(JSON.stringify({ credentials: { key: `}${value}` }, model: "gpt-6" })),
+      '"{\\"credentials\\":[REDACTED],\\"model\\":\\"gpt-6\\"}"'],
+    ["a bare value with backslashes", (value: string) => `password=\\\\${value} status 503`, "password=[REDACTED] status 503"],
+    ["a URL value inside escaped JSON", (value: string) => JSON.stringify(JSON.stringify({ url: `https://x/?api_key=${value}`, model: "gpt-6" })),
+      '"{\\"url\\":\\"https://x/?api_key=[REDACTED]\\",\\"model\\":\\"gpt-6\\"}"'],
+  ] as const)("ends %s at its own boundary", (_label, format, expected) => {
+    const text = format(marker());
+    expect(redactProviderErrorText(text) === expected).toBe(true);
+    expect(new AcpRpcError(-32603, "Internal error", { details: text }).message
+      === `RPC error -32603: Internal error: ${JSON.stringify({ details: expected })}`).toBe(true);
+  });
+
   it("preserves non-sensitive field values, status text and URL ports byte-for-byte", () => {
     const texts = [
       ...[401, 404, 429, 503].map((status) => `unexpected status ${status} from gateway, request id: req-1234, model: gpt-6`),
@@ -137,6 +219,26 @@ describe("provider error privacy", () => {
         for (const safe of [redactProviderErrorText(text), new AcpRpcError(-32603, "Gateway error", { details: text }).message]) {
           expect(safe.includes(secret)).toBe(false);
           expect(classify(safe)).toBe(classify(text));
+        }
+      });
+    }
+  }
+
+  for (const entry of ["generic", "codex", "claude"] as const) {
+    for (const [status, type, code, message, reason] of classifiedFields) {
+      it(`preserves truncated and escaped HTTP ${status} classification through ${entry}`, () => {
+        const secret = marker();
+        const body = { error: { type, code, message }, request_id: "req-1234", api_key: secret };
+        const classify = entry === "generic" ? classifyTaskFailure : (value: string) => classifyDaemonTaskFailure(entry, value);
+        for (const text of [
+          `unexpected status ${status} from gateway: ${unterminated(JSON.stringify(body), secret)}`,
+          `unexpected status ${status} from gateway: ${JSON.stringify(JSON.stringify(body))}`,
+        ]) {
+          expect(classify(text)).toBe(reason);
+          for (const safe of [redactProviderErrorText(text), new AcpRpcError(-32603, "Gateway error", { details: text }).message]) {
+            expect(safe.includes(secret)).toBe(false);
+            expect(classify(safe)).toBe(classify(text));
+          }
         }
       });
     }
@@ -235,6 +337,14 @@ describe("provider error privacy", () => {
     ["unclosed objects", () => "a:{".repeat(66_667).slice(0, 200_000)],
     ["unclosed arrays", () => "a:[".repeat(66_667).slice(0, 200_000)],
     ["uppercase key", () => "A".repeat(200_000) + "="],
+    ["unterminated sensitive strings", () => 'api_key:"'.repeat(22_223).slice(0, 200_000)],
+    ["unterminated sensitive objects", () => "api_key:{".repeat(22_223).slice(0, 200_000)],
+    ["escaped sensitive strings", () => 'api_key:\\"'.repeat(20_000)],
+    ["unterminated nested objects", () => '"a":{"b":'.repeat(22_223).slice(0, 200_000)],
+    ["backslashes", () => "\\".repeat(200_000)],
+    ["key and backslashes", () => "a" + "\\".repeat(200_000)],
+    ["single-quoted sensitive lines", () => "api_key:'\n".repeat(20_000)],
+    ["escaped quotes in sensitive arrays", () => 'api_key:[\\"'.repeat(16_667).slice(0, 200_000)],
   ] as const)("scans 200k %s within the synchronous time budget", (_label, makeText) => {
     const startedAt = performance.now();
     redactProviderErrorText(makeText());
