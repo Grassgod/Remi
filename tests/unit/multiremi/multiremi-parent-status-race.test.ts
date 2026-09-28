@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
+import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { ChildMutation, RaceOperation, RaceResult } from "./fixtures/parent-status-race-worker.js";
 
@@ -132,6 +133,48 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         if (database instanceof PostgresSyncDatabase) expect(database.maxTransactionDepth).toBe(1);
       });
     }
+
+    // Re-derivation takes no parent lock before counting: a parent decision that
+    // commits in between wins, and the conditional UPDATE leaves no trace.
+    if (dialect === "postgres") it("old-parent re-derivation yields to a parent move committed while it counts", () => {
+      const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
+      const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
+      const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+      store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+      store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
+      const other = new PostgresSyncDatabase(location);
+      other.exec("SET lock_timeout = '2s'");
+      const otherStore = new MultiremiStore(other);
+      (database as PostgresSyncDatabase).resetTransactionDepthStats();
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "parent_status_derived") {
+          events.push(event.type);
+        }
+      });
+      let moved = false;
+      const original = IssuesRepo.prototype.countOpenChildIssues;
+      IssuesRepo.prototype.countOpenChildIssues = function (id) {
+        const result = original.call(this, id);
+        if (!moved && id === oldParent.id && new Error().stack?.includes("rederiveParentStatus")) {
+          moved = true;
+          otherStore.updateIssue(oldParent.id, { status: "blocked", actorType: "member" });
+        }
+        return result;
+      };
+      try {
+        store.updateIssue(child.id, { parentIssueId: newParent.id });
+      } finally {
+        IssuesRepo.prototype.countOpenChildIssues = original;
+        unsubscribe();
+        other.close();
+      }
+      expect(moved).toBe(true);
+      expect(store.getIssue(oldParent.id)?.status).toBe("blocked");
+      expect(store.listIssueActivity(oldParent.id).filter((entry) => entry.type === "parent_status_derived")).toEqual([]);
+      expect(events).toEqual([]);
+      expect((database as PostgresSyncDatabase).maxTransactionDepth).toBe(1);
+    });
 
     for (const path of ["api", "scm"] as const) {
       for (const mutation of mutations) {

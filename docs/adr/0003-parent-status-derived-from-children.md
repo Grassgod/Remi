@@ -132,8 +132,12 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    unfinished child under that closed parent; the closed-parent policy above
    remains in effect. The guarantee is a current count at the parent's decision,
    not a prohibition on later child writes.
-   Re-derivation also locks and re-reads the parent before counting; the old
-   parent's re-parenting hook owns a separate post-commit transaction.
+   Re-derivation does not lock the parent before counting: its conditional
+   `in_review` → `in_progress` UPDATE locks the row and re-checks the status
+   after any wait; a child added or reopened after the count is a child event
+   of its own; closing a child never takes that lock, so an earlier lock would
+   not make the count more current. The old parent's re-parenting hook owns a
+   separate post-commit transaction.
    [The two-connection regression](../../tests/unit/multiremi/multiremi-parent-status-race.test.ts)
    exercises both orders 20 times for API/SCM and creation, attachment, and
    reopening from each terminal status through PATCH or Agent assignment.

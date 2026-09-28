@@ -3633,10 +3633,12 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): void {
     if (parent.status !== "in_review") return;
-    if (!lockIssueRowWithinTransaction(this.ctx.db, parent.id)) return;
-    const current = this.getIssue(parent.id);
-    if (!current || current.status !== "in_review") return;
-    parent = current;
+    // No parent row lock before counting (MUL-471). The conditional UPDATE below
+    // takes that lock and re-checks `in_review` after any wait, so a concurrent
+    // parent decision turns it into a no-op. A child added or reopened after
+    // this count is a child event of its own, and closing a child never takes
+    // the lock, so an earlier lock would not make the count below any more
+    // current.
     const openChildren = this.countOpenChildIssues(parent.id);
     if (openChildren === 0) return;
     const now = nowIso();
