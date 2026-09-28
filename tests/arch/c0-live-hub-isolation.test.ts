@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
 
@@ -60,7 +61,31 @@ const C0_SOURCES = new Set([
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
 
+function hasLiveHubValueImport(src: string): boolean {
+  const file = ts.createSourceFile("replica.ts", src, ts.ScriptTarget.Latest, true);
+  return file.statements.some((node) => {
+    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) return false;
+    if (!/^@multiremi\/contracts\/live-hub(?:\.js)?$/.test(node.moduleSpecifier.text)) return false;
+    const clause = node.importClause;
+    if (!clause) return true;
+    if (clause.isTypeOnly) return false;
+    if (clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)) return true;
+    return clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+  });
+}
+
 describe("C0 live-hub modules are not yet wired into runtime code", () => {
+  it.each([
+    ['import type { HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['import { type HubFrame } from "@multiremi/contracts/live-hub";', false],
+    ['import { parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['import type { HubFrame } from "@multiremi/contracts/live-hub"; import { parseHubStreamKey } from "@multiremi/contracts/live-hub"; export const parse = parseHubStreamKey;', true],
+    ['import { type HubFrame, parseHubStreamKey } from "@multiremi/contracts/live-hub";', true],
+    ['import * as hub from "@multiremi/contracts/live-hub.js";', true],
+    ['import "@multiremi/contracts/live-hub";', true],
+  ])("classifies each individual contract import: %s", (source, expected) => {
+    expect(hasLiveHubValueImport(source)).toBe(expected);
+  });
   for (const { specifier, wired } of C0_MODULES) {
     it(`${specifier} is imported by ${wired ? "runtime code" : "nothing but tests"}`, () => {
       const consumers: string[] = [];
@@ -105,7 +130,7 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
         const spec = match[1]!;
         if (spec !== "@multiremi/contracts/live-hub" && spec !== "@multiremi/contracts/live-hub.js") continue;
         consumers.push(file.replace(`${REPO_ROOT}/`, ""));
-        if (!/import type\s*\{[^}]*\}\s*from\s*["']@multiremi\/contracts\/live-hub(\.js)?["']/.test(src)) {
+        if (hasLiveHubValueImport(src)) {
           valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
         }
       }
