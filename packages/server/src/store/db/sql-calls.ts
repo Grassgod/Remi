@@ -30,7 +30,10 @@
  * the scanner cannot tokenise raises {@link SqlScanError}, which the pool also
  * treats as a refusal, so an input the scanner misreads is never waved through.
  */
-import { SQL_KEYWORD_HEADS } from "./sql-keywords.js";
+import {
+  SQL_CONTEXTUAL_KEYWORD_HEADS,
+  SQL_UNCONDITIONAL_KEYWORD_HEADS,
+} from "./sql-keywords.js";
 
 /** A function call found in a statement. */
 export interface SqlFunctionCall {
@@ -276,12 +279,21 @@ export function maskSqlLiterals(sql: string): string {
 /**
  * Every function call in `sql`, in source order.
  *
- * Two shapes are deliberately *not* calls:
+ * Three shapes are deliberately *not* calls:
  *
- * - an identifier that is a SQL keyword (`IN (…)`, `EXISTS (…)`, `CAST(…)`,
- *   `OVER (…)`), listed in `sql-keywords.ts`;
+ * - an identifier that is a **reserved** keyword or one PostgreSQL refuses as a
+ *   function name (`IN (…)`, `EXISTS (…)`, `CAST(…)`), from
+ *   `SQL_UNCONDITIONAL_KEYWORD_HEADS`;
+ * - `FILTER` or `OVER` immediately after the `)` that closes the call it
+ *   modifies (`count(*) FILTER (WHERE …)`, `row_number() OVER (…)`), from
+ *   `SQL_CONTEXTUAL_KEYWORD_HEADS`;
  * - a type modifier after `::` (`x::numeric(10,2)`), which is a cast's
  *   precision, not an invocation.
+ *
+ * Anything else spelled `name(` is a call and is reported, whichever case it
+ * uses and whether or not it is quoted. The previous revision skipped every
+ * name in a 115-word list unconditionally, which let a user-defined `filter()`
+ * through (MUL-439 `cmt_0f5ulv021ijn`); the two sets above are the correction.
  */
 export function scanSqlFunctionCalls(sql: string): SqlFunctionCall[] {
   const { tokens } = tokenize(sql);
@@ -300,20 +312,31 @@ export function scanSqlFunctionCalls(sql: string): SqlFunctionCall[] {
     const isCall = after?.kind === "punct" && (after as PunctToken).value === "(";
     if (!isCall) continue;
 
-    if (SQL_KEYWORD_HEADS.has(token.value)) continue;
+    // A quoted name is never a keyword: `"filter"` resolves to a user function,
+    // not to the FILTER clause, and PostgreSQL will happily call it. The same
+    // goes for a schema-qualified name — `public.filter()` is a call even
+    // though `filter` is on the contextual list, because a qualifier cannot
+    // appear in front of a clause keyword.
+    const schemaQualified =
+      t >= 2 &&
+      tokens[t - 1]?.kind === "punct" &&
+      (tokens[t - 1] as PunctToken).value === "." &&
+      tokens[t - 2]?.kind === "ident";
+    const isKeywordForm = !token.quoted && !token.unicodeEscaped && !schemaQualified;
+
+    if (isKeywordForm) {
+      // Reserved / un-callable words: the grammar cannot turn these into a call.
+      if (SQL_UNCONDITIONAL_KEYWORD_HEADS.has(token.value)) continue;
+      // A contextual keyword is skipped only in its clause position.
+      if (SQL_CONTEXTUAL_KEYWORD_HEADS.has(token.value) && isClauseKeywordPosition(tokens, t, token.value)) {
+        continue;
+      }
+    }
 
     // `schema.function(` — the qualifier is reported so the caller can refuse
     // anything outside `pg_catalog`, and a quoted qualifier keeps its case so
     // `"PG_CATALOG".set_config(…)` is not accepted as the real one.
-    let schema: string | null = null;
-    if (
-      t >= 2 &&
-      tokens[t - 1]?.kind === "punct" &&
-      (tokens[t - 1] as PunctToken).value === "." &&
-      tokens[t - 2]?.kind === "ident"
-    ) {
-      schema = (tokens[t - 2] as IdentToken).value;
-    }
+    const schema = schemaQualified ? (tokens[t - 2] as IdentToken).value : null;
 
     calls.push({
       name: token.value,
@@ -325,6 +348,39 @@ export function scanSqlFunctionCalls(sql: string): SqlFunctionCall[] {
   }
 
   return calls;
+}
+
+/**
+ * True when a contextual keyword at index `t` is in a clause position rather
+ * than calling a function of the same name.
+ *
+ * `FILTER` and `OVER` open a clause on the result of an aggregate or window
+ * function, so in legal syntax they always follow the `)` that closes it.
+ * `BY` belongs to `ORDER BY`, `GROUP BY` and `PARTITION BY`, so it follows one
+ * of those words.
+ *
+ * Every rule keys on the token *before* the candidate. That is what makes them
+ * resistant to the obvious trick: `ORDER BY by()` tokenises as
+ * `order by by (`, so the second `by` is preceded by an identifier, not by
+ * `ORDER`, and is reported as the call it is. Whitespace and comments never
+ * reach this layer — `tokenize` has already dropped them — so the check is on
+ * the token stream rather than on raw offsets.
+ */
+function isClauseKeywordPosition(tokens: Token[], t: number, word: string): boolean {
+  const previous = tokens[t - 1];
+  if (word === "filter" || word === "over") {
+    // `aggregate(...) FILTER (…)` / `window_fn(...) OVER (…)`: the keyword
+    // follows the `)` that closes the call it applies to.
+    return previous?.kind === "punct" && (previous as PunctToken).value === ")";
+  }
+  if (word === "by") {
+    // `ORDER BY (…)` / `GROUP BY (…)` / `PARTITION BY (…)`.
+    return (
+      previous?.kind === "ident" &&
+      (previous.value === "order" || previous.value === "group" || previous.value === "partition")
+    );
+  }
+  return false;
 }
 
 /** Skip a single-quoted string; `start` is the opening quote. */

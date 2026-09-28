@@ -29,6 +29,10 @@ import {
 } from "@multiremi/store/db/read-pool.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-calls.js";
+import {
+  SQL_CONTEXTUAL_KEYWORD_HEADS,
+  SQL_UNCONDITIONAL_KEYWORD_HEADS,
+} from "@multiremi/store/db/sql-keywords.js";
 
 // The fallback is a local, throwaway placeholder — never a real credential. It
 // only decides whether the Postgres block is skipped when the environment does
@@ -140,6 +144,50 @@ describe("read pool: the SELECT gate", () => {
     ]) {
       expect(isReadOnlySelect(sql), `${sql} should be a read`).toBe(true);
     }
+  });
+
+  it("rejects a statement batch, but allows one trailing terminator", () => {
+    // Only the first statement would be the one the classifier inspected, so a
+    // batch is refused outright rather than half-checked (`cmt_0f5ulv021ijn`).
+    for (const sql of [
+      "SELECT 1; SELECT 2",
+      "SELECT 1; DELETE FROM t",
+      "SELECT 1;;",
+      "WITH x AS (SELECT 1) SELECT * FROM x; SELECT 2",
+    ]) {
+      expect(isReadOnlySelect(sql), `${JSON.stringify(sql)} should be rejected`).toBe(false);
+    }
+    // A single trailing `;` is a terminator, not a second statement.
+    for (const sql of [
+      "SELECT 1;",
+      "SELECT 1;  ",
+      "SELECT 1;\n",
+      "SELECT 1; -- trailing comment",
+      "WITH x AS (SELECT 1) SELECT * FROM x;",
+    ]) {
+      expect(isReadOnlySelect(sql), `${JSON.stringify(sql)} should be a read`).toBe(true);
+    }
+    // A `;` inside a literal is not a separator.
+    expect(isReadOnlySelect("SELECT 'a;b' AS s")).toBe(true);
+    expect(isReadOnlySelect("SELECT $$ a;b $$ AS s")).toBe(true);
+    expect(isReadOnlySelect("SELECT 1 /* ; */")).toBe(true);
+  });
+
+  it("rejects every locking clause, not just FOR UPDATE", () => {
+    // All four take row locks. A read-only transaction rejects them too; naming
+    // them here turns a server error into a clear gate refusal.
+    for (const clause of ["FOR UPDATE", "FOR SHARE", "FOR KEY SHARE", "FOR NO KEY UPDATE"]) {
+      expect(
+        isReadOnlySelect(`SELECT * FROM t ${clause}`),
+        `${clause} should be rejected`,
+      ).toBe(false);
+      // `NOWAIT` / `SKIP LOCKED` are still locking clauses.
+      expect(isReadOnlySelect(`SELECT * FROM t ${clause} NOWAIT`)).toBe(false);
+      expect(isReadOnlySelect(`SELECT * FROM t ${clause} SKIP LOCKED`)).toBe(false);
+    }
+    // The words inside a literal are not a clause.
+    expect(isReadOnlySelect("SELECT 'FOR SHARE' AS s")).toBe(true);
+    expect(isReadOnlySelect("SELECT 'FOR UPDATE' AS s")).toBe(true);
   });
 
   it("rejects a write before it ever reaches a connection", async () => {
@@ -293,10 +341,18 @@ describe("read pool: the function gate is a whitelist, not a denylist", () => {
     expect(names(`SELECT "a""b"()`)).toEqual(["a\"b"]);
     // `::type(...)` is a cast's precision, not a call.
     expect(names(`SELECT x::numeric(10,2) FROM t`)).toEqual([]);
-    // Keywords that take parentheses are not calls.
-    for (const kw of ["IN", "EXISTS", "CAST", "OVER", "FILTER", "WITHIN", "ANY", "ALL"]) {
+    // Reserved keywords that take parentheses are not calls.
+    for (const kw of ["IN", "EXISTS", "CAST", "ANY", "ALL", "COALESCE", "NULLIF"]) {
       expect(names(`SELECT 1 WHERE x ${kw} (1)`), kw).toEqual([]);
     }
+    // `FILTER` and `OVER` are only clause keywords after a `)`. Written after a
+    // bare identifier they are function calls, which is the third review's
+    // finding, so they must be reported here.
+    expect(names(`SELECT count(*) FILTER (WHERE x) FROM t`)).toEqual(["count"]);
+    expect(names(`SELECT sum(x) OVER (PARTITION BY y) FROM t`)).toEqual(["sum"]);
+    expect(names(`SELECT x OVER (1)`)).toEqual(["over"]);
+    expect(names(`SELECT x FILTER (1)`)).toEqual(["filter"]);
+    expect(names(`SELECT x WITHIN (1)`)).toEqual(["within"]);
     // An operator between an identifier and `(` means the two are unrelated.
     expect(names(`SELECT a = (SELECT 1)`)).toEqual([]);
     // A dollar placeholder is not a quote and does not swallow the statement.
@@ -370,7 +426,7 @@ describe("read pool: the function gate is a whitelist, not a denylist", () => {
     // description cannot drift from the code. Adding a function is a deliberate
     // edit here as well as there — which is the point, since every entry is a
     // claim that the function has no side effect.
-    expect(READ_FUNCTION_WHITELIST.size).toBe(189);
+    expect(READ_FUNCTION_WHITELIST.size).toBe(188);
     // No duplicates: a name listed twice would mean the count overstates the
     // whitelist's coverage.
     const source = await Bun.file(
@@ -1117,6 +1173,298 @@ describe.skipIf(!pgAvailable)("read pool: quoted and escaped calls cannot bypass
       ReadPoolSideEffectError,
     );
     await pool.close();
+  });
+});
+
+/**
+ * The keyword skip, which is where the third review broke the gate
+ * (`cmt_0f5ulv021ijn`).
+ *
+ * The previous revision carried a 115-word list and skipped every member
+ * unconditionally, so a user-defined `filter()` — which PostgreSQL accepts as
+ * an unquoted function name — ran through `PostgresReadPool.query` and kept an
+ * advisory lock. These cases pin the correction: only words the grammar cannot
+ * turn into a call are skipped without looking at position.
+ */
+describe.skipIf(!pgAvailable)("read pool: keyword exemption is context-aware", () => {
+  let pool: PostgresReadPool;
+  let url = "";
+  let inspect: Bun.SQL;
+  /** Functions created here, each taking an advisory lock when called. */
+  const KEYWORD_FUNCTIONS = ["filter", "within", "over", "respect"] as const;
+
+  function makePool(target: string = url): PostgresReadPool {
+    return new PostgresReadPool(target);
+  }
+
+  /** The raw driver behind the pool, for out-of-band inspection. */
+  function rawDriver(target: PostgresReadPool): Bun.SQL {
+    return (target as unknown as { sql: Bun.SQL }).sql;
+  }
+
+  async function advisoryLocks(): Promise<number> {
+    return (
+      await inspect.unsafe(
+        "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+      )
+    )[0].n as number;
+  }
+
+  beforeAll(async () => {
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_kw WITH (FORCE)`);
+    await admin.unsafe(`CREATE DATABASE ${TEST_DB}_kw`);
+    await admin.end();
+    const parsed = new URL(PG_ADMIN_URL);
+    parsed.pathname = `/${TEST_DB}_kw`;
+    url = parsed.toString();
+
+    inspect = new Bun.SQL(url, { max: 1 });
+    // Each function takes an advisory lock and returns, so a bypass leaves a
+    // trace that outlives the statement even though the pool reports success.
+    for (const name of KEYWORD_FUNCTIONS) {
+      await inspect.unsafe(`
+        CREATE OR REPLACE FUNCTION ${name}() RETURNS integer LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_advisory_lock(439200); RETURN 7; END $$`);
+    }
+  });
+
+  afterAll(async () => {
+    await inspect?.end();
+    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB}_kw WITH (FORCE)`);
+    await admin.end();
+  });
+
+  it("confirms these names really are callable, so the test cannot pass vacuously", async () => {
+    // The device at the heart of the bypass: PostgreSQL accepts an unquoted
+    // function name that is a `U` keyword or absent from its catalog. If a
+    // future server refused these `CREATE`s, the cases below would stop testing
+    // anything, so this asserts the premise on the same server.
+    for (const name of KEYWORD_FUNCTIONS) {
+      const exists = await inspect.unsafe(
+        `SELECT count(*)::int AS n FROM pg_proc WHERE proname = $1 AND pronamespace = 'public'::regnamespace`,
+        [name],
+      );
+      expect(exists[0].n, `${name}() should exist as a user function`).toBe(1);
+    }
+  });
+
+  it("refuses each keyword-named function in all four call positions", async () => {
+    pool = makePool(url);
+    const positions: Array<[string, (name: string) => string]> = [
+      ["SELECT list", (n) => `SELECT ${n}()`],
+      ["FROM", (n) => `SELECT * FROM ${n}()`],
+      ["LATERAL", (n) => `SELECT * FROM (SELECT 1) x, LATERAL ${n}()`],
+      ["ROWS FROM", (n) => `SELECT * FROM ROWS FROM(${n}())`],
+    ];
+    for (const name of KEYWORD_FUNCTIONS) {
+      for (const [label, build] of positions) {
+        const sql = build(name);
+        const before = await advisoryLocks();
+        const error = await pool.query(sql).then(
+          () => null,
+          (caught: unknown) => caught,
+        );
+        expect(error, `${label}: ${sql}`).toBeInstanceOf(ReadPoolSideEffectError);
+        expect((error as ReadPoolSideEffectError).code, `${label}: ${sql}`).toBe(
+          "read_pool_side_effect",
+        );
+        // Refusal happens before the connection is used, so no lock can remain.
+        expect(await advisoryLocks(), `${label}: ${sql} left a lock`).toBe(before);
+      }
+    }
+    await pool.close();
+  });
+
+  it("refuses the quoted and schema-qualified spellings of the same names", async () => {
+    // A quoted `"filter"` is never a keyword — it resolves to the user function
+    // — and a qualifier cannot precede a clause keyword, so `public.filter()`
+    // is a call too. The previous revision skipped both, because it matched on
+    // the resolved name alone.
+    pool = makePool(url);
+    for (const sql of [
+      `SELECT "filter"()`,
+      `SELECT "over"()`,
+      `SELECT "within"()`,
+      `SELECT "respect"()`,
+      `SELECT public.filter()`,
+      `SELECT pg_catalog.filter()`,
+      `SELECT FILTER()`,
+      `SELECT Over()`,
+    ]) {
+      const error = await pool.query(sql).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      expect(error, sql).toBeInstanceOf(ReadPoolSideEffectError);
+    }
+    expect(await advisoryLocks()).toBe(0);
+    await pool.close();
+  });
+
+  it("refuses the other words that were skipped unconditionally", async () => {
+    // A sample of the `U`/`T` words the 115-entry list exempted. None is
+    // whitelisted, so the gate must refuse each one rather than skip it.
+    pool = makePool(url);
+    for (const name of [
+      "next", "by", "rows", "range", "partition", "exclude", "ties", "locked",
+      "share", "unbounded", "preceding", "following", "conflict",
+      "nothing", "unknown", "nulls", "first", "last", "at", "zone", "groups",
+      "recursive", "of", "no", "current", "double", "varying",
+    ]) {
+      const error = await pool.query(`SELECT ${name}()`).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      expect(error, `SELECT ${name}()`).toBeInstanceOf(ReadPoolSideEffectError);
+    }
+    // `update` is a write keyword, so the *classifier* refuses it first. That is
+    // stricter than the gate and the right error for the caller.
+    const writeWord = await pool.query("SELECT update()").then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(writeWord).toBeInstanceOf(ReadPoolNotSelectError);
+    await pool.close();
+  });
+
+  it("still accepts the syntax those words exist for", async () => {
+    // The positive side: refusing the *calls* must not break the clauses.
+    pool = makePool(url);
+    await expect(
+      pool.query("SELECT count(*) FILTER (WHERE x > 1)::int AS n FROM (SELECT 2 AS x) t"),
+    ).resolves.toEqual([{ n: 1 }]);
+    await expect(
+      pool.query("SELECT sum(x) OVER (PARTITION BY y)::int AS s FROM (SELECT 1 AS x, 2 AS y) t"),
+    ).resolves.toEqual([{ s: 1 }]);
+    await expect(
+      pool.query("SELECT sum(x) OVER w::int AS s FROM (SELECT 1 AS x) t WINDOW w AS (ORDER BY x)"),
+    ).resolves.toEqual([{ s: 1 }]);
+    await expect(
+      pool.query(
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) AS p FROM (SELECT 1 AS x) t",
+      ),
+    ).resolves.toEqual([{ p: 1 }]);
+    // `ORDER BY (…)`: the reason `by` needs a context rule rather than removal.
+    await expect(
+      pool.query("SELECT m.id FROM (SELECT 1 AS id, 2 AS n) m ORDER BY (m.n > 1) DESC, m.id"),
+    ).resolves.toEqual([{ id: 1 }]);
+    await expect(pool.query("SELECT 1 GROUP BY (1)")).resolves.toEqual([{ "?column?": 1 }]);
+    await expect(
+      pool.query("SELECT x.a, y.b FROM (SELECT 1 AS a) x, LATERAL (SELECT 2 AS b) y"),
+    ).resolves.toEqual([{ a: 1, b: 2 }]);
+    await expect(
+      pool.query("SELECT generate_series FROM ROWS FROM (generate_series(1,2))"),
+    ).resolves.toHaveLength(2);
+    await pool.close();
+  });
+
+  it("allows only the shapes PostgreSQL itself accepts as clause syntax", async () => {
+    // The `)`-precedes rule is the part of this gate that is easiest to get
+    // wrong, so this pins the property directly: for every way I could place a
+    // `)` immediately before `FILTER(`/`OVER(`, PostgreSQL either treats it as
+    // the clause (which is what the rule allows) or rejects the statement as a
+    // syntax error. A shape the gate allows but PostgreSQL *executes* as a
+    // function call is the only thing that would matter, and there is none.
+    pool = makePool(url);
+    const shapes = [
+      `SELECT (SELECT 1) filter(1)`,
+      `SELECT (1) filter(1)`,
+      `SELECT (1) over(1)`,
+      `SELECT count(*) filter(1)`,
+      `SELECT * FROM t WHERE (a) filter(b)`,
+      `SELECT * FROM (SELECT 1) filter(1)`,
+      `SELECT * FROM (SELECT 1) AS x, LATERAL (SELECT 2) filter(3)`,
+      `WITH q AS (SELECT 1) SELECT * FROM q filter(1)`,
+    ];
+    for (const sql of shapes) {
+      const gateAllows = findDisallowedFunction(sql) === null;
+      if (!gateAllows) continue; // Refused outright: nothing more to prove.
+      // The gate allowed it, so PostgreSQL must reject it. Anything else would
+      // mean a real call slipped past the contextual rule.
+      const outcome = await pool
+        .query(sql)
+        .then(() => "accepted", (error: unknown) => `rejected: ${(error as Error).message.slice(0, 40)}`);
+      expect(
+        outcome,
+        `the gate allowed ${sql}, so PostgreSQL must treat it as a syntax error`,
+      ).toStartWith("rejected");
+    }
+    expect(await advisoryLocks()).toBe(0);
+    await pool.close();
+  });
+
+  it("does not let `ORDER BY` hide a call to `by()`", async () => {
+    // The context rule keys on the token *before* the candidate: `ORDER BY by()`
+    // tokenises as `order by by (`, so the second `by` is not preceded by
+    // `ORDER` and is treated as a call.
+    pool = makePool(url);
+    await inspect.unsafe(`
+      CREATE OR REPLACE FUNCTION by() RETURNS integer LANGUAGE plpgsql AS $$
+      BEGIN PERFORM pg_advisory_lock(439201); RETURN 7; END $$`);
+    const error = await pool.query("SELECT 1 ORDER BY by()").then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ReadPoolSideEffectError);
+    expect(await advisoryLocks()).toBe(0);
+    await inspect.unsafe("DROP FUNCTION by()");
+    await pool.close();
+  });
+
+  it("skips only words PostgreSQL will not accept as a function name", async () => {
+    // The mechanical guard the review asked for: every unconditionally skipped
+    // word must have catcode `R` (reserved) or `C` (cannot be a function or type
+    // name) in the server's own keyword catalog. Adding a `U`/`T` word to the
+    // unconditional set — which is exactly how the bypass was introduced —
+    // turns this red.
+    const rows = (await inspect.unsafe("SELECT word, catcode FROM pg_get_keywords()")) as Array<{
+      word: string;
+      catcode: string;
+    }>;
+    const catcode = new Map(rows.map((row) => [row.word.toLowerCase(), row.catcode]));
+
+    for (const word of SQL_UNCONDITIONAL_KEYWORD_HEADS) {
+      const code: string = catcode.get(word) ?? "";
+      expect(
+        ["R", "C"],
+        `${word} is catcode ${code === "" ? "absent" : code} in pg_get_keywords(); only R and C may be skipped unconditionally`,
+      ).toContain(code);
+    }
+
+    // And the contextual set must be non-empty and disjoint, so the guard above
+    // cannot pass by the unconditional set having swallowed everything.
+    expect(SQL_CONTEXTUAL_KEYWORD_HEADS.size).toBeGreaterThan(0);
+    for (const word of SQL_CONTEXTUAL_KEYWORD_HEADS) {
+      expect(SQL_UNCONDITIONAL_KEYWORD_HEADS.has(word), `${word} is in both sets`).toBe(false);
+    }
+  });
+
+  it("covers the refusals outside a database too", () => {
+    // The same matrix through `findDisallowedFunction`, so the lexical layer is
+    // covered when no server is configured.
+    for (const name of ["filter", "within", "over", "respect", "by"]) {
+      for (const sql of [
+        `SELECT ${name}()`,
+        `SELECT * FROM ${name}()`,
+        `SELECT * FROM (SELECT 1) x, LATERAL ${name}()`,
+        `SELECT * FROM ROWS FROM(${name}())`,
+        // A quoted or qualified spelling is never the keyword form, so it is a
+        // call whatever the name is.
+        `SELECT "${name}"()`,
+        `SELECT public.${name}()`,
+      ]) {
+        expect(findDisallowedFunction(sql), sql).not.toBeNull();
+      }
+    }
+    // `left` and `right` are `T`-catcode keywords that are also genuine pure
+    // string functions, so they are whitelisted and allowed.
+    expect(findDisallowedFunction("SELECT left('ab', 1)")).toBeNull();
+    expect(findDisallowedFunction("SELECT right('ab', 1)")).toBeNull();
+    // But a qualified spelling of them is still a call to that exact name.
+    expect(findDisallowedFunction("SELECT pg_catalog.left('ab', 1)")).toBeNull();
+    expect(findDisallowedFunction("SELECT public.left('ab', 1)")).toContain("non-pg_catalog");
   });
 });
 
