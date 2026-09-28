@@ -144,13 +144,14 @@ describe("A-3 task offers", () => {
     const h = fixture(); const now = h.clock.now();
     setSystemTime(now);
     try {
-      h.store.beginPlatformDrain({ operationId: "offer-drain", ttlMs: 10_000 });
+      const maintenance = h.store.beginPlatformDrain({ operationId: "offer-drain", ttlMs: 30_000 });
+      const remaining = Date.parse(maintenance.expiresAt!) - now;
       const task = h.task(); await h.hello();
       expect(h.store.getTask(task.id)?.status).toBe("queued");
       expect(h.offered()).toHaveLength(0);
-      setSystemTime(now + 9_999); h.clock.advance(9_999); await h.layer.drain();
+      setSystemTime(now + remaining - 1); h.clock.advance(remaining - 1); await h.layer.drain();
       expect(h.offered()).toHaveLength(0);
-      setSystemTime(now + 10_001); h.clock.advance(2); await h.layer.drain();
+      setSystemTime(now + remaining + 1); h.clock.advance(2); await h.layer.drain();
       expect(h.offered()[0]!.p.id).toBe(task.id);
     } finally { setSystemTime(); }
   });
