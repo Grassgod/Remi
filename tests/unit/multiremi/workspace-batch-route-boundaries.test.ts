@@ -54,6 +54,109 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
       expect(await response.json()).toEqual({ issues: [], total: 0 });
     });
 
+    for (const refType of ["key", "id"] as const) {
+      it(`lists children by parent ${refType} in the requested workspace`, async () => {
+        const { app, own, workspaceB, headers } = await setup();
+        const response = await app.request(`${prefix}/children?parent_ids=${own.parent[refType]}&workspace_id=${workspaceB.id}`, { headers });
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.total).toBe(1);
+        expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+      });
+    }
+
+    it("lists children of distinct parents supplied as a key and an id", async () => {
+      const { store, app, own, workspaceB, headers } = await setup();
+      const otherParent = store.createIssue({ workspaceId: workspaceB.id, title: "Other keyed parent" });
+      const otherChild = store.createIssue({ workspaceId: workspaceB.id, title: "Other keyed child", parentIssueId: otherParent.id });
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key},${otherParent.id}&workspace_id=${workspaceB.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(2);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id, otherChild.id]);
+    });
+
+    it("deduplicates a parent resolved from both its key and id", async () => {
+      const { store, app, own, workspaceB, headers } = await setup();
+      const listChildren = spyOn(store, "listChildIssues");
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key},${own.parent.id},${own.parent.key}&workspace_id=${workspaceB.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+      expect(listChildren.mock.calls).toEqual([[own.parent.id]]);
+    });
+
+    it("skips an unknown key and still lists other accessible parents", async () => {
+      const { app, own, workspaceB, headers } = await setup();
+      const unknown = await app.request(`${prefix}/children?parent_ids=MUL-999999&workspace_id=${workspaceB.id}`, { headers });
+      expect(unknown.status).toBe(200);
+      expect(await unknown.json()).toEqual({ issues: [], total: 0 });
+      const mixed = await app.request(`${prefix}/children?parent_ids=MUL-999999,${own.parent.key}&workspace_id=${workspaceB.id}`, { headers });
+      expect(mixed.status).toBe(200);
+      const body = await mixed.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+    });
+
+    it("hides a key resolved in an inaccessible workspace without traversing it", async () => {
+      const { store, app, foreign, workspaceA, headers } = await setup();
+      expect(store.getIssueByRef(foreign.parent.key, workspaceA.id)?.id).toBe(foreign.parent.id);
+      const listChildren = spyOn(store, "listChildIssues");
+      const response = await app.request(`${prefix}/children?parent_ids=${foreign.parent.key}&workspace_id=${workspaceA.id}`, { headers });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ issues: [], total: 0 });
+      expect(listChildren).not.toHaveBeenCalled();
+    });
+
+    it("skips an ambiguous unscoped key without traversing either parent", async () => {
+      const { store, app, foreign, own, headers } = await setup();
+      expect(foreign.parent.key).toBe(own.parent.key);
+      expect(store.getIssueByRef(own.parent.key, null)).toBeNull();
+      const listChildren = spyOn(store, "listChildIssues");
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key}`, { headers });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ issues: [], total: 0 });
+      expect(listChildren).not.toHaveBeenCalled();
+    });
+
+    it("resolves an unambiguous key when no workspace is supplied", async () => {
+      const { store, app, workspaceB, headers } = await setup();
+      const parent = store.createIssue({ workspaceId: workspaceB.id, title: "Unique unscoped parent" });
+      const child = store.createIssue({ workspaceId: workspaceB.id, title: "Unique unscoped child", parentIssueId: parent.id });
+      const response = await app.request(`${prefix}/children?parent_ids=${parent.key}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([child.id]);
+    });
+
+    it("does not resolve an id outside the requested workspace", async () => {
+      const { app, own, workspaceA, headers } = await setup();
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.id}&workspace_id=${workspaceA.id}`, { headers });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ issues: [], total: 0 });
+    });
+
+    it("checks child workspace access after resolving a parent key", async () => {
+      const { store, app, own, workspaceA, workspaceB, headers } = await setup();
+      const foreignChild = store.createIssue({ workspaceId: workspaceA.id, title: "Foreign child under keyed parent" });
+      db!.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [own.parent.id, foreignChild.id]);
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key}&workspace_id=${workspaceB.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+    });
+
+    it("hides foreign keys from a task token even when its owner belongs to both workspaces", async () => {
+      const { store, app, owner, foreign, own, workspaceA } = await setup();
+      const { token } = await store.createTaskAccessToken(own.task, owner.id);
+      const response = await app.request(`${prefix}/children?parent_ids=${foreign.parent.key}&workspace_id=${workspaceA.id}`, { headers: authHeaders(token) });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ issues: [], total: 0 });
+    });
+
     it("filters mixed-workspace parents while preserving the response wire shape", async () => {
       const { app, foreign, own, headers } = await setup();
       const response = await app.request(`${prefix}/children?parent_ids=${foreign.parent.id},${own.parent.id}`, { headers });
@@ -191,6 +294,22 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 }
 
 describe("batch issue parameter compatibility", () => {
+  it("keeps workspaceId native-only and gives it precedence over workspace_id", async () => {
+    const { app, foreign, own, workspaceA, workspaceB } = await setup();
+    expect(foreign.parent.key).toBe(own.parent.key);
+    const headers = authHeaders(masterToken);
+    for (const [prefix, expectedChild] of [["/api/issues", foreign.child], ["/api/multiremi/issues", own.child]] as const) {
+      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key}&workspaceId=${workspaceB.id}&workspace_id=${workspaceA.id}`, { headers });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([expectedChild.id]);
+    }
+    const compat = await app.request(`/api/issues/children?parent_ids=${own.parent.key}&workspaceId=${workspaceB.id}`, { headers });
+    expect(compat.status).toBe(200);
+    expect(await compat.json()).toEqual({ issues: [], total: 0 });
+  });
+
   it("keeps parentIds native-only while filtering its results", async () => {
     const { app, foreign, own, headers } = await setup();
     const query = `parentIds=${foreign.parent.id},${own.parent.id}`;

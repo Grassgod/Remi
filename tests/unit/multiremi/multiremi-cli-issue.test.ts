@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
+import { buildIssueListQuery } from "../../../apps/remi/cli/multiremi/commands/issue.js";
 import { cliCommandHelp } from "../../../apps/remi/cli/index.js";
 import { tableHeaders } from "./helpers.js";
 
@@ -17,6 +18,12 @@ afterEach(() => {
 });
 
 describe("Multiremi CLI — issues, attachments, and sessions", () => {
+  test("issue list encodes --assignee-type as the plural compatibility parameter", () => {
+    const query = new URLSearchParams(buildIssueListQuery({ "assignee-type": "member" }));
+    expect(query.get("assignee_types")).toBe("member");
+    expect(query.has("assignee_type")).toBe(false);
+  });
+
   test("issue assign returns the same flat issue fields as get plus task and cancellation outcomes", async () => {
     const issue = { id: "iss_1", identifier: "MUL-1", title: "Assignment", assignee_id: null, assignee_type: null };
     let outcome: Record<string, unknown> = { task_id: null, cancelled_tasks: 2 };
