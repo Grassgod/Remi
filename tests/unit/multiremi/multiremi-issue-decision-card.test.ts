@@ -1231,10 +1231,12 @@ describe("MUL-412 issue decision cards", () => {
       const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
       const messageId = `om_${failure.replaceAll(" ", "_")}`;
       const marker = decisionInteractionMarker(parent.id, decision.id);
-      let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+      const registration = {
+        current: null as ReturnType<typeof registerIssueDecisionCardInteraction> | null,
+      };
       try {
         const result = await daemonClientOverTcp(store, async client => {
-          registration = registerIssueDecisionCardInteraction({
+          registration.current = registerIssueDecisionCardInteraction({
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
@@ -1254,7 +1256,7 @@ describe("MUL-412 issue decision cards", () => {
         });
         expect(result).not.toHaveProperty("card");
       } finally {
-        registration?.dispose();
+        registration.current?.dispose();
         stopWake();
         stopEvents();
       }
@@ -1280,10 +1282,12 @@ describe("MUL-412 issue decision cards", () => {
     const events: string[] = [];
     const stopWake = store.onTaskEnqueued(() => { wakes += 1; });
     const stopEvents = store.onWorkspaceEvent(event => events.push(event.type));
-    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    const registration = {
+      current: null as ReturnType<typeof registerIssueDecisionCardInteraction> | null,
+    };
     try {
       const result = await daemonClientOverTcp(store, async client => {
-        registration = registerIssueDecisionCardInteraction({
+        registration.current = registerIssueDecisionCardInteraction({
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: async () => {
@@ -1305,7 +1309,7 @@ describe("MUL-412 issue decision cards", () => {
       expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
       expect(result).not.toHaveProperty("card");
     } finally {
-      registration?.dispose();
+      registration.current?.dispose();
       stopWake();
       stopEvents();
     }
@@ -1324,10 +1328,12 @@ describe("MUL-412 issue decision cards", () => {
       const decisionId = "dcs_missing";
       const messageId = `om_missing_${missing}`;
       const marker = decisionInteractionMarker(issueId, decisionId);
-      let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+      const registration = {
+        current: null as ReturnType<typeof registerIssueDecisionCardInteraction> | null,
+      };
       try {
         const result = await daemonClientOverTcp(store, async client => {
-          registration = registerIssueDecisionCardInteraction({
+          registration.current = registerIssueDecisionCardInteraction({
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(issueId, decisionId),
@@ -1344,7 +1350,7 @@ describe("MUL-412 issue decision cards", () => {
         expect(result?.toast).toEqual({ type: "error", content: DECISION_NOT_SUBMITTED_TOAST });
         expect(result).not.toHaveProperty("card");
       } finally {
-        registration?.dispose();
+        registration.current?.dispose();
       }
     });
   }
@@ -1365,10 +1371,12 @@ describe("MUL-412 issue decision cards", () => {
       return originalAnswer(...args);
     };
     store.answerIssueDecision = injectedAnswer;
-    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    const registration = {
+      current: null as ReturnType<typeof registerIssueDecisionCardInteraction> | null,
+    };
     try {
       const result = await daemonClientOverTcp(store, async client => {
-        registration = registerIssueDecisionCardInteraction({
+        registration.current = registerIssueDecisionCardInteraction({
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => client.getFeishuIssueDecision(parent.id, decision.id),
@@ -1386,7 +1394,7 @@ describe("MUL-412 issue decision cards", () => {
       expect(result).toHaveProperty("card");
       expect(store.getIssueDecision(parent.id, decision.id)?.status).toBe("withdrawn");
     } finally {
-      registration?.dispose();
+      registration.current?.dispose();
       store.answerIssueDecision = originalAnswer;
     }
   });
@@ -1402,10 +1410,12 @@ describe("MUL-412 issue decision cards", () => {
     sendCard(store, messageId)!;
     const marker = decisionInteractionMarker(parent.id, decision.id);
     let raced = false;
-    let registration: ReturnType<typeof registerIssueDecisionCardInteraction> | null = null;
+    const registration = {
+      current: null as ReturnType<typeof registerIssueDecisionCardInteraction> | null,
+    };
     try {
       const result = await daemonClientOverTcp(store, async client => {
-        registration = registerIssueDecisionCardInteraction({
+        registration.current = registerIssueDecisionCardInteraction({
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: async () => {
@@ -1433,7 +1443,7 @@ describe("MUL-412 issue decision cards", () => {
       expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "answered" });
       expect(store.getIssueDecision(parent.id, decision.id)?.history).toHaveLength(1);
     } finally {
-      registration?.dispose();
+      registration.current?.dispose();
     }
   });
 
@@ -1517,8 +1527,11 @@ describe("MUL-412 issue decision cards", () => {
           expect(result?.toast, row.name).toEqual(row.expected);
           expect(Boolean(result && "card" in result), row.name).toBe("receipt" in row && row.receipt === true);
           if (!("submitted" in row && row.submitted)) {
-            expect(result?.toast.content.startsWith("本次没有提交："), row.name).toBe(true);
-            expect(result?.toast.content, row.name).toContain("请");
+            const toast = result?.toast as { content?: unknown } | undefined;
+            expect(typeof toast?.content, row.name).toBe("string");
+            if (typeof toast?.content !== "string") throw new Error(`${row.name}: toast content is missing`);
+            expect(toast.content.startsWith("本次没有提交："), row.name).toBe(true);
+            expect(toast.content, row.name).toContain("请");
           }
         } finally {
           registration?.dispose();
