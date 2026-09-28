@@ -19,6 +19,9 @@
 import type { HubSeqRange, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
 import type { SessionLogEntry } from "./port";
 
+/** Namespace only; shared channels must use `replicaLockName(userId, workspaceId)`. */
+export const REPLICA_CHANNEL = "remi-replica";
+
 /** `navigator.locks` name. The plan's spelling, kept verbatim: `remi-replica:<user>:<ws>`. */
 export const REPLICA_LOCK_PREFIX = "remi-replica:";
 
