@@ -436,8 +436,9 @@ function createMemoryTabsReplica(options: BrowserReplicaOptions, view: ReplicaVi
     },
     ack: (sessionId, ack) => {
       if (disposed || !openSessions.has(sessionId)) return;
-      engine.ack(sessionId, ack);
+      const result = engine.acknowledge(sessionId, ack);
       refreshView(sessionId);
+      if (result.reset) options.subscribe(sessionId, engine.resumeFrom(sessionId));
     },
     clear: (reason) => {
       if (disposed) return;
@@ -611,8 +612,12 @@ function handleInline(
         },
       ];
     }
-    case "ack":
-      return [{ type: "backfill", sessionId: request.sessionId, range: engine.ack(request.sessionId, request.ack) }];
+    case "ack": {
+      const result = engine.acknowledge(request.sessionId, request.ack);
+      const view = engine.snapshot(request.sessionId);
+      return [{ type: "backfill", sessionId: request.sessionId, ...result,
+        head: view.head, fresh: view.fresh, ready: view.ready, entries: [...view.entries] }];
+    }
     case "frames": {
       const missing = engine.frames(request.sessionId, request.frames);
       const snapshot = engine.snapshot(request.sessionId);

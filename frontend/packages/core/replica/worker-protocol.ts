@@ -119,6 +119,11 @@ export interface ReplicaWorkerBackfillMessage {
   type: "backfill";
   sessionId: string;
   range: HubSeqRange | null;
+  reset: boolean;
+  head: number | null;
+  fresh: boolean;
+  ready: boolean;
+  entries: SessionLogEntry[];
 }
 
 export interface ReplicaWorkerAppendedMessage {

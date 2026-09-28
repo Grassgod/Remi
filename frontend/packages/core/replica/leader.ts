@@ -155,6 +155,8 @@ export class ReplicaLeader {
   /** A `stream.ack`, forwarded so the Worker decides reset vs gap. */
   ack(sessionId: string, ack: HubStreamAckPayload): void {
     if (!this.openCounts.has(sessionId)) return;
+    this.options.view.updateFreshness(sessionId, false);
+    this.options.broadcast({ type: "replica:ack", sessionId, ack });
     this.post({ type: "ack", sessionId, ack });
   }
 
@@ -260,6 +262,12 @@ export class ReplicaLeader {
         return;
       }
       case "backfill": {
+        this.options.view.setWindow(message.sessionId, message.entries, {
+          head: message.head, fresh: message.fresh, ready: message.ready,
+        });
+        this.options.broadcast({ type: "replica:appended", sessionId: message.sessionId,
+          range: { from: 0, to: 0 }, head: message.head, fresh: message.fresh });
+        if (message.reset) this.resubscribe(message.sessionId);
         // Step 2: a gap (or a reset) is read through the read route, written into
         // the replica, and only then can the stream continue without a hole.
         if (message.range) await this.backfill(message.sessionId, message.range);

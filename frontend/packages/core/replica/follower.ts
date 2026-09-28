@@ -141,6 +141,12 @@ export class ReplicaFollower implements SessionReplicaPort {
   handle(message: ReplicaChannelMessage): void {
     if (this.disposed) return;
     switch (message.type) {
+      case "replica:ack": {
+        if (!this.requested.has(message.sessionId)) return;
+        this.cancelPending(message.sessionId);
+        this.options.view.updateFreshness(message.sessionId, false);
+        return;
+      }
       case "replica:window": {
         const pending = this.pending.get(message.requestId);
         if (!pending || pending.sessionId !== message.sessionId) return;

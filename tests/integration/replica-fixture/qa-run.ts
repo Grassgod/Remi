@@ -112,6 +112,7 @@ function startServer(assetDir: string) {
   const hub = newMockHub(SESSION_ID, seedLog(120));
   const sockets = new Set<ServerWebSocket<never>>();
   const pageSubscriptions = new Map<ServerWebSocket<never>, Set<string>>();
+  let replayPaused = false;
 
   /** Known only after `Bun.serve` returns; the handlers below run later. */
   let origin = "";
@@ -182,7 +183,7 @@ function startServer(assetDir: string) {
           // Replay what the ring still holds, exactly as the hub would.
           const tail = fromSeq;
           const frames = hub.rows.filter((row) => row.seq >= tail && row.visibility === "shown").map(frameFor);
-          if (frames.length > 0) {
+          if (!replayPaused && frames.length > 0) {
             socket.send(JSON.stringify({ type: "stream.data", payload: { stream: "log", id: SESSION_ID, frames } }));
           }
           return;
@@ -230,6 +231,7 @@ function startServer(assetDir: string) {
       if (row) broadcast([patchFrameFor(row)]);
     },
     appendSilently(count: number): void { appendRows(hub, count); },
+    pauseReplay(paused: boolean): void { replayPaused = paused; },
     sendAck(head: number, version: number): void {
       for (const socket of sockets) {
         if (!pageSubscriptions.get(socket)?.size) continue;
@@ -509,14 +511,22 @@ async function runScope(
     }
     if(key==="qa-new-ack") {
       const oldHead=server.hub.head;
+      const subsBefore = server.hub.subscribes.length, readsBefore = server.hub.logReads.length;
       const responses=await leader.evaluate(()=> (window as any).__qaWorkerResponses.length);
+      server.pauseReplay(true);
       server.appendSilently(1);server.hub.logVersion=99;
       server.sendAck(server.hub.head,server.hub.logVersion);
       await waitFor(async()=>await leader.evaluate((n)=> (window as any).__qaWorkerResponses.slice(n).some((r:any)=>r.type==="backfill"),responses));
+      await waitFor(async () => (await states()).every(state => !state?.fresh));
       const all=await states();
       check("QA ack: version/head change revokes view freshness",all.every(s=>!s?.fresh),`heads ${all.map(s=>s?.head).join(",")}, fresh ${all.map(s=>s?.fresh).join(",")}`);
-      const last=await leader.evaluate(()=> (window as any).__qaWorkerResponses.at(-1));
-      check("QA ack: reset triggers new cursor or range read",last?.type!=="backfill"||last.range!==null,`last worker response ${JSON.stringify(last)}`);
+      const restarted = await waitFor(async () =>
+        server.hub.subscribes.slice(subsBefore).some(sub => sub.fromSeq === 1)
+        || server.hub.logReads.slice(readsBefore).some(read => read.from === 1 && read.to >= oldHead), 1000).catch(() => false);
+      check("QA ack: reset triggers new cursor or range read",restarted !== false,`new cursors ${JSON.stringify(server.hub.subscribes.slice(subsBefore))}, reads ${JSON.stringify(server.hub.logReads.slice(readsBefore))}`);
+      server.pauseReplay(false);
+      server.broadcast(server.hub.rows.map(frameFor));
+      await waitFor(async () => (await states()).every(state => state?.head === server.hub.head && state.fresh));
     }
     if(key==="qa-identity-user"||key==="qa-identity-workspace") {
       const user=key==="qa-identity-user"?"qa_new_user":"user_1";

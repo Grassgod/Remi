@@ -186,8 +186,10 @@ export class ReplicaWorkerHost {
           return;
         }
         case "ack": {
-          const backfill = engine.ack(request.sessionId, request.ack);
-          post({ type: "backfill", sessionId: request.sessionId, range: backfill });
+          const result = engine.acknowledge(request.sessionId, request.ack);
+          const view = engine.snapshot(request.sessionId);
+          post({ type: "backfill", sessionId: request.sessionId, ...result,
+            head: view.head, fresh: view.fresh, ready: view.ready, entries: [...view.entries] });
           return;
         }
         case "frames": {

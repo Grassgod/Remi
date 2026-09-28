@@ -119,6 +119,10 @@ export class ReplicaEngine {
    * sending immediately.
    */
   ack(sessionId: string, ack: HubStreamAckPayload): HubSeqRange | null {
+    return this.acknowledge(sessionId, ack).range;
+  }
+
+  acknowledge(sessionId: string, ack: HubStreamAckPayload): { range: HubSeqRange | null; reset: boolean } {
     const current = this.storage.readState(sessionId);
     const decision = decideAck(ack, current);
 
@@ -144,7 +148,7 @@ export class ReplicaEngine {
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
 
-    return decision.backfill;
+    return { range: decision.backfill, reset: decision.reset };
   }
 
   /**

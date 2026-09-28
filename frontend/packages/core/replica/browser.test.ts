@@ -5,6 +5,26 @@ import { replicaLockName } from "./channel";
 const replicas: BrowserReplica[] = [];
 afterEach(() => { for (const replica of replicas.splice(0)) replica.dispose(); });
 
+test.each([[2, 1], [1, 2]])("an ack head=%s version=%s publishes stale status and restarts a changed version", async (head, version) => {
+  const subscriptions: number[] = [];
+  const replica = await openBrowserReplica({
+    userId: "user", workspaceId: "ws", tabId: "tab", subscribe: (_id, from) => subscriptions.push(from),
+    unsubscribe: () => {}, readRange: async () => [],
+    env: { hasOpfs: true, broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+      locks: { request: (_name: string, _options: unknown, callback: () => Promise<void>) => callback() } as never },
+  });
+  replicas.push(replica);
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  replica.open("session");
+  const ack = { stream: "log" as const, id: "session", first_seq: 1, head_seq: 1, log_version: 1, gap: null };
+  replica.ack("session", ack);
+  replica.frames("session", [{ seq: 1, kind: "entry", payload: { session_id: "session", seq: 1, revision: 1, body_md: "one" } }]);
+  expect(replica.port.getSnapshot("session").fresh).toBe(true);
+  replica.ack("session", { ...ack, head_seq: head, log_version: version });
+  expect(replica.port.getSnapshot("session").fresh).toBe(false);
+  if (version === 2) expect(subscriptions).toEqual([1, 1]);
+});
+
 test("dispose lets the Web Lock callback finish and prevents a queued disposed page from starting", async () => {
   let callback: (() => Promise<void>) | undefined;
   let released = false;
