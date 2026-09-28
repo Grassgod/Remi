@@ -194,7 +194,9 @@ export class ReplicaEngine {
    * either way.
    */
   writeWindow(sessionId: string, entries: readonly SessionLogEntry[], range: HubSeqRange): HubSeqRange | null {
-    if (entries.length > 0) this.storage.upsertEntries(entries);
+    const held = this.storage.readEntries(sessionId);
+    const newer = entries.filter(entry => !held.has(entry.seq) || entry.revision > held.get(entry.seq)!.revision);
+    if (newer.length > 0) this.storage.upsertEntries(newer);
     const state = this.storage.readState(sessionId);
     // Coverage advances to what the read route proved it served, not to the
     // highest seq among the returned rows: a window that came back short because

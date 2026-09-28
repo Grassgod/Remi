@@ -95,7 +95,21 @@ export function applyFrames(input: {
   const deletes = new Set<number>();
   let ranges = input.state.ranges.map((range) => ({ ...range }));
 
+  const rows = new Map<number, HubFrame[]>();
   for (const frame of input.frames) {
+    const target = frame.kind === "patch" ? patchTargetSeq(frame.payload, frame) : frameAsEntry(frame)?.seq ?? frame.seq;
+    const batch = rows.get(target) ?? [];
+    batch.push(frame);
+    rows.set(target, batch);
+  }
+  // Partial fields depend on previous revisions, even if a batch is reordered.
+  // Legacy patches without a revision keep their order after versioned writes.
+  const revisionOf = (frame: HubFrame): number => {
+    const payload = frame.payload as { revision?: unknown } | null;
+    return frame.kind === "patch" && typeof payload?.revision !== "number" ? Infinity : payloadRevision(payload);
+  };
+  const ordered = [...rows.values()].flatMap(batch => batch.sort((a, b) => revisionOf(a) - revisionOf(b)));
+  for (const frame of ordered) {
     if (frame.kind === "patch") {
       // A patch addresses a row the replica already holds. Without that row there
       // is nothing to update; the seq is left to the coverage walk below, which

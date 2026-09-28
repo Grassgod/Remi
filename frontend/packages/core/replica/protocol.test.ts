@@ -107,6 +107,14 @@ describe("step 2: ack", () => {
 });
 
 describe("step 3: frames", () => {
+  test("partial patches in a reordered batch still compose in revision order", () => {
+    const result = applyFrames({
+      frames: [patchFrame(1, { body_html: "<p>edited</p>" }, 3), patchFrame(1, { body_md: "edited" }, 2)],
+      state: emptyReplicaState(), entries: new Map([[1, entry(1)]]),
+    });
+    expect(result.upserts[0]).toMatchObject({ revision: 3, body_md: "edited", body_html: "<p>edited</p>" });
+  });
+
   test("partial patches compose on the latest revision in the batch", () => {
     const result = applyFrames({
       frames: [patchFrame(1, { body_md: "edited" }, 2), patchFrame(1, { body_html: "<p>edited</p>" }, 3)],

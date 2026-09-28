@@ -127,6 +127,16 @@ describe("SQL replica storage", () => {
     engine.close();
   });
 
+  test("a delayed read window cannot replace a newer streamed revision", async () => {
+    const { storage } = await openSqlStorage();
+    const replica = new ReplicaEngine(storage);
+    replica.openSession({ sessionId: "sess_1", userId: "user_1", workspaceId: "ws_1" });
+    replica.frames("sess_1", [entryFrame(1, { revision: 5, body_md: "latest" })]);
+    replica.writeWindow("sess_1", [entry(1)], { from: 1, to: 1 });
+    expect(replica.readWindow("sess_1", 1, 1)[0]).toMatchObject({ revision: 5, body_md: "latest" });
+    replica.close();
+  });
+
   test("meta round-trips and a different user wipes the database", async () => {
     const { storage } = await openSqlStorage();
     const first = new ReplicaEngine(storage);
