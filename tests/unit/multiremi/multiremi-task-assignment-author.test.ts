@@ -4,7 +4,7 @@
  *
  * The bug this file pins: `POST /api/multiremi/tasks` passed `...publicInput`
  * straight into `createTask`, so a task credential (an agent run) could send
- * `assignment_author_type: "member"` and have the `task_assigned` session event
+ * `assignment_author_type: "member"` and have the `turn` session event
  * — the durable "who asked for this work" record — attribute the run to a human.
  * Members could write another run's `task_id`, `trigger_comment_id` or
  * `parent_task_id` the same way.
@@ -52,10 +52,11 @@ async function fixture(): Promise<Fixture> {
   };
 }
 
-/** The `task_assigned` events a task wrote into its Issue Session. */
+/** The `turn` events a task wrote into its Issue Session. */
+// Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: Fixture["store"], sessionId: string, taskId: string | undefined) {
   return store.listSessionEvents(sessionId).filter((event) =>
-    event.kind === "task_assigned" && (!taskId || event.taskId === taskId)
+    event.kind === "turn" && (!taskId || event.taskId === taskId)
   );
 }
 

@@ -145,7 +145,7 @@ export function driveTaskMessageFanout(
     prompt: "p".repeat(4_096),
   });
   // Preserve the captured event times independently of migration clock reads.
-  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 41));
+  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 45));
   const messages = store.appendTaskMessages(task.id, [
     { seq: 1, type: "text", content: "hello" },
     { seq: 2, type: "tool_use", tool: "Bash", input: { command: "ls" }, toolCallId: "tc_1", status: "in_progress" },
@@ -168,7 +168,7 @@ export function driveTaskMessageFanout(
     chatSessionId: chat.id,
     prompt: "q".repeat(4_096),
   });
-  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 44));
+  pinMessageClock?.(Date.UTC(2026, 8, 27, 12, 0, 0, 48));
   const chatMessages = store.appendTaskMessages(chatTask.id, [
     { seq: 1, type: "text", content: "chat hello" },
   ]);

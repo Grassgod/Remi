@@ -18,11 +18,17 @@
  * The integration suite is skipped (not failed) when Postgres is unreachable, so
  * the file is safe on machines without the configured MULTIREMI_DATABASE_URL.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
+import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
@@ -209,6 +215,14 @@ if (!pgAvailable) {
 describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
+  let pointerQueryCount = 0;
+
+  function drainSystemEvents(): void {
+    const pending = db.query("SELECT 1 FROM multiremi_system_events WHERE status IN ('pending', 'processing') LIMIT 1");
+    const at = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+    for (let round = 0; round < 100 && pending.get(); round++) store.dispatchPendingSystemEvents(at);
+    if (pending.get()) throw new Error("System event queue did not drain within 100 rounds");
+  }
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
@@ -218,7 +232,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // Constructing the store runs migrate(): all CREATE TABLE / ALTER / index DDL
     // flows through translateSqliteToPg. A mis-translation would throw right here.
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
-    store = new MultiremiStore(db);
+    store = new MultiremiStore(db, {
+      taskTraceQuery: (sql, params) => {
+        pointerQueryCount++;
+        return db.query(sql).get(...params) as Record<string, unknown> | null;
+      },
+    });
     store.ensureLocalWorkspace();
   });
 
@@ -322,6 +341,54 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     expect(unknownAgent.status).toBe(404);
   });
+  it("writes and reads trace pointers and routes hot and archive traces on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-trace-reader-"));
+    try {
+      const runtime = store.registerRuntime({ id: "rt_pg_trace_reader", name: "PG trace runtime", provider: "codex",
+        daemonId: "dmn_pg_trace_reader", workspaceId: "local" });
+      const agent = store.createAgent({ name: "PG trace agent", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
+      const issue = store.createIssue({ title: "PG trace reader", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      expect(store.getTaskTrace(task.id)).toMatchObject({ location: "daemon", runtimeId: runtime.id });
+      expect(pointerQueryCount).toBeGreaterThan(0);
+
+      const trace = new InMemoryTraceStore();
+      trace.append(task.id, [{ type: "text", content: "hot event" }]);
+      const reader = new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => trace),
+        archive: new SessionArchiveReader({ store, root }) });
+      expect(await reader.readTrace(task.id)).toMatchObject({ state: "ok", source: "daemon", head: 1 });
+
+      store.startTask(task.id);
+      store.completeTask(task.id, { output: "done", traceEventCount: 1 });
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+        traces: { [task.id]: traceFileBody({ events: 4, gapAfter: 2, taskId: task.id }) } });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+        issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+      const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+      await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+      expect((await service.complete(runtime.id, issue.id, archive.id, claim.uploadAttempt!)).status).toBe("ready");
+      expect(store.getTaskTrace(task.id)).toMatchObject({ location: "archive", archiveId: archive.id, headSeq: 4 });
+      expect((await reader.readTrace(task.id, 0, 2)).events.map(event => event.seq)).toEqual([1, 3]);
+      expect((await reader.readTrace(task.id, 3, 2)).events.map(event => event.seq)).toEqual([4]);
+
+      const empty = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "empty" });
+      expect(store.claimTask(runtime.id)?.id).toBe(empty.id);
+      store.startTask(empty.id);
+      store.completeTask(empty.id, { output: "done", traceEventCount: 0 });
+      expect(store.getTaskTrace(empty.id)?.location).toBe("none");
+      const lost = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "lost" });
+      expect(store.claimTask(runtime.id)?.id).toBe(lost.id);
+      store.markTaskTraceLost(lost.id);
+      expect(store.getTaskTrace(lost.id)?.location).toBe("lost");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.
@@ -437,6 +504,419 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) store.deleteIssue(`iss_classification_${entry.name}`);
     db.run("DELETE FROM multiremi_agents WHERE id = ?", ["agt_chat_migration"]);
   }, 30_000);
+
+  it("accepts a multi-session Issue package with retry, delegation and a same-daemon provider Runtime on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-issue-members-"));
+    try {
+      const leader = store.createAgent({ name: "PG Issue leader", provider: "codex", workspaceId: "local" });
+      const delegate = store.createAgent({ name: "PG Issue delegate", provider: "claude", workspaceId: "local" });
+      const owner = store.registerRuntime({ id: "rt_pg_issue_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
+      const otherProvider = store.registerRuntime({ id: "rt_pg_issue_claude", name: "claude", provider: "claude",
+        daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
+      const issue = store.createIssue({ title: "PG Issue package", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
+      const original = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "original" });
+      const retry = store.createTask({ agentId: leader.id, issueId: issue.id,
+        parentTaskId: original.id, prompt: "retry" });
+      const sibling = store.createTask({ agentId: leader.id, issueId: issue.id,
+        issueSessionId: secondSession.id, prompt: "second session" });
+      const delegated = store.createTask({ agentId: delegate.id, issueId: issue.id,
+        parentTaskId: original.id, delegationId: "dlg_pg_issue_package",
+        delegatedByAgentId: leader.id, prompt: "delegated" });
+      for (const task of [original, retry, sibling]) {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      }
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
+      const tasks = [original, retry, sibling, delegated];
+      const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+        members: [original.issueSessionId!, secondSession.id].map((sessionId) => ({
+          path: `sessions/${sessionId}/history.jsonl`, body: Buffer.from("session history\n"),
+        })),
+        traces: Object.fromEntries(tasks.map((task) => [task.id, traceFileBody({ events: 1, taskId: task.id })])) });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+        issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+      const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+      await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+      expect((await service.complete(owner.id, issue.id, archive.id, claim.uploadAttempt!)).status).toBe("ready");
+      expect(fixture.contents.has(`sessions/${original.issueSessionId}/history.jsonl`)).toBe(true);
+      expect(fixture.contents.has(`sessions/${secondSession.id}/history.jsonl`)).toBe(true);
+      for (const task of tasks) expect(store.getTaskTrace(task.id)).toMatchObject({ archiveId: archive.id, headSeq: 1 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects foreign and missing trace tasks atomically and cleans rejected archive bytes on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-archive-auth-"));
+    try {
+      const agent = store.createAgent({ name: "PG archive member", provider: "codex", workspaceId: "local" });
+      const owner = store.registerRuntime({
+        id: "rt_pg_archive_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_archive_owner", workspaceId: "local",
+      });
+      const other = store.registerRuntime({
+        id: "rt_pg_archive_other", name: "other", provider: "codex",
+        daemonId: "dmn_pg_archive_other", workspaceId: "local",
+      });
+      const noDaemon = store.registerRuntime({
+        id: "rt_pg_archive_unbound", name: "unbound", provider: "claude", workspaceId: "local",
+      });
+      const chat = store.createChatSession({ agentId: agent.id, title: "Owner", workspaceId: "local" });
+      const sibling = store.createChatSession({ agentId: agent.id, title: "Sibling", workspaceId: "local" });
+      db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
+        [owner.id, chat.id, sibling.id]);
+      const good = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
+      const foreignRuntime = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "runtime" });
+      const foreignSubject = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: sibling.id, prompt: "subject" });
+      const foreignWorkspace = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "workspace" });
+      const unbound = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "unbound" });
+      for (const [taskId, runtimeId] of [[good.id, owner.id], [foreignRuntime.id, other.id],
+        [foreignSubject.id, owner.id], [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtimeId, taskId]);
+      }
+      const outside = store.createWorkspace({ name: "PG archive outside", slug: "pg-archive-outside" });
+      db.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [outside.id, foreignWorkspace.id]);
+      for (const [taskId, runtimeId] of [[foreignRuntime.id, other.id], [foreignSubject.id, owner.id],
+        [foreignWorkspace.id, owner.id], [unbound.id, noDaemon.id]]) {
+        db.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
+          [taskId, runtimeId, "2026-09-27T00:00:00.000Z"]);
+      }
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      for (const badId of [foreignRuntime.id, foreignSubject.id, foreignWorkspace.id,
+        unbound.id, "tsk_pg_archive_missing"]) {
+        const previous = store.getTaskTrace(badId);
+        const fixture = await buildArchiveFixture({
+          subject: { kind: "chat", id: chat.id },
+          traces: {
+            [good.id]: traceFileBody({ events: 1, taskId: good.id }),
+            [badId]: traceFileBody({ events: 1, taskId: badId }),
+          },
+        });
+        const archive = service.initialize({
+          workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+          runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+          sha256: fixture.sha256, sizeBytes: fixture.sizeBytes,
+        }).archive;
+        const claim = await service.claimUploadAttempt(owner.id, { kind: "chat", id: chat.id }, archive.id);
+        await service.upload(owner.id, { kind: "chat", id: chat.id }, archive.id,
+          claim.uploadAttempt!, new Response(fixture.bytes).body);
+        await expect(service.complete(owner.id, { kind: "chat", id: chat.id }, archive.id,
+          claim.uploadAttempt!)).rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
+        expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+        expect(store.getTaskTrace(good.id)).toBeNull();
+        expect(store.getTaskTrace(badId)).toEqual(previous);
+        expect(existsSync(join(root, archive.relativePath))).toBe(false);
+      }
+      const tampered = await buildArchiveFixture({
+        subject: { kind: "chat", id: chat.id },
+        members: [{ path: "sessions/chat_1/history.jsonl", body: Buffer.from("history") }],
+        traces: { [good.id]: traceFileBody({ events: 1, taskId: good.id }) },
+        tamperMemberBody: (path, body) => path.startsWith("sessions/") ? Buffer.from("changed") : body,
+      });
+      const archive = service.initialize({
+        workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+        runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: tampered.sourceRevision,
+        sha256: tampered.sha256, sizeBytes: tampered.sizeBytes,
+      }).archive;
+      const claim = await service.claimUploadAttempt(owner.id, { kind: "chat", id: chat.id }, archive.id);
+      await service.upload(owner.id, { kind: "chat", id: chat.id }, archive.id,
+        claim.uploadAttempt!, new Response(tampered.bytes).body);
+      await expect(service.complete(owner.id, { kind: "chat", id: chat.id }, archive.id,
+        claim.uploadAttempt!)).rejects.toThrow();
+      expect(store.getSessionArchive(archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(good.id)).toBeNull();
+      expect(existsSync(join(root, archive.relativePath))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove a newer attempt's final archive when an older completion fails on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-archive-fence-"));
+    try {
+      const agent = store.createAgent({ name: "PG archive fence", provider: "codex", workspaceId: "local" });
+      const runtime = store.registerRuntime({
+        id: "rt_pg_archive_fence", name: "fence", provider: "codex",
+        daemonId: "dmn_pg_archive_fence", workspaceId: "local",
+      });
+      const chat = store.createChatSession({ agentId: agent.id, title: "Fence", workspaceId: "local" });
+      db.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", [runtime.id, chat.id]);
+      const task = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "trace" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, task.id]);
+      const scope = { kind: "chat", id: chat.id } as const;
+      const fixture = await buildArchiveFixture({
+        subject: scope, traces: { [task.id]: traceFileBody({ events: 1, taskId: task.id }) },
+      });
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const archive = service.initialize({
+        workspaceId: "local", subjectKind: "chat", subjectId: chat.id,
+        runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+        sha256: fixture.sha256, sizeBytes: fixture.sizeBytes,
+      }).archive;
+      const old = await service.claimUploadAttempt(runtime.id, scope, archive.id);
+      await service.upload(runtime.id, scope, archive.id, old.uploadAttempt!, new Response(fixture.bytes).body);
+      let entered!: () => void;
+      let release!: () => void;
+      const reachedSync = new Promise<void>((resolve) => { entered = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const internal = service as unknown as { syncDirectory: (path: string) => Promise<void> };
+      const sync = internal.syncDirectory.bind(service);
+      let first = true;
+      internal.syncDirectory = async (path) => {
+        if (first) { first = false; entered(); await gate; }
+        return sync(path);
+      };
+      const stale = service.complete(runtime.id, scope, archive.id, old.uploadAttempt!);
+      await reachedSync;
+      const finalPath = join(root, archive.relativePath);
+      expect(existsSync(finalPath)).toBe(true);
+      expect(store.markSessionArchiveFailedAttempt(archive.id, runtime.id, old.uploadAttempt!, "retry"))
+        .toMatchObject({ status: "failed" });
+      db.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+        ["2000-01-01T00:00:00.000Z", archive.id]);
+      const newer = await service.claimUploadAttempt(runtime.id, scope, archive.id);
+      await service.upload(runtime.id, scope, archive.id, newer.uploadAttempt!, new Response(fixture.bytes).body);
+      writeFileSync(finalPath, Buffer.alloc(fixture.bytes.length));
+      expect((await service.complete(runtime.id, scope, archive.id, newer.uploadAttempt!)).status).toBe("ready");
+      release();
+      await expect(stale).rejects.toMatchObject({ status: 409, code: "session_archive_attempt_conflict" });
+      expect(store.getSessionArchive(archive.id)).toMatchObject({ status: "ready", attemptCount: newer.uploadAttempt });
+      expect(readFileSync(finalPath)).toEqual(Buffer.from(fixture.bytes));
+      expect(JSON.parse(readFileSync(join(root, archive.relativePath, "..", "manifest.json"), "utf8")))
+        .toMatchObject({ archive_id: archive.id, attempt_count: newer.uploadAttempt });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  async function pgArchiveFenceFixture(label: string) {
+    const root = mkdtempSync(join(tmpdir(), `multiremi-pg-${label}-`));
+    const runtime = store.registerRuntime({ id: `rt_pg_${label}`, name: label, provider: "codex",
+      daemonId: `dmn_pg_${label}`, workspaceId: "local" });
+    const issue = store.createIssue({ title: label, workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
+      rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+    const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
+    const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+    const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+      issueId: issue.id, runtimeId: runtime.id, daemonId: runtime.daemonId!, sourceRevision: fixture.sourceRevision,
+      sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+    const a = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+    await service.upload(runtime.id, issue.id, archive.id, a.uploadAttempt!, new Response(fixture.bytes).body);
+    const finalPath = join(root, archive.relativePath);
+    const manifestPath = join(root, archive.relativePath, "..", "manifest.json");
+    return { root, runtime, issue, fixture, service, archive, a: a.uploadAttempt!, finalPath, manifestPath };
+  }
+
+  for (const readyBeforeOldCleanup of [false, true]) {
+    it(`keeps Postgres attempt B files after manual retry (B ready=${readyBeforeOldCleanup})`, async () => {
+      const f = await pgArchiveFenceFixture(`aba_${readyBeforeOldCleanup}`);
+      const originalComplete = store.completeSessionArchiveWithTracePointers.bind(store);
+      const internal = f.service as unknown as { cleanupFailedPromotion: (...args: unknown[]) => Promise<void>;
+        syncDirectory: (path: string) => Promise<void> };
+      const cleanup = internal.cleanupFailedPromotion.bind(f.service);
+      let releaseA!: () => void;
+      const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+      let reachedA!: () => void;
+      const aPaused = new Promise<void>((resolve) => { reachedA = resolve; });
+      let rejectA = true;
+      store.completeSessionArchiveWithTracePointers = (...args) => {
+        if (rejectA) { rejectA = false; throw new Error("A ready failed"); }
+        return originalComplete(...args);
+      };
+      internal.cleanupFailedPromotion = async (...args) => { reachedA(); await aGate; return cleanup(...args); };
+      try {
+        const oldCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+        await aPaused;
+        expect(store.getSessionArchive(f.archive.id)?.status).toBe("failed");
+        expect((await f.service.retry(f.archive.id)).retryBudgetBaseAttempt).toBe(f.a);
+        const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+        expect(b.uploadAttempt).toBe(f.a + 1);
+        await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+          new Response(f.fixture.bytes).body);
+        // Force B's promotion through rename rather than identical-ZIP reuse.
+        writeFileSync(f.finalPath, Buffer.alloc(f.fixture.bytes.length));
+        let releaseB = () => {};
+        let bPaused: Promise<void> | null = null;
+        if (!readyBeforeOldCleanup) {
+          const sync = internal.syncDirectory.bind(f.service);
+          let reachedB!: () => void;
+          bPaused = new Promise<void>((resolve) => { reachedB = resolve; });
+          const bGate = new Promise<void>((resolve) => { releaseB = resolve; });
+          internal.syncDirectory = async (path) => { reachedB(); await bGate; return sync(path); };
+        }
+        const bCompletion = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!);
+        if (bPaused) await bPaused;
+        else await bCompletion;
+        const bPartial = `${f.finalPath}.${b.uploadAttempt}.partial`;
+        writeFileSync(bPartial, "B partial");
+        releaseA();
+        await expect(oldCompletion).rejects.toThrow("A ready failed");
+        expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+        expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+        expect(readFileSync(bPartial, "utf8")).toBe("B partial");
+        releaseB();
+        expect((await bCompletion).status).toBe("ready");
+      } finally {
+        store.completeSessionArchiveWithTracePointers = originalComplete;
+        releaseA();
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    }, 20_000);
+  }
+
+  it("holds a Postgres row lock across cleanup ownership check and unlink", async () => {
+    const f = await pgArchiveFenceFixture("cleanup_lock");
+    const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    const other = new MultiremiStore(otherDb);
+    otherDb.run("SET lock_timeout = '100ms'");
+    const originalComplete = store.completeSessionArchiveWithTracePointers.bind(store);
+    const internal = f.service as unknown as { onCleanupLocked: () => void };
+    let checked = false;
+    let lockError: unknown;
+    internal.onCleanupLocked = () => {
+      checked = true;
+      try { other.retrySessionArchive(f.archive.id); } catch (error) { lockError = error; }
+    };
+    store.completeSessionArchiveWithTracePointers = () => { throw new Error("ready failed"); };
+    try {
+      await expect(f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a))
+        .rejects.toThrow("ready failed");
+      expect(checked).toBe(true);
+      expect(String(lockError)).toMatch(/lock timeout|canceling statement|55P03/i);
+      store.completeSessionArchiveWithTracePointers = originalComplete;
+      await f.service.retry(f.archive.id);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+        new Response(f.fixture.bytes).body);
+      expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+    } finally {
+      store.completeSessionArchiveWithTracePointers = originalComplete;
+      otherDb.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("rejects a stale Postgres attempt before it promotes a shared ZIP", async () => {
+    const f = await pgArchiveFenceFixture("stale_promote");
+    const internal = f.service as unknown as { writeManifest: (...args: unknown[]) => Promise<string> };
+    const write = internal.writeManifest.bind(f.service);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const paused = new Promise<void>((resolve) => { reached = resolve; });
+    let first = true;
+    internal.writeManifest = async (...args) => {
+      const path = await write(...args);
+      if (first) { first = false; reached(); await gate; }
+      return path;
+    };
+    try {
+      const stale = f.service.complete(f.runtime.id, f.issue.id, f.archive.id, f.a);
+      await paused;
+      store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "retry");
+      await f.service.retry(f.archive.id);
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      await f.service.upload(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!,
+        new Response(f.fixture.bytes).body);
+      expect((await f.service.complete(f.runtime.id, f.issue.id, f.archive.id, b.uploadAttempt!)).status).toBe("ready");
+      release();
+      await expect(stale).rejects.toMatchObject({ code: "session_archive_attempt_conflict" });
+      expect(readFileSync(f.finalPath)).toEqual(Buffer.from(f.fixture.bytes));
+      expect(JSON.parse(readFileSync(f.manifestPath, "utf8"))).toMatchObject({ attempt_count: b.uploadAttempt });
+    } finally { release(); rmSync(f.root, { recursive: true, force: true }); }
+  }, 20_000);
+
+  it("resets the Postgres retry budget without reusing an attempt number", async () => {
+    const previousMaxAttempts = process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS;
+    process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = "2";
+    const f = await pgArchiveFenceFixture("retry_budget");
+    try {
+      expect(f.a).toBe(1);
+      expect(store.getSessionArchive(f.archive.id)?.retryBudgetBaseAttempt).toBe(0);
+      store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, f.a, "first failure");
+      const reset = await f.service.retry(f.archive.id);
+      expect(reset).toMatchObject({ attemptCount: 1, retryBudgetBaseAttempt: 1 });
+      const b = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      expect(b).toMatchObject({ uploadAttempt: 2 });
+      expect(store.getSessionArchive(f.archive.id)).toMatchObject({ attemptCount: 2, retryBudgetBaseAttempt: 1 });
+      expect(store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, 2, "second failure"))
+        .toMatchObject({ retryExhaustedAt: null });
+      db.run("UPDATE multiremi_session_archives SET next_retry_at = ? WHERE id = ?",
+        ["2000-01-01T00:00:00.000Z", f.archive.id]);
+      const c = await f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id);
+      expect(c.uploadAttempt).toBe(3);
+      expect(store.markSessionArchiveFailedAttempt(f.archive.id, f.runtime.id, 3, "third failure"))
+        .toMatchObject({ retryExhaustedAt: expect.any(String), retryBudgetBaseAttempt: 1 });
+      await expect(f.service.claimUploadAttempt(f.runtime.id, f.issue.id, f.archive.id))
+        .rejects.toMatchObject({ code: "session_archive_retry_exhausted" });
+    } finally {
+      if (previousMaxAttempts === undefined) delete process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS;
+      else process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_ATTEMPTS = previousMaxAttempts;
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans the promoted ZIP and manifest after a late membership or manifest failure on Postgres", async () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-pg-late-archive-fail-"));
+    try {
+      const agent = store.createAgent({ name: "PG late archive", provider: "codex", workspaceId: "local" });
+      const owner = store.registerRuntime({ id: "rt_pg_late_owner", name: "owner", provider: "codex",
+        daemonId: "dmn_pg_late_owner", workspaceId: "local" });
+      const foreign = store.registerRuntime({ id: "rt_pg_late_foreign", name: "foreign", provider: "claude",
+        daemonId: "dmn_pg_late_foreign", workspaceId: "local" });
+      const issue = store.createIssue({ title: "PG late archive", workspaceId: "local" });
+      store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
+        rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
+      const upload = async (events: number) => {
+        const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
+          traces: { [task.id]: traceFileBody({ events, taskId: task.id }) } });
+        const archive = service.initialize({ workspaceId: "local", subjectKind: "issue", subjectId: issue.id,
+          issueId: issue.id, runtimeId: owner.id, daemonId: owner.daemonId!, sourceRevision: fixture.sourceRevision,
+          sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
+        const claim = await service.claimUploadAttempt(owner.id, issue.id, archive.id);
+        await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
+        return { archive, attempt: claim.uploadAttempt! };
+      };
+      const late = await upload(1);
+      const complete = store.completeSessionArchiveWithTracePointers.bind(store);
+      store.completeSessionArchiveWithTracePointers = (...args) => {
+        db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
+        return complete(...args);
+      };
+      await expect(service.complete(owner.id, issue.id, late.archive.id, late.attempt))
+        .rejects.toMatchObject({ status: 422, code: "session_archive_trace_ownership_mismatch" });
+      store.completeSessionArchiveWithTracePointers = complete;
+      expect(store.getSessionArchive(late.archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(task.id)).toBeNull();
+      expect(existsSync(join(root, late.archive.relativePath))).toBe(false);
+      expect(existsSync(join(root, late.archive.relativePath, "..", "manifest.json"))).toBe(false);
+
+      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      const manifestFail = await upload(2);
+      const internal = service as unknown as { writeManifest: (...args: unknown[]) => Promise<void> };
+      const write = internal.writeManifest.bind(service);
+      internal.writeManifest = async (...args) => { await write(...args); throw new Error("PG manifest sync failed"); };
+      await expect(service.complete(owner.id, issue.id, manifestFail.archive.id, manifestFail.attempt))
+        .rejects.toThrow("PG manifest sync failed");
+      expect(store.getSessionArchive(manifestFail.archive.id)?.status).toBe("failed");
+      expect(store.getTaskTrace(task.id)).toBeNull();
+      expect(existsSync(join(root, manifestFail.archive.relativePath))).toBe(false);
+      expect(existsSync(join(root, manifestFail.archive.relativePath, "..", "manifest.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("fences Wiki cleanup leases and persists per-path progress across connections", () => {
     const otherDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
@@ -978,13 +1458,25 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     runMigrations(db);
 
     expect(db.query(
-      `SELECT status, next_retry_at, retry_exhausted_at
+      `SELECT status, next_retry_at, retry_exhausted_at, retry_budget_base_attempt
        FROM multiremi_session_archives WHERE id = ?`,
     ).get(archiveId)).toEqual({
       status: "failed",
       next_retry_at: expect.any(String),
       retry_exhausted_at: expect.any(String),
+      retry_budget_base_attempt: 0,
     });
+
+    db.run(`UPDATE multiremi_session_archives
+      SET attempt_count = 7, retry_budget_base_attempt = 6,
+          next_retry_at = NULL, retry_exhausted_at = NULL
+      WHERE id = ?`, [archiveId]);
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?",
+      ["20260826_session_archive_retry_budget"]);
+    runMigrations(db);
+    expect(db.query(
+      "SELECT retry_exhausted_at, retry_budget_base_attempt FROM multiremi_session_archives WHERE id = ?",
+    ).get(archiveId)).toEqual({ retry_exhausted_at: null, retry_budget_base_attempt: 6 });
   });
 
   it("normalizes legacy SCM base URL paths and keeps one default per origin on Postgres", () => {
@@ -2244,6 +2736,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
     const input = {
       workspaceId: ws,
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -2254,7 +2748,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const first = store.reportSessionArchiveFailure(
       input,
       `sar_failure_${wsCounter}`,
-      `failures/sar_failure_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_${wsCounter}/sessions.zip`,
     );
     expect(first).toMatchObject({
       created: true,
@@ -2265,7 +2759,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const repeated = store.reportSessionArchiveFailure(
       { ...input, error: "second pack failure" },
       `sar_failure_replacement_${wsCounter}`,
-      `failures/sar_failure_replacement_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_replacement_${wsCounter}/sessions.zip`,
     );
     expect(repeated).toMatchObject({
       created: false,
@@ -2279,6 +2773,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     const actualInput = {
       workspaceId: ws,
+      subjectKind: "issue" as const,
+      subjectId: issue.id,
       issueId: issue.id,
       runtimeId: runtime.id,
       daemonId: runtime.daemonId!,
@@ -2289,7 +2785,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const actual = store.initSessionArchive(
       actualInput,
       `sar_actual_${wsCounter}`,
-      `archives/sar_actual_${wsCounter}/sessions.tar.gz`,
+      `archives/sar_actual_${wsCounter}/sessions.zip`,
     );
     expect(actual.created).toBe(true);
     expect(store.getSessionArchive(first.archive.id)).toBeNull();
@@ -2297,14 +2793,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const newFailure = store.reportSessionArchiveFailure(
       { ...input, error: "third pack failure" },
       `sar_failure_third_${wsCounter}`,
-      `failures/sar_failure_third_${wsCounter}/sessions.tar.gz`,
+      `failures/sar_failure_third_${wsCounter}/sessions.zip`,
     );
     expect(newFailure.created).toBe(true);
     expect(store.listSessionArchives(issue.id)).toHaveLength(2);
     expect(store.initSessionArchive(
       actualInput,
       `sar_actual_duplicate_${wsCounter}`,
-      `archives/sar_actual_duplicate_${wsCounter}/sessions.tar.gz`,
+      `archives/sar_actual_duplicate_${wsCounter}/sessions.zip`,
     )).toMatchObject({ created: false, archive: { id: actual.archive.id } });
     expect(store.getSessionArchive(newFailure.archive.id)).toBeNull();
     expect(store.listSessionArchives(issue.id)).toHaveLength(1);
@@ -2441,6 +2937,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   it("dispatches trigger_issue system events atomically on Postgres", () => {
+    // Earlier tests share this queue; drain their events before testing one atomic dispatch.
+    const drainAt = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+    const pendingEvents = db.query(
+      "SELECT 1 FROM multiremi_system_events WHERE status IN ('pending', 'processing') LIMIT 1",
+    );
+    for (let round = 0; round < 100 && pendingEvents.get(); round++) {
+      store.dispatchPendingSystemEvents(drainAt);
+    }
+    if (pendingEvents.get()) throw new Error("System event queue did not drain within 100 rounds");
+
     const ws = freshWorkspace();
     const agent = store.createAgent({ name: "Wiki PG", provider: "codex", workspaceId: ws });
     const issue = store.createIssue({ title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
@@ -2812,8 +3318,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   /**
    * MUL-409 fix round 2, blocking 4, failure half: when the dispatch itself
    * fails the prerequisite's `done` must not roll back, and the dependent must
-   * stay in a state a human can retry from. The hook records
-   * `dependency_auto_start_skipped` so the hold is visible.
+   * stay in a state a human can retry from. An unavailable owner is a business
+   * skip, recorded under the same locks as the start decision.
    */
   it("keeps the prerequisite done and the dependent retryable when auto-start dispatch fails (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_dep_fail", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
@@ -2826,8 +3332,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       assigneeType: "agent",
       assigneeId: owner.id,
     });
-    // The dependent's owner disappears, so the dispatch the hook attempts will
-    // throw (Agent not found) after the prerequisite's transition committed.
+    // The dependent's owner is unavailable when the hook makes its decision.
     db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
 
     db.resetTransactionDepthStats();
@@ -2841,12 +3346,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
     const skipped = store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped");
     expect(skipped).toHaveLength(1);
-    // Owner validation runs inside the transaction, before the round is built,
-    // so the recorded reason is the validator's own message.
-    expect(String(skipped[0]?.body ?? "")).toContain("Agent is archived");
-    // Fix round 4: there is no "release" step any more — the whole attempt
-    // (claim included) rolls back, so the dependent never left `backlog` and has
-    // nothing to release. The skip is the only durable trace.
+    expect(String(skipped[0]?.body ?? "")).toContain("No runnable agent");
+    // An unavailable owner is decided under the lock before the claim, so the
+    // dependent stays in backlog and the business skip is the durable trace.
     expect(skipped[0]?.data).toMatchObject({ reason: "dispatch_failed" });
     expect(skipped[0]?.data ?? {}).not.toHaveProperty("claimReleased");
     // And the retry really works once the owner is fixed.
@@ -3120,6 +3622,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    * transaction early.
    */
   it("rolls the whole automatic start back when a step fails (PG)", () => {
+    drainSystemEvents();
     const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Atomic owner", provider: "claude", runtimeId: runtime.id });
     const prereq = store.createIssue({ title: "Atomic prerequisite", status: "in_progress" });
@@ -3147,9 +3650,15 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       original(issueId, input, ...rest);
     };
 
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
     db.resetTransactionDepthStats();
-    store.updateIssue(prereq.id, { status: "done" });
-    ctx.appendIssueActivity = original;
+    try {
+      store.updateIssue(prereq.id, { status: "done" });
+    } finally {
+      ctx.appendIssueActivity = original;
+    }
+    expect(warnings.mock.calls).toHaveLength(1);
+    warnings.mockRestore();
 
     // Whole row sets, not counts of a filtered subset.
     const taskRows = db.query(
@@ -3157,10 +3666,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     ).all(dependent.id) as Array<{ status: string }>;
     expect(taskRows).toEqual([]);
     expect(store.getIssue(dependent.id)?.status).toBe("backlog");
-    // The prerequisite's `done` is what committed; the dependent's own attempt is
-    // what rolled back. So the surviving state is "backlog, prerequisites now
-    // satisfied, no round" — the shape a public assign can pick up (asserted
-    // below), not the pre-fix "backlog with a queued round".
+    // The prerequisite's `done` committed while the dependent's attempt rolled
+    // back. The surviving backlog with no round is recovered by the check below.
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(0);
     const auto = db.query(
       "SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_started'",
@@ -3169,19 +3676,170 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const skipped = db.query(
       "SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'dependency_auto_start_skipped'",
     ).all(dependent.id) as Array<{ data: string }>;
-    expect(skipped).toHaveLength(1);
-    expect(JSON.parse(skipped[0]!.data)).toMatchObject({ reason: "dispatch_failed" });
+    expect(skipped).toEqual([]);
     // The prerequisite's own transition is untouched, and the depth stayed 1.
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     expect(db.maxTransactionDepth).toBe(1);
 
-    // And the retry after a fixed owner really starts it, through public assign.
-    db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);
-    const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: owner.id });
-    expect(assigned.task?.id).toBeDefined();
+    const checkRow = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(checkRow.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
     expect(db.query(
       "SELECT status FROM multiremi_tasks WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(dependent.id)).toEqual([{ status: "queued" }]);
+  });
+
+  it("U8 ignores a stale backlog issue after its round was already queued (PG)", () => {
+    const runtime = store.registerRuntime({ name: "Stale PG runtime", provider: "claude" });
+    const owner = store.createAgent({ name: "Stale PG owner", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Stale PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Stale PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    store.updateIssue(prereq.id, { status: "done" });
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    const before = store.listTasksForIssue(dependent.id);
+    expect(before).toHaveLength(1);
+    const issues = (store as unknown as { issues: { autoStartDependent(...args: unknown[]): unknown } }).issues;
+    issues.autoStartDependent(dependent, store.getIssue(prereq.id)!, null, { since: store.getIssue(prereq.id)!.updatedAt });
+    expect(store.listTasksForIssue(dependent.id)).toEqual(before);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started")).toHaveLength(1);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+  });
+
+  it("U9 retries a transaction write failure without a business skip (PG 40001)", () => {
+    drainSystemEvents();
+    const runtime = store.registerRuntime({ name: "Replay write PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Replay write PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Replay write PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Replay write PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    const issues = (store as unknown as { issues: { runIssueUpdatePostCommit(...args: unknown[]): void } }).issues;
+    const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
+    try { store.updateIssue(prereq.id, { status: "done" }); } finally { hook.mockRestore(); }
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    const run = db.run.bind(db);
+    let injected = false;
+    const failure = spyOn(db, "run").mockImplementation((sql, ...args) => {
+      if (!injected && sql.includes("SET status = 'todo'")) {
+        injected = true;
+        return run("DO $$ BEGIN RAISE EXCEPTION 'injected replay PG write failure' USING ERRCODE = '40001'; END $$", []);
+      }
+      return run(sql, ...args);
+    });
+    try { store.dispatchPendingSystemEvents(new Date(check.availableAt)); } finally { failure.mockRestore(); }
+    expect(injected).toBe(true);
+    const first = store.getSystemEvent(check.id)!;
+    expect(first.status).toBe("pending");
+    expect(first.attemptCount).toBe(1);
+    expect(first.lastError).toContain("injected replay PG write failure");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    store.dispatchPendingSystemEvents(new Date(Date.parse(check.availableAt) + 10_000));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).map((task) => task.status)).toEqual(["queued"]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)).toMatchObject({ status: "processed", attemptCount: 2 });
+  });
+
+  it("U10 contains a PATCH auto-start write failure and replays it (PG)", async () => {
+    drainSystemEvents();
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ name: "Patch write PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Patch write PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Patch write PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Patch write PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    const run = db.run.bind(db);
+    let injected = false;
+    const failure = spyOn(db, "run").mockImplementation((sql, ...args) => {
+      if (!injected && sql.includes("SET status = 'todo'")) {
+        injected = true;
+        return run("DO $$ BEGIN RAISE EXCEPTION 'injected normal PG write failure' USING ERRCODE = '40001'; END $$", []);
+      }
+      return run(sql, ...args);
+    });
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(warnings.mock.calls).toHaveLength(1);
+    } finally {
+      failure.mockRestore();
+      warnings.mockRestore();
+    }
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    expect(store.listTasksForIssue(dependent.id).map((task) => task.status)).toEqual(["queued"]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_started"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ replayed: true }) })]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+  });
+
+  it("U10b rolls back a failed business skip and records one on replay (PG)", async () => {
+    drainSystemEvents();
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ name: "Patch skip PG", provider: "claude" });
+    const owner = store.createAgent({ name: "Patch skip PG", provider: "claude", runtimeId: runtime.id });
+    const prereq = store.createIssue({ title: "Patch skip PG prerequisite", status: "in_progress" });
+    const dependent = store.createIssue({ title: "Patch skip PG dependent", status: "backlog", blockedBy: [prereq.id],
+      assigneeType: "agent", assigneeId: owner.id });
+    db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
+    const ctx = (store as unknown as { ctx: StoreContext }).ctx;
+    const original = ctx.appendIssueActivity.bind(ctx);
+    let injected = false;
+    ctx.appendIssueActivity = (issueId, input, deferredEvents) => {
+      if (!injected && input.type === "dependency_auto_start_skipped") {
+        injected = true;
+        throw new Error("injected PG skip activity failure");
+      }
+      original(issueId, input, deferredEvents);
+    };
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "done" }),
+      });
+      expect(response.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(warnings.mock.calls).toHaveLength(1);
+    } finally {
+      ctx.appendIssueActivity = original;
+      warnings.mockRestore();
+    }
+    expect(store.getIssue(prereq.id)?.status).toBe("done");
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped")).toEqual([]);
+    const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
+      .get(prereq.id) as { id: string };
+    const check = store.getSystemEvent(row.id)!;
+    store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(store.listIssueActivity(dependent.id).filter((entry) => entry.type === "dependency_auto_start_skipped"))
+      .toHaveLength(1);
+    expect(store.listTasksForIssue(dependent.id)).toEqual([]);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
   });
 
   it("leaves no todo-without-round and no backlog-with-round when the process dies at the claim (PG)", async () => {

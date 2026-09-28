@@ -220,13 +220,16 @@ squad rule about ordering was prose. The observable failures were:
      `todo -> backlog` "release", producing `backlog` + a queued round — a
      waiting issue with work running.
 
-   Both are gone. On any failure inside the transaction the whole attempt rolls
-   back — `backlog`, no task rows, no half-written activity — and a single
-   `dependency_auto_start_skipped` (`reason: dispatch_failed`, in its own
-   transaction, so it survives) tells a human what to do: fix the owner and
-   assign the issue again; a forced start is not needed. The prerequisite's own
-   `done` is not part of the attempt and stays committed. A `backlog` issue that
-   already owns an active round is not claimed: its status stays `backlog`, no
+   Both are gone. The dispatch decision is made under the locks before any write,
+   as in 3a: an owner that cannot run writes exactly one
+   `dependency_auto_start_skipped` (`reason: dispatch_failed`) in the same
+   transaction, with no status change; a skip already recorded since the
+   prerequisite's `done` suppresses a second one, so a concurrently completing
+   prerequisite or the recovery replay cannot double-record. Any other failure
+   is unexpected: the transaction rolls back with nothing written, the
+   post-commit path only logs it, and the `dependency_auto_start_check` replay
+   retries it. The prerequisite's own `done` stays committed. A `backlog` issue
+   that already owns an active round is not claimed: its status stays `backlog`, no
    task or auto-start activity is added, and the existing round moves it to
    `in_progress` when execution starts.
 
@@ -248,17 +251,27 @@ squad rule about ordering was prose. The observable failures were:
      when no round is waiting, because the plan says the owner's *next* round;
    - no parent at all — the dependent's own member owner, or its subscribers,
      get an inbox item.
-   **Known crash window (not recovered automatically in this round).** The
-   prerequisite's `done` commits before the dependent's auto-start transaction
-   opens. A process that dies exactly in between leaves the dependent at
-   `backlog` with every prerequisite satisfied and no round. Nothing scans for
-   that state, so a human sees a waiting issue whose prerequisites are all done
-   and no automatic retry for it; the ways out are the public
-   `POST /api/multiremi/issues/:id/assign` (or the assignee picker) — which starts
-   it without `force`, because the gate is satisfied — or a member
-   `PATCH {status: todo}`. Systematic recovery is tracked by MUL-452: replay
-   post-commit hooks from `multiremi_system_events`, keyed idempotently by the
-   event id. This change adds no scanner or replay mechanism.
+   **Crash recovery (MUL-452).** The prerequisite's `done` transaction also
+   writes an independent `issue/dependency_auto_start_check` system event,
+   available after five seconds. The background system-event consumer retries
+   only E3 automatic starts: the prerequisite must still be `done`, and the
+   dependent must still be `backlog`, have every prerequisite satisfied, have
+   an agent/squad owner, and have no `dependency_auto_start_skipped` activity
+   since the event was created; that check runs inside the auto-start transaction
+   under the workspace and issue locks, keyed by the event's `created_at`.
+   Existing workspace/issue locks and the conditional `backlog -> todo` update
+   arbitrate competing attempts; the event
+   id is audit data (`replayed: true`, `replay_event_id`), not an idempotency key.
+   The replay does not catch: business outcomes are return values written in the
+   transaction, so every throw is treated as infrastructure and goes back to the
+   outbox (eight attempts with exponential backoff, then `failed` with
+   `last_error`; no activity is written for an exhausted replay, and the manual
+   assign/status paths remain). Recovery has its own lease and retry budget and
+   does not trigger autopilots or replay notifications. E2/E4 and E3
+   readiness/failure notifications belong
+   to MUL-404's atomic state-and-inbox acceptance. Background jobs must be
+   enabled for automatic recovery; the public assign/status paths remain
+   available for manual recovery. No schema migration is required.
 
    Structurally exempt tasks (retry, continuation, redispatch, delegation return
    and E2 parent wake-up) can still be created while the issue waits. Each such

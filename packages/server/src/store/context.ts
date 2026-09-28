@@ -18,6 +18,8 @@ import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js"
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -200,6 +202,25 @@ export type CreateIssueCommentOptions =
   | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
   | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
 
+/**
+ * One human-request transition, as the store recorded it.
+ *
+ * Deliberately *not* expressed as a task event. `notifyTaskEvent("task:running")`
+ * fires once per task resume, and a task resumes only when its **last** pending
+ * request settles — so a task with two open requests would report one transition
+ * and lose the other. E5 keys its cards by request id (MUL-403 §2 item 4), so the
+ * store publishes the request that changed instead of the task that happened to
+ * move with it.
+ */
+export interface HumanRequestTransition {
+  type: "created" | "responded" | "expired" | "cancelled";
+  request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest;
+  /** Workspace of the owning task, so a consumer does not have to look it up. */
+  workspaceId: string;
+}
+
+export type HumanRequestListener = (transition: HumanRequestTransition) => void;
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (
@@ -316,6 +337,7 @@ export interface IssuesSurface {
   ): string;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void;
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -536,6 +558,11 @@ export interface TasksSurface {
     terminalStatus?: "completed" | "failed" | "cancelled" | null;
     terminalBody?: string | null;
   }): { task: MultiremiTask | null; created: boolean; covered: boolean };
+  ensureDelegationWakeupWithinTransaction(
+    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): { task: MultiremiTask | null; created: boolean; covered: boolean };
   getTask(id: string): MultiremiTask | null;
   /**
    * MUL-474: identity/status columns only — no `prompt`, `result` or `usage`.
@@ -545,6 +572,8 @@ export interface TasksSurface {
   getTaskIdentity(id: string): import("./repos/tasks-repo.js").MultiremiTaskIdentity | null;
   /** MUL-474: the `status` route's fields, without the prompt column. */
   getTaskStatusSnapshot(id: string): import("./repos/tasks-repo.js").TaskStatusSnapshot | null;
+  listTaskMessages(taskId: string, sinceSeq?: number | null): import("@multiremi/contracts/types.js").MultiremiTaskMessage[];
+  listTaskHumanRequests(taskId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest[];
   getTaskWithAgent(id: string): import("@multiremi/contracts/types.js").MultiremiTaskWithAgent | null;
   listTasks(status?: MultiremiTaskStatus): MultiremiTask[];
   listTasksForRuntimeStatuses(runtimeId: string, statuses: readonly MultiremiTaskStatus[]): MultiremiTask[];
@@ -627,6 +656,83 @@ export interface ChatSurface {
   };
   completePendingAgentIssueUpdatesForTaskWithinTransaction(chatSessionId: string, taskId: string): number;
   discardPendingAgentIssueUpdatesWithinTransaction(chatSessionId: string): number;
+}
+
+export interface ConversationLogSurface {
+  /** Allocates the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number;
+  /** Insert one row; `input.seq` places it explicitly (mirror, backfill). */
+  appendWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** In-place update with `revision++` and the write hook; caller owns the transaction. */
+  updateWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void;
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input?: { bodyMd: string; title?: string | null; metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata; createdAt?: string },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync the `head` row to the Issue title and description, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  /** The `turn` card of a task, updated in place through its lifecycle. */
+  findTurnEntry(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: {
+      status?: string | null;
+      finalReplyMd?: string | null;
+      finalEntryId?: string | null;
+      summary?: string | null;
+      toolCallCount?: number | null;
+      eventCount?: number | null;
+      typeHistogram?: unknown[] | null;
+      usage?: unknown[] | null;
+      model?: unknown | null;
+      elapsedMs?: number | null;
+      failureReason?: string | null;
+    },
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  appendConversationLog(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  appendConversationLogWithinTransaction(input: import("@multiremi/store/repos/conversation-log-repo.js").AppendConversationLogInput): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  updateConversationLogWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: import("@multiremi/store/repos/conversation-log-repo.js").UpdateConversationLogInput,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntry(sessionId: string, seq: number, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogEntryById(id: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry | null;
+  getConversationLogHead(sessionId: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): { sessionId: string; headSeq: number; logVersion: number; updatedAt: string } | null;
+  conversationLogWindow(sessionId: string, input?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogWindowInput): import("@multiremi/contracts/conversation-log").ConversationLogWindow;
+  locateConversationLogEntry(sessionId: string, id: string, query?: import("@multiremi/store/repos/conversation-log-repo.js").ConversationLogQuery | null): import("@multiremi/contracts/conversation-log").ConversationLogLocation | null;
+  listConversationLogShown(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntries(sessionId: string, input?: { sinceSeq?: number | null; toSeq?: number | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  listConversationLogEntriesByTask(taskId: string): import("@multiremi/contracts/conversation-log").ConversationLogEntry[];
+  setConversationLogListener(listener: import("@multiremi/contracts/conversation-log").ConversationLogListener | null): void;
+  ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogIssueHead(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
+  syncConversationLogChatHead(
+    sessionId: string,
+    title: string | null,
+    createdAt?: string,
+  ): import("@multiremi/contracts/conversation-log").ConversationLogEntry;
 }
 
 export interface IssueSessionsSurface {
@@ -750,6 +856,7 @@ export interface FeishuBotSurface {
   }): MultiremiTask[];
   retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;
+  materializeFeishuTaskDeliveries(taskId: string): void;
   claimFeishuBotOutbound(
     workspaceId: string,
     runtimeId: string,
@@ -757,6 +864,7 @@ export interface FeishuBotSurface {
     supportsTaskStream?: boolean,
     supportsNativeCot?: boolean,
     supportsAttachments?: boolean,
+    supportsKinds?: boolean,
   ): MultiremiFeishuBotOutboundDelivery | null;
   getFeishuBotOutboundAttachment(
     workspaceId: string,
@@ -788,13 +896,25 @@ export interface KnowledgeSurface {
   } | null;
 }
 
-export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
+/** Trace pointer reads and writes, exposed by the store facade. */
+export interface TaskTracesSurface {
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null;
+  markTaskTraceDaemon(taskId: string, runtimeId: string): void;
+  markTaskTraceNone(taskId: string): void;
+  markTaskTraceLost(taskId: string): void;
+  /** Must be called inside the caller's transaction. */
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
+  clearTaskTraceArchivePointers(archiveId: string): number;
+}
+
+export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
   readonly taskEventListeners = new Set<TaskEventListener>();
   readonly taskMessagesListeners = new Set<TaskMessagesListener>();
   readonly workspaceEventListeners = new Set<WorkspaceEventListener>();
+  readonly humanRequestListeners = new Set<HumanRequestListener>();
   readonly analyticsEvents: MultiremiAnalyticsEvent[] = [];
   readonly metricCounters = new Map<string, MultiremiMetricCounter>();
 
@@ -923,7 +1043,19 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  /**
+   * Task trace pointers. Resolved through `resolveHost` like the other carved
+   * repos, since the archive repo needs them inside its own transaction.
+   */
+  taskTraces(): TaskTracesSurface {
+    return this.resolveHost();
+  }
+
   issueSessions(): IssueSessionsSurface {
+    return this.resolveHost();
+  }
+
+  conversationLog(): ConversationLogSurface {
     return this.resolveHost();
   }
 
@@ -1044,7 +1176,28 @@ export class StoreContext {
     }
   }
 
+  /**
+   * Publish one human-request transition.
+   *
+   * Called by the store facade right after each of the three write paths returns
+   * the row it changed, so the transition is reported exactly once and while the
+   * row is durable.
+   */
+  notifyHumanRequest(transition: HumanRequestTransition): void {
+    for (const listener of [...this.humanRequestListeners]) {
+      try {
+        listener(transition);
+      } catch {
+        // Realtime listeners are best-effort and must not roll back the write.
+      }
+    }
+  }
+
   notifyTaskEvent(type: string, task: MultiremiTask): void {
+    if (["task:running", "task:awaiting_human", "task:completed", "task:failed", "task:cancelled"].includes(type)) {
+      try { this.feishuBot().materializeFeishuTaskDeliveries(task.id); }
+      catch (error) { log.warn(`Feishu task delivery materialization failed for ${task.id}; background claim will retry`); }
+    }
     for (const listener of [...this.taskEventListeners]) {
       try {
         listener({ type, task });
@@ -1184,7 +1337,7 @@ export class StoreContext {
       ],
     );
     try {
-      this.host.queueAgentIssueUpdate({
+      const queueUpdate = () => this.host.queueAgentIssueUpdate({
         activityId: id,
         issueId,
         actorType: input.actorType,
@@ -1194,6 +1347,8 @@ export class StoreContext {
         data: input.data ?? null,
         createdAt: now,
       });
+      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
+      else queueUpdate();
     } catch (err) {
       log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1204,7 +1359,10 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const workspaceId = this.issueWorkspaceId(issueId);
+      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
+      const workspaceId = this.db.inTransaction
+        ? this.db.transaction(lookupWorkspace)()
+        : lookupWorkspace();
       if (!workspaceId) return;
       const event: WorkspaceEvent = {
         type: "activity:created",
@@ -1296,10 +1454,20 @@ export class StoreContext {
     return assignment?.daemon ?? null;
   }
 
-  // Cross-domain: the un-hydrated comment row. Read by the issues band and by the tasks band
-  // (createTask / getTaskTriggerMetadata / getThreadRootCommentId), so it lives here.
+  // Legacy comment rows remain the mutation source until the legacy tables retire.
   getRawIssueComment(id: string): MultiremiIssueComment | null {
     const row = this.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueComment(row) : null;
+  }
+
+  // Wake-up and task trigger readers use the current, non-deleted log comment.
+  getLogIssueComment(id: string): MultiremiIssueComment | null {
+    if (!id.startsWith("cmt_")) return null;
+    const row = this.db.query(`SELECT log.*, s.issue_id, log.session_id AS issue_session_id,
+      log.body_md AS body, CASE WHEN log.kind = 'system' THEN 'system' ELSE 'comment' END AS type
+      FROM multiremi_conversation_log log
+      JOIN multiremi_issue_sessions s ON s.id = log.session_id
+      WHERE log.id = ? AND log.kind IN ('message', 'system') AND log.deleted_at IS NULL`).get(id) as Row | null;
     return row ? toIssueComment(row) : null;
   }
 

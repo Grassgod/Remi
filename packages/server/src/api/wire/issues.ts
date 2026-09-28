@@ -144,7 +144,7 @@ export function sessionEventCompatibilityResponse(event: MultiremiSessionEvent):
     author_id: event.authorId,
     kind: event.kind,
     body: event.body,
-    task_id: event.taskId,
+    task_id: event.sourceCommentId ? null : event.taskId,
     source_comment_id: event.sourceCommentId,
     metadata: event.metadata,
     created_at: event.createdAt,

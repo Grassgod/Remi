@@ -60,9 +60,10 @@ async function fixture(): Promise<Fixture> {
   };
 }
 
-/** The `task_assigned` events one task wrote into its Issue Session. */
+/** The `turn` events one task wrote into its Issue Session. */
+// Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: MultiremiStore, sessionId: string, taskId: string) {
-  return store.listSessionEvents(sessionId).filter((event) => event.kind === "task_assigned" && event.taskId === taskId);
+  return store.listSessionEvents(sessionId).filter((event) => event.kind === "turn" && event.taskId === taskId);
 }
 
 describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
@@ -72,7 +73,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
     const issue = store.createIssue({ title: "MUL-448 B1 issue" });
     const session = store.createIssueSession(issue.id, { title: "B1 session" });
 
-    // Session task: the `task_assigned` author is the member, not the header agent.
+    // Session task: the `turn` author is the member, not the header agent.
     const taskResponse = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
       method: "POST", headers: forged,
       body: JSON.stringify({ agent_id: agentId, prompt: "Member session task" }),

@@ -110,6 +110,7 @@ function createRecordingWs(): RecordingWs {
       };
     },
     onReconnect: () => () => {},
+    onResync: () => () => {},
   } as unknown as WSClient;
 
   return {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
@@ -16,6 +17,7 @@ import type {
   AgentTask,
   SharedIssueActor,
   SharedIssueBundle,
+  SharedTaskTracePage,
   TimelineEntry,
 } from "@multiremi/core/types";
 import { api } from "@multiremi/core/api";
@@ -55,10 +57,10 @@ export function SharedIssuePage({ token }: { token: string }) {
     );
   }
 
-  return <SharedIssueDocument bundle={query.data} />;
+  return <SharedIssueDocument bundle={query.data} token={token} />;
 }
 
-function SharedIssueDocument({ bundle }: { bundle: SharedIssueBundle }) {
+function SharedIssueDocument({ bundle, token }: { bundle: SharedIssueBundle; token: string }) {
   const { t } = useT("issues");
   const { issue } = bundle;
   const actorName = (type: string | null, id: string | null) => {
@@ -177,13 +179,13 @@ function SharedIssueDocument({ bundle }: { bundle: SharedIssueBundle }) {
                         </div>
                       ))}
                       {session.tasks.map((task) => (
-                        <SharedTask key={task.id} task={task} actors={bundle.actors} />
+                        <SharedTask key={task.id} task={task} actors={bundle.actors} token={token} />
                       ))}
                     </div>
                   </section>
                 ))}
                 {bundle.tasks.map((task) => (
-                  <SharedTask key={task.id} task={task} actors={bundle.actors} />
+                  <SharedTask key={task.id} task={task} actors={bundle.actors} token={token} />
                 ))}
               </div>
             </DocumentSection>
@@ -310,27 +312,63 @@ function SharedTimelineEntry({
   );
 }
 
-function SharedTask({
+export function SharedTask({
   task,
   actors,
+  token,
 }: {
-  task: AgentTask & { messages?: Array<Record<string, unknown>> };
+  task: AgentTask;
   actors: SharedIssueActor[];
+  token: string;
 }) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const [requestVersion, setRequestVersion] = useState(0);
+  const trace = useQuery({
+    queryKey: ["shared-task-trace", token, task.id, requestVersion],
+    enabled: open,
+    retry: false,
+    queryFn: async () => {
+      const events: SharedTaskTracePage["events"] = [];
+      let afterSeq = 0;
+      for (;;) {
+        const page = await api.getSharedTaskTrace(token, task.id, afterSeq);
+        if (page.state !== "ok") return { events, state: page.state, runtimeName: page.runtime_name };
+        events.push(...page.events);
+        if (page.eof) return { events, state: "ok" as const, runtimeName: page.runtime_name };
+        if (page.next_after_seq <= afterSeq) throw new Error("trace cursor did not advance");
+        afterSeq = page.next_after_seq;
+      }
+    },
+  });
   const agent = findActor(actors, "agent", task.agent_id);
+  const state = trace.data?.state;
+  const stateText = state === "unreachable"
+    ? t(($) => $.share.trace_unreachable, { name: trace.data?.runtimeName ?? "?" })
+    : state === "lost" ? t(($) => $.share.trace_lost)
+    : state === "backfilling" ? t(($) => $.share.trace_backfilling)
+    : null;
   return (
-    <details className="border-y py-2 text-sm">
+    <details className="border-y py-2 text-sm" onToggle={(event) => {
+      const expanded = event.currentTarget.open;
+      setOpen(expanded);
+      if (expanded) setRequestVersion((version) => version + 1);
+    }}>
       <summary className="flex cursor-pointer list-none items-center gap-2">
         <Bot className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{agent?.name ?? task.agent_id}</span>
         <span className="text-xs text-muted-foreground">{task.status}</span>
       </summary>
       <div className="mt-3 space-y-3 pl-6">
-        {(task.messages ?? []).map((message, index) => (
-          <div key={String(message.id ?? message.seq ?? index)} className="overflow-hidden">
-            <div className="mb-1 text-[11px] uppercase text-muted-foreground">{String(message.type ?? "event")}</div>
+        {open && trace.isPending && <p>{t(($) => $.share.trace_loading)}</p>}
+        {open && trace.isError && <p>{t(($) => $.share.trace_failed)}</p>}
+        {open && stateText && <p>{stateText}</p>}
+        {open && trace.data?.events.map((event, index) => (
+          <div key={String(event.seq ?? index)} className="overflow-hidden">
+            <div className="mb-1 text-[11px] uppercase text-muted-foreground">{event.type}</div>
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-xs">
-              {messageText(message)}
+              {messageText(traceEventToMessage(event))}
+              {event.truncated && `\n${t(($) => $.share.trace_truncated, { bytes: event.original_bytes })}`}
             </pre>
           </div>
         ))}
@@ -339,12 +377,16 @@ function SharedTask({
   );
 }
 
+export function traceEventToMessage(event: SharedTaskTracePage["events"][number]): Record<string, unknown> {
+  return { ...event };
+}
+
 function findActor(actors: SharedIssueActor[], type: string, id: string | null): SharedIssueActor | null {
   if (!id) return null;
   return actors.find((actor) => actor.type === type && actor.id === id) ?? null;
 }
 
-function messageText(message: Record<string, unknown>): string {
+export function messageText(message: Record<string, unknown>): string {
   for (const key of ["content", "output", "text", "body", "input"]) {
     const value = message[key];
     if (typeof value === "string" && value) return value;

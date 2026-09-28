@@ -167,8 +167,13 @@ describe("CLI capabilities manifest", () => {
   });
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
+    // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
+    // machine-to-server protocol, so they raise the exempt count with the total.
+    // MUL-483 combines main with C5's daemon decision-card read, B1's two log
+    // reads, B5's two trace reads, and B4's fourteen daemon archive routes:
+    // 775 + 1 + 2 + 2 + 14 = 794.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 679,
+      mapped: 683,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -176,9 +181,9 @@ describe("CLI capabilities manifest", () => {
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
-      exempt: 96,
+      exempt: 111,
       missing: 0,
-      total: 775,
+      total: 794,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
@@ -277,7 +282,7 @@ describe("CLI capabilities manifest", () => {
       deprecated_since: "0.3.0",
     });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
-    expect(Object.keys(manifest.aliases)).toHaveLength(47);
+    expect(Object.keys(manifest.aliases)).toHaveLength(48);
     for (const [legacy, alias] of Object.entries(manifest.aliases)) {
       expect(migrationDoc, legacy).toContain(`| \`${legacy}\` | \`${alias.replacement}\` |`);
     }

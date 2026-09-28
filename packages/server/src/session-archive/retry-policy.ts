@@ -53,8 +53,10 @@ export function nextSessionArchiveRetryAt(
   attemptCount: number,
   policy: SessionArchiveRetryPolicy,
   now: Date | number,
+  retryBudgetBaseAttempt = 0,
 ): string {
-  const attempt = Number.isSafeInteger(attemptCount) && attemptCount > 0 ? attemptCount : 1;
+  const relativeAttempt = attemptCount - retryBudgetBaseAttempt;
+  const attempt = Number.isSafeInteger(relativeAttempt) && relativeAttempt > 0 ? relativeAttempt : 1;
   const exponentialDelay = policy.baseDelayMs * (2 ** Math.max(0, attempt - 1));
   const cappedDelay = Math.min(exponentialDelay, policy.maxDelayMs);
   const jitteredDelay = Math.round(cappedDelay * deterministicJitterFactor(archiveId));
@@ -66,8 +68,10 @@ export function nextSessionArchiveRetryAt(
 export function isSessionArchiveRetryExhausted(
   attemptCount: number,
   policy: SessionArchiveRetryPolicy,
+  retryBudgetBaseAttempt = 0,
 ): boolean {
-  return Number.isSafeInteger(attemptCount) && attemptCount >= policy.maxAttempts;
+  const relativeAttempt = attemptCount - retryBudgetBaseAttempt;
+  return Number.isSafeInteger(relativeAttempt) && relativeAttempt >= policy.maxAttempts;
 }
 
 function deterministicJitterFactor(archiveId: string): number {

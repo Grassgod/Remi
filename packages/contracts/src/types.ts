@@ -954,6 +954,7 @@ export interface MultiremiDaemonHeartbeatAck {
   feishu_bot?: MultiremiFeishuBotDirective;
   /** One leased proactive reply for the Runtime hosting the Feishu concierge. */
   pending_feishu_outbound?: MultiremiFeishuBotOutboundDelivery;
+  pending_feishu_outbounds?: MultiremiFeishuBotOutboundDelivery[];
   ssh_mesh?: MultiremiSshMeshHeartbeatAck;
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
@@ -2091,19 +2092,28 @@ export type MultiremiSessionArchiveStatus =
   | "failed"
   | "superseded";
 
+/** What an archive covers: one Issue, one Chat Session, or one one-shot Task. */
+export type MultiremiSessionArchiveSubjectKind = "issue" | "chat" | "task";
+
 export const MULTIREMI_SESSION_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_MIN_GC_INTERVAL_MS = 60 * 1000;
 export const MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION = "preparation-failed";
 
 /**
- * Control-plane metadata for a provider-native Issue session archive.
- * Archive bytes live in SessionArchiveStore, never in SQL.
+ * Control-plane metadata for one Session Archive.
+ *
+ * `subjectKind` is `issue`, `chat` or `task`; `issueId` is only set for Issue
+ * subjects. Archive bytes live in SessionArchiveStore, never in SQL.
  */
 export interface MultiremiSessionArchive {
   id: string;
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  /** Container format; v1 rows stay readable, new uploads are always v2. */
+  format: string;
+  issueId: string | null;
   runtimeId: string;
   daemonId: string;
   sourceRevision: string;
@@ -2115,6 +2125,8 @@ export interface MultiremiSessionArchive {
   relativePath: string;
   metadata: Record<string, unknown>;
   attemptCount: number;
+  /** Attempt number at the last manual retry; budget and display use the difference. */
+  retryBudgetBaseAttempt: number;
   lastError: string | null;
   nextRetryAt: string | null;
   retryExhaustedAt: string | null;
@@ -2125,9 +2137,14 @@ export interface MultiremiSessionArchive {
 
 export interface InitSessionArchiveInput {
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  /** Only Issue subjects carry an Issue id. */
+  issueId?: string | null;
   runtimeId: string;
   daemonId: string;
+  /** Container format; v2 uploads carry the v2 format string. */
+  format?: string;
   sourceRevision: string;
   sha256: string;
   sizeBytes: number;
@@ -2137,7 +2154,9 @@ export interface InitSessionArchiveInput {
 
 export interface ReportSessionArchiveFailureInput {
   workspaceId: string;
-  issueId: string;
+  subjectKind: MultiremiSessionArchiveSubjectKind;
+  subjectId: string;
+  issueId?: string | null;
   runtimeId: string;
   daemonId: string;
   stage: "prepare";
@@ -4053,7 +4072,7 @@ export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
   resource: "issue" | "feishu_source";
-  event: "status_changed" | "messages_ingested";
+  event: "status_changed" | "messages_ingested" | "dependency_auto_start_check";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;
@@ -4498,6 +4517,10 @@ export interface FeishuBotOutboundMention {
  * changing the kinds or the checkpoint fields.
  */
 export type FeishuBotOutboundDeliveryKind =
+  | "cot"
+  | "interaction_card"
+  | "result_card"
+  | "receipt"
   | "decision_card"
   | "decision_card_patch"
   | "decision_reminder";
@@ -4590,13 +4613,16 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /** The requester, including in private chats where the final card needs no @. */
   interactionOpenId?: string;
   /**
-   * What the host should do with this delivery (MUL-407). Absent means the
+   * What the host should do with this delivery. Absent means the
    * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
    * `decision_card` carries a server-built card in `body` and posts it as a
    * proactive thread reply; `decision_card_patch` edits the message named by
-   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   * `targetMessageId`; `decision_reminder` is a plain text nudge. C5 adds
+   * independent CoT, interaction, result and receipt handlers.
    */
   kind?: FeishuBotOutboundDeliveryKind;
+  /** A receipt owns exactly one original inbound message and state transition. */
+  receiptState?: "received" | "completed" | "failed";
   /** Set on every decision-card lane so the host can poll the request. */
   humanRequestId?: string;
   human_request_id?: string;
@@ -4607,7 +4633,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
    */
   humanRequestTaskId?: string;
   human_request_task_id?: string;
-  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  /** A decision patch target or the original inbound message a receipt updates. */
   targetMessageId?: string;
   target_message_id?: string;
   /**
@@ -4969,6 +4995,7 @@ export interface FeishuBotTestResult {
 }
 
 export type FeishuBotAuditAction =
+  | "receipt_failed"
   | "configured"
   | "updated"
   | "deleted"
@@ -5252,6 +5279,7 @@ export interface UpdateChatSessionInput {
 export interface SendChatMessageInput {
   body?: string | null;
   content?: string | null;
+  client_id?: string;
   attachmentIds?: string[];
   attachment_ids?: string[];
   /** Server-internal creator lineage. */
