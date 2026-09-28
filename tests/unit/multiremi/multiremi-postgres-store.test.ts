@@ -2441,6 +2441,16 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   it("dispatches trigger_issue system events atomically on Postgres", () => {
+    // Earlier tests share this queue; drain their events before testing one atomic dispatch.
+    const drainAt = new Date(Date.now() + 24 * 60 * 60 * 1_000);
+    const pendingEvents = db.query(
+      "SELECT 1 FROM multiremi_system_events WHERE status IN ('pending', 'processing') LIMIT 1",
+    );
+    for (let round = 0; round < 100 && pendingEvents.get(); round++) {
+      store.dispatchPendingSystemEvents(drainAt);
+    }
+    if (pendingEvents.get()) throw new Error("System event queue did not drain within 100 rounds");
+
     const ws = freshWorkspace();
     const agent = store.createAgent({ name: "Wiki PG", provider: "codex", workspaceId: ws });
     const issue = store.createIssue({ title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
