@@ -357,6 +357,106 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(store.listSessionEvents(session.id).filter(event => event.kind === "task_steer")).toHaveLength(1);
   });
 
+  function organizerFixture() {
+    const { workspaceId, agent: workerAgent } = freshAgent();
+    const supervisorAgent = store.createAgent({
+      name: "PG organizer", provider: "codex", workspaceId, role: "supervisor",
+    });
+    const patrol = store.createIssue({ title: "PG organizer patrol", workspaceId });
+    const targetIssue = store.createIssue({ title: "PG organizer target", workspaceId, status: "in_progress" });
+    const supervisorTask = store.createTask({ agentId: supervisorAgent.id, issueId: patrol.id, prompt: "Patrol" });
+    const session = store.getOrCreateDefaultIssueSession(targetIssue.id);
+    const targetTask = store.createSessionTask(session.id, { agentId: workerAgent.id, prompt: "Organizer target" });
+    store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
+    return { workspaceId, supervisorAgent, supervisorTask, patrol, session, targetTask };
+  }
+
+  for (const action of ["steer", "force_answer"] as const) {
+    it(`commits an Organizer ${action} and its audit in one transaction, publishing after COMMIT`, async () => {
+      const { workspaceId, supervisorAgent, supervisorTask, patrol, session, targetTask } = organizerFixture();
+      const locks: Array<{ lock: string; inTransaction: boolean }> = [];
+      const events: Array<{ type: string; inTransaction: boolean }> = [];
+      const unsubscribe = store.onWorkspaceEvent(event => {
+        if (event.workspaceId === workspaceId) events.push({ type: event.type, inTransaction: db.inTransaction });
+      });
+      const originalRun = db.run;
+      db.run = function run(sql, ...params) {
+        if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") {
+          locks.push({ lock: "workspace", inTransaction: db.inTransaction });
+        }
+        if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") {
+          locks.push({ lock: "session", inTransaction: db.inTransaction });
+        }
+        return originalRun.call(this, sql, ...params);
+      };
+      maxDepth = 0;
+      let result: ReturnType<MultiremiStore["performOrganizerAction"]>;
+      try {
+        result = store.performOrganizerAction({
+          supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisorAgent.id,
+          targetTaskId: targetTask.id, action, reason: "PG organizer probe", content: "Organizer input",
+        });
+      } finally {
+        db.run = originalRun;
+        unsubscribe();
+      }
+      expect(maxDepth).toBe(1);
+      expect(db.inTransaction).toBe(false);
+      expect(locks.slice(0, 2).map(entry => entry.lock)).toEqual(["workspace", "session"]);
+      expect(locks.every(entry => entry.inTransaction)).toBe(true);
+      expect(result.message).toMatchObject({
+        taskId: targetTask.id, kind: action, content: "Organizer input",
+        authorType: "agent", authorId: supervisorAgent.id,
+      });
+      expect(await reader<{ kind: string; content: string; author_type: string; author_id: string }[]>`SELECT kind, content, author_type, author_id FROM multiremi_task_steer_messages WHERE task_id = ${targetTask.id}`)
+        .toEqual([{ kind: action, content: "Organizer input", author_type: "agent", author_id: supervisorAgent.id }]);
+      expect(await reader<{ action: string; target_task_id: string; report_issue_id: string }[]>`SELECT action, target_task_id, report_issue_id FROM multiremi_organizer_actions WHERE id = ${result.audit.id}`)
+        .toEqual([{ action, target_task_id: targetTask.id, report_issue_id: patrol.id }]);
+      expect(await reader`SELECT id FROM multiremi_issue_comments WHERE id = ${result.comment.id}`).toHaveLength(1);
+      expect(await reader`SELECT id FROM multiremi_session_events WHERE session_id = ${session.id} AND kind = 'task_steer'`)
+        .toHaveLength(1);
+      expect(events.filter(event => event.type === "comment:created")).toHaveLength(1);
+      expect(events.every(event => !event.inTransaction)).toBe(true);
+    });
+  }
+
+  it("rolls back an Organizer steer, its audit and comment when the transaction fails later", async () => {
+    const { workspaceId, supervisorAgent, supervisorTask, patrol, session, targetTask } = organizerFixture();
+    const events: string[] = [];
+    const unsubscribe = store.onWorkspaceEvent(event => {
+      if (event.workspaceId === workspaceId) events.push(event.type);
+    });
+    const issues = (store as unknown as {
+      issues: { notifyOrganizerAction: (...args: unknown[]) => void };
+    }).issues;
+    const originalNotify = issues.notifyOrganizerAction;
+    let injected = false;
+    issues.notifyOrganizerAction = function notifyOrganizerAction(...args: unknown[]) {
+      originalNotify.apply(this, args);
+      injected = true;
+      throw new Error("MUL-465 Organizer rollback injection");
+    };
+    maxDepth = 0;
+    try {
+      expect(() => store.performOrganizerAction({
+        supervisorTaskId: supervisorTask.id, supervisorAgentId: supervisorAgent.id,
+        targetTaskId: targetTask.id, action: "steer", reason: "PG organizer rollback", content: "Organizer input",
+      })).toThrow("MUL-465 Organizer rollback injection");
+    } finally {
+      issues.notifyOrganizerAction = originalNotify;
+      unsubscribe();
+    }
+    expect(injected).toBe(true);
+    expect(await reader`SELECT id FROM multiremi_task_steer_messages WHERE task_id = ${targetTask.id}`).toHaveLength(0);
+    expect(await reader`SELECT id FROM multiremi_session_events WHERE session_id = ${session.id} AND kind = 'task_steer'`)
+      .toHaveLength(0);
+    expect(await reader`SELECT id FROM multiremi_organizer_actions WHERE target_task_id = ${targetTask.id}`).toHaveLength(0);
+    expect(await reader`SELECT id FROM multiremi_issue_comments WHERE issue_id = ${patrol.id}`).toHaveLength(0);
+    expect(events).toEqual([]);
+    expect(maxDepth).toBe(1);
+    expect(db.inTransaction).toBe(false);
+  });
+
   for (const status of ["completed", "failed", "cancelled"] as const) {
     it(`rejects ${status} tasks in the caller-owned steer transaction`, () => {
       const { agent } = freshAgent();
