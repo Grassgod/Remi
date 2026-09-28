@@ -116,6 +116,13 @@ import {
 } from "@multiremi/store/repos/task-traces-repo.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import {
+  TraceBackfillProgressRepo,
+  type TraceBackfillProgress,
+  type TraceBackfillProgressInput,
+  type TraceBackfillTaskDigest,
+  type TraceBackfillTaskRecord,
+} from "@multiremi/store/repos/trace-backfill-progress-repo.js";
+import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
@@ -528,6 +535,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
   private taskTraces: TaskTracesRepo;
+  private traceBackfillProgress: TraceBackfillProgressRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
@@ -598,6 +606,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.taskTraces = new TaskTracesRepo(this.ctx, options.taskTraceQuery);
+    this.traceBackfillProgress = new TraceBackfillProgressRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -931,6 +940,43 @@ runMigrations(this.db);
 
   clearTaskTraceArchivePointers(archiveId: string): number {
     return this.taskTraces.clearArchivePointers(archiveId);
+  }
+
+  getTraceBackfillProgress(
+    subjectKind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+  ): TraceBackfillProgress | null {
+    return this.traceBackfillProgress.get(subjectKind, subjectId);
+  }
+
+  listTraceBackfillProgress(): TraceBackfillProgress[] {
+    return this.traceBackfillProgress.list();
+  }
+
+  markTraceBackfillRunning(input: TraceBackfillProgressInput): void {
+    this.traceBackfillProgress.markRunning(input);
+  }
+
+  /** Must be called inside the transaction that makes the archive ready. */
+  markTraceBackfillDone(input: TraceBackfillProgressInput & { archiveId: string | null }): void {
+    this.traceBackfillProgress.markDone(input);
+  }
+
+  listTraceBackfillTasks(
+    subjectKind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+  ): TraceBackfillTaskRecord[] {
+    return this.traceBackfillProgress.listTasks(subjectKind, subjectId);
+  }
+
+  /** Must be called inside the transaction that makes the archive ready. */
+  replaceTraceBackfillTasks(
+    subjectKind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+    archiveId: string,
+    tasks: readonly TraceBackfillTaskDigest[],
+  ): void {
+    this.traceBackfillProgress.replaceTasks(subjectKind, subjectId, archiveId, tasks);
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }

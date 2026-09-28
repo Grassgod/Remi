@@ -3350,6 +3350,10 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       );
     `);
   });
+  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
+  // the task_messages trace backfill. Plain idempotent DDL rather than
+  // `runMigrationOnce`, for the same clock-read reason as the MUL-407 block above.
+  createTraceBackfillProgress(db);
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
@@ -5662,6 +5666,44 @@ function createTaskTracePointers(db: SqlDatabase): void {
       ON multiremi_task_traces(location, updated_at);
     CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_archive
       ON multiremi_task_traces(archive_id);
+  `);
+}
+
+/**
+ * One row per backfilled subject. `running` marks a subject whose archive is
+ * being built, so a restart knows to discard its staging files and redo it;
+ * `done` is written in the transaction that makes the archive `ready`.
+ *
+ * `multiremi_trace_backfill_tasks` holds the per-task digests of the last
+ * completed run, replaced in that same transaction.
+ */
+function createTraceBackfillProgress(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_progress (
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      task_count INTEGER NOT NULL DEFAULT 0,
+      row_count BIGINT NOT NULL DEFAULT 0,
+      digest TEXT,
+      archive_id TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(subject_kind, subject_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_tasks (
+      task_id TEXT PRIMARY KEY,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      archive_id TEXT NOT NULL,
+      row_count BIGINT NOT NULL,
+      head_seq BIGINT NOT NULL,
+      digest TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_trace_backfill_tasks_subject
+      ON multiremi_trace_backfill_tasks(subject_kind, subject_id);
   `);
 }
 
