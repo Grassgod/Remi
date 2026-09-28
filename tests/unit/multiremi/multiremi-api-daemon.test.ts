@@ -1,3 +1,4 @@
+import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
 // HTTP surface the daemon itself calls: install commands and token minting,
 // claim/start/complete, task reports, orphan recovery, GC checks, task history.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -446,10 +447,7 @@ describe("Multiremi API — daemon endpoints", () => {
       runtimeId,
       prompt: "claim with provisioned daemon",
     });
-    const claim = await app.request(`/api/daemon/runtimes/${runtimeId}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${credential.token}` },
-    });
+    const claim = await taskOfferResponse(store, runtimeId, { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(claim.status).toBe(200);
     expect((await claim.json()).task.id).toBe(task.id);
   });
@@ -1090,16 +1088,13 @@ describe("Multiremi API — daemon endpoints", () => {
     const runtime = store.registerRuntime({ name: "local", provider: "claude" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     expect((await claim.json()).task.id).toBe(task.id);
 
-    const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+    expect(store.getTask(task.id)?.acceptedAt).toBeString();
     const lease = await app.request(`/api/daemon/tasks/${task.id}/dispatch-lease`, { method: "POST" });
-    expect(lease.status).toBe(200);
-    expect(await lease.json()).toEqual({ status: "dispatched" });
-    expect(Date.parse(store.getTask(task.id)!.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
+    expect(lease.status).toBe(404);
     expect(store.claimTask(runtime.id)).toBeNull();
 
     const start = await app.request(`/api/daemon/tasks/${task.id}/start`, { method: "POST" });
@@ -1252,7 +1247,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const app = createMultiremiApp({ store });
 
     const claims = await Promise.all(Array.from({ length: 8 }, () =>
-      app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })
+      taskOfferResponse(store, runtime.id)
     ));
     expect(claims.every((response) => response.status === 200)).toBe(true);
     const bodies = await Promise.all(claims.map((response) => response.json()));
@@ -1264,7 +1259,7 @@ describe("Multiremi API — daemon endpoints", () => {
       runtimeId: runtime.id,
     });
 
-    const emptyClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const emptyClaim = await taskOfferResponse(store, runtime.id);
     expect(emptyClaim.status).toBe(200);
     expect(await emptyClaim.json()).toEqual({ task: null });
   });
@@ -1286,9 +1281,9 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(waiting.id);
     store.markTaskWaitingLocalDirectory(waiting.id, "/tmp/project");
 
-    const recovered = await app.request(`/api/daemon/runtimes/${runtime.id}/recover-orphans`, { method: "POST" });
-    expect(recovered.status).toBe(200);
-    expect(await recovered.json()).toEqual({ orphaned: 2, retried: 2 });
+    await reconcileRuntimeReady(store, runtime.id);
+    expect([running, waiting].filter(task => store.getTask(task.id)?.status === "failed")).toHaveLength(2);
+    expect(store.listTasks().filter(task => task.parentTaskId === running.id || task.parentTaskId === waiting.id)).toHaveLength(2);
     expect(store.getTask(running.id)?.failureReason).toBe("runtime_recovery");
     expect(store.getTask(running.id)?.completedAt).toBe(store.getTask(running.id)?.failedAt);
     expect(store.getTask(waiting.id)?.waitReason).toBeNull();
@@ -1306,7 +1301,7 @@ describe("Multiremi API — daemon endpoints", () => {
 
     const missing = await app.request("/api/daemon/runtimes/rt_missing/recover-orphans", { method: "POST" });
     expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({ error: "runtime not found" });
+    expect(await missing.text()).toBe("404 Not Found");
   });
 
   it("serves daemon task reports with message idempotency, session pinning, and usage upserts", async () => {
@@ -1317,7 +1312,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const waitingTask = store.createTask({ agentId: agent.id, prompt: "wait for checkout" });
     const app = createMultiremiApp({ store });
 
-    expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(task.id);
+    expect((await (await taskOfferResponse(store, runtime.id)).json()).task.id).toBe(task.id);
 
     const session = await app.request(`/api/daemon/tasks/${task.id}/session`, {
       method: "POST",
@@ -1438,7 +1433,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(terminalProgress.status).toBe(200);
     expect(await terminalProgress.json()).toEqual({ status: "ok" });
 
-    expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(waitingTask.id);
+    expect((await (await taskOfferResponse(store, runtime.id)).json()).task.id).toBe(waitingTask.id);
     store.markTaskWaitingLocalDirectory(waitingTask.id, "/tmp/repo");
     const skippedSession = await app.request(`/api/daemon/tasks/${waitingTask.id}/session`, {
       method: "POST",

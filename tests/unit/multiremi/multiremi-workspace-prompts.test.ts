@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT } from "../../../packages/server/src/prompts/workspace-settings.js";
@@ -121,7 +122,7 @@ describe("workspace prompt settings", () => {
     store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "Do it" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     expect((await claim.json()).task).toMatchObject({
       workspace_bootstrap_prompt: "Workspace bootstrap rule",

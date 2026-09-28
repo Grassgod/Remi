@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { receiveTaskOffer } from "../../fixtures/task-offer.js";
+import { normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
@@ -1046,7 +1048,7 @@ describe("Multiremi API — agent plugins", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed).toMatchObject({
       id: task.id,

@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 // Runtime metadata/usage, console scoping, delete cascade, and the async request
 // queues (model list, update, local skill list/import) plus register/deregister.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -220,7 +221,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     });
     expect((await updatedModels.json()).models[0].id).toBe("gpt-5.4");
 
-    const claim = await app.request("/api/daemon/runtimes/rt_api/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_api");
     expect((await claim.json()).task.id).toBe(task.id);
     await app.request(`/api/daemon/tasks/${task.id}/usage`, {
       method: "POST",
@@ -359,7 +360,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "legacy usage" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request("/api/daemon/runtimes/rt_total_only/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_total_only");
     expect((await claim.json()).task.id).toBe(task.id);
 
     // Exactly what a pre-0.2.49 daemon posts: a total, no splits.
@@ -413,7 +414,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "modern usage" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request("/api/daemon/runtimes/rt_split/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_split");
     expect((await claim.json()).task.id).toBe(task.id);
     const report = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
       method: "POST",
@@ -1483,7 +1484,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(store.getRuntimeLocalSkillImportRequest(camelBatchRuntime.id, camelBatchImportOne.id)?.status).toBe("running");
     expect(store.getRuntimeLocalSkillImportRequest(camelBatchRuntime.id, camelBatchImportTwo.id)?.status).toBe("pending");
 
-    const taskClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const taskClaim = await taskOfferResponse(store, runtime.id);
     expect(taskClaim.status).toBe(200);
     expect(store.getRuntimeModelListRequest(runtime.id, modelRequest.id)?.status).toBe("pending");
     expect(store.getRuntimeUpdateRequest(runtime.id, updateRequest.id)?.status).toBe("pending");

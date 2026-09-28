@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -79,7 +80,7 @@ describe("persisted inherited context diagnostics", () => {
     });
     expectNullDiagnostics(store, task.id);
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST", headers });
+    const claim = await taskOfferResponse(store, runtime.id, { headers, authToken: "MASTER" });
     expect(claim.status).toBe(200);
     const claimed = (await claim.json()).task;
     expect(claimed.id).toBe(task.id);
@@ -237,7 +238,7 @@ describe("persisted inherited context diagnostics", () => {
     const progressAt = "2026-09-17T03:00:00.000Z";
     setSystemTime(new Date(firstRecordedAt));
     const { store, runtime, side, task: firstTask, app } = fixture(true);
-    const firstClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST", headers });
+    const firstClaim = await taskOfferResponse(store, runtime.id, { headers, authToken: "MASTER" });
     expect(firstClaim.status).toBe(200);
     const first = (await firstClaim.json()).task;
     expect(first.id).toBe(firstTask.id);
@@ -247,7 +248,7 @@ describe("persisted inherited context diagnostics", () => {
     const secondRuntime = store.registerRuntime({ name: "Second runtime", provider: "codex", workspaceId: "local" });
     const secondAgent = store.createAgent({ name: "Second reader", provider: "codex", workspaceId: "local", runtimeId: secondRuntime.id });
     const secondTask = store.createSessionTask(side.id, { agentId: secondAgent.id, prompt: "Read with a larger context budget" });
-    const secondClaim = await app.request(`/api/daemon/runtimes/${secondRuntime.id}/tasks/claim`, { method: "POST", headers });
+    const secondClaim = await taskOfferResponse(store, secondRuntime.id, { headers, authToken: "MASTER" });
     expect(secondClaim.status).toBe(200);
     const second = (await secondClaim.json()).task;
     expect(second.id).toBe(secondTask.id);

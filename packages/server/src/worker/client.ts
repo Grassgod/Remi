@@ -926,24 +926,6 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/tasks/${taskId}/start`, {});
   }
 
-  async renewTaskDispatchLease(taskId: string): Promise<MultiremiTaskStatus> {
-    try {
-      const resp = await this.post<{ status: MultiremiTaskStatus }>(
-        `/api/daemon/tasks/${taskId}/dispatch-lease`,
-        {},
-      );
-      return resp.status;
-    } catch (error) {
-      // Rolling upgrades may briefly run a new daemon against an older control
-      // plane. Fall back to the legacy read-only status endpoint; a genuinely
-      // missing task also returns 404 there and remains distinguishable.
-      if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-        return await this.getTaskStatus(taskId);
-      }
-      throw error;
-    }
-  }
-
   async markTaskWaitingLocalDirectory(taskId: string, reason: string): Promise<void> {
     await this.post(`/api/daemon/tasks/${taskId}/wait-local-directory`, { reason });
   }
@@ -1564,7 +1546,7 @@ function isRuntimeGoneHeartbeatError(error: unknown): boolean {
     && error.message.includes("runtime not found");
 }
 
-function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | null {
+export function normalizeDaemonClaimTask(raw: any | null): (MultiremiTaskWithAgent & import("@daemon/contracts/types.js").AgentTask) | null {
   if (!raw) return null;
   const normalized = {
     ...raw,
@@ -1686,7 +1668,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     // Do not leave a rejected snake_case alias available to daemon field helpers.
     delete normalized.chat_auto_checkout_repos;
   }
-  return normalized as MultiremiTaskWithAgent;
+  return normalized as MultiremiTaskWithAgent & import("@daemon/contracts/types.js").AgentTask;
 }
 
 function normalizeDaemonClaimSquadContext(raw: any): any | null {

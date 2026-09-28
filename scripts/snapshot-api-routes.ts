@@ -1170,7 +1170,7 @@ export const buildSnapshotApp = buildApp;
 // families
 // ---------------------------------------------------------------------------
 
-type Flow = (rec: Recorder, refs: SeedRefs) => Promise<void>;
+type Flow = (rec: Recorder, refs: SeedRefs, store: MultiremiStore) => Promise<void>;
 
 const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 
@@ -1533,7 +1533,7 @@ flow("daemon-retirement", async (rec, refs) => {
 });
 
 // -- daemon -----------------------------------------------------------------
-flow("daemon", async (rec, refs) => {
+flow("daemon", async (rec, refs, store) => {
   await rec.json("POST", "/api/daemon/register", {
     workspace_id: refs.workspaceId,
     daemon_id: "dmn_flow",
@@ -1542,7 +1542,7 @@ flow("daemon", async (rec, refs) => {
     runtimes: [{ name: "flow-runtime", type: "claude", version: "9.9.9", status: "online", maxConcurrency: 1 }],
   });
   await rec.json("POST", "/api/daemon/heartbeat", { runtime_id: refs.runtimeId });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
+  store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
   await rec.json("PUT", `/api/daemon/runtimes/${refs.runtimeId}/models`, {
     models: [{ id: "claude-sonnet-4", label: "Claude Sonnet 4" }],
   });
@@ -1575,11 +1575,11 @@ flow("daemon", async (rec, refs) => {
     stderr: "",
     duration_ms: 1,
   });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/recover-orphans`, {});
+  store.recoverOrphans(refs.runtimeId, []);
   await rec.json("POST", "/api/daemon/deregister", { runtime_ids: [refs.runtimeId] });
 });
 
-flow("daemon-task-lifecycle", async (rec, refs) => {
+flow("daemon-task-lifecycle", async (rec, refs, store) => {
   const task = await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
     issueId: refs.issueId,
@@ -1588,8 +1588,8 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   const id = task.body?.id ?? task.body?.task?.id ?? refs.taskId;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
-    const claim = await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
-    if ((claim.body?.task?.id ?? claim.body?.id) === id) break;
+    const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
+    if (claim?.id === id) break;
   }
   // waiting_local_directory only applies to a dispatched task, so it runs
   // before start (startTask accepts dispatched and waiting_local_directory).
@@ -1918,7 +1918,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
       resetDeterministicState();
       const boot = await buildApp();
       const recorder = new Recorder(boot.app, routes, name);
-      await run(recorder, boot.refs);
+      await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);
       boot.db.close();

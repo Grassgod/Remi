@@ -115,15 +115,16 @@ describe("daemon protocol v2 real connection", () => {
 
   it("re-registers a runtime deleted before hello, reconnects with the new ID and receives an offer", async () => {
     const deletedId = "rt_deleted_previous_registration";
-    const recoverOrphans = MultiremiDaemonClient.prototype.recoverOrphans;
+    const registerRuntime = MultiremiDaemonClient.prototype.registerDaemonRuntime;
     let releaseRecovery!: () => void;
     const recovery = new Promise<void>(resolve => { releaseRecovery = resolve; });
     let recovering = false;
     let recoveries = 0;
-    const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans").mockImplementation(async function (this: MultiremiDaemonClient, runtimeId) {
+    const register = spyOn(MultiremiDaemonClient.prototype, "registerDaemonRuntime").mockImplementation(async function (this: MultiremiDaemonClient, input) {
       if (++recoveries === 2) { recovering = true; await recovery; }
-      return await recoverOrphans.call(this, runtimeId);
+      return await registerRuntime.call(this, input);
     });
+    const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans");
     const claim = spyOn(MultiremiDaemonClient.prototype, "claimTask");
     try {
       const h = await fixture({ onReady: (daemon, h) => {
@@ -134,7 +135,7 @@ describe("daemon protocol v2 real connection", () => {
         (daemon as unknown as { options: { runtimeId: string } }).options.runtimeId = deletedId;
       } });
       await h.startDaemon();
-      await waitFor(() => recovering, "orphan recovery after runtime_gone");
+      await waitFor(() => recovering, "re-registration after runtime_gone");
       expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(1);
       await Bun.sleep(50);
       const claims = claim.mock.calls.length;
@@ -150,13 +151,17 @@ describe("daemon protocol v2 real connection", () => {
       expect(h.store.getRuntime(newId)?.daemonId).toBe("dmn_fixture");
       expect(h.layer.registry.sessionForRuntime(deletedId)).toBeNull();
       const session = h.layer.registry.sessionForRuntime(newId)! as typeof h.sessions[number];
-      expect(session.sendEvent({ t: "task.offer", rt: newId, p: { task_id: "offer-after-register" } }).ok).toBe(true);
-      await waitFor(() => h.received.some(frame => frame.t === "task.offer"), "new runtime offer");
-      expect(h.received.at(-1)).toMatchObject({ rt: newId, p: { task_id: "offer-after-register" } });
+      const agent = h.store.createAgent({ name: "offer after registration", provider: "claude", runtimeId: newId, workspaceId: "local" });
+      const task = h.store.createTask({ agentId: agent.id, prompt: "offer after registration" });
+      await waitFor(() => h.received.some(frame => frame.t === "task.offer" && frame.p.id === task.id), "new runtime offer");
+      expect(h.received.find(frame => frame.t === "task.offer")).toMatchObject({ rt: newId, p: { id: task.id } });
       h.clock.advance(100);
       await waitFor(() => session.unacknowledgedFrameCount === 0, "independent offer acknowledgement");
-      expect(recover).toHaveBeenCalledTimes(2);
-    } finally { releaseRecovery(); recover.mockRestore(); claim.mockRestore(); }
+      expect(register).toHaveBeenCalledTimes(2);
+      expect(recover).not.toHaveBeenCalled();
+      expect(claim).not.toHaveBeenCalled();
+      await waitFor(() => h.store.getTask(task.id)?.status === "completed", "re-registered task completion");
+    } finally { releaseRecovery(); register.mockRestore(); recover.mockRestore(); claim.mockRestore(); }
   });
 
   it("recovers registry contention only after runtime_gone, registration and a fresh hello", async () => {

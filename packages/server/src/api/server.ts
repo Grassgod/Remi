@@ -142,6 +142,7 @@ import {
   DaemonProtocolLayer,
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
+import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
@@ -861,15 +862,24 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
   });
+  const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
+  const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
+    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki) });
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
   const unsubscribeTaskEnqueued = store.onTaskEnqueued((task) => {
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, "task:queued", task);
+    // MUL-462: 换成实时扇出
+    offers.kick(task.runtimeId);
   });
   const unsubscribeTaskEvent = store.onTaskEvent((event) => {
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
+    if (["task:completed", "task:failed", "task:cancelled"].includes(event.type)) {
+      // MUL-462: 换成实时扇出
+      offers.terminal(event.task.id, event.task.runtimeId);
+    }
   });
   const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
     notifyBrowserTaskMessages(store, browserWebSockets, browserScopeWebSockets, task, messages);

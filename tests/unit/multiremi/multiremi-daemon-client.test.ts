@@ -455,7 +455,7 @@ describe("MultiremiDaemonClient daemon protocol", () => {
     expect(camelTask?.boundIssue).toEqual(task?.boundIssue);
   });
 
-  it("falls back to the legacy status endpoint while the control plane rolls forward", async () => {
+  it("does not renew a dispatch lease or fall back to the HTTP status endpoint", () => {
     const requests: Array<{ method: string; path: string }> = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname;
@@ -464,14 +464,9 @@ describe("MultiremiDaemonClient daemon protocol", () => {
       return Response.json({ status: "running" });
     }) as unknown as typeof globalThis.fetch;
 
-    const status = await new MultiremiDaemonClient("https://remi.example", "daemon-token")
-      .renewTaskDispatchLease("tsk_rolling");
-
-    expect(status).toBe("running");
-    expect(requests).toEqual([
-      { method: "POST", path: "/api/daemon/tasks/tsk_rolling/dispatch-lease" },
-      { method: "GET", path: "/api/daemon/tasks/tsk_rolling/status" },
-    ]);
+    const client = new MultiremiDaemonClient("https://remi.example", "daemon-token");
+    expect("renewTaskDispatchLease" in client).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it("does not advertise the removed personal-bot side channel", async () => {

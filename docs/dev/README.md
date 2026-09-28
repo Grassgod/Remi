@@ -31,7 +31,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
 | 改详情页首屏定位、贴底或 `data-perf-state` 契约 | [ADR 0008](../adr/0008-issue-detail-anchored-reveal-and-stick-to-bottom.md) | 先隐藏后一次定位、贴底状态机与预算口径 |
-| 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0005](../adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、hb 与升级等待已接线；claim 暂用 HTTP 退避轮询，业务帧由后续子单接入 |
+| 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0005](../adr/0005-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、hb 与升级等待已接线；offer/accept/reject 与 ready 对账替代 claim，pending、outbox 与 trace 按分段接入 |
 | 改项目 Memory/Wiki | [项目知识契约](../project-wiki-memory-spec.md) | 查询、提案、发布、物化与权限 |
 | 改飞书消息接入 | [消息接入](../feishu-message-ingestion.md) | Connection、Source、消息处理与凭据 |
 | 配置部署或排障 | [部署](../../deploy/README.md)、[本机 stable/dev](../deploy/local-profiles.md)、[daemon 环境](../deploy/66-8-remi-environment.md) | 服务组成、配置和启动条件 |

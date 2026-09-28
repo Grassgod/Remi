@@ -46,6 +46,7 @@ import {
   type DaemonProtocolClientOptions,
   type DaemonProtocolLane,
 } from "./daemon-protocol-client.js";
+import { registerDaemonOfferHandler } from "./daemon-offers.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
@@ -403,6 +404,7 @@ export interface MultiremiDaemonOptions {
   requestTimeoutMs?: number;
   maxConcurrency?: number;
   once?: boolean;
+  onceOfferTimeoutMs?: number;
   providerFactory?: MultiremiDaemonProviderFactory;
   updateRunner?: MultiremiDaemonUpdateRunner;
   localSkillRoots?: Record<string, string>;
@@ -810,9 +812,8 @@ export class MultiremiDaemon {
   private readonly authorityProbeDelaysMs: number[];
   /** The plugin fallback remains until MUL-419 moves it to RPC/push. */
   private nextPluginDesiredAt = 0;
-  private nextClaimAt = 0;
-  private claimIdleMs: number;
-  private readonly claimIdleBaseMs: number;
+  private onceTaskAccepted = false;
+  private onceOfferTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDesired: { revision: string; artifacts: AgentPluginArtifactSpec[] } | null = null;
   private desiredFetchedAt = 0;
   private lastDesiredRefreshAt = 0;
@@ -880,6 +881,7 @@ export class MultiremiDaemon {
       requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_DAEMON_REQUEST_TIMEOUT_MS,
       maxConcurrency: resolveDaemonConcurrency(options.maxConcurrency ?? numberEnv(process.env.MULTIREMI_MAX_CONCURRENCY, 0)),
       once: options.once ?? false,
+      onceOfferTimeoutMs: Math.max(1, options.onceOfferTimeoutMs ?? 5_000),
       launchedBy: options.launchedBy ?? process.env.MULTIREMI_LAUNCHED_BY ?? null,
       taskTimeoutMs: options.taskTimeoutMs ?? parseInt(process.env.MULTIREMI_TASK_TIMEOUT_MS ?? "0", 10),
       taskDrainTimeoutMs: Math.max(1, options.taskDrainTimeoutMs ?? DEFAULT_TASK_DRAIN_TIMEOUT_MS),
@@ -960,9 +962,6 @@ export class MultiremiDaemon {
       ? cleanupRetryDelays
       : [...TERMINAL_AUTHORITY_CLEANUP_RETRY_DELAYS_MS];
     this.localSkillRoots = options.localSkillRoots ?? {};
-    // Idle claims back off from the same legacy cadence when a caller pinned one.
-    this.claimIdleBaseMs = Math.max(1, options.pollIntervalMs ?? DEFAULT_CLAIM_IDLE_BASE_MS);
-    this.claimIdleMs = this.claimIdleBaseMs;
     const probeDelays = (options.authorityProbeDelaysMs ?? [])
       .filter((delay) => Number.isFinite(delay) && delay > 0)
       .map((delay) => Math.max(1, Math.floor(delay)));
@@ -1085,8 +1084,36 @@ export class MultiremiDaemon {
         await this.stopAfterTerminalAuthority();
       },
       onStateChange: () => this.wakeClaim(),
+      onConnected: () => {
+        const runtime = this.protocolLane.runtime();
+        if (runtime) this.protocolClient.send({ t: "runtime.ready",
+          rt: runtime.runtime_id, p: { active_task_ids: runtime.active_task_ids } });
+        if (this.options.once && !this.onceTaskAccepted && this.onceOfferTimer === null) {
+          this.onceOfferTimer = setTimeout(() => { this.onceOfferTimer = null; this.stop(); }, this.options.onceOfferTimeoutMs);
+        }
+      },
     };
     this.protocolClient.addLane(this.protocolLane);
+    registerDaemonOfferHandler(this.protocolClient, {
+      runtimeId: () => this.options.runtimeId,
+      rejection: () => {
+        if (this.options.once && this.onceTaskAccepted) return "draining";
+        if (this.serverDrainActive) return "draining";
+        if (this.stopped || !this.ready || !this.supervisorReady() || this.claimsPaused || this.runtimeGoneInflight.size) return "claims_paused";
+        if (this.activeTaskCount >= this.options.maxConcurrency || (this.options.once && this.onceTaskAccepted)) return "capacity";
+        return null;
+      },
+      run: task => {
+        this.onceTaskAccepted = true;
+        if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
+        this.onceOfferTimer = null;
+        const run = this.handleTask(task).catch(error => {
+          log.error(`task ${task.id} crashed outside handleTask (${error instanceof Error ? error.name : typeof error})`);
+        }).finally(() => { if (this.options.once) this.stop(); });
+        this.inflight.add(run);
+        void run.finally(() => this.inflight.delete(run));
+      },
+    });
   }
 
   async checkExternalWorkspaceMembership(workspaceId: string, externalId: string): Promise<boolean> {
@@ -1254,7 +1281,6 @@ export class MultiremiDaemon {
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
-      await this.client.recoverOrphans(this.options.runtimeId!);
       this.ready = true;
       this.onReadyChange(true);
       // A co-resident provider becoming ready is not enough to claim work.
@@ -1266,7 +1292,7 @@ export class MultiremiDaemon {
 
       this.protocolClient?.startLane(this.protocolLane);
       this.nextPluginDesiredAt = Date.now();
-      this.nextClaimAt = Date.now();
+      this.onceTaskAccepted = false;
       while (!this.stopped) {
         try {
           this.assertWorkspaceRootOwner();
@@ -1279,27 +1305,6 @@ export class MultiremiDaemon {
             await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: this.options.once });
           }
 
-          if (this.options.once) {
-            // One-shot mode (tests, single runs) stays strictly serial:
-            // claim one task, run it to completion, return.
-            if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) return;
-            const task = await this.claimTask(this.options.runtimeId!);
-            if (!task) return;
-            await this.handleTask(task);
-            return;
-          }
-
-          if (this.claimsPaused || this.serverDrainActive || this.runtimeGoneInflight.size || this.protocolClient?.allowsClaims() === false) {
-            // A sibling can pause claims while it installs the shared CLI, or
-            // the platform can be draining. Keep this lane ready and
-            // heartbeating so a failed install can release the pause; only a
-            // successful update explicitly stops the supervisor. The claim
-            // deadline has to move with it, otherwise the sleep below sees a
-            // deadline that is already due and returns immediately.
-            this.deferClaimLane();
-          } else if (Date.now() >= this.nextClaimAt) {
-            await this.runClaimPump();
-          }
           await this.waitForNextTick();
         } catch (err) {
           // A transient server/network blip (e.g. the server restarting) must not
@@ -1320,7 +1325,6 @@ export class MultiremiDaemon {
           // outage cannot turn the poll loop into a tight retry spin.
           const retryMs = Math.max(this.options.pollIntervalMs, DAEMON_HEARTBEAT_INTERVAL_MS);
           this.nextPluginDesiredAt = Date.now() + retryMs;
-          this.nextClaimAt = Date.now() + retryMs;
           log.warn(`daemon poll loop error, retrying in ${retryMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await this.waitForNextTick();
         }
@@ -1377,10 +1381,10 @@ export class MultiremiDaemon {
   }
 
 
-  /** Claim polling and the temporary plugin fallback own this sleep. */
+  /** The temporary plugin fallback owns this sleep until A-4. */
   private async waitForNextTick(): Promise<void> {
     if (this.stopped) return;
-    const delayMs = Math.max(0, Math.min(this.nextPluginDesiredAt, this.nextClaimAt) - Date.now());
+    const delayMs = Math.max(0, this.nextPluginDesiredAt - Date.now());
     await new Promise<void>(resolveWait => {
       let settled = false;
       const finish = () => {
@@ -1402,25 +1406,6 @@ export class MultiremiDaemon {
   }
 
 
-  /** Reset the idle claim backoff; every event that can add queued work calls this. */
-  private resetClaimBackoff(): void {
-    this.claimIdleMs = this.claimIdleBaseMs;
-    this.nextClaimAt = Date.now();
-  }
-
-  /**
-   * Push the next claim attempt out without claiming.
-   *
-   * Used whenever the claim lane is suppressed (paused, draining, or a lost
-   * Runtime): the poll sleep waits for the earliest deadline, so leaving a due
-   * deadline in place would turn the sleep into a busy loop.
-   */
-  private deferClaimLane(): void {
-    // Wake for the next heartbeat rather than a short poll: while claims are
-    // suppressed there is nothing to do in between, and the heartbeat is what
-    // can lift the suppression (a drain directive or a released update pause).
-    this.nextClaimAt = Date.now() + DAEMON_HEARTBEAT_INTERVAL_MS;
-  }
 
   /**
    * Free one concurrency slot and wake the claim lane.
@@ -1431,54 +1416,11 @@ export class MultiremiDaemon {
   private releaseActiveTaskSlot(): void {
     const previous = this.activeTaskCount;
     this.activeTaskCount = Math.max(0, previous - 1);
-    if (this.activeTaskCount < previous) this.resetClaimBackoff();
+    if (this.activeTaskCount < previous) this.wakeClaim();
   }
 
   /** The process connection is shared by every co-resident provider. */
   daemonProtocolClient(): DaemonProtocolClient { return this.protocolClient; }
-
-  /**
-   * Bounded claim pump: keep claiming while there is spare capacity and run each
-   * task concurrently (detached). The server's claim query also caps in-flight
-   * tasks at the runtime's maxConcurrency, so this local gate and the server
-   * agree. `activeTaskCount` is incremented synchronously at the top of
-   * handleTask, so the loop sees it grow.
-   *
-   * An empty claim backs the next attempt off exponentially up to
-   * `MULTIREMI_CLAIM_IDLE_MAX_MS`; claiming one task resets it.
-   * The temporary HTTP claim fallback remains until MUL-419 wires offers.
-   */
-  private async runClaimPump(): Promise<void> {
-    let claimed = false;
-    while (
-      this.activeTaskCount < this.options.maxConcurrency
-      && !this.stopped
-      && !this.claimsPaused
-      && !this.serverDrainActive
-      && !this.runtimeGoneInflight.size
-      && this.protocolClient?.allowsClaims() !== false
-      && this.supervisorReady()
-    ) {
-      const task = await this.claimTask(this.options.runtimeId!);
-      if (!task) break;
-      claimed = true;
-      const run = this.handleTask(task).catch((err) => {
-        // handleTask routes task failures to failTask itself; this guards the
-        // detached promise against an unexpected unhandled rejection.
-        log.error(`task ${task.id} crashed outside handleTask: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      this.inflight.add(run);
-      void run.finally(() => this.inflight.delete(run));
-    }
-    if (this.stopped) return;
-    if (claimed) {
-      this.resetClaimBackoff();
-      return;
-    }
-    const idleMs = this.claimIdleMs;
-    this.claimIdleMs = Math.min(this.claimIdleMs * 2, this.options.claimIdleMaxMs);
-    this.nextClaimAt = Date.now() + idleMs;
-  }
 
   private async registerCurrentRuntime(): Promise<string> {
     if (!this.explicitRuntimeId) {
@@ -1585,7 +1527,7 @@ export class MultiremiDaemon {
             : "Platform drain released: resuming task claims",
         );
       }
-      if (this.serverDrainActive && !draining) this.resetClaimBackoff();
+      if (this.serverDrainActive && !draining) this.wakeClaim();
       this.serverDrainActive = draining;
       // Track the highest generation seen so the next heartbeat acknowledges
       // it. Acknowledging in normal mode too keeps the ack current when a new
@@ -1680,11 +1622,6 @@ export class MultiremiDaemon {
         this.startRuntimeModelRefresh();
       }
       await this.refreshWorkspaceRepos(workspaceId);
-      try {
-        await this.client.recoverOrphans(newRuntimeId);
-      } catch (error) {
-        log.warn(`Recover orphans after runtime_gone failed for ${newRuntimeId}: ${error instanceof Error ? error.message : String(error)}`);
-      }
       this.protocolClient?.runtimesChanged();
       return true;
     } finally {
@@ -2434,6 +2371,8 @@ export class MultiremiDaemon {
   }
 
   stop(): void {
+    if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
+    this.onceOfferTimer = null;
     this.stopped = true;
     this.pollAbort.abort();
     // stop() is synchronous and may be called while start() is sleeping. Clear
@@ -3116,15 +3055,6 @@ export class MultiremiDaemon {
     return { ok: true };
   }
 
-  private async claimTask(runtimeId: string): Promise<MultiremiTaskWithAgent | null> {
-    this.pendingClaimCount++;
-    try {
-      return await this.client.claimTask(runtimeId) as MultiremiTaskWithAgent | null;
-    } finally {
-      this.pendingClaimCount--;
-    }
-  }
-
   private releaseUpdateClaimPause(scope: MultiremiRuntimeUpdateScope): void {
     if (scope === "cli" && this.cliUpdateCoordinator) {
       this.cliUpdateCoordinator.releaseClaims();
@@ -3136,7 +3066,6 @@ export class MultiremiDaemon {
   private releaseLocalUpdateClaimPause(): void {
     if (this.restartRequestedFlag) return;
     this.claimsPaused = false;
-    this.resetClaimBackoff();
     this.wakeClaim();
   }
 
@@ -4416,9 +4345,6 @@ export class MultiremiDaemon {
       checking = true;
       try {
         let status = await this.client.getTaskStatus(taskId);
-        if (status === "dispatched") {
-          status = await this.client.renewTaskDispatchLease(taskId);
-        }
         if (status === "completed" || status === "failed" || status === "cancelled") {
           onTerminal(status);
           if (status === "cancelled") this.outbox?.purgeTask(taskId);
@@ -4591,7 +4517,6 @@ export class MultiremiDaemon {
       protocol: this.protocolClient?.health(),
       heartbeat_interval_ms: DAEMON_HEARTBEAT_INTERVAL_MS,
       // Null when no poll loop has started yet (health is served from startup).
-      claim_idle_next_at: this.nextClaimAt > 0 ? new Date(this.nextClaimAt).toISOString() : null,
       pid: process.pid,
       uptime: formatDuration(Date.now() - this.startedAt.getTime()),
       runtime_id: this.options.runtimeId,

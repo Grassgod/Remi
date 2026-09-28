@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { refreshPreNativeCodexSnapshots } from "@multiremi/relay/discovery.js";
 import { runtimeModelsWithCatalogError } from "@multiremi/worker/daemon.js";
@@ -118,7 +119,7 @@ describe("Codex native model membership through API and dispatch", () => {
       expect(created.status).toBe(201);
       const { task: waiting } = await created.json();
       expect(store.runtimeCanRunAgent(runtime, saved)).toBe(false);
-      const emptyClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      const emptyClaim = await taskOfferResponse(store, runtime.id);
       expect(emptyClaim.status).toBe(200);
       expect((await emptyClaim.json()).task).toBeNull();
       expect(store.getTask(waiting.id)?.status).toBe("queued");
@@ -190,7 +191,7 @@ describe("Codex native model membership through API and dispatch", () => {
         expect((await rejected.json()).code).toBe("model_not_in_execution_catalog");
       }
       expect(store.runtimeCanRunAgent(refreshed, saved)).toBe(false);
-      const emptyClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      const emptyClaim = await taskOfferResponse(store, runtime.id);
       expect((await emptyClaim.json()).task).toBeNull();
       expect(store.getTask(waiting.id)?.status).toBe("queued");
       expect(dispatches).toEqual([]);

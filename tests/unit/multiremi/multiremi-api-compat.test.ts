@@ -1,3 +1,4 @@
+import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
 // The compatibility surface the upstream (Go) clients still call: register/deregister,
 // local user + workspace, invitations, config/cli token, health, cloud runtime,
 // billing/lark/chat batches, and the linked-resource console workflows.
@@ -305,7 +306,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const legacyRuntimeId = legacyRegisteredBody.runtimes[0].id;
     const legacyAgent = store.createAgent({ name: "Legacy Codex", provider: "codex", runtimeId: legacyRuntimeId });
     const legacyTask = store.createTask({ agentId: legacyAgent.id, prompt: "legacy runtime task" });
-    const legacyClaim = await app.request(`/api/daemon/runtimes/${legacyRuntimeId}/tasks/claim`, { method: "POST" });
+    const legacyClaim = await taskOfferResponse(store, legacyRuntimeId);
     expect(legacyClaim.status).toBe(200);
     expect((await legacyClaim.json()).task.id).toBe(legacyTask.id);
     expect(store.getTask(legacyTask.id)?.runtimeId).toBe(legacyRuntimeId);
@@ -1130,14 +1131,12 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     });
     expect(await unsubscribe.json()).toEqual({ subscribed: false });
 
-    const pendingBeforeClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    expect((await pendingBeforeClaim.json()).some((item: any) => item.id === task.id)).toBe(false);
+    expect(pendingTaskWireSnapshot(store, runtime.id).some((item: any) => item.id === task.id)).toBe(false);
 
-    const claimed = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claimed = await taskOfferResponse(store, runtime.id);
     const claimedBody = await claimed.json();
     expect(claimedBody.task.id).toBe(task.id);
-    const pendingAfterClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    expect((await pendingAfterClaim.json()).some((item: any) =>
+    expect(pendingTaskWireSnapshot(store, runtime.id).some((item: any) =>
       item.id === task.id && item.workspace_id === "local" && item.status === "dispatched"
     )).toBe(true);
     const waiting = await app.request(`/api/daemon/tasks/${task.id}/wait-local-directory`, {
@@ -1482,7 +1481,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     expect(autopilotDetailBody.autopilot.id).toBe(autopilot.id);
     expect(autopilotDetailBody.autopilot.projectId).toBeUndefined();
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect((await claim.json()).task.id).toBe(task.id);
     await app.request(`/api/daemon/tasks/${task.id}/usage`, {
       method: "POST",

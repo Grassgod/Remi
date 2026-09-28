@@ -7,8 +7,8 @@ behaviour it enables is MUL-377.
 
 The revision hash and state dedupe remain. MUL-418 A-2 replaces the HTTP
 heartbeat timer and v1 WebSocket wake-up with a process-wide v2 connection.
-Claim temporarily uses backoff polling until MUL-419; plugin desired keeps its
-fallback refresh until the v2 business frames are connected. This ADR records
+MUL-419 A-3 replaces claim polling with server offers; plugin desired keeps its
+fallback refresh until A-4 connects the v2 business frames. This ADR records
 the original polling decision; current transport is specified in
 [daemon-protocol-v2.md](../daemon-protocol-v2.md).
 

@@ -23,6 +23,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -338,7 +339,7 @@ describe("MUL-474 daemon claim re-checks a Task cancelled during hydration", () 
     });
     const headers = { Authorization: `Bearer ${token.token}`, "content-type": "application/json" };
     const requests = [0, 1].map(() =>
-      app.request("/api/daemon/runtimes/rt_mul474_claim/tasks/claim", { method: "POST", headers }));
+      taskOfferResponse(store, "rt_mul474_claim", { headers, authToken: AUTH_TOKEN, projectKnowledge: projectKnowledge as never }));
     await entered;
     // The single-flight guard means only the first poll hydrates, and it is now
     // parked inside hydration with its pre-cancel read already done.

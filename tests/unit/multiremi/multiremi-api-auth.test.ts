@@ -1,5 +1,6 @@
 // Bearer auth, daemon-token route scoping, and the cookie fallback for safe methods.
 import { afterEach, describe, expect, it } from "bun:test";
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import {
   buildRequestAuth,
@@ -288,10 +289,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "legacy claim" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: "Bearer root-secret" },
-    });
+    const claim = await taskOfferResponse(store, runtime.id, { headers: { Authorization: "Bearer root-secret" }, authToken: "root-secret" });
     expect(claim.status).toBe(200);
     const body = await claim.json();
     expect(body.task.auth_token).toStartWith("mat_");
@@ -472,10 +470,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       workspaceId: "local",
       prompt: "use task token",
     });
-    const taskTokenClaim = await app.request(`/api/daemon/runtimes/${ownerRuntimeId}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${daemonBody.token.token}` },
-    });
+    const taskTokenClaim = await taskOfferResponse(store, ownerRuntimeId, { headers: { Authorization: `Bearer ${daemonBody.token.token}` } });
     expect(taskTokenClaim.status).toBe(200);
     const taskTokenClaimBody = await taskTokenClaim.json();
     expect(taskTokenClaimBody.task.auth_token).toStartWith("mat_");
@@ -627,10 +622,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     });
     expect(registeredRuntime.status).toBe(201);
 
-    const daemonClaim = await app.request("/api/daemon/runtimes/rt_auth_daemon/tasks/claim", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${daemonBody.token.token}` },
-    });
+    const daemonClaim = await taskOfferResponse(store, "rt_auth_daemon", { headers: { Authorization: `Bearer ${daemonBody.token.token}` } });
     expect(daemonClaim.status).toBe(200);
 
     const localHeartbeat = await app.request("/api/multiremi/runtimes/rt_auth_daemon/heartbeat", {
@@ -826,10 +818,8 @@ describe("Multiremi API — authentication and token scoping", () => {
       error: "forbidden for daemon identity",
       code: "daemon_identity_forbidden",
     });
-    const masterCanInspectOtherDaemon = await app.request(
-      `/api/daemon/runtimes/${otherDaemonRuntime.id}/tasks/pending`,
-      { headers: { Authorization: "Bearer root-secret" } },
-    );
+    const masterCanInspectOtherDaemon = await taskOfferResponse(store, otherDaemonRuntime.id,
+      { headers: { Authorization: "Bearer root-secret" }, authToken: "root-secret" });
     expect(masterCanInspectOtherDaemon.status).toBe(200);
 
     store.registerRuntime({ id: "rt_remote_auth", name: "Remote runtime", provider: "codex", workspaceId: "remote" });

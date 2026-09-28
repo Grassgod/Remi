@@ -50,6 +50,7 @@ export interface DaemonProtocolLane {
   probeUpgrade(): Promise<void>;
   onTerminal(code: number): Promise<void>;
   onStateChange?(): void;
+  onConnected?(): void;
 }
 
 export interface DaemonProtocolClientOptions {
@@ -119,6 +120,7 @@ export class DaemonProtocolClient {
   private readonly background = new Set<Promise<unknown>>();
   private readonly laneWork = new Map<DaemonProtocolLane, Promise<void>>();
   private readonly pending = new Map<string, PendingRpc>();
+  private readonly frameHandlers = new Map<string, Set<(frame: DaemonParsedFrame) => void | Promise<void>>>();
   private readonly timers = new Set<DaemonProtocolTimer>();
   private socket: DaemonProtocolSocketLike | null = null;
   private listeners: Array<[string, (event: any) => void]> = [];
@@ -142,6 +144,12 @@ export class DaemonProtocolClient {
   }
 
   addLane(lane: DaemonProtocolLane): void { this.lanes.add(lane); }
+
+  registerFrameHandler(type: string, handler: (frame: DaemonParsedFrame) => void | Promise<void>): void {
+    let handlers = this.frameHandlers.get(type);
+    if (!handlers) this.frameHandlers.set(type, handlers = new Set());
+    handlers.add(handler);
+  }
 
   startLane(lane: DaemonProtocolLane): void {
     this.activeLanes.add(lane);
@@ -327,6 +335,7 @@ export class DaemonProtocolClient {
       this.handshakeTimer = null;
       this.transition("connected");
       this.options.onWelcome?.(frame.payload as unknown as DaemonWelcomePayload);
+      for (const { lane } of this.advertised) lane.onConnected?.();
       this.ackTick();
       this.heartbeatTick();
       return;
@@ -348,6 +357,9 @@ export class DaemonProtocolClient {
       }
     }
     if (this.options.onFrame) this.track(Promise.resolve().then(() => this.options.onFrame!(frame)).catch(error => this.report(error)));
+    for (const handler of this.frameHandlers.get(frame.type) ?? []) {
+      this.track(Promise.resolve().then(() => handler(frame)).catch(error => this.report(error)));
+    }
   }
 
   private heartbeatTick(): void {

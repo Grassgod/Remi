@@ -9,7 +9,7 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
-import type { MultiremiDaemon } from "@multiremi/daemon.js";
+import type { MultiremiDaemon, MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 
@@ -80,6 +80,7 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
+    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory">;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
   } = {}): Promise<DaemonProtocolHarness> {
@@ -111,6 +112,7 @@ export class DaemonProtocolHarness {
             return socket;
           },
         },
+        ...options.daemonOptions,
       })));
       return h;
     } catch (error) { await h.dispose(); throw error; }
@@ -163,6 +165,11 @@ export class DaemonProtocolHarness {
     if (this.layer) await waitFor(() => this.layer.registry.size === 0, "server socket close callbacks");
   }
 
+  async waitForDaemonExit(): Promise<void> {
+    await Promise.all(this.runs);
+    if (this.runError) throw this.runError;
+  }
+
   async restartDaemon(): Promise<void> { await this.stopDaemon(); await this.startDaemon(); }
 
   async disconnect(): Promise<void> {
@@ -201,6 +208,7 @@ export class DaemonProtocolHarness {
       try {
         this.teardownSteps.push("drain background");
         while (this.serverWork.size) await Promise.allSettled([...this.serverWork]);
+        await this.layer?.drain();
         if (this.server) await waitFor(() => this.server.pendingRequests === 0, "server requests to drain");
       } finally {
         try {

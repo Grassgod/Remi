@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
@@ -53,7 +54,7 @@ describe("claim knowledge budget", () => {
     let calls = 0;
     project.hydrateTaskKnowledge = async t => { calls++; await gate.promise; return t; };
     const app = createMultiremiApp({ store, projectKnowledge: project, repositoryWiki: repository });
-    const requests = [0, 1].map(() => app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" }));
+    const requests = [0, 1].map(() => taskOfferResponse(store, runtime.id, { projectKnowledge: project, repositoryWiki: repository }));
     await Bun.sleep(10);
     expect(calls).toBe(1);
     store.cancelTask(task.id);

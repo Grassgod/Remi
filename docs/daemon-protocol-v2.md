@@ -334,6 +334,10 @@ daemon 断线期间：queued 留在队列；dispatched 未 accept 的按 §3.1 �
 服务端对账：DB 已终态而 daemon 仍在跑的推 `task.cancelled`；DB 为 running 而 daemon 没列出的
 走 `recoverOrphans`（原 `POST /recover-orphans` 路由删除，逻辑移到这里）。
 
+`hello` 与 `runtime.ready` 的 `active_task_ids` 共用同一个来源：正在跑的任务，加上本 runtime
+的 outbox 中还有未送达终态帧的任务；blocked 分区不计入。断线期间已完成、等待重放的任务因此
+不会被提前判成孤儿。daemon 对自己未在运行的任务收到 `task.cancelled` 时为空操作，不清 outbox。
+
 ### 3.3 派活延迟怎么测
 
 任务表新增 `offered_at` 与 `accepted_at` 两列，分三段报告：

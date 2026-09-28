@@ -1639,6 +1639,8 @@ export interface MultiremiTask {
   createdAt: string;
   updatedAt: string;
   dispatchedAt: string | null;
+  offeredAt?: string | null;
+  acceptedAt?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   failedAt: string | null;

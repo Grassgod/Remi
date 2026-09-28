@@ -338,43 +338,22 @@ describe("daemon poll cadence", () => {
     expect(probe.desiredGets).toBeLessThanOrEqual(7);
   });
 
-  it("keeps once mode serial without an HTTP heartbeat", async () => {
+  it("keeps once mode free of HTTP claims and heartbeats", async () => {
     const probe = track(createLoopDaemon({ once: true }));
-    await probe.run;
-    expect(probe.claims).toBe(1);
+    await flushMicrotasks();
+    await probe.stop();
+    expect(probe.claims).toBe(0);
     expect(probe.heartbeats).toBe(0);
   });
 
-  it("backs idle claims off 3s -> 30s and caps there", async () => {
+  it("never runs an idle HTTP claim pump, even after ten minutes", async () => {
     jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-    }));
-
+    const probe = track(createLoopDaemon());
     await flushMicrotasks();
-    // Let the first (immediate) claim happen before measuring idle intervals.
-    await advance(5);
-    expect(probe.claimTimes.length).toBe(1);
-    expect(probe.claimIdleLadder[0]).toBe(3000);
-
-    // Collect the next eight idle attempts; the ladder must double then cap.
-    const deltas: number[] = [];
-    for (let round = 0; round < 8; round++) {
-      const before = probe.claimTimes.length;
-      await advanceToNextClaim(probe);
-      deltas.push(probe.claimTimes.at(-1)! - probe.claimTimes[before - 1]!);
-    }
-    // The wait applied before attempt N is the ladder value observed on attempt N-1.
-    expect(probe.claimIdleLadder.slice(0, 8)).toEqual([
-      3000, 6000, 12_000, 24_000, 30_000, 30_000, 30_000, 30_000,
-    ]);
-    // And the claims really waited that long. The tolerance only absorbs the
-    // timer tick that lands the first claim; the ladder above is exact.
-    const expectedWaits = [3000, 6000, 12_000, 24_000, 30_000];
-    for (const [index, expected] of expectedWaits.entries()) {
-      expect(Math.abs(deltas[index]! - expected)).toBeLessThanOrEqual(10);
-    }
-    expect(Math.max(...deltas)).toBeLessThanOrEqual(30_010);
+    await advance(10 * 60_000);
+    expect(probe.claims).toBe(0);
+    expect(probe.claimTimes).toEqual([]);
+    expect(probe.heartbeats).toBe(0);
   }, 20_000);
 
   it("does not spin the poll loop while claims are paused or draining", async () => {
@@ -413,98 +392,58 @@ describe("daemon poll cadence", () => {
     expect(probe.claims).toBe(claimsBeforePause);
   }, 20_000);
 
-  it("resets the idle backoff when a claim finally returns work", async () => {
+  it("does not consume work from the removed HTTP claim path", async () => {
     jest.useFakeTimers();
-    let deliverTask = false;
+    const probe = track(createLoopDaemon({ claims: () => ({ id: "tsk_legacy", prompt: "legacy" }) }));
     let handled = 0;
-    let delivered = 0;
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-      // Exactly one task: the stub handleTask never consumes a concurrency slot,
-      // so a stub that kept returning work would spin the pump forever.
-      claims: () => {
-        if (!deliverTask || delivered >= 1) return null;
-        delivered++;
-        return { id: "tsk_1", agentId: "agt_1", workspaceId: "local", prompt: "x" };
-      },
-    }));
-    (probe.daemon as unknown as { handleTask: () => Promise<void> }).handleTask = async () => { handled++; };
-
+    (probe.daemon as unknown as { handleTask(): Promise<void> }).handleTask = async () => { handled++; };
     await flushMicrotasks();
-    // Back off to the cap first so the reset is unambiguous.
-    for (let round = 0; round < 6; round++) await advanceToNextClaim(probe);
-    expect((probe.daemon as unknown as { claimIdleMs: number }).claimIdleMs).toBe(30_000);
-
-    deliverTask = true;
-    await advanceToNextClaim(probe);
-    await flushMicrotasks();
-    expect(handled).toBe(1);
-    // Claiming work resets the ladder to the base interval.
-    expect((probe.daemon as unknown as { claimIdleMs: number }).claimIdleMs).toBe(3000);
-    expect(probe.claimIdleLadder.at(-1)).toBe(30_000);
+    await advance(10 * 60_000);
+    expect(probe.claims).toBe(0);
+    expect(handled).toBe(0);
   }, 20_000);
 
-  it("resets the idle backoff when a slot frees, drain clears, or claims resume", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon({
-      ack: () => ({ agent_plugins: { revision: "rev-1" } }),
-    }));
-    await flushMicrotasks();
-    await advance(30_000);
+  it("wakes on slot release, update pause release and drain release without HTTP claims", async () => {
+    const probe = track(createLoopDaemon({ startLoop: false }));
     const internal = probe.daemon as unknown as {
-      claimIdleMs: number;
-      nextClaimAt: number;
-      activeTaskCount: number;
-      releaseActiveTaskSlot(): void;
-      releaseLocalUpdateClaimPause(): void;
-      claimsPaused: boolean;
+      activeTaskCount: number; claimsPaused: boolean; serverDrainActive: boolean;
+      waitWake(): void; releaseActiveTaskSlot(): void; releaseLocalUpdateClaimPause(): void;
     };
-
-    // A finished task frees capacity, so a queued task may already be waiting.
+    let wakes = 0;
+    internal.waitWake = () => { wakes++; };
     internal.activeTaskCount = 1;
-    internal.claimIdleMs = 30_000;
     internal.releaseActiveTaskSlot();
     expect(internal.activeTaskCount).toBe(0);
-    expect(internal.claimIdleMs).toBe(3000);
-    expect(internal.nextClaimAt).toBeLessThanOrEqual(Date.now());
-
-    // A released update pause resumes claims immediately.
-    internal.claimIdleMs = 30_000;
+    expect(wakes).toBe(1);
     internal.claimsPaused = true;
     internal.releaseLocalUpdateClaimPause();
-    expect(internal.claimIdleMs).toBe(3000);
     expect(internal.claimsPaused).toBe(false);
-
-    // And a drain returning to normal does the same through the ack path.
-    internal.claimIdleMs = 30_000;
-    internal.claimsPaused = true;
-    (probe.daemon as unknown as { serverDrainActive: boolean }).serverDrainActive = true;
+    expect(wakes).toBe(2);
+    internal.serverDrainActive = true;
     // MUL-419: 换回真实 v2 下发
     await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
-    expect(internal.claimIdleMs).toBe(3000);
-  }, 20_000);
+    expect(internal.serverDrainActive).toBe(false);
+    expect(internal.claimsPaused).toBe(false);
+    expect(wakes).toBeGreaterThanOrEqual(3);
+    expect(probe.claims).toBe(0);
+  });
 
-  it("resets the idle backoff when a business input resumes the claim lane", async () => {
-    jest.useFakeTimers();
-    const probe = track(createLoopDaemon());
-    await flushMicrotasks();
-    await advance(5);
-    for (let round = 0; round < 6; round++) await advanceToNextClaim(probe);
-    const internal = probe.daemon as unknown as { claimIdleMs: number; serverDrainActive: boolean };
-    expect(internal.claimIdleMs).toBe(30_000);
+  it("a drain-release input wakes the loop immediately without restarting HTTP claims", async () => {
+    const probe = track(createLoopDaemon({ startLoop: false }));
+    const internal = probe.daemon as unknown as { serverDrainActive: boolean; waitWake(): void };
     internal.serverDrainActive = true;
-    const claimsBefore = probe.claimTimes.length;
+    let wokeAt: number | null = null;
+    internal.waitWake = () => { wokeAt = Date.now(); };
     const queuedAt = Date.now();
     // MUL-419: 换回真实 v2 下发
     await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
-    await flushMicrotasks();
-    await advance(20);
-    expect(probe.claimTimes.length).toBe(claimsBefore + 1);
-    expect(probe.claimTimes.at(-1)! - queuedAt).toBeLessThanOrEqual(1000);
-    expect(probe.claimIdleLadder.at(-1)).toBe(3000);
-  }, 20_000);
+    expect(wokeAt).not.toBeNull();
+    expect(wokeAt! - queuedAt).toBeLessThanOrEqual(1000);
+    expect(internal.serverDrainActive).toBe(false);
+    expect(probe.claims).toBe(0);
+  });
 
-  it("keeps the claim backoff running when the protocol channel is unavailable", async () => {
+  it("never falls back to HTTP claim while the protocol channel is unavailable", async () => {
     jest.useFakeTimers();
     const client = new DaemonProtocolClient({
       serverUrl: "http://127.0.0.1:1", daemonId: "offline", cliVersion: "0.2.83",
@@ -523,7 +462,7 @@ describe("daemon poll cadence", () => {
     await flushMicrotasks();
     expect(client.connectionState()).toBe("disconnected");
     await advance(10 * 60_000);
-    expect(probe.claims).toBeGreaterThanOrEqual(5);
+    expect(probe.claims).toBe(0);
     expect(probe.heartbeats).toBe(0);
     expect(client.health().state).toBe("disconnected");
     expect(client.diagnostics().timers).toBe(1);

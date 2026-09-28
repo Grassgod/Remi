@@ -2986,6 +2986,8 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_tasks", "codex_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "claude_profile TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "offered_at TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "accepted_at TEXT");
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   migrateExecutionScopedLanes(db);
   addColumnIfMissing(db, "multiremi_session_agent_lanes", "parent_cursor_seq INTEGER NOT NULL DEFAULT 0");

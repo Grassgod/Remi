@@ -4777,6 +4777,20 @@ runMigrations(this.db);
     return this.tasks.claimTask(runtimeId, options);
   }
 
+  recordTaskOffered(taskId: string, runtimeId: string, at?: string): boolean {
+    return this.tasks.recordTaskOffered(taskId, runtimeId, at);
+  }
+
+  acceptTaskOffer(taskId: string, runtimeId: string, at?: string): boolean {
+    return this.tasks.acceptTaskOffer(taskId, runtimeId, at);
+  }
+
+  releaseTaskOfferLease(taskId: string): void { this.tasks.releaseTaskOfferLease(taskId); }
+
+  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
+    return this.tasks.requeueTaskOffer(taskId, runtimeId);
+  }
+
   startTask(taskId: string): MultiremiTask {
     return this.tasks.startTask(taskId);
   }
@@ -5052,7 +5066,7 @@ runMigrations(this.db);
     return this.tasks.reportTaskUsage(taskId, usage);
   }
 
-  recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
-    return this.tasks.recoverOrphans(runtimeId);
+  recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {
+    return this.tasks.recoverOrphans(runtimeId, activeTaskIds);
   }
 }

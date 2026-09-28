@@ -205,6 +205,8 @@ export interface DaemonSessionOptions {
   onFrame?(sample: WsFrameSample): void;
   /** Connection ended, for any reason. Called at most once. */
   onClose?(): void;
+  onBestEffort?(frame: DaemonParsedFrame): void;
+  onDrain?(): void;
   /** Time seam. Defaults to the real clock; tests install a manual one. */
   clock?: DaemonProtocolClock;
 }
@@ -326,6 +328,7 @@ export class DaemonProtocolSession {
   handleDrain(): void {
     if (this.closed) return;
     this.paused = false;
+    this.options.onDrain?.();
   }
 
   /** Socket-level close: the peer disconnected. Nothing to send back. */
@@ -785,8 +788,7 @@ export class DaemonProtocolSession {
       this.sendReply(frame.id ?? "", reply ?? { ok: true });
       return null;
     }
-    // `runtime.ready` and `concierge.status` belong to A-3/A-4. Accepting them
-    // here keeps the transport from rejecting a frame a later sub-issue owns.
+    this.options.onBestEffort?.(frame);
     return null;
   }
 

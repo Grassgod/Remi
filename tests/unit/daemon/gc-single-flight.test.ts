@@ -123,7 +123,9 @@ describe("daemon Session archive GC orchestration", () => {
       runtimeModelRetryWake: null,
       workspaceRootFence: null,
       supervisorReady: () => true,
-      onReadyChange: () => {},
+      onReadyChange: (ready: boolean) => {
+        if (ready) { loopEntered(); daemon.stop(); }
+      },
     });
 
     let stopped = false;
@@ -272,6 +274,7 @@ describe("daemon Session archive GC orchestration", () => {
     const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon & Record<string, unknown>;
     let barrierReady = false;
     let claims = 0;
+    let connections = 0;
     let providerReady!: () => void;
     const providerReachedBarrier = new Promise<void>((resolve) => { providerReady = resolve; });
     Object.assign(daemon, {
@@ -298,6 +301,9 @@ describe("daemon Session archive GC orchestration", () => {
           return null;
         },
       },
+      protocolClient: {
+        startLane: () => { connections++; daemon.stop(); }, stopLane: () => {}, drain: async () => {},
+      },
       sshMeshManager: {
         getHeartbeatStatus: () => ({ protocol_version: 1, state: "disabled", peers: [] }),
       },
@@ -320,10 +326,12 @@ describe("daemon Session archive GC orchestration", () => {
     await providerReachedBarrier;
     await Bun.sleep(30);
     expect(claims).toBe(0);
+    expect(connections).toBe(0);
 
     barrierReady = true;
     await run;
-    expect(claims).toBe(1);
+    expect(connections).toBe(1);
+    expect(claims).toBe(0);
   });
 
   it("runs snapshot GC even when workspace GC fails, then reports the workspace error", async () => {

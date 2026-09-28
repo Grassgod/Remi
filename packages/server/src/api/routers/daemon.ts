@@ -74,7 +74,7 @@ import type {
   MultiremiTask,
   SubmitFeishuBotMessageInput,
 } from "@multiremi/contracts/types.js";
-import { BinarySkillFilesUnsupportedError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
@@ -82,12 +82,6 @@ import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
-import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
-import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.js";
-
-/** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
-const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
-import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
 
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
@@ -156,7 +150,6 @@ function validateDaemonInstallRequestBody(
 
 export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   const { store, authToken } = deps;
-  const preparingClaims = new Map<string, Promise<Record<string, unknown> | null>>();
 
   app.post("/api/daemon/scm/git-credentials", async (c) => {
     const body = await readJsonStrict<{
@@ -935,76 +928,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     c.header("Cache-Control", "no-store");
     return c.json({ allowed });
   });
-  // Multiremi daemon-compatible endpoints.
-  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    const body = await readJsonStrictAllowEmpty<{ supports_binary_skill_files?: unknown }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (!body || typeof body !== "object" || Array.isArray(body)
-      || (body.supports_binary_skill_files !== undefined && typeof body.supports_binary_skill_files !== "boolean")) {
-      return c.json({ error: "supports_binary_skill_files must be a boolean" }, 400);
-    }
-    let preparing = preparingClaims.get(runtimeId);
-    // A duplicate poll must not deliver the same Task twice while its first claim is preparing.
-    if (preparing) return c.json({ task: null });
-    if (!preparing) {
-      preparing = (async () => {
-        const task = store.claimTask(runtimeId, { supportsBinarySkillFiles: body.supports_binary_skill_files === true });
-        if (!task) return null;
-        // Checkout scope is server-owned metadata, independent of Wiki body availability.
-        const remotes = new Set(task.repos.map(repo => canonicalRepositoryRemote(repo.url)));
-        for (const repo of resolveTaskRepositoryWikiRepositories(store, task)) {
-          if (!remotes.has(canonicalRepositoryRemote(repo.url))) {
-            task.repos.push({ url: repo.url });
-            remotes.add(canonicalRepositoryRemote(repo.url));
-          }
-        }
-        const hydratedTask = await hydrateClaimKnowledge(task, deps.projectKnowledge, deps.repositoryWiki);
-        // The hydration above awaits work outside the store, so nothing this request wrote can
-        // have invalidated the cached Task row: another request may have cancelled the Task while
-        // it ran, and a cached row would still say `dispatched`. Drop the request cache so the
-        // re-check below reads committed state — that check is the whole reason a cancelled Task
-        // is not delivered.
-        invalidateRequestReadCache();
-        const current = store.getTask(task.id);
-        if (current?.status !== "dispatched" || current.runtimeId !== runtimeId) return null;
-        const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
-        const runtime = store.getRuntime(runtimeId);
-        // Every claim gets a task capability, including ownerless runtimes left by
-        // older releases. The task/agent/workspace bindings enforce authorization.
-        const ownerId = cleanString(runtime?.ownerId) ?? "local";
-        const token = await store.createTaskAccessToken(task, ownerId);
-        response.auth_token = token.token;
-        return response;
-      })().finally(() => preparingClaims.delete(runtimeId));
-      preparingClaims.set(runtimeId, preparing);
-    }
-    try {
-      return c.json({ task: await preparing });
-    } catch (error) {
-      if (error instanceof BinarySkillFilesUnsupportedError) {
-        return c.json({ error: error.message, code: "binary_skill_files_unsupported" }, 409);
-      }
-      throw error;
-    }
-  });
-  app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
-    const runtime = store.getRuntime(c.req.param("runtimeId"));
-    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    // MUL-386 C.1: was `store.listTasks()` (every task in the deployment, full
-    // rows) filtered down to this runtime's queued/dispatched work. `/tasks/pending`
-    // is polled by daemons, so the unbounded read turned into an 8 MB+ bridge reply
-    // that the bridge hard limit now refuses. Filter in SQL instead.
-    const tasks = store.listTasksForRuntimeStatuses(runtime.id, DAEMON_PENDING_TASK_STATUSES)
-      .sort(compareDaemonPendingTasks)
-      .map((task) => daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-    return c.json(tasks);
-  });
-  app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    if (!store.getRuntime(runtimeId)) return c.json({ error: "runtime not found" }, 404);
-    return c.json(store.recoverOrphans(runtimeId));
-  });
   app.post("/api/daemon/tasks/:taskId/start", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
@@ -1016,15 +939,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     const task = store.startTask(taskId);
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/dispatch-lease", (c) => {
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    const task = store.renewTaskDispatchLease(taskId);
-    return c.json({ status: task.status });
   });
   app.post("/api/daemon/tasks/:taskId/wait-local-directory", async (c) => {
     const taskId = c.req.param("taskId");

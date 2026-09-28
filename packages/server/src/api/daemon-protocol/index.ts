@@ -38,6 +38,7 @@ import {
   setDaemonProtocolDbCounters,
   type DaemonProtocolSocket,
   type DaemonSessionHeartbeat,
+  type DaemonSessionHello,
   type DaemonSessionRuntimeAuthorization,
 } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
@@ -52,7 +53,18 @@ export interface DaemonProtocolIdentity {
 /** An RPC handler a later sub-issue registers. */
 export type DaemonProtocolRpcHandler = (
   frame: DaemonParsedFrame,
+  session: DaemonProtocolSession,
 ) => Promise<unknown | null> | unknown | null;
+
+export interface DaemonProtocolSessionHooks {
+  stop?(): void;
+  hello?(session: DaemonProtocolSession, hello: DaemonSessionHello): void;
+  heartbeat?(session: DaemonProtocolSession, heartbeat: DaemonSessionHeartbeat): void;
+  reply?(session: DaemonProtocolSession, frame: DaemonParsedFrame): void;
+  ack?(session: DaemonProtocolSession, ack: number): void;
+  drain?(session: DaemonProtocolSession): void;
+  close?(session: DaemonProtocolSession): void;
+}
 
 export interface DaemonProtocolLayerOptions {
   store: MultiremiStore;
@@ -76,6 +88,9 @@ export class DaemonProtocolLayer {
   private readonly metrics: WsFrameMetricsRuntime | null;
   /** RPC handlers registered by later sub-issues, keyed by frame type. */
   private readonly rpcHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly bestEffortHandlers = new Map<string, (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
+  private readonly sessionHooks = new Set<DaemonProtocolSessionHooks>();
+  private readonly background = new Set<Promise<unknown>>();
 
   constructor(options: DaemonProtocolLayerOptions) {
     this.store = options.store;
@@ -91,22 +106,33 @@ export class DaemonProtocolLayer {
 
   stop(): void {
     this.metrics?.stop();
+    for (const hooks of this.sessionHooks) hooks.stop?.();
   }
 
 
   /** Open a v2 session for an upgraded socket. */
   openSession(socket: DaemonProtocolSocket, identity: DaemonProtocolIdentity): DaemonProtocolSession {
     const sessionId = createId("dws");
-    const session = new DaemonProtocolSession({
+    const session: DaemonProtocolSession = new DaemonProtocolSession({
       sessionId,
       socket,
       registry: this.registry,
       serverVersion: this.serverVersion,
       ownerAccessToken: identity.accessToken,
       authorizeRuntime: (daemonId, runtimeId) => this.authorizeRuntime(identity, daemonId, runtimeId),
-      onHeartbeat: (heartbeat) => this.handleHeartbeat(heartbeat),
+      onHello: hello => { for (const hooks of this.sessionHooks) hooks.hello?.(session, hello); },
+      onHeartbeat: heartbeat => {
+        const reply = this.handleHeartbeat(heartbeat);
+        for (const hooks of this.sessionHooks) hooks.heartbeat?.(session, heartbeat);
+        return reply;
+      },
       onFrame: (sample) => this.metrics?.record(sample),
-      onRpc: (frame) => this.dispatchRpc(frame),
+      onRpc: frame => this.dispatchRpc(frame, session),
+      onBestEffort: frame => this.bestEffortHandlers.get(frame.type)?.(frame, session),
+      onReply: frame => { for (const hooks of this.sessionHooks) hooks.reply?.(session, frame); },
+      onAck: ack => { for (const hooks of this.sessionHooks) hooks.ack?.(session, ack); },
+      onDrain: () => { for (const hooks of this.sessionHooks) hooks.drain?.(session); },
+      onClose: () => { for (const hooks of this.sessionHooks) hooks.close?.(session); },
     });
     return session;
   }
@@ -200,15 +226,30 @@ export class DaemonProtocolLayer {
     this.rpcHandlers.set(frameType, handler);
   }
 
+  registerBestEffortHandler(frameType: string, handler: (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void): void {
+    this.bestEffortHandlers.set(frameType, handler);
+  }
+
+  registerSessionHooks(hooks: DaemonProtocolSessionHooks): void { this.sessionHooks.add(hooks); }
+
+  trackBackground(run: Promise<unknown>): void {
+    this.background.add(run);
+    void run.finally(() => this.background.delete(run)).catch(() => {});
+  }
+
+  async drain(): Promise<void> {
+    while (this.background.size) await Promise.allSettled([...this.background]);
+  }
+
   /** Close every live session with 4001 (server shutdown). */
   closeAll(reason = "server shutting down"): void {
     for (const session of this.registry.listSessions()) session.closeForServerShutdown();
   }
 
-  private async dispatchRpc(frame: DaemonParsedFrame): Promise<unknown | null> {
+  private async dispatchRpc(frame: DaemonParsedFrame, session: DaemonProtocolSession): Promise<unknown | null> {
     const handler = this.rpcHandlers.get(frame.type);
     if (!handler) return null;
-    return handler(frame);
+    return handler(frame, session);
   }
 
   /**

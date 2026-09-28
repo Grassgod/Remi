@@ -1,9 +1,10 @@
+import { taskOfferResponse, receiveTaskOffer, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
 // The exact payload shapes the Go daemon expects from pending/claim polling,
 // plus the issue-update paths that dispatch a task.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
-import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { MultiremiDaemonClient, normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { prepareFeishuIssueTopic as prepareIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
@@ -26,7 +27,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.chatProjectId).toBe(project.id);
     expect(claimed?.issue).toBeNull();
@@ -126,7 +127,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
 
     mockFetch(() => jsonResponse({ task: wire }));
-    const normalized = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const normalized = normalizeDaemonClaimTask(wire);
     expect(normalized?.repositoryWikiContexts?.[0]?.docs[0]).toMatchObject({
       id: stored.id,
       body: "",
@@ -165,8 +166,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(high.id);
 
     const app = createMultiremiApp({ store });
-    const pending = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    const pendingBody = await pending.json();
+    const pendingBody = pendingTaskWireSnapshot(store, runtime.id);
     expect(pendingBody.map((item: any) => item.id)).toEqual([high.id, sameOld.id, sameNew.id, low.id]);
     expect(pendingBody.map((item: any) => item.status)).toEqual(["dispatched", "queued", "queued", "queued"]);
     expect(Object.keys(pendingBody[0]).sort()).toEqual([
@@ -287,7 +287,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const second = store.createTask({ agentId: agent.id, issueId: secondIssue.id, prompt: "Second claim" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const claimTask = (await claim.json()).task;
     expect(claimTask).toMatchObject({
@@ -359,7 +359,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
     const client = new MultiremiDaemonClient("https://remi.example");
-    const normalized = await client.claimTask(runtime.id);
+    const normalized = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
     expect(normalized).toMatchObject({
       id: second.id,
       agentId: agent.id,
@@ -448,7 +448,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
 
-    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.issue?.attachments).toEqual([
@@ -529,13 +529,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.project?.instructions).toBe(latestInstructions);
     expect(claimed?.project?.instructionsRevision).toBe(updatedProject.instructionsRevision);
     expect(claimed?.project?.instructionsUpdatedAt).toBe(updatedProject.instructionsUpdatedAt);
-    const prompt = buildTaskPrompt(claimed);
+    const prompt = buildTaskPrompt(claimed!);
     expect(prompt).toContain(`## Project Instructions\n${latestInstructions}`);
     expect(prompt).not.toContain("Use the instructions from task creation time.");
   });
@@ -579,7 +579,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const claimed = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed?.id).toBe(task.id);
     expect(claimed?.squadContext).toMatchObject({
@@ -658,7 +658,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
 
     const claimed: any[] = [];
     for (let index = 0; index < 3; index++) {
-      const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+      const claim = await taskOfferResponse(store, runtime.id);
       expect(claim.status).toBe(200);
       claimed.push((await claim.json()).task);
     }
@@ -773,7 +773,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
 
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
     const retry = (await response.json()).task;
     expect(retry).toMatchObject({
@@ -820,7 +820,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
           session_execution_fingerprint = NULL WHERE id = ?`, [chat.id]);
 
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
     const wire = (await response.json()).task;
     expect(wire.id).toBe(pending.task.id);
@@ -863,7 +863,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(store.getTask(sent.task.id)?.issueId).toBe(issue.id);
 
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const response = await taskOfferResponse(store, runtime.id);
     expect(response.status).toBe(200);
     const wire = (await response.json()).task;
     expect(wire.id).toBe(sent.task.id);
@@ -896,7 +896,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const app = createMultiremiApp({ store });
 
     const first = store.sendChatMessage(chat.id, { body: "First bound request" });
-    const firstResponse = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const firstResponse = await taskOfferResponse(store, runtime.id);
     expect(firstResponse.status).toBe(200);
     const firstClaim = (await firstResponse.json()).task;
     expect(firstClaim.session_projection.mode).toBe("bootstrap");
@@ -913,7 +913,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     store.startTask(first.task.id);
     store.completeTask(first.task.id, { output: "First answer", sessionId: "sess_chat_delta" });
     const second = store.sendChatMessage(chat.id, { body: "Second bound request" });
-    const secondResponse = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const secondResponse = await taskOfferResponse(store, runtime.id);
     expect(secondResponse.status).toBe(200);
     const secondClaim = (await secondResponse.json()).task;
     expect(secondClaim.session_projection.mode).toBe("delta");
@@ -1026,8 +1026,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     store.pinTaskSession(workdirTask.id, "sess-workdir", "/Users/alice/src/remi");
 
     const app = createMultiremiApp({ store });
-    const pending = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    const pendingBody = await pending.json();
+    const pendingBody = pendingTaskWireSnapshot(store, runtime.id);
     const byId = new Map(pendingBody.map((task: any) => [task.id, task]));
 
     expect(byId.get(workdirTask.id)).toMatchObject({
@@ -1095,8 +1094,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
 
     const app = createMultiremiApp({ store });
-    const pending = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    const pendingBody = await pending.json();
+    const pendingBody = pendingTaskWireSnapshot(store, runtime.id);
     const byId = new Map(pendingBody.map((task: any) => [task.id, task]));
 
     expect(byId.get(envRoot.id)).toMatchObject({
@@ -1162,8 +1160,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(task.triggerSummary).toBe(body);
 
     const app = createMultiremiApp({ store });
-    const pending = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
-    const pendingBody = await pending.json();
+    const pendingBody = pendingTaskWireSnapshot(store, runtime.id);
 
     expect(pendingBody).toHaveLength(1);
     expect(pendingBody[0]).toMatchObject({
@@ -1180,7 +1177,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       new_comments_since: previousStartedAt,
     });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     const claimBody = await claim.json();
     expect(claimBody.task).toMatchObject({
       id: task.id,

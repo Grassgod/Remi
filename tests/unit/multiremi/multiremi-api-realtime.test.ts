@@ -182,7 +182,7 @@ describe("Multiremi API — realtime websockets", () => {
     }
   });
 
-  it("serves process-wide v2 heartbeat and realtime health without v1 wake-up or pending delivery", async () => {
+  it("serves process-wide v2 heartbeat, realtime health and task offers without v1 wake-up", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_ws", name: "WS runtime", provider: "codex" });
     const second = store.registerRuntime({ id: "rt_ws_second", name: "Second WS runtime", provider: "claude" });
@@ -203,9 +203,12 @@ describe("Multiremi API — realtime websockets", () => {
       ] } });
       expect(ack.p.runtime_acks[0].pending_model_list).toBeUndefined();
       expect(store.getRuntimeModelListRequest(runtime.id, model.id)?.status).toBe("pending");
-      const queued = store.createTask({ agentId: agent.id, prompt: "polling transition" });
-      await expectNoWebSocketMessage(ws);
-      expect(store.claimTask(runtime.id)?.id).toBe(queued.id);
+      const nextOffer = nextWebSocketMessage(ws);
+      const queued = store.createTask({ agentId: agent.id, prompt: "push dispatch" });
+      const offer = await nextOffer;
+      expect(offer).toMatchObject({ t: "task.offer", rt: runtime.id, p: { id: queued.id } });
+      ws.send(JSON.stringify({ v: 2, t: "res", re: String(offer.seq), ack: offer.seq, p: { ok: true } }));
+      expect(store.getTask(queued.id)?.status).toBe("dispatched");
       store.cancelTask(queued.id);
       const update = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
       ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-pending", p: { active_task_count: 0 } }));
@@ -660,6 +663,8 @@ describe("Multiremi API — realtime websockets", () => {
       workspaceId: "local",
       prompt: "Do not assume daemon identity",
     });
+    expect(store.claimTask("rt_ws_local")?.id).toBe(task.id);
+    store.startTask(task.id);
     const taskToken = await store.createTaskAccessToken(task, "local");
     const removedMember = store.createWorkspaceMember({
       id: "member-removed-daemon-ws",
