@@ -351,6 +351,10 @@ export class ConversationLogRepo {
     const sets: string[] = [];
     const params: unknown[] = [];
     const fields = input.fields;
+    if (fields.task_id !== undefined) {
+      sets.push("task_id = ?");
+      params.push(fields.task_id);
+    }
     if (fields.body_md !== undefined) {
       sets.push("body_md = ?");
       params.push(fields.body_md);

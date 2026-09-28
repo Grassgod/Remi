@@ -47,7 +47,7 @@ describe("conversation log (MUL-426)", () => {
     expect(bodies[1]).toEqual(bodies[2]);
   });
 
-  it("updates comments in place, emits resolved patches, and never mirrors legacy resolve markers", () => {
+  it("updates comments in place, emits resolved patches, and appends hidden resolve markers", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Patches", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
@@ -67,7 +67,13 @@ describe("conversation log (MUL-426)", () => {
     });
     expect("session_id" in patches[0]!).toBe(false);
     expect(store.getConversationLogEntryById(comment.id)?.revision).toBe(original.revision + 2);
-    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind.includes("resolved"))).toEqual([]);
+    // Ruling (m), cmt_s8kpg7mhyd7g: mirror hidden resolve markers per Senior ruling ③.
+    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind.includes("resolved"))
+      .map((entry) => ({ kind: entry.kind, visibility: entry.visibility, seq: entry.seq, target_seq: entry.metadata.target_seq })))
+      .toEqual([
+        { kind: "thread_resolved", visibility: "hidden", seq: 2, target_seq: 1 },
+        { kind: "thread_unresolved", visibility: "hidden", seq: 3, target_seq: 1 },
+      ]);
 
     store.updateIssueComment(comment.id, { body: "second" });
     const edited = store.getConversationLogEntryById(comment.id)!;
@@ -102,7 +108,10 @@ describe("conversation log (MUL-426)", () => {
     expect(patches[0]?.fields).toMatchObject({
       resolved_at: null, resolved_by_type: null, resolved_by_id: null,
     });
-    expect(store.listConversationLogEntries(sessionId).filter((entry) => entry.kind.includes("resolved"))).toEqual([]);
+    // Ruling (m), cmt_s8kpg7mhyd7g: mirror hidden resolve markers per Senior ruling ③.
+    expect(store.listConversationLogEntries(sessionId).filter((entry) => entry.kind.includes("resolved"))
+      .map((entry) => ({ kind: entry.kind, visibility: entry.visibility, seq: entry.seq, target_seq: entry.metadata.target_seq })))
+      .toEqual([{ kind: "thread_resolved", visibility: "hidden", seq: 2, target_seq: 1 }]);
   });
 
   it("rolls back a log append together with its allocated seq", () => {

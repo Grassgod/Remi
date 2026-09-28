@@ -8,15 +8,21 @@ export const CHAT_ISSUE_DECOUPLED_FINGERPRINT = "chat-issue-decoupled";
 
 /** Retry lineage is structural. Editable prompt text must never erase the
  * provenance of a generated notification; an explicit user turn is a new input. */
-export function chatTaskRetryParentSql(child: string, parent: string): string {
+export function chatTaskRetryParentSql(child: string, parent: string, source: "log" | "legacy" = "log"): string {
+  const userInput = source === "legacy"
+    ? `SELECT 1 FROM multiremi_chat_messages retry_input
+      WHERE retry_input.task_id = ${child}.id AND retry_input.role = 'user'`
+    : `SELECT 1 FROM multiremi_conversation_log retry_input
+      JOIN multiremi_chat_sessions retry_session ON retry_session.id = retry_input.session_id
+      WHERE retry_input.task_id = ${child}.id AND retry_input.kind = 'message'
+        AND retry_input.author_type = 'member' AND retry_input.deleted_at IS NULL`;
   return `${child}.parent_task_id = ${parent}.id
     AND ${child}.workspace_id = ${parent}.workspace_id
     AND ${child}.agent_id = ${parent}.agent_id
     AND ${child}.chat_session_id = ${parent}.chat_session_id
     AND ${child}.task_kind = ${parent}.task_kind
     AND ${child}.attempt > 1 AND ${child}.attempt = ${parent}.attempt + 1
-    AND NOT EXISTS (SELECT 1 FROM multiremi_chat_messages retry_input
-      WHERE retry_input.task_id = ${child}.id AND retry_input.role = 'user')`;
+    AND NOT EXISTS (${userInput})`;
 }
 
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];

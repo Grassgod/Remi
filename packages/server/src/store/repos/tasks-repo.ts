@@ -270,7 +270,7 @@ const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = `(
   )
 )`;
 
-interface DelegationWakeupInput {
+export interface DelegationWakeupInput {
   sourceTaskId: string;
   requiredEventSeq: number;
   triggerCommentId?: string | null;
@@ -642,6 +642,24 @@ export class TasksRepo {
     return result;
   }
 
+  /** Caller owns COMMIT and must flush the queue and collected child-status hooks afterwards. */
+  ensureDelegationWakeupWithinTransaction(
+    input: DelegationWakeupInput,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): DelegationWakeupResult {
+    const initial = this.getTask(input.sourceTaskId);
+    if (!initial) return { task: null, created: false, covered: false };
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const source = this.getTask(input.sourceTaskId);
+    if (!source || source.workspaceId !== initial.workspaceId) {
+      return { task: null, created: false, covered: false };
+    }
+    const result = this.ensureDelegationWakeupWithinWorkspaceLock(source, input, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(...(result.createdTasks ?? (result.created && result.task ? [result.task] : [])));
+    return result;
+  }
+
   /**
    * Caller owns the transaction; notification and the E1/E2 hook must happen
    * only after it commits. `childStatusChanges` is required (see
@@ -703,7 +721,7 @@ export class TasksRepo {
     const expectedExecutionFingerprint = inheritedExecutionFingerprint
       ?? this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
     const triggerCommentId = cleanOptionalString(input.triggerCommentId ?? input.trigger_comment_id);
-    const triggerComment = triggerCommentId ? this.ctx.getRawIssueComment(triggerCommentId) : null;
+    const triggerComment = triggerCommentId ? this.ctx.getLogIssueComment(triggerCommentId) : null;
     if (triggerCommentId && !triggerComment) throw new Error(`Comment not found: ${triggerCommentId}`);
     const requestedParentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
     const parentTaskId = requestedParentTaskId ?? triggerComment?.taskId ?? null;
@@ -1494,7 +1512,7 @@ export class TasksRepo {
 
   getTaskTriggerMetadata(task: MultiremiTask): MultiremiTaskTriggerMetadata | null {
     if (!task.triggerCommentId) return null;
-    const comment = this.ctx.getRawIssueComment(task.triggerCommentId);
+    const comment = this.ctx.getLogIssueComment(task.triggerCommentId);
     if (!comment) return null;
 
     const lastStartedAt = this.getLastTaskStartedAtForIssueAndAgent(task.issueId ?? comment.issueId, task.agentId, task.id);
@@ -2346,7 +2364,9 @@ export class TasksRepo {
           AND b.agent_id = t.agent_id) AS feishu_transport
       FROM multiremi_tasks t WHERE t.workspace_id = ?
       AND t.chat_session_id IS NOT NULL AND t.status = 'queued' AND t.execution_fingerprint IS NULL AND t.attempt = 1
-      AND (EXISTS (SELECT 1 FROM multiremi_chat_messages m WHERE m.task_id = t.id AND m.role = 'user')
+      AND (EXISTS (SELECT 1 FROM multiremi_conversation_log m
+          JOIN multiremi_chat_sessions message_session ON message_session.id = m.session_id WHERE m.task_id = t.id
+          AND m.kind = 'message' AND m.author_type = 'member' AND m.deleted_at IS NULL)
         OR EXISTS (SELECT 1 FROM multiremi_feishu_bot_chat_bindings b
           WHERE b.chat_session_id = t.chat_session_id AND b.workspace_id = t.workspace_id
             AND b.agent_id = t.agent_id))`).all(workspaceId) as Row[];
@@ -3584,7 +3604,7 @@ export class TasksRepo {
     const seen = new Set<string>();
     while (current.parentId && !seen.has(current.parentId)) {
       seen.add(current.id);
-      const parent = this.ctx.getRawIssueComment(current.parentId);
+      const parent = this.ctx.getLogIssueComment(current.parentId);
       if (!parent) break;
       current = parent;
     }
@@ -3613,11 +3633,13 @@ export class TasksRepo {
   private countNewCommentsSince(issueId: string, since: string, anchorCommentId: string, agentId: string): number {
     const row = this.ctx.db.query(
       `SELECT COUNT(*) AS count
-       FROM multiremi_issue_comments
-       WHERE issue_id = ?
-         AND created_at > ?
-         AND id <> ?
-         AND NOT (author_type = 'agent' AND author_id = ?)`,
+       FROM multiremi_conversation_log log
+       JOIN multiremi_issue_sessions s ON s.id = log.session_id
+       WHERE s.issue_id = ? AND log.kind IN ('message', 'system')
+         AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.deleted_at IS NULL
+         AND log.created_at > ?
+         AND log.id <> ?
+         AND NOT (log.author_type = 'agent' AND log.author_id = ?)`,
     ).get(issueId, since, anchorCommentId, agentId) as { count: number } | null;
     return Number(row?.count ?? 0);
   }
@@ -3790,7 +3812,7 @@ export class TasksRepo {
     const reportRows = this.ctx.db.query(
       `SELECT task.*,
               (SELECT MAX(event.seq)
-               FROM multiremi_session_events event
+               FROM multiremi_conversation_log event
                WHERE event.session_id = task.issue_session_id
                  AND event.task_id = task.id
                  AND event.kind IN ('task_completed', 'task_failed', 'task_cancelled')) AS terminal_event_seq
@@ -3802,7 +3824,7 @@ export class TasksRepo {
          AND task.agent_id <> task.delegated_by_agent_id
          AND task.delegation_return_task_id IS NULL
          AND EXISTS (
-           SELECT 1 FROM multiremi_session_events terminal_event
+           SELECT 1 FROM multiremi_conversation_log terminal_event
            WHERE terminal_event.session_id = task.issue_session_id
              AND terminal_event.task_id = task.id
              AND terminal_event.kind IN ('task_completed', 'task_failed', 'task_cancelled')
@@ -4612,7 +4634,7 @@ export class TasksRepo {
       if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt, task.id)) {
         return null;
       }
-      const parent = task.triggerCommentId ? this.ctx.issues().getIssueComment(task.triggerCommentId) : null;
+      const parent = task.triggerCommentId ? this.ctx.getLogIssueComment(task.triggerCommentId) : null;
       const comment = this.ctx.db.transaction(() => {
         const created = this.ctx.issues().createIssueComment(task.issueId!, {
           issueSessionId: task.issueSessionId,
@@ -4650,12 +4672,13 @@ export class TasksRepo {
     // Branch on `since` in JS rather than `(? IS NULL OR …)` in SQL: Postgres
     // cannot infer the type of a placeholder that only appears in IS NULL and
     // rejects the whole query ("could not determine data type of parameter").
-    const base = `SELECT 1 AS present FROM multiremi_issue_comments
-       WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
-         AND task_id = ?`;
+    const base = `SELECT 1 AS present FROM multiremi_conversation_log log
+       JOIN multiremi_issue_sessions s ON s.id = log.session_id
+       WHERE s.issue_id = ? AND log.author_type = 'agent' AND log.author_id = ? AND log.kind = 'message'
+         AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.deleted_at IS NULL AND log.task_id = ?`;
     const row = (since == null
       ? this.ctx.db.query(`${base} LIMIT 1`).get(issueId, agentId, taskId)
-      : this.ctx.db.query(`${base} AND created_at >= ? LIMIT 1`).get(issueId, agentId, taskId, since)) as { present: number } | null;
+      : this.ctx.db.query(`${base} AND log.created_at >= ? LIMIT 1`).get(issueId, agentId, taskId, since)) as { present: number } | null;
     return Boolean(row);
   }
 

@@ -33,6 +33,10 @@ describe("Issue sessions and per-agent projection lanes", () => {
     db!.run("UPDATE multiremi_issue_comments SET issue_session_id = NULL WHERE issue_id = ?", [issue.id]);
     db!.run("UPDATE multiremi_tasks SET issue_session_id = NULL WHERE issue_id = ?", [issue.id]);
     db!.run("DELETE FROM multiremi_session_events WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id = ?)", [issue.id]);
+    // MUL-427 ruling (i), cmt_0buuxntn73ab: a pre-v2 fixture has no log, heads or B7 ledger.
+    db!.run("DELETE FROM multiremi_conversation_log WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id = ?)", [issue.id]);
+    db!.run("DELETE FROM multiremi_conversation_heads WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id = ?)", [issue.id]);
+    db!.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260928_conversation_log_backfill"]);
     db!.run("DELETE FROM multiremi_issue_sessions WHERE issue_id = ?", [issue.id]);
 
     const migrated = new MultiremiStore(db!);

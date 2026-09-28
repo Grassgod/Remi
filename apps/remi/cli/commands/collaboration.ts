@@ -434,6 +434,12 @@ function issueExtendedSpecs(): CommandSpec[] {
       requireConfirmation(invocation);
       await mutateAndRender(invocation, "DELETE", `${issueSubpath(invocation, "dependencies")}/${encodePath(positional(invocation, 1, "dependency"))}`);
     }),
+    nativeSpec("issue.done-grant.add", ["issue", "done-grant", "add"], "Authorize the owner agent to close a parent issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "POST", issueSubpath(invocation, "parent-done-grant"));
+    }),
+    nativeSpec("issue.done-grant.remove", ["issue", "done-grant", "remove"], "Revoke the owner agent's parent closure grant", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
+      await mutateAndRender(invocation, "DELETE", issueSubpath(invocation, "parent-done-grant"));
+    }),
     nativeSpec("issue.reaction.list", ["issue", "reaction", "list"], "List issue reactions", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, issueSubpath(invocation, "reactions"), ["reactions"]);
     }),

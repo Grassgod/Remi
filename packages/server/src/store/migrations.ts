@@ -13,6 +13,7 @@ import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
+import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -2816,6 +2817,12 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // purge snapshot or resurrect archive bytes after the control-plane row is
   // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
+  // MUL-400 S1c (A4): a member may authorize the parent issue's owner agent to
+  // close that single parent once its children are finished. Three nullable
+  // columns, add-only: NULL means "no grant" and matches the pre-S1c behaviour.
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_at TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_by TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_agent_id TEXT");
   const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
   addColumnIfMissing(db, "multiremi_issues", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
@@ -3350,13 +3357,17 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       );
     `);
   });
-  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
-  // the task_messages trace backfill. Plain idempotent DDL rather than
-  // `runMigrationOnce`, for the same clock-read reason as the MUL-407 block above.
-  createTraceBackfillProgress(db);
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+  runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
+    backfillConversationLogWithinTransaction(db);
+  });
+  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
+  // the task_messages trace backfill. Plain idempotent DDL rather than
+  // `runMigrationOnce`, for the same clock-read reason as the MUL-407 (E5) block
+  // above. Ordered after the MUL-427 conversation backfill.
+  createTraceBackfillProgress(db);
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
@@ -5101,7 +5112,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       SELECT push.workspace_id, push.binding_id, push.issue_id, retry.id, push.delivery_mode, push.source
       FROM push_lineage push
       JOIN multiremi_tasks parent ON parent.id = push.wake_task_id
-      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent")}
+      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent", "legacy")}
     )
     SELECT push.*, task.chat_session_id FROM push_lineage push
     LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id

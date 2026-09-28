@@ -2646,6 +2646,32 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.done-grant.add": {
+      "command": "remi issue done-grant add",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.add",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.done-grant.remove": {
+      "command": "remi issue done-grant remove",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.done-grant.remove",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.reaction.list": {
       "command": "remi issue reaction list",
       "auth": [

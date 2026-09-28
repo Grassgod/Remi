@@ -192,6 +192,15 @@ describe("formatActivity", () => {
     expect(
       formatActivity(activity("parent_status_held", { details: { requested: "in_review" } }), t),
     ).toBe('activity.parent_status_held {"status":"status.in_review"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "grant_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_grant_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "final_summary_missing", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_final_summary_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_done_grant_created", { details: { agentId: "agt_owner" } }), t, () => "Owner"))
+      .toBe('activity.parent_done_grant_created {"agent":"Owner"}');
+    expect(formatActivity(activity("parent_done_grant_revoked"), t)).toBe("activity.parent_done_grant_revoked");
+    expect(formatActivity(activity("parent_done_grant_used", { details: { source: "scm_merge" } }), t))
+      .toBe('activity.parent_done_grant_used {"source":"activity.parent_done_grant_source_scm_merge"}');
     expect(
       formatActivity(activity("issue_status_forced", { details: { status: "done" } }), t),
     ).toBe('activity.issue_status_forced {"status":"status.done"}');

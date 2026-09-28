@@ -88,8 +88,9 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    projections and the wake-up rules depend on today are appended as
    `visibility = 'hidden'` rows with a `target_seq`: `task_completed`,
    `task_failed`, `task_cancelled`, `session_created`, `task_steer`,
-   `message_edited` and `message_deleted` — the kinds production actually
-   writes, under their existing names. In-place updates of shown rows bump
+   `message_edited`, `message_deleted`, `thread_resolved` and `thread_unresolved`.
+   Shown rows also include `follow_frozen`. Together they cover every kind main
+   has a producer for, under their existing names. In-place updates of shown rows bump
    `revision`. The hidden markers are also the change feed for the Live Hub and
    the browser replica. A row with `kind = 'head'` is not an event: every
    seq-range read (wake-up, projection, delegation drain) excludes it, and
@@ -216,14 +217,42 @@ exclude hidden markers and deleted rows, and cap the older visible count at
 1,000. The existing Chat `/messages/page` route pages by log seq while keeping
 its timestamp-and-id cursor wire.
 
-Legacy writers remain active until B2 ports internal readers. In particular,
-resolve and unresolve still append legacy `thread_resolved` and
-`thread_unresolved` events, but update only the comment row in the new log; no
-resolution marker exists in `conversation_log`. Explicitly created Issue
+Legacy writers remain active until MUL-432 removes the old tables. Resolve and
+unresolve update the comment row in place and append hidden `thread_resolved`
+and `thread_unresolved` markers with the target comment's seq in the log.
+Explicitly created Issue
 sessions append `session_created`. The implicit default Issue session gets its
 seq-0 head without a creation marker, preserving the existing first event seq
-and stored follow/delegation cursors. Older rows without a log mirror retain
-their legacy read path until B7 backfills them.
+and stored follow/delegation cursors. MUL-427 / B7 backfills older rows in the
+startup transaction before readers switch to the log. The legacy `/events`
+adapter excludes head, includes hidden markers, renames assignment wire kind to
+`turn`, and adds marker `target_seq`; the agent projection keeps its existing
+`task_assigned` wire and immutable event bodies.
+
+The B7 migration runs after `backfillDefaultIssueSessions`, copies every source
+seq, skips existing rows, and only fills a NULL comment task association without
+changing its revision or update time (ruling (f)). Chat-owned topic transport
+tasks retain NULL Issue sessions and no Issue log rows (ruling (s)); their Chat
+message associations are reconciled separately. The read-only
+[reconciliation command](../../scripts/reconcile-conversation-log.ts) reports
+counts and per-session digests without constructing a Store. The
+[synthetic benchmark](../../scripts/benchmark-conversation-log.ts) exercises
+SQLite and local PostgreSQL at the specified historical scale. Only JSON and
+Markdown evidence is committed under `reports/migrations/`; the self-contained
+HTML preview is a delivery-comment attachment.
+
+Issue comment log rows take `task_id` from the comment, including system
+comments; the legacy mirror event keeps its NULL task association. Deletion
+clears the tombstone's `task_id`. The agent projection and legacy `/events`
+wire output NULL whenever `source_comment_id` is present, preserving their
+existing shape (MUL-427, ruling (e)).
+
+The five self-transactional comment operations own a commit-event queue when
+the caller has not supplied one. Workspace pushes and triggered-task enqueue
+notifications are released only after their transaction commits; rollback
+discards them. Update and delete cancel comment-triggered tasks after the
+comment transaction, so cancellation's workspace lifecycle lock and terminal
+notifications cannot run inside that transaction.
 
 ## Alternatives considered
 

@@ -4,7 +4,7 @@
  * `multiremi_chat_messages` (MUL-402, message architecture v2-B; ADR 0006).
  *
  * One row is one display unit: `head` at seq 0, `message`, `system`, `turn` and
- * `result_published`. Every other lifecycle fact the agent projections and the
+ * `result_published` and `follow_frozen`. Every other lifecycle fact the agent projections and the
  * wake-up rules depend on stays on the same seq axis as a `visibility = "hidden"`
  * marker, so lane cursors, projection windows and the browser replica keep
  * reading one ordering. The kind names are the production values; `task_assigned`
@@ -27,6 +27,7 @@ export const CONVERSATION_LOG_SHOWN_KINDS = [
   "system",
   "turn",
   "result_published",
+  "follow_frozen",
 ] as const;
 
 /**
@@ -43,6 +44,8 @@ export const CONVERSATION_LOG_HIDDEN_KINDS = [
   "task_steer",
   "message_edited",
   "message_deleted",
+  "thread_resolved",
+  "thread_unresolved",
 ] as const;
 
 /** Every `kind` the table stores: the production kinds plus `head`. */
@@ -62,6 +65,7 @@ export const CONVERSATION_LOG_KIND_VISIBILITY = {
   system: "shown",
   turn: "shown",
   result_published: "shown",
+  follow_frozen: "shown",
   task_completed: "hidden",
   task_failed: "hidden",
   task_cancelled: "hidden",
@@ -69,6 +73,8 @@ export const CONVERSATION_LOG_KIND_VISIBILITY = {
   task_steer: "hidden",
   message_edited: "hidden",
   message_deleted: "hidden",
+  thread_resolved: "hidden",
+  thread_unresolved: "hidden",
 } as const satisfies Record<ConversationLogKind, ConversationLogVisibility>;
 
 /** One `(type, tool)` bucket of a turn card's process-event histogram. */
@@ -164,8 +170,8 @@ export interface ConversationLogEntry {
   /**
    * Comment resolution, mirroring the three fields of the comment contract in
    * `./types.js`. Resolving updates them in place and bumps `revision`;
-   * unresolving clears all three. Every non-comment kind is null, and resolve
-   * never appends a marker row, because production writes no such kind.
+   * unresolving clears all three. Every non-comment kind is null. Resolve and
+   * unresolve also append hidden markers at the original Session event seq.
    */
   resolved_at: string | null;
   resolved_by_type: string | null;
@@ -201,6 +207,7 @@ export interface ConversationLogPatch {
     | "body_html"
     | "render_version"
     | "metadata"
+    | "task_id"
     | "deleted_at"
     | "updated_at"
     | "resolved_at"

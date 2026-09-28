@@ -3,7 +3,7 @@
 // readers; this module is what fills the new table from the same transaction, so
 // the log is complete the moment the read endpoints switch over.
 //
-// The mapping is the production one from the MUL-402 ruling: the eleven
+// The mapping covers every kind main has a producer for: the fourteen
 // `session_events` kinds plus `head`, with `task_assigned` renamed to `turn` and
 // everything else under its existing name. Issue sessions keep
 // `session_events.seq` as their log seq, which is what lets lane cursors,
@@ -52,11 +52,6 @@ export interface MirrorSessionEvent {
   created_at: string;
 }
 
-/**
- * Kinds the log stores, keyed by the `session_events.kind` that produces them.
- * `thread_resolved` / `thread_unresolved` are deliberately absent: the legacy
- * table keeps those markers until B2/B9, while the log updates its comment row.
- */
 const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   message: "message",
   system: "system",
@@ -69,6 +64,9 @@ const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   task_steer: "task_steer",
   message_edited: "message_edited",
   message_deleted: "message_deleted",
+  follow_frozen: "follow_frozen",
+  thread_resolved: "thread_resolved",
+  thread_unresolved: "thread_unresolved",
 };
 
 /** The log kind a `session_events` row maps to, or null when it is not mirrored. */
@@ -77,7 +75,7 @@ export function conversationLogKindForSessionEvent(kind: string): ConversationLo
 }
 
 /**
- * `message_edited` and `message_deleted` describe an earlier row, so their
+ * Edit, delete, resolve and unresolve markers describe an earlier row, so their
  * `metadata.target_seq` points at the comment's own seq on the same axis. The
  * legacy metadata carries `comment_id`; the log row id is that same comment id.
  */
@@ -92,7 +90,7 @@ export function targetSeqForMarker(
 }
 
 /** A `session_events` row as a log append. */
-export function sessionEventToConversationLog(event: MirrorSessionEvent): {
+export function sessionEventToConversationLog(event: MirrorSessionEvent, commentTaskId: string | null = null): {
   sessionId: string;
   seq: number;
   id: string;
@@ -120,7 +118,7 @@ export function sessionEventToConversationLog(event: MirrorSessionEvent): {
     kind,
     authorType: event.author_type,
     authorId: event.author_id,
-    taskId: event.task_id,
+    taskId: event.source_comment_id ? commentTaskId : event.task_id,
     bodyMd: event.body ?? "",
     parentId,
     metadata: metadata as ConversationLogEntryMetadata,
