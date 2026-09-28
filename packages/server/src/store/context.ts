@@ -639,6 +639,11 @@ export interface RuntimesSurface {
   /** The Runtime row without the derived usage / model / execution-group reads. */
   getRuntimeLite(id: string): MultiremiRuntime | null;
   listRuntimes(): MultiremiRuntime[];
+  /**
+   * One workspace's Runtimes with the same hydration `listRuntimes` adds, but
+   * with the workspace filter in SQL and the derived reads batched (MUL-473).
+   */
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[];
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean;
   createRuntimeCommandRequest(runtimeId: string, input: import("@multiremi/contracts/types.js").CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest;
   getRuntimeCommandRequest(runtimeId: string, requestId: string): MultiremiRuntimeCommandRequest | null;

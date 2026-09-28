@@ -27,11 +27,12 @@ import {
   type FirstScreenHotspotsFixtureOptions,
 } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
 import golden from "../../fixtures/multiremi/first-screen-hotspots-golden.json";
+import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 
-let databases: Database[] = [];
+let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 
-afterEach(() => {
-  for (const database of databases) database.close();
+afterEach(async () => {
+  for (const database of databases) await database.dispose();
   databases = [];
 });
 
@@ -46,7 +47,7 @@ interface Probe {
 }
 
 /** Wrap the driver so every *executed* statement is counted, not just prepared. */
-function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
+function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   const record = (sql: string, rows: unknown[]): void => {
     probe.statements += 1;
     probe.rows += rows.length;
@@ -72,7 +73,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return {
+  const wrapped: SqlDatabase = {
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -87,6 +88,13 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
   };
+  return new Proxy(raw, {
+    get(target, property) {
+      const source = property in wrapped ? wrapped : target;
+      const value = Reflect.get(source, property);
+      return typeof value === "function" ? value.bind(source) : value;
+    },
+  });
 }
 
 function createProbe(): Probe {
@@ -106,7 +114,7 @@ function createProbe(): Probe {
 
 interface Harness {
   store: MultiremiStore;
-  db: Database;
+  db: SqlDatabase;
   probe: Probe;
   app: ReturnType<typeof createMultiremiApp>;
   fixture: FirstScreenHotspotsFixture;
@@ -114,8 +122,9 @@ interface Harness {
 }
 
 async function createHarness(options: FirstScreenHotspotsFixtureOptions = {}): Promise<Harness> {
-  const db = new Database(":memory:");
-  databases.push(db);
+  const database = await openHotspotDatabase();
+  databases.push(database);
+  const db = database.db;
   const probe = createProbe();
   const store = new MultiremiStore(countingDatabase(db, probe));
   const fixture = seedFirstScreenHotspotsFixture(store, {
@@ -284,7 +293,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // for. The measured value is 9 and is pinned here rather than rounded away;
     // see the delivery comment for the per-statement breakdown. Concretely:
     // auth 3 + three candidate lists + page + labels + count = 9.
-    for (const count of [...byAgentId, ...byMemberRowId]) expect(count).toBeLessThanOrEqual(8);
+    for (const count of [...byAgentId, ...byMemberRowId]) expect(count).toBeLessThanOrEqual(7);
     for (const count of byUserId) expect(count).toBeLessThanOrEqual(9);
     // Row counts must not move the statement count: compare the two sizes whose
     // filter actually matches rows. (A 1-Issue workspace legitimately skips the
@@ -302,7 +311,8 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     // The three refs that cannot be prefix-locked, so all three kinds are read:
     // a user id, an Agent *named* like a user id, and a name that matches an
     // Agent. Each is constant in the Issue count (measured 1 / 60 / 300).
-    const harness = await createHarness({ issues: 300, sessions: 1, inboxRows: 0 });
+    for (const issues of [1, 60, 300]) {
+    const harness = await createHarness({ issues, sessions: 1, inboxRows: 0 });
     const fixture = harness.fixture;
     // Give one Agent a name shaped like a user id, which is QA's counterexample.
     const lookalike = harness.store.createAgent({
@@ -335,6 +345,7 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     ] as const) {
       const measured = await getJson(harness, `/api/issues?assignee_id=${encodeURIComponent(ref)}&limit=50`);
       expect(measured.statements).toBeLessThanOrEqual(budget);
+    }
     }
   });
 

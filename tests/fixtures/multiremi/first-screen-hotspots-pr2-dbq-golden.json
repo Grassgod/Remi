@@ -1,0 +1,38 @@
+[
+  {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 306,
+    "runtimes": 1,
+    "foreignRuntimes": 1,
+    "routes": {
+      "/api/inbox/summary": 7,
+      "/api/attachments/:id/content": 4,
+      "/api/runtimes": 7
+    }
+  },
+  {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 606,
+    "runtimes": 20,
+    "foreignRuntimes": 30,
+    "routes": {
+      "/api/inbox/summary": 7,
+      "/api/attachments/:id/content": 4,
+      "/api/runtimes": 7
+    }
+  },
+  {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 906,
+    "runtimes": 60,
+    "foreignRuntimes": 100,
+    "routes": {
+      "/api/inbox/summary": 7,
+      "/api/attachments/:id/content": 4,
+      "/api/runtimes": 7
+    }
+  }
+]

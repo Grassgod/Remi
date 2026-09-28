@@ -188,7 +188,7 @@ export function registerAttachmentRoutes(app: Hono, deps: RouterDeps): void {
     if (!attachment.url.startsWith("/api/attachments/")) {
       return c.redirect(attachment.url);
     }
-    return localAttachmentFileResponse(attachment);
+    return localAttachmentFileResponse(attachment, c.req.raw.headers);
   });
 
   app.delete("/api/attachments/:id", async (c) => {

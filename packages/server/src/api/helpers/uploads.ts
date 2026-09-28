@@ -1,7 +1,7 @@
 // Attachment upload storage: the on-disk layout under the upload root, filename sanitising and
 // the local file response used when an attachment is served back.
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 import type { MultiremiAttachment } from "@multiremi/contracts/types.js";
@@ -37,19 +37,39 @@ export function uploadedAttachmentPath(attachment: { workspaceId: string; id: st
   return uploadAbsolutePath(uploadRelativePath(attachment.workspaceId, attachment.id, attachment.filename));
 }
 
-export async function localAttachmentFileResponse(attachment: MultiremiAttachment): Promise<Response> {
+// Upload writers mint a new id for each file; row updates only change parents.
+// If an overwrite path is added, this validator must become a content hash.
+export async function localAttachmentFileResponse(
+  attachment: MultiremiAttachment,
+  requestHeaders?: { get(name: string): string | null },
+): Promise<Response> {
   const filePath = uploadedAttachmentPath(attachment);
   if (!filePath || !existsSync(filePath)) return Response.json({ error: "attachment file not found" }, { status: 404 });
   const info = await stat(filePath);
-  const bytes = await readFile(filePath);
-  return new Response(bytes, {
-    headers: {
-      "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
-      "Content-Length": String(info.size),
-      "Content-Disposition": `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`)}`,
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-    },
+  const headers: Record<string, string> = {
+    "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
+    "Content-Length": String(info.size),
+    "Content-Disposition": `attachment; filename="${attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/[!'()*]/g, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+    "Cache-Control": requestHeaders ? "private, max-age=31536000, immutable" : "no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (requestHeaders) headers["ETag"] = `"${attachment.id}"`;
+  // The caller completes authorization and visibility checks before this helper.
+  if (requestHeaders && ifNoneMatchMatches(requestHeaders.get("if-none-match"), headers["ETag"]!)) {
+    delete headers["Content-Length"];
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(Bun.file(filePath), { headers });
+}
+
+// GET revalidation uses weak comparison, including wildcard and validator lists.
+function ifNoneMatchMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const candidates = header.split(",").map((value) => value.trim());
+  if (candidates.includes("*")) return true;
+  return candidates.some((candidate) => {
+    const value = candidate.startsWith("W/") ? candidate.slice(2).trim() : candidate;
+    return value === etag;
   });
 }
 
