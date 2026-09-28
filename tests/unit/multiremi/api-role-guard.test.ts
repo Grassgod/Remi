@@ -533,7 +533,7 @@ describe("MUL-461 api role — health and effective config", () => {
     delete process.env.MULTIREMI_API_ROLE;
     const { store, db } = memoryStore();
     try {
-      const app = createMultiremiApp({ store, authToken: null });
+      const app = createMultiremiApp({ store, authToken: null, hub: null });
       // Byte-identity with main matters here: `snapshot-api-routes.ts` records these
       // bodies, so an unconditional `role` would break the golden check.
       expect(await (await app.request("/health")).json()).toEqual({ ok: true });

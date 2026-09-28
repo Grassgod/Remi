@@ -331,7 +331,7 @@ describe("MUL-438 browser stream endpoints", () => {
     const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
     const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "socket task", issueId: issue.id });
     const token = await store.createAccessToken({ name: "Socket owner", type: "pat", workspaceId: workspace.id, userId: "creator" });
-    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null, liveHub: createEmptyLiveHub(createLocalHubTransport()) });
 
     const logSocket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
     const traceSocket = new WebSocket(`ws://127.0.0.1:${server.port}/api/trace/ws?workspace_id=${workspace.id}`);
@@ -339,8 +339,7 @@ describe("MUL-438 browser stream endpoints", () => {
       await authenticateBrowserWebSocket(logSocket, token.token);
       await authenticateBrowserWebSocket(traceSocket, token.token);
 
-      // `/ws` answers a log subscription, and it carries the C0 hub's honest
-      // empty range while C1 is still in flight.
+      // This injected empty Hub keeps the endpoint contract independent of retention.
       logSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "log", id: session.id, from_seq: 1 } }));
       expect(await nextWebSocketMessage(logSocket)).toEqual({
         type: "stream.ack",

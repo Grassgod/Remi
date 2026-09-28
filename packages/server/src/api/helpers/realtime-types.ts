@@ -37,6 +37,8 @@ export type MultiremiWebSocketData = DaemonWebSocketData | BrowserWebSocketData;
 export type MultiremiWebSocketClient = {
   data: MultiremiWebSocketData;
   sendText(message: string): void;
+  /** Bun sockets expose their backlog; legacy registry test doubles may omit it. */
+  getBufferedAmount?(): number;
   close(code?: number, reason?: string): void;
 }
 
