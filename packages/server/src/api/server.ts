@@ -316,9 +316,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
   // detach handle, but an app has no shutdown hook — the listener lives exactly as
   // long as the store and the hub it points at, which is the app's own lifetime.
-  // A process without `MULTIREMI_BACKGROUND_JOBS` attaches nothing, so a ui process
-  // is not a consumer (see `consumesHumanRequestFeed`).
-  if (hub) attachHumanRequestFeed({ store, hub });
+  //
+  // "Who consumes" follows the same flag that decides who runs background jobs,
+  // resolved the same way so an explicitly constructed app and an env-configured one
+  // cannot disagree: `backgroundJobs: false` is a read-only candidate, and it must
+  // not subscribe even on a host whose environment says otherwise.
+  if (hub) {
+    const backgroundJobs = options.backgroundJobs ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+    attachHumanRequestFeed({ store, hub, enabled: backgroundJobs });
+  }
 
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {

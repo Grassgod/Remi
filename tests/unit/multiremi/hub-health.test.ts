@@ -68,6 +68,23 @@ describe("hub health payloads", () => {
     expect(await (await app.request("/readyz")).json()).toEqual({ ok: true });
   });
 
+  it("does not attach the human-request feed when background jobs are off", () => {
+    // A read-only blue/green candidate passes `backgroundJobs: false`; the feed must
+    // honour that rather than the host environment, so the two cannot disagree about
+    // who consumes E5's events. The observable is the listener count on the store.
+    const store = createStore();
+    const hub = createHub({ transport: createLocalHubTransport() });
+    const listeners = (): number => (store as unknown as {
+      ctx: { humanRequestListeners: Set<unknown> };
+    }).ctx.humanRequestListeners.size;
+
+    createMultiremiApp({ store, hub: hub as never, backgroundJobs: false, realtimeState: { enabled: true, connections: 0 } });
+    expect(listeners()).toBe(0);
+
+    createMultiremiApp({ store, hub: hub as never, backgroundJobs: true, realtimeState: { enabled: true, connections: 0 } });
+    expect(listeners()).toBe(1);
+  });
+
   it("recognizes only a hub that can describe itself", () => {
     const hub = createHub({ transport: createLocalHubTransport() });
     expect(isObservableHub(hub)).toBe(true);
