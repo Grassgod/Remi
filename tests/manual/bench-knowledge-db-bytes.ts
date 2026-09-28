@@ -428,7 +428,7 @@ async function measureMode(kind: "postgres" | "sqlite", out: ModeReport): Promis
     store,
     authToken: "root-secret",
     projectKnowledge,
-    requestMetrics: { enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 128 },
+    requestMetrics: { enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 128, role: "all" },
   });
   const headers = { Authorization: "Bearer root-secret" };
 
