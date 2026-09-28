@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_ERROR_CODES, DAEMON_RETRYABLE_ERROR_CODES, DAEMON_TERMINAL_ERROR_CODES } from "@multiremi/contracts/daemon-protocol.js";
@@ -22,6 +22,31 @@ function fixture() {
 }
 
 describe("v2 reports", () => {
+  it("absorbs identical progress and normalized usage subset replays before Store writes", async () => {
+    const { store, task, report } = fixture();
+    store.startTask(task.id);
+    const progress = spyOn(store, "reportProgress");
+    const usage = spyOn(store, "reportTaskUsage");
+    try {
+      for (let index = 0; index < 2; index++) {
+        expect(await report("task.progress", { summary: "first", step: 1, total: 2 })).toEqual({ ok: true });
+      }
+      expect(progress).toHaveBeenCalledTimes(1);
+      expect(await report("task.progress", { summary: "last", step: 2, total: 2 })).toEqual({ ok: true });
+      expect(progress).toHaveBeenCalledTimes(2);
+      const a = { provider: "claude", model: "a", input_tokens: 5, output_tokens: 2 };
+      const b = { provider: "claude", model: "b", input_tokens: 7, output_tokens: 3 };
+      for (const entries of [[a], [b], [a], [b], [{ ...a, input_tokens: 999 }, a]]) {
+        expect(await report("task.usage", { usage: entries })).toEqual({ ok: true });
+      }
+      expect(usage).toHaveBeenCalledTimes(2);
+      expect(store.getTask(task.id)?.usage.map(entry => [entry.model, entry.inputTokens, entry.outputTokens])).toEqual([
+        ["a", 5, 2], ["b", 7, 3],
+      ]);
+      expect(store.getTask(task.id)?.progressSummary).toBe("last");
+    } finally { progress.mockRestore(); usage.mockRestore(); }
+  });
+
   for (const type of ["task.complete", "task.fail"]) {
     it(`delivers all daemon-derived completion fields to the round-card hook for ${type}`, async () => {
       const { store, task, runtime } = fixture();

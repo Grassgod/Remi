@@ -1,4 +1,5 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { normalizeTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { isDeepStrictEqual } from "node:util";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, ReportAgentPluginRuntimeStateInput,
@@ -116,16 +117,22 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             const summary = string(p.summary);
             const step = typeof p.step === "number" ? p.step : undefined;
             const total = typeof p.total === "number" ? p.total : undefined;
-            // Terminal display tails may replay after a lost ACK; identical values are already applied.
-            if (terminal(task.status) && task.progressSummary === summary
+            // An identical replay must not repeat a DB write or task notification.
+            if (task.progressSummary === summary
               && task.progressStep === (step ?? null) && task.progressTotal === (total ?? null)) break;
             if (!terminal(task.status) || p.final === true) store.reportProgress(taskId, summary, step, total,
               { allowTerminal: p.final === true });
             break;
           }
-          case "task.usage":
-            store.reportTaskUsage(taskId, daemonTaskUsageEntries(p.usage));
+          case "task.usage": {
+            const usage = daemonTaskUsageEntries(p.usage);
+            const keyed = (entries: unknown) => new Map(normalizeTaskUsageEntries(entries)
+              .map(entry => [JSON.stringify([entry.provider, entry.model]), entry]));
+            const current = keyed(task.usage);
+            if ([...keyed(usage)].every(([key, entry]) => isDeepStrictEqual(current.get(key), entry))) break;
+            store.reportTaskUsage(taskId, usage);
             break;
+          }
           case "task.workspace": {
             const runtimeId = string(p.runtime_id);
             if (!task.issueId) reject("task_not_found");

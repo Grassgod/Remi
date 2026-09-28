@@ -2,11 +2,12 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multiremi.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
-import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
+import type { DaemonProtocolLayer, DaemonProtocolRpcHandler } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
 import type { MultiremiDaemon, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
@@ -63,6 +64,7 @@ export class DaemonProtocolHarness {
   readonly sockets: InjectedSocket[] = [];
   readonly sessions: DaemonProtocolSession[] = [];
   readonly ledger: LedgerEntry[] = [];
+  readonly effectiveLedger: LedgerEntry[] = [];
   readonly teardownSteps: string[] = [];
   readonly errors: Error[] = [];
   readonly received: Record<string, any>[] = [];
@@ -138,6 +140,26 @@ export class DaemonProtocolHarness {
       authToken: "fixture-master", apiRole: this.apiRole,
       onDaemonProtocol: layer => {
         this.layer = layer;
+        // Observe persisted business fields after successful handlers, not ingress or ACK receipt.
+        const handlers = (layer as any).eventHandlers as Map<string, DaemonProtocolRpcHandler>;
+        for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {
+          const handle = handlers.get(type)!;
+          const state = (id: string) => {
+            const task = this.store.getTask(id);
+            return task ? { status: task.status, result: task.result, usage: task.usage,
+              progress: [task.progressSummary, task.progressStep, task.progressTotal] } : null;
+          };
+          layer.registerEventHandler(type, async (frame, session) => {
+            const partition = String(frame.payload.task_id ?? "");
+            const before = state(partition);
+            const reply = await handle(frame, session);
+            if ((reply as { ok?: unknown } | null)?.ok === true && !isDeepStrictEqual(before, state(partition))) {
+              this.effectiveLedger.push({ sessionId: session.sessionId, partition,
+                seq: frame.seq, type: frame.type, frame: frame.raw });
+            }
+            return reply;
+          });
+        }
         const open = layer.openSession.bind(layer);
         layer.openSession = (...args) => {
           const session = open(...args);
