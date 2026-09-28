@@ -49,8 +49,13 @@ export interface AcpClientOptions {
   agentType?: string;
   /** Working directory for the agent process. */
   cwd?: string;
-  /** Daemon-owned directory mounted as this task execution's literal /tmp. */
+  /**
+   * Daemon-owned directory bound to this task execution. Linux mounts it as the
+   * literal /tmp; macOS (MUL-449) exports it through TMPDIR/TMP/TEMP instead.
+   */
   privateTmpDirectory?: string;
+  /** Platform override for the private-/tmp contract (test injection). */
+  privateTmpPlatform?: NodeJS.Platform;
   /** Additional MCP servers to configure. */
   mcpServers?: McpServerConfig[];
   /** Environment variables for the agent process. */
@@ -142,7 +147,11 @@ export class AcpClient {
       resolveAcpProcessLaunch(executable, this._options.args ?? []),
       this._options.privateTmpDirectory,
       env,
+      this._options.privateTmpPlatform,
     );
+    // A platform downgrade (macOS) hands back the environment it needs; the
+    // caller's own `env` object is never mutated.
+    if (launch.env) Object.assign(env, launch.env);
     this._process = Bun.spawn([launch.executable, ...launch.args], {
       stdin: "pipe",
       stdout: "pipe",
@@ -464,7 +473,10 @@ export class AcpClient {
         // `line` is 1-based and `limit` caps the returned line count
         // (sdk schema.json ReadTextFileRequest); both are optional.
         const { path, line, limit } = msg.params as { path: string; line?: number | null; limit?: number | null };
-        let content = readFileSync(mapPrivateTmpPath(path, this._options.privateTmpDirectory), "utf-8");
+        let content = readFileSync(
+          mapPrivateTmpPath(path, this._options.privateTmpDirectory, this._options.privateTmpPlatform),
+          "utf-8",
+        );
         if (line != null || limit != null) {
           const start = line != null && line > 0 ? line - 1 : 0;
           const lines = content.split("\n");
@@ -473,7 +485,11 @@ export class AcpClient {
         this._respond(msg.id, { content });
       } else if (msg.method === "fs/write_text_file") {
         const { path, content } = msg.params as { path: string; content: string };
-        writeFileSync(mapPrivateTmpPath(path, this._options.privateTmpDirectory), content, "utf-8");
+        writeFileSync(
+          mapPrivateTmpPath(path, this._options.privateTmpDirectory, this._options.privateTmpPlatform),
+          content,
+          "utf-8",
+        );
         this._respond(msg.id, {});
       }
     } catch (err: any) {
