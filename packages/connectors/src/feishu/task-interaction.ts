@@ -107,6 +107,27 @@ export interface IssueDecisionCardInteraction {
 
 const pendingDecisions = new Map<string, IssueDecisionCardInteraction>();
 
+function issueDecisionFailureToast(error: unknown): string {
+  const value = object(error);
+  const code = typeof value.code === "string" ? value.code.trim() : "";
+  const status = typeof value.status === "number" ? value.status : null;
+  if (code === "decision_member_unmapped") {
+    return "本次没有提交：飞书身份还未关联到 Remi 成员。请先用飞书登录一次网页端，或在本话题给机器人发一条消息后再试；也可以直接去网页端回答。";
+  }
+  if (code === "decision_member_ambiguous") {
+    return "本次没有提交：飞书身份关联到多个 Remi 成员。请去网页端回答。";
+  }
+  if (code === "decision_operator_mismatch") {
+    return "本次没有提交：这条只能由被问的人回答。";
+  }
+  if (status === 404 || status === 409) {
+    return "本次没有提交：这个决定已经结束了。";
+  }
+  return code
+    ? `本次没有提交：提交失败，请稍后重试（错误码：${code}）。`
+    : "本次没有提交：提交失败，请稍后重试。";
+}
+
 /**
  * Register the click handler for one Issue decision card (MUL-412).
  *
@@ -216,16 +237,18 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
   if (!entry) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   if (context.open_chat_id !== entry.chatId || !entry.recipientOpenId
-    || object(event.operator).open_id !== entry.recipientOpenId) return toast("请由卡片中指定的处理人提交");
+    || object(event.operator).open_id !== entry.recipientOpenId) {
+    return toast("本次没有提交：这条只能由被问的人回答。");
+  }
   let decision: MultiremiIssueDecision | null = null;
   try {
     decision = await entry.getDecision();
-  } catch {
-    return toast("提交未确认，请稍后重试");
+  } catch (error) {
+    return toast(issueDecisionFailureToast(error));
   }
   if (!decision) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   if (decision.status !== "escalated") {
-    return { ...toast("请求已结束", "info"),
+    return { ...toast("本次没有提交：这个决定已经结束了。", "info"),
       card: { type: "raw", data: buildIssueDecisionCard(decision,
         { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
   }
@@ -250,13 +273,11 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
   try {
     const settled = await entry.submit(answer, String(object(event.operator).open_id ?? ""));
-    return { ...toast(settled.status === "answered" ? "已提交" : "请求已结束", settled.status === "answered" ? "success" : "info"),
+    return { ...toast(settled.status === "answered" ? "已提交" : "本次没有提交：这个决定已经结束了。", settled.status === "answered" ? "success" : "info"),
       card: { type: "raw", data: buildIssueDecisionCard(settled,
         { agentName: entry.agentName, sessionId: entry.sessionId, receipt: true }) } };
   } catch (error) {
-    return toast(error instanceof Error && !/HTTP|fetch|token/i.test(error.message)
-      ? error.message.slice(0, 100)
-      : "提交未确认，请稍后重试");
+    return toast(issueDecisionFailureToast(error));
   }
 }
 
