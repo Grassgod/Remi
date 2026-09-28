@@ -276,6 +276,27 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         }
       });
 
+      it(`${direction}: W7 real CLI batch-update exits nonzero with workspace_move_blocked`, async () => {
+        const { source, target } = workspaces(reverse);
+        const auth = await credentials(source, target);
+        const parent = store.createIssue({ title: "CLI parent", workspaceId: source });
+        store.createIssue({ title: "CLI child", workspaceId: source, parentIssueId: parent.id });
+        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: auth.app.fetch });
+        try {
+          const proc = Bun.spawn([process.execPath, "apps/remi/main.ts", "issue", "batch-update",
+            "--data", JSON.stringify({ issue_ids: [parent.id], updates: { workspace_id: target } }),
+            "--server", server.url.toString(), "--token", auth.both, "--output", "json"], {
+            env: { PATH: process.env.PATH, HOME: process.env.TMPDIR ?? "/tmp" }, stdout: "pipe", stderr: "pipe",
+          });
+          const [code, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+          expect(code).not.toBe(0);
+          expect(stdout + stderr).toContain("workspace_move_blocked");
+          expect(store.getIssue(parent.id)?.workspaceId).toBe(source);
+        } finally {
+          server.stop(true);
+        }
+      });
+
       it(`${direction}: W8 HTTP refuses foreign parent creation, re-parenting and dependency insertion`, async () => {
         const { source, target } = workspaces(reverse);
         const auth = await credentials(source, target);
