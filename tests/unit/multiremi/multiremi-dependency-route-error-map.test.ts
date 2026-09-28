@@ -39,7 +39,7 @@ function parked() {
   return { store, runtime, agent, prereq, dependent, other };
 }
 
-interface Call { label: string; path: string; method: string; body?: unknown }
+interface Call { label: string; path: string; method: string; body?: unknown; headers?: Record<string, string> }
 
 describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", () => {
   it("returns the same 409 code and unmet prerequisites for session tasks and other gate entries", async () => {
@@ -49,10 +49,10 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
     for (const call of [
       { path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, body: { agent_id: agent.id, prompt: "start" } },
       { path: "/api/multiremi/tasks", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
-      { path: `/api/issues/${dependent.id}/rerun`, body: { agent_id: agent.id } },
+      { path: `/api/issues/${dependent.id}/rerun`, body: { agent_id: agent.id }, headers: { "X-Agent-ID": agent.id } },
     ]) {
       const response = await app.request(call.path, {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(call.body),
+        method: "POST", headers: { "content-type": "application/json", ...call.headers }, body: JSON.stringify(call.body),
       });
       expect(response.status).toBe(409);
       const payload = await response.json() as { code: string; unmet: Array<{ key: string }> };
@@ -82,7 +82,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
       // Task creation funnels.
       { label: "task create", path: "/api/multiremi/tasks", method: "POST", body: { agentId: agent.id, issueId: dependent.id, prompt: "start" } },
       { label: "session task create", path: `/api/issues/${dependent.id}/sessions/${session.id}/tasks`, method: "POST", body: { agent_id: agent.id, prompt: "start" } },
-      { label: "rerun", path: `/api/issues/${dependent.id}/rerun`, method: "POST", body: { agent_id: agent.id } },
+      { label: "rerun", path: `/api/issues/${dependent.id}/rerun`, method: "POST", body: { agent_id: agent.id }, headers: { "X-Agent-ID": agent.id } },
       // Batch reports per-row skips rather than failing the whole request.
       { label: "native batch", path: "/api/multiremi/issues/batch-update", method: "POST", body: { issueIds: [dependent.id], updates: { status: "todo" } } },
       { label: "compat batch", path: "/api/issues/batch-update", method: "POST", body: { issue_ids: [dependent.id], updates: { status: "todo" } } },
@@ -105,7 +105,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
     for (const call of calls) {
       const response = await app.request(call.path, {
         method: call.method,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...call.headers },
         ...(call.body ? { body: JSON.stringify(call.body) } : {}),
       });
       const payload = await response.json().catch(() => ({})) as { code?: string; error?: string; updated?: number; skipped?: unknown[] };
