@@ -255,14 +255,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ?? requireWorkspaceAdmin(c, store, workspaceId);
 
   const listAccessibleChildIssues = (c: Context, parentRefs: string[], explicitWorkspaceId: string | null): MultiremiIssue[] => {
-    // Keep unscoped refs on the store's resolver; do not infer token/member defaults.
+    // Full IDs resolve globally; explicit selectors only scope keys, numbers and
+    // prefixes. Keep unscoped refs on the store's resolver; do not infer token/member defaults.
     let workspaceId = cleanString(explicitWorkspaceId) ?? cleanString(c.req.header("X-Workspace-ID"));
+    let unknownSlug = false;
     if (!workspaceId) {
       const slug = cleanString(c.req.header("X-Workspace-Slug"));
       if (slug) {
-        const workspace = store.listWorkspaces().find((candidate) => candidate.slug === slug);
-        if (!workspace) return [];
-        workspaceId = workspace.id;
+        workspaceId = store.listWorkspaces().find((candidate) => candidate.slug === slug)?.id ?? null;
+        unknownSlug = !workspaceId;
       }
     }
     const workspaceAccess = new Map<string, boolean>();
@@ -276,7 +277,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     };
     const seenParentIds = new Set<string>();
     return parentRefs.flatMap((ref) => {
-      const parent = store.getIssueByRef(ref, workspaceId);
+      const parent = store.getIssue(ref.trim()) ?? (unknownSlug ? null : store.getIssueByRef(ref, workspaceId));
       if (!parent || !canAccessWorkspace(parent.workspaceId)) return [];
       if (seenParentIds.has(parent.id)) return [];
       seenParentIds.add(parent.id);

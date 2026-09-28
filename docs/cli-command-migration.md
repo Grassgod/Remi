@@ -43,17 +43,20 @@ Like the existing list, ordering is `updated_at DESC`; `sort_by`, `sort_order`,
 
 `remi issue children <key-or-id>` accepts either reference. Both children batch
 routes resolve `parent_ids` to parent IDs and deduplicate those IDs before
-listing children. Explicit workspace selectors take precedence in this order:
-query `workspace_id` (native requests first check `workspaceId`, then
-`workspace_id`), `X-Workspace-ID`, then `X-Workspace-Slug` resolved to a workspace
-ID. An unknown explicit slug returns a successful empty batch. With no explicit
-selector, resolution remains unscoped and does not infer token or member defaults.
-Both batch routes follow `getIssueByRef`, like `/api/issues/:id/children`:
-an exact ID wins; otherwise a unique match wins, or, without a workspace selector,
-the unique local row takes precedence among multiple matches. An explicit
-workspace restricts resolution to that workspace's row. Unknown or still
-unresolved references and inaccessible parents are skipped; children must also
-pass the existing workspace access check. Compatibility responses retain
+listing children. A full issue ID resolves globally, whatever workspace is
+selected, so the CLI's default `X-Workspace-ID` never hides a parent the caller
+can access; the workspace only distinguishes keys, numbers and ID prefixes.
+For those, explicit workspace selectors take precedence in this order: query
+`workspace_id` (native requests first check `workspaceId`, then `workspace_id`),
+`X-Workspace-ID`, then `X-Workspace-Slug` resolved to a workspace ID. An unknown
+explicit slug skips keys, numbers and prefixes but still resolves full IDs. With
+no explicit selector, resolution remains unscoped and does not infer token or
+member defaults. Non-ID references follow `getIssueByRef`, like
+`/api/issues/:id/children`: a unique match wins, or, without a workspace
+selector, the unique local row takes precedence among multiple matches. An
+explicit workspace restricts resolution to that workspace's row. Unknown or
+still unresolved references and inaccessible parents are skipped; children must
+also pass the existing workspace access check. Compatibility responses retain
 snake_case Issue fields, while native responses retain camelCase.
 
 `include_archived_total=true` (CLI `--include-archived-total`) adds the

@@ -129,3 +129,50 @@ test("issue CLI resolves the same parent key within each explicitly selected wor
     server.stop(true);
   }
 }, 20_000);
+
+test("issue CLI resolves a full parent ID outside the default workspace", async () => {
+  const store = createStore();
+  store.ensureLocalWorkspace();
+  const owner = store.getOrCreateUser({ name: "CLI default owner", email: "cli-default-owner@example.test" });
+  const workspace = store.createWorkspace({ name: "Workspace A", slug: "cli-default-a" }, owner.id);
+  const parent = store.createIssue({ workspaceId: workspace.id, title: "A parent" });
+  const child = store.createIssue({ workspaceId: workspace.id, title: "A child", parentIssueId: parent.id });
+  const authToken = randomUUID();
+  const app = createMultiremiApp({ store, authToken });
+  const workspaceHeaders: Array<string | null> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/api/issues/children") workspaceHeaders.push(request.headers.get("X-Workspace-ID"));
+      return app.fetch(request);
+    },
+  });
+  const root = resolve(import.meta.dir, "../..");
+  const env = {
+    ...process.env,
+    MULTIREMI_TOKEN: authToken,
+    MULTIREMI_WORKSPACE_ID: "local",
+    MULTIREMI_CONFIG: join(tmpdir(), `mul415-unused-config-${randomUUID()}.json`),
+  };
+  try {
+    for (const workspaceArgs of [[], ["--workspace", workspace.id]]) {
+      const cliArgs = ["issue", "children", parent.id, ...workspaceArgs, "--server", server.url.toString(), "--output", "json"];
+      const cliProcess = Bun.spawn([process.execPath, "run", "apps/remi/main.ts", ...cliArgs], {
+        cwd: root, env, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(cliProcess.stdout).text(), new Response(cliProcess.stderr).text(), cliProcess.exited,
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const body = JSON.parse(stdout) as { total: number; issues: Array<{ id: string; title: string }> };
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue) => issue.id)).toEqual([child.id]);
+      console.log(`$ MULTIREMI_WORKSPACE_ID=local bun run apps/remi/main.ts ${cliArgs.join(" ")}`);
+      console.log(JSON.stringify({ total: body.total, titles: body.issues.map((issue) => issue.title) }));
+    }
+    expect(workspaceHeaders).toEqual(["local", workspace.id]);
+  } finally {
+    server.stop(true);
+  }
+}, 20_000);

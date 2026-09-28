@@ -115,16 +115,49 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
       expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
     });
 
-    it("returns an empty batch for an unknown explicit slug without traversing parents", async () => {
-      const { store, app, own, headers } = await setup();
+    it("skips keys for an unknown explicit slug while still resolving full IDs", async () => {
+      const { store, app, own, workspaceB, headers } = await setup();
+      const keyedParent = store.createIssue({ workspaceId: workspaceB.id, title: "Unique keyed parent" });
+      store.createIssue({ workspaceId: workspaceB.id, title: "Unique keyed child", parentIssueId: keyedParent.id });
+      expect(store.getIssueByRef(keyedParent.key, null)?.id).toBe(keyedParent.id);
       const listChildren = spyOn(store, "listChildIssues");
-      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key},${own.parent.id}`, {
+      const response = await app.request(`${prefix}/children?parent_ids=${keyedParent.key},${own.parent.id}`, {
         headers: { ...headers, "X-Workspace-Slug": "missing-workspace" },
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ issues: [], total: 0 });
-      expect(listChildren).not.toHaveBeenCalled();
+      const body = await response.json();
+      expect(body.total).toBe(1);
+      expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+      expect(listChildren.mock.calls).toEqual([[own.parent.id]]);
     });
+
+    for (const selector of ["workspace_id", "X-Workspace-ID", "X-Workspace-Slug"] as const) {
+      const request = (app: ReturnType<typeof createMultiremiApp>, ref: string, workspace: { id: string; slug: string }, headers: Record<string, string>) =>
+        selector === "workspace_id"
+          ? app.request(`${prefix}/children?parent_ids=${ref}&workspace_id=${workspace.id}`, { headers })
+          : app.request(`${prefix}/children?parent_ids=${ref}`, {
+            headers: { ...headers, [selector]: selector === "X-Workspace-ID" ? workspace.id : workspace.slug },
+          });
+
+      it(`resolves an accessible full ID outside the workspace selected by ${selector}`, async () => {
+        const { store, app, own, headers } = await setup();
+        const local = store.getWorkspace("local")!;
+        const response = await request(app, own.parent.id, local, headers);
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.total).toBe(1);
+        expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([own.child.id]);
+      });
+
+      it(`hides an inaccessible full ID outside the workspace selected by ${selector}`, async () => {
+        const { store, app, foreign, workspaceB, headers } = await setup();
+        const listChildren = spyOn(store, "listChildIssues");
+        const response = await request(app, foreign.parent.id, workspaceB, headers);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ issues: [], total: 0 });
+        expect(listChildren).not.toHaveBeenCalled();
+      });
+    }
 
     it("lists children of distinct parents supplied as a key and an id", async () => {
       const { store, app, own, workspaceB, headers } = await setup();
@@ -224,13 +257,6 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
       const body = await response.json();
       expect(body.total).toBe(1);
       expect(body.issues.map((issue: { id: string }) => issue.id)).toEqual([child.id]);
-    });
-
-    it("does not resolve an id outside the requested workspace", async () => {
-      const { app, own, workspaceA, headers } = await setup();
-      const response = await app.request(`${prefix}/children?parent_ids=${own.parent.id}&workspace_id=${workspaceA.id}`, { headers });
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ issues: [], total: 0 });
     });
 
     it("checks child workspace access after resolving a parent key", async () => {
