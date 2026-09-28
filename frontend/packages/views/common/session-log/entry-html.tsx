@@ -28,11 +28,9 @@
  * caller supplies because only it knows which client renderer to reach for.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../i18n";
-import { MermaidDiagram } from "../../editor/mermaid-diagram";
-import { HtmlPreviewBody } from "../../editor/html-preview-body";
 import {
   enhanceEntryHtml,
   type EntryPreviewSlot,
@@ -54,15 +52,41 @@ export interface EntryHtmlProps {
   className?: string;
 }
 
+/**
+ * The two preview components are loaded on demand, not imported here.
+ *
+ * They are the heaviest things a row can mount (Mermaid and its runtime, the
+ * sandboxed-iframe machinery), and most rows have neither. A static import puts
+ * both in every bundle that renders a comment — including this list's own
+ * fixture page — for content that is usually absent. The slots are already
+ * fixed-height boxes, so a lazily arriving preview cannot move anything.
+ *
+ * `Suspense` with a null fallback: the slot is empty until the chunk lands, and
+ * the slot's height does not depend on the preview being there.
+ */
+const MermaidDiagram = lazy(() =>
+  import("../../editor/mermaid-diagram").then((module) => ({ default: module.MermaidDiagram }))
+);
+const HtmlPreviewBody = lazy(() =>
+  import("../../editor/html-preview-body").then((module) => ({ default: module.HtmlPreviewBody }))
+);
+
 /** Fixed slot for a Mermaid diagram; the slot's own height is the block's. */
 function MermaidSlot({ slot }: { slot: EntryPreviewSlot }): React.ReactElement {
-  return createPortal(<MermaidDiagram chart={slot.source} />, slot.element);
+  return createPortal(
+    <Suspense fallback={null}>
+      <MermaidDiagram chart={slot.source} />
+    </Suspense>,
+    slot.element,
+  );
 }
 
 /** Fixed slot for a sandboxed HTML preview. */
 function HtmlSlot({ slot }: { slot: EntryPreviewSlot }): React.ReactElement {
   return createPortal(
-    <HtmlPreviewBody source={{ kind: "inline", html: slot.source }} title="HTML preview" className="h-full" />,
+    <Suspense fallback={null}>
+      <HtmlPreviewBody source={{ kind: "inline", html: slot.source }} title="HTML preview" className="h-full" />
+    </Suspense>,
     slot.element,
   );
 }
