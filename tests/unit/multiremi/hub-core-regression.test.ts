@@ -87,3 +87,34 @@ describe("MUL-436 regression 1: patch bases and stale replay", () => {
     expect(out.frames).toEqual([]);
   });
 });
+
+describe("MUL-436 regression 2: edits while lagging", () => {
+  it("retains an invalidation for the slow consumer while delivering to the fast one", () => {
+    const hub = make({ limits: { laggingBytes: 10 } });
+    const slow = new RecordingSink(), fast = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, slow);
+    hub.subscribeWithSink("log:s", 0, fast);
+    slow.buffered = 11;
+    row(hub, 1); hub.flushNow(); patch(hub, 1); hub.flushNow();
+    expect(slow.frames.map((frame) => frame.kind)).toEqual(["entry"]);
+    expect(fast.frames.map((frame) => frame.kind)).toEqual(["entry", "patch"]);
+    slow.buffered = 0; sub.notifyDrain(); hub.flushNow();
+    expect(slow.gaps).toEqual([{ from: 1, to: 1 }]);
+    patch(hub, 1, { body_md: "edited again" }, 3); hub.flushNow();
+    expect(slow.frames.map((frame) => frame.kind)).toEqual(["entry"]);
+    expect(slow.gaps).toEqual([{ from: 1, to: 1 }, { from: 1, to: 1 }]);
+  });
+
+  it("bounds deferred edits with one conservative range and resumes after its cursor", () => {
+    const hub = make({ limits: { laggingBytes: 10 } });
+    const out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    out.buffered = 11;
+    for (let seq = 1; seq <= 3; seq++) row(hub, seq);
+    hub.flushNow();
+    patch(hub, 1); hub.flushNow(); patch(hub, 3); hub.flushNow();
+    row(hub, 4); hub.flushNow();
+    out.buffered = 0; sub.notifyDrain(); hub.flushNow();
+    expect(out.order).toEqual(["data:1,2,3", "gap:1,3", "data:4"]);
+  });
+});

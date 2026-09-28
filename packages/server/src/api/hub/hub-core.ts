@@ -216,6 +216,8 @@ interface HubSubscriber {
   cursor: number;
   /** Contiguous ranges actually delivered; gap-skipped rows are never patch bases. */
   readonly delivered: HubSeqRange[];
+  /** Edits that require a reread, bounded to one conservative range while paused. */
+  changeGap: HubSeqRange | null;
   lagging: boolean;
   active: boolean;
   /** Set for A-0's spelling, which wants `TraceEvent`s rather than hub frames. */
@@ -917,6 +919,19 @@ export class HubImpl implements ObservableLiveHub {
       const changes = this.liveChanges.get(key);
       for (const subscriber of set) {
         if (!subscriber.active) continue;
+        if (changes) {
+          for (const frame of changes) {
+            if (frame.seq <= subscriber.cursor &&
+              (subscriber.lagging || !this.hasDelivered(subscriber, frame.seq))) {
+              this.deferChangeGap(subscriber, frame.seq);
+            }
+          }
+        }
+        if (subscriber.changeGap && !subscriber.lagging) {
+          const gap = subscriber.changeGap;
+          subscriber.changeGap = null;
+          this.notifyGap(subscriber, gap.from, gap.to);
+        }
         if (changes && changes.length > 0 && !subscriber.lagging) {
           // A gap advances the replay cursor without delivering a patch base.
           const applicable = changes.filter((frame) => this.hasDelivered(subscriber, frame.seq));
@@ -992,6 +1007,23 @@ export class HubImpl implements ObservableLiveHub {
     return subscriber.delivered.some((range) => range.from <= seq && seq <= range.to);
   }
 
+  private deferChangeGap(subscriber: HubSubscriber, seq: number): void {
+    const gap = subscriber.changeGap;
+    const from = Math.min(gap?.from ?? seq, seq);
+    const to = Math.max(gap?.to ?? seq, seq);
+    subscriber.changeGap = { from, to };
+    // A reread is asynchronous: until a new base is delivered, another patch must
+    // also become a gap. The conservative range may invalidate unchanged rows.
+    const held = subscriber.delivered.splice(0);
+    for (const range of held) {
+      if (range.to < from || range.from > to) subscriber.delivered.push(range);
+      else {
+        if (range.from < from) subscriber.delivered.push({ from: range.from, to: from - 1 });
+        if (range.to > to) subscriber.delivered.push({ from: to + 1, to: range.to });
+      }
+    }
+  }
+
   /** The transport drained: resume from `cursor + 1`, or report the range we lost. */
   private resume(subscriber: HubSubscriber): void {
     if (!subscriber.active) return;
@@ -1027,14 +1059,18 @@ export class HubImpl implements ObservableLiveHub {
     if (!subscriber.active) return;
     const from = subscriber.cursor;
     if (upTo < from) return;
+    this.notifyGap(subscriber, from, upTo);
+    subscriber.cursor = upTo;
+  }
+
+  private notifyGap(subscriber: HubSubscriber, from: number, to: number): void {
     if (subscriber.sink.gap) {
       try {
-        subscriber.sink.gap(from, upTo);
+        subscriber.sink.gap(from, to);
       } catch (error) {
         this.warn(`subscriber for ${subscriber.key} threw in gap: ${errorText(error)}`);
       }
     }
-    subscriber.cursor = upTo;
   }
 
   /**
@@ -1063,6 +1099,7 @@ export class HubImpl implements ObservableLiveHub {
       requested: fromSeq,
       cursor: fromSeq,
       delivered: [],
+      changeGap: null,
       lagging: false,
       active: true,
       traceListener,
