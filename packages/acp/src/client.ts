@@ -608,8 +608,17 @@ export class AcpClient {
    * `cwd` and `mcpServers` are required by the schema — callers must supply
    * both or the agent rejects the load with -32602 (see {@link LoadSessionParams}).
    */
-  async loadSession(sessionId: string, cwd: string, mcpServers: McpServerConfig[]): Promise<NewSessionResult> {
-    const params: LoadSessionParams = { sessionId, cwd, mcpServers };
+  async loadSession(
+    sessionId: string,
+    cwd: string,
+    mcpServers: McpServerConfig[],
+    extra?: Pick<LoadSessionParams, "additionalDirectories" | "_meta">,
+  ): Promise<NewSessionResult> {
+    const params: LoadSessionParams = {
+      sessionId, cwd, mcpServers,
+      ...(extra?.additionalDirectories?.length ? { additionalDirectories: extra.additionalDirectories } : {}),
+      _meta: extra?._meta,
+    };
     const result = await this._request<NewSessionResult>("session/load", params);
     this._serverSessionId = result.sessionId ?? sessionId;
     return { ...result, sessionId: result.sessionId ?? sessionId };

@@ -116,6 +116,7 @@
     "./utils": "./utils.ts",
     "./constants/*": "./constants/*.ts",
     "./platform": "./platform/index.ts",
+    "./platform/use-after-first-screen": "./platform/use-after-first-screen.ts",
     "./platform-lifecycle": "./platform-lifecycle/index.ts",
     "./feishu": "./feishu/index.ts",
     "./feishu/queries": "./feishu/queries.ts",

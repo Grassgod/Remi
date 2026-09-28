@@ -50,6 +50,7 @@ import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { cn } from "@multiremi/ui/lib/utils";
 import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
@@ -148,9 +149,18 @@ export function RuntimesPage({
   });
   const isMobile = useIsMobile();
 
-  const { data: runtimes = [], isLoading: fetching } = useQuery(
-    runtimeListOptions(wsId),
-  );
+  const {
+    data: runtimes = [],
+    isLoading: fetching,
+    status: runtimesStatus,
+    isPlaceholderData: runtimesIsPlaceholderData,
+  } = useQuery(runtimeListOptions(wsId));
+  // MUL-472 item 5: mark the list container as this page's measured viewport and
+  // publish whether the rows came from this round's own response.
+  const perfMarker = useListPerfMarker({
+    status: runtimesStatus,
+    isPlaceholderData: runtimesIsPlaceholderData,
+  });
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
   // The server returns the full fleet to workspace managers and only the
@@ -290,7 +300,7 @@ export function RuntimesPage({
     showConnectDialog || (cloudRuntimeEnabled && showCloudRuntimeDialog);
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeaderBar
         totalCount={totalCount}
         onConnectRemote={() => setShowConnectDialog(true)}

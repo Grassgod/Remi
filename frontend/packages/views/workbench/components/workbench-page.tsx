@@ -24,6 +24,7 @@ import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
 import { IssueDetail } from "../../issues/components";
 import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { WorkbenchListItem } from "./workbench-list-item";
@@ -108,15 +109,26 @@ export function WorkbenchPage() {
     isLoading: reviewLoading,
     isError: reviewLoadFailed,
     refetch: refetchReview,
+    status: reviewStatus,
   } = useQuery(workbenchIssuesOptions(wsId, "in_review"));
   const {
     data: blockedData,
     isLoading: blockedLoading,
     isError: blockedLoadFailed,
     refetch: refetchBlocked,
+    status: blockedStatus,
   } = useQuery(workbenchIssuesOptions(wsId, "blocked"));
   const { data: inProgressData } = useQuery(workbenchIssuesOptions(wsId, "in_progress"));
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  // MUL-472 item 5: the workbench's own measured viewport is its list panel, and
+  // its rows are "new" once both bucket queries resolved. `in_progress` is
+  // context below the fold, so it does not gate the marker.
+  // Snapshot determines the review buckets, so it is primary data here.
+  const { data: snapshot = [], status: snapshotStatus } = useQuery(agentTaskSnapshotOptions(wsId));
+  const sourceStatuses = [reviewStatus, blockedStatus, snapshotStatus];
+  const perfMarker = useListPerfMarker({
+    status: sourceStatuses.includes("pending") ? "pending"
+      : sourceStatuses.includes("error") ? "error" : "success",
+  });
 
   const { awaitingInput, awaitingReview } = useMemo(
     () => partitionReviewIssues(reviewData?.issues ?? [], snapshot),
@@ -124,7 +136,7 @@ export function WorkbenchPage() {
   );
   const blocked = blockedData?.issues ?? [];
   const inProgress = inProgressData?.issues ?? [];
-  const loading = reviewLoading || blockedLoading;
+  const loading = reviewLoading || blockedLoading || snapshotStatus === "pending";
   const loadFailed = reviewLoadFailed || blockedLoadFailed;
 
   const failureSummaryByIssueId = useMemo(() => {
@@ -277,7 +289,7 @@ export function WorkbenchPage() {
       );
     }
     return (
-      <div className="flex flex-1 flex-col min-h-0">
+      <div className="flex flex-1 flex-col min-h-0" {...perfMarker}>
         {listHeader}
         {loading ? (
           listSkeleton
@@ -304,7 +316,7 @@ export function WorkbenchPage() {
         maxSize={480}
         groupResizeBehavior="preserve-pixel-size"
       >
-        <div className="flex h-full flex-col border-r">
+        <div className="flex h-full flex-col border-r" {...perfMarker}>
           {listHeader}
           {loading ? (
             listSkeleton

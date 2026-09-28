@@ -45,13 +45,19 @@ function runtimeNeedsUpdate(
  * Returns true if the current user has any local runtime with an outdated CLI version.
  * Accepts wsId as parameter so callers outside WorkspaceIdProvider can use it safely.
  */
-export function useMyRuntimesNeedUpdate(wsId: string | undefined): boolean {
+export function useMyRuntimesNeedUpdate(
+  wsId: string | undefined,
+  /** MUL-472 b: `false` defers `cli/latest-version` until the route is past its first screen. */
+  latestVersionEnabled = true,
+): boolean {
   const userId = useAuthStore((s) => s.user?.id);
   const { data: runtimes } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
-  const { data: latestVersion } = useQuery(latestCliVersionOptions());
+  const { data: latestVersion } = useQuery(
+    latestCliVersionOptions({ enabled: latestVersionEnabled }),
+  );
 
   if (!runtimes || !latestVersion || !userId) return false;
 
@@ -62,13 +68,19 @@ export function useMyRuntimesNeedUpdate(wsId: string | undefined): boolean {
  * Returns a Set of runtime IDs that belong to the current user and have updates available.
  * Accepts wsId as parameter so callers outside WorkspaceIdProvider can use it safely.
  */
-export function useUpdatableRuntimeIds(wsId: string | undefined): Set<string> {
+export function useUpdatableRuntimeIds(
+  wsId: string | undefined,
+  /** MUL-472 b: the runtimes page is already past the shell gate when it asks. */
+  latestVersionEnabled = true,
+): Set<string> {
   const userId = useAuthStore((s) => s.user?.id);
   const { data: runtimes } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
-  const { data: latestVersion } = useQuery(latestCliVersionOptions());
+  const { data: latestVersion } = useQuery(
+    latestCliVersionOptions({ enabled: latestVersionEnabled }),
+  );
 
   return useMemo(() => {
     if (!runtimes || !latestVersion || !userId) return new Set<string>();

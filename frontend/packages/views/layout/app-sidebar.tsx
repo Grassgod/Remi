@@ -78,6 +78,7 @@ import { useModalStore } from "@multiremi/core/modals";
 import { useConfigStore } from "@multiremi/core/config";
 import { useMyRuntimesNeedUpdate } from "@multiremi/core/runtimes/hooks";
 import { pinListOptions } from "@multiremi/core/pins/queries";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { useDeletePin, useReorderPins } from "@multiremi/core/pins/mutations";
 import { issueDetailOptions } from "@multiremi/core/issues/queries";
 import { useWorkbenchPendingCount } from "@multiremi/core/issues/workbench";
@@ -274,21 +275,25 @@ function PinRow({
   pathname,
   onUnpin,
   wsId,
+  /* MUL-472 b: the per-pin detail request is the third serial wave behind the
+     pin list, so it waits for the same first-screen gate. */
+  detailsEnabled,
 }: {
   pin: PinnedItem;
   href: string;
   pathname: string;
   onUnpin: () => void;
   wsId: string;
+  detailsEnabled: boolean;
 }) {
   const isIssue = pin.item_type === "issue";
   const issueQuery = useQuery({
     ...issueDetailOptions(wsId, pin.item_id),
-    enabled: isIssue,
+    enabled: isIssue && detailsEnabled,
   });
   const projectQuery = useQuery({
     ...projectDetailOptions(wsId, pin.item_id),
-    enabled: !isIssue,
+    enabled: !isIssue && detailsEnabled,
   });
 
   const triggeredRef = useRef(false);
@@ -368,16 +373,27 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const workspace = useCurrentWorkspace();
   const p = useWorkspacePaths();
   const { data: workspaces = EMPTY_WORKSPACES } = useQuery(workspaceListOptions());
-  const { data: myInvitations = EMPTY_INVITATIONS } = useQuery(myInvitationListOptions());
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
-  const inboxAttentionCount = useInboxAttentionUnreadCount(wsId);
-  const hasRuntimeUpdates = useMyRuntimesNeedUpdate(wsId);
-  const workbenchPendingCount = useWorkbenchPendingCount(wsId);
+  // MUL-472 b: the sidebar's own requests (inbox summary, CLI update hint,
+  // workbench badge, pins, invitations) are shell chrome. This component never
+  // unmounts during in-app navigation, so they use the shell scope: they wait
+  // for the session's first page and then stay enabled, which keeps hot
+  // navigation from re-issuing (and re-expiring) them.
+  const shellGateOpen = useAfterFirstScreen({ scope: "shell", routeKey: pathname });
+  // The invitation badge is the same class. QA's probe caught it missing the
+  // gate entirely: `/api/invitations` left 865 ms (issues) / 1540 ms (detail)
+  // before the first content row.
+  const { data: myInvitations = EMPTY_INVITATIONS } = useQuery(
+    myInvitationListOptions({ enabled: shellGateOpen }),
+  );
+  const inboxAttentionCount = useInboxAttentionUnreadCount(wsId, shellGateOpen);
+  const hasRuntimeUpdates = useMyRuntimesNeedUpdate(wsId, shellGateOpen);
+  const workbenchPendingCount = useWorkbenchPendingCount(wsId, shellGateOpen);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
-    ...pinListOptions(wsId ?? "", userId ?? ""),
-    enabled: !!wsId && !!userId,
+    ...pinListOptions(wsId ?? "", userId ?? "", { enabled: shellGateOpen }),
+    enabled: !!wsId && !!userId && shellGateOpen,
   });
   const deletePin = useDeletePin();
   const reorderPins = useReorderPins();
@@ -689,6 +705,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                               pathname={pathname}
                               onUnpin={() => deletePin.mutate({ itemType: pin.item_type, itemId: pin.item_id })}
                               wsId={wsId ?? ""}
+                              detailsEnabled={shellGateOpen}
                             />
                           ))}
                         </SidebarMenu>
