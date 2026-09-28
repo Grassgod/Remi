@@ -1,0 +1,125 @@
+// MUL-438 / C3 over real sockets: the frames a browser actually receives on
+// `/ws` and `/api/trace/ws`.
+//
+// The protocol suite next door exercises the handler directly; this one proves
+// the endpoint wiring — which socket serves which stream kind, and that the chat
+// lifecycle invalidations now follow the session's creator instead of the chat
+// scope.
+import { afterEach, describe, expect, it } from "bun:test";
+import { startMultiremiServer } from "@multiremi/api.js";
+import {
+  authenticateBrowserWebSocket,
+  createStore,
+  expectNoWebSocketMessage,
+  nextWebSocketMessage,
+  resetMultiremiTestEnv,
+} from "./helpers.js";
+
+afterEach(resetMultiremiTestEnv);
+
+describe("MUL-438 browser stream endpoints", () => {
+  it("serves log streams on /ws, refuses trace there, and refuses log on /api/trace/ws", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+    const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
+    const issue = store.createIssue({ title: "Socket issue", workspaceId: workspace.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
+    const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "socket task", issueId: issue.id });
+    const token = await store.createAccessToken({ name: "Socket owner", type: "pat", workspaceId: workspace.id, userId: "creator" });
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+
+    const logSocket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    const traceSocket = new WebSocket(`ws://127.0.0.1:${server.port}/api/trace/ws?workspace_id=${workspace.id}`);
+    try {
+      await authenticateBrowserWebSocket(logSocket, token.token);
+      await authenticateBrowserWebSocket(traceSocket, token.token);
+
+      // `/ws` answers a log subscription, and it carries the C0 hub's honest
+      // empty range while C1 is still in flight.
+      logSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "log", id: session.id, from_seq: 1 } }));
+      expect(await nextWebSocketMessage(logSocket)).toEqual({
+        type: "stream.ack",
+        payload: { stream: "log", id: session.id, first_seq: 1, head_seq: 0, log_version: null, gap: null },
+      });
+
+      // The same socket must not serve trace: that stream lives in the runtime
+      // process and the browser reaches it over the other endpoint.
+      logSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "trace", id: task.id, from_seq: 1 } }));
+      expect(await nextWebSocketMessage(logSocket)).toEqual({
+        type: "stream.error",
+        payload: { stream: "trace", id: task.id, code: "wrong_endpoint" },
+      });
+
+      // …and the trace endpoint is the mirror image.
+      traceSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "trace", id: task.id, from_seq: 1 } }));
+      expect(await nextWebSocketMessage(traceSocket)).toEqual({
+        type: "stream.ack",
+        payload: { stream: "trace", id: task.id, first_seq: 1, head_seq: 0, log_version: null, gap: null },
+      });
+      traceSocket.send(JSON.stringify({ type: "stream.subscribe", payload: { stream: "log", id: session.id, from_seq: 1 } }));
+      expect(await nextWebSocketMessage(traceSocket)).toEqual({
+        type: "stream.error",
+        payload: { stream: "log", id: session.id, code: "wrong_endpoint" },
+      });
+    } finally {
+      logSocket.close();
+      traceSocket.close();
+      server.stop(true);
+    }
+  });
+
+  it("keeps a chat lifecycle event away from a workspace peer and delivers it to the creator", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "peer", name: "Peer", role: "member" });
+    const agent = store.createAgent({ name: "Chatty", provider: "codex", workspaceId: workspace.id });
+    const chat = store.createChatSession({ agentId: agent.id, workspaceId: workspace.id, creatorId: "creator", title: "Private chat" });
+    const creatorToken = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+    const peerToken = await store.createAccessToken({ name: "Peer", type: "pat", workspaceId: workspace.id, userId: "peer" });
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+
+    const creator = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    const peer = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    try {
+      await authenticateBrowserWebSocket(creator, creatorToken.token);
+      await authenticateBrowserWebSocket(peer, peerToken.token);
+
+      // A chat lifecycle signal is creator-private. The creator receives it on
+      // the user registry — without subscribing to any scope — and the peer
+      // receives nothing at all.
+      store.updateChatSession(chat.id, { title: "Renamed privately" });
+
+      const received = await nextWebSocketMessage(creator);
+      expect(received).toMatchObject({
+        type: "chat:session_updated",
+        payload: { chat_session_id: chat.id, title: "Renamed privately" },
+      });
+      await expectNoWebSocketMessage(peer, 250);
+    } finally {
+      creator.close();
+      peer.close();
+      server.stop(true);
+    }
+  });
+
+  it("broadcasts resync to the sockets this process holds", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+    const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    try {
+      await authenticateBrowserWebSocket(socket, token.token);
+      const handle = server.broadcastResync({ jitterMs: () => 0 });
+      expect(handle.recipients).toBe(1);
+      expect(await nextWebSocketMessage(socket)).toEqual({ type: "resync" });
+    } finally {
+      socket.close();
+      server.stop(true);
+    }
+  });
+});

@@ -71,7 +71,16 @@ const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string
  * exact paths; everything else is refused.
  */
 const RUNTIME_ALLOWED_PREFIXES = ["/api/daemon/", "/health/", "/internal/"] as const;
-const RUNTIME_ALLOWED_EXACT = ["/health", "/healthz", "/readyz", "/api/multiremi/health"] as const;
+const RUNTIME_ALLOWED_EXACT = [
+  "/health",
+  "/healthz",
+  "/readyz",
+  "/api/multiremi/health",
+  // MUL-438: the browser trace socket is served by the process that owns the
+  // trace stream (runtime), and nginx routes the path there. It is the one
+  // browser-facing path in this allowlist.
+  "/api/trace/ws",
+] as const;
 
 /** Independent re-implementation of §3.2, used as the oracle. */
 function expectedRefusal(role: ApiRole, pathname: string): boolean {
@@ -141,7 +150,12 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
       const { method, path } = concreteRequest(pattern);
       // The three upgrade-only routes answer 426 through `app.request`; the WS
       // behaviour is asserted separately below against a real server.
-      if (pattern === "GET /api/daemon/ws" || pattern === "GET /ws" || pattern === "GET /api/realtime/ws") continue;
+      if (
+        pattern === "GET /api/daemon/ws"
+        || pattern === "GET /ws"
+        || pattern === "GET /api/realtime/ws"
+        || pattern === "GET /api/trace/ws"
+      ) continue;
       const response = await app.request(path, { method });
       statuses.set(pattern, response.status);
     }
@@ -328,7 +342,7 @@ describe("MUL-461 api role — env resolution", () => {
 describe("MUL-461 api role — guard over the full golden route inventory", () => {
   it("keeps main's behavior when the role is all", async () => {
     const statuses = await sweep("all");
-    expect(statuses.size).toBe(GOLDEN.routes.length - 3);
+    expect(statuses.size).toBe(GOLDEN.routes.length - 4);
     let refused = 0;
     for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
@@ -362,6 +376,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // Unchanged by MUL-410's five /api/issues/:id/decisions routes and by MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes: all nine are browser
     // traffic, so this process serves them and the count stands.
+    // MUL-438's `GET /api/trace/ws` is a browser path (`ui` serves it), so it does
+    // not move this count: it is refused only by `runtime`. The swept total was 70;
+    // the new route is upgrade-only and is asserted in the websocket block below.
     expect(misdirected, routeCountHint("ui")).toHaveLength(70);
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(71);
   });
@@ -381,6 +398,11 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
+    // MUL-438 adds `GET /api/trace/ws` to the literal allowlist above, and it is
+    // upgrade-only, so it changes neither number: the swept refusals stay at 691
+    // (the inventory grew by one, but the new path is not swept) and the two
+    // refused upgrade routes are still `GET /ws` and `GET /api/realtime/ws` —
+    // `GET /api/daemon/ws` and the new trace socket are served by this role.
     expect(refused, routeCountHint("runtime")).toBe(691);
     expect(refused + 2, routeCountHint("runtime")).toBe(693);
   });
@@ -477,6 +499,18 @@ describe("MUL-461 api role — websocket upgrades", () => {
       expect(refused.status, path).toBe(421);
       expect(refused.role, path).toBe("runtime");
     }
+  });
+
+  it("serves the browser trace socket from runtime and refuses it from ui's mirror rule", async () => {
+    // MUL-438: the trace stream's home is the runtime process, so this is the one
+    // browser upgrade path runtime must NOT refuse. A successful upgrade has no
+    // readable body (asserted by the status alone); a 421 would carry the header.
+    const served = await upgradeStatus("runtime", "/api/trace/ws?workspace_id=local");
+    expect(served.status).not.toBe(421);
+    // `ui` only refuses the daemon prefix, so this path is simply not its
+    // business to refuse at the guard — nginx sends it to runtime (MUL-464).
+    const onUi = await upgradeStatus("ui", "/api/trace/ws?workspace_id=local");
+    expect(onUi.status).not.toBe(421);
   });
 
   it("keeps the 426 upgrade-required answer for a non-upgrade GET", async () => {

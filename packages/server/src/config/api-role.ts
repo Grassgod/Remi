@@ -56,13 +56,19 @@ export function isApiRoleConfigured(env: Record<string, string | undefined> = pr
 
 /**
  * Paths the `runtime` role serves: the daemon protocol, the health trio every
- * container probe uses, and the peer channel (`/internal/*`, MUL-462).
+ * container probe uses, the peer channel (`/internal/*`, MUL-462), and the
+ * browser trace socket (`/api/trace/ws`, MUL-438).
  *
  * An allowlist of exact paths and prefixes rather than a prefix sweep, so
  * `/api/cloud-runtime/healthz` (a browser route) is not mistaken for `/healthz`.
  */
 export function isRuntimeAllowedPath(pathname: string): boolean {
   if (isDaemonPath(pathname)) return true;
+  // MUL-438: the trace stream lives in the runtime process (ADR 0007 decision
+  // 1), so its browser socket is the one browser endpoint this role serves.
+  // `nginx` routes `/api/trace/ws` here (MUL-464); without this entry the
+  // upgrade would answer 421 in the process that owns the stream.
+  if (pathname === "/api/trace/ws") return true;
   if (pathname === "/health" || pathname.startsWith("/health/")) return true;
   if (pathname === "/healthz" || pathname === "/readyz") return true;
   // `/api/multiremi/health` sits in the "mounted for every role" row of §3.2 and

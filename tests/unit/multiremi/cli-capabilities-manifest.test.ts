@@ -172,9 +172,12 @@ describe("CLI capabilities manifest", () => {
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
-      exempt: 92,
+      // MUL-438 adds the browser trace socket (`GET /api/trace/ws`), exempt under
+      // the existing `websocket_transport` rule: a long-lived stream is not a CLI
+      // command surface.
+      exempt: 93,
       missing: 0,
-      total: 769,
+      total: 770,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
