@@ -6,13 +6,13 @@ import { readWithSessionCookie, SSR_LOG_TIMEOUT_MS } from "./server-log";
 
 describe("Issue SSR cookie reader", () => {
   it("does not request without a cookie", async () => {
-    const fetcher = vi.fn();
+    const fetcher = vi.fn() as unknown as typeof fetch;
     expect(await readWithSessionCookie({ cookie: undefined, slug: "test", path: "/api/sessions/s/log", schema: z.array(z.string()), fetcher })).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
   it.each([401, 503])("returns only the shell seed for HTTP %s", async status => {
     expect(await readWithSessionCookie({ cookie: "synthetic", slug: "test", path: "/log", schema: z.array(z.string()),
-      fetcher: vi.fn(async () => new Response("upstream private error", { status })) as typeof fetch })).toBeNull();
+      fetcher: vi.fn(async () => new Response("upstream private error", { status })) as unknown as typeof fetch })).toBeNull();
   });
   it("uses the 800ms deadline and suppresses sensitive upstream errors", async () => {
     const errorLog = vi.spyOn(console, "error");

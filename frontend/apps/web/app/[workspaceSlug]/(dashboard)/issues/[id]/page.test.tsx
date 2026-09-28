@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { Suspense } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const replace = vi.hoisted(() => vi.fn());
 
@@ -43,9 +45,11 @@ describe("IssueDetailPage", () => {
     const searchParams = Promise.resolve({ session: "session-main" });
     await act(async () => {
       render(
-        <Suspense fallback={null}>
-          <IssueDetailPage issueId="issue-1" initialIssueSessionId="session-main" />
-        </Suspense>,
+        <QueryClientProvider client={new QueryClient()}>
+          <Suspense fallback={null}>
+            <IssueDetailPage issueId="issue-1" initialIssueSessionId="session-main" />
+          </Suspense>
+        </QueryClientProvider>,
       );
       await Promise.all([params, searchParams]);
     });

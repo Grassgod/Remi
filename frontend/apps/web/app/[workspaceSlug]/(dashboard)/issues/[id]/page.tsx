@@ -1,5 +1,6 @@
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
 import { issueKeys } from "@multiremi/core/issues/queries";
+import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import { readIssueLogBootstrap } from "../../../../../features/issues/server-log";
 import IssuePageClient from "../../../../../features/issues/issue-page-client";
 
@@ -15,11 +16,13 @@ export default async function IssueDetailPage({ params, searchParams }: {
   if (initial) {
     queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, id), initial.issue);
     queries.setQueryData(issueKeys.sessions(id), initial.sessions);
+    queries.setQueryData(workspaceKeys.members(initial.issue.workspace_id), initial.members);
+    queries.setQueryData(issueKeys.children(initial.issue.workspace_id, id), initial.children);
     if (initial.parentIssue) queries.setQueryData(issueKeys.detail(initial.issue.workspace_id, initial.parentIssue.id), initial.parentIssue);
   }
   return (
     <HydrationBoundary state={dehydrate(queries)}>
-      <IssuePageClient issueId={id} initialIssueSessionId={sessionId} initialLog={initial?.log} />
+      <IssuePageClient issueId={id} initialIssueSessionId={sessionId ?? initial?.log.sessionId} initialLog={initial?.log} initialData={initial ?? undefined} />
     </HydrationBoundary>
   );
 }
