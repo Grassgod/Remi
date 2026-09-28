@@ -87,21 +87,21 @@ describe("SharedTask trace expansion", () => {
     expect(getSharedTaskTrace).toHaveBeenCalledTimes(2);
   });
 
-  it("continues past a truncated event to eof and renders its byte notice with last", async () => {
-    const events = [
-      { seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "first" },
-      { seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "中文😀", truncated: true as const, original_bytes: 1_080_177 },
-      { seq: 3, ts: "2026-09-28T00:00:02Z", type: "text", content: "last" },
-    ];
-    getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) =>
-      page({ events: [events[afterSeq]!], next_after_seq: afterSeq + 1, head: 3, eof: afterSeq === 2 }));
+  it.each([
+    { seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "\u0001".repeat(180_000) },
+    { seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
+      tool_call_id: "i".repeat(1024 * 1024 + 1000), status: "completed", output: "" },
+  ])("renders an oversized $type completely and automatically pages to eof", async (event) => {
+    getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) => afterSeq === 0
+      ? page({ events: [event], next_after_seq: 1, head: 2, eof: false })
+      : page({ events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "last" }], next_after_seq: 2, head: 2 }));
     renderTask();
     await userEvent.setup().click(screen.getByText("agt_share"));
     expect(await screen.findByText("last")).toBeInTheDocument();
-    expect(screen.getByText("first")).toBeInTheDocument();
-    const text = "中文😀\n（内容过长已截断，原始 1080177 字节）";
-    expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === text)).toBeInTheDocument();
-    expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1, 2]);
+    const expected = messageText(traceEventToMessage(event));
+    expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === expected)).toBeInTheDocument();
+    expect(screen.queryByText(/内容过长已截断/)).not.toBeInTheDocument();
+    expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1]);
   });
 
   it("renders the same content from legacy inline messages and trace events", async () => {
@@ -122,20 +122,6 @@ describe("SharedTask trace expansion", () => {
       expect(newText).toBe(oldText);
       expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === newText)).toBeInTheDocument();
     }
-  });
-
-  it("displays shortened identity values with the existing notice and pages to eof", async () => {
-    const event = { seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash", tool_call_id: "call_short",
-      status: "completed", truncated: true as const, original_bytes: 1_049_741, truncated_fields: ["tool_call_id"] };
-    getSharedTaskTrace.mockImplementation(async (_token: string, _taskId: string, afterSeq: number) => afterSeq === 0
-      ? page({ events: [event], next_after_seq: 1, head: 2, eof: false })
-      : page({ events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "last" }], next_after_seq: 2, head: 2 }));
-    renderTask();
-    await userEvent.setup().click(screen.getByText("agt_share"));
-    expect(await screen.findByText("last")).toBeInTheDocument();
-    const expected = JSON.stringify(event, null, 2) + "\n（内容过长已截断，原始 1049741 字节）";
-    expect(screen.getByText((_, element) => element?.tagName === "PRE" && element.textContent === expected)).toBeInTheDocument();
-    expect(getSharedTaskTrace.mock.calls.map((call) => call[2])).toEqual([0, 1]);
   });
 
   it.each([
