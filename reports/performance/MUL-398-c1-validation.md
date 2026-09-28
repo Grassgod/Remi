@@ -51,7 +51,7 @@
 | WS message处理器 | browser订阅scope校验、daemon heartbeat及任务辅助读取 |
 | 启动迁移 | 如 migrations.ts 的 feishu 整表回填，未拥有请求上下文 |
 
-后台收回必须先使queued读有界，并取得v0.2.84之后后台单次回包<6 MiB数据；修一个queued读不等于其余八类自动安全。常量中的后台项独立、可一行删除，没有别处分散特判。`autopilots-repo.ts` 未改。
+后台收回必须先使queued读有界，并在含埋点版本实际部署后取得后台单次回包<6 MiB数据；修一个queued读不等于其余八类自动安全。常量中的后台项独立、可一行删除，没有别处分散特判。`autopilots-repo.ts` 未改。
 
 ### 分页调用方逐一对照
 
@@ -69,23 +69,23 @@
 
 ## 分页副作用实测
 
-PostgreSQL17.5、Bun1.3.14、本机独立loopback实例。相同脚本/fixture、同版本PG，两进程分别导入main和本PR实现，warmup3+n31，交替执行顺序，p95为nearest-rank；额外p95为31个成对after-before值。原始每对数据在 [measurements.json](MUL-398-c1-measurements.json)。
+最终 head `8a24e769` 用本任务独立的 PostgreSQL15.19、Bun1.3.14 loopback 实例重测。相同脚本/fixture、同版本PG，两进程分别导入 main `b95dd2fa` 和本PR实现，warmup3+n31，交替执行顺序，p95为nearest-rank；额外p95为31个成对after-before值。原始每对数据在 [measurements.json](MUL-398-c1-measurements.json)。
 
 daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计589,822 B（>512 KiB）；降级事件本身只带task_id/seq_start/seq_end，不把巨大正文塞回引用。两侧始终交付N个browser帧，页大小8，消息 SELECT=ceil(N/8)。总桥调用还包含每页scope/identity查询，故不是仅消息SELECT数。
 
 | 路径 | N | 总桥调用 before → after | 消息SELECT | before p50/p95 ms | after p50/p95 ms | 成对额外p95 ms |
 |---|---:|---:|---:|---:|---:|---:|
-| daemon POST | 1 | 10 → 10 | 正式页大小断言8 | 10.36 / 13.45 | 9.64 / 12.26 | 6.07 |
-| daemon POST | 10 | 20 → 20 | 同上 | 15.38 / 22.08 | 15.05 / 24.00 | 8.51 |
-| daemon POST | 50 | 65 → 65 | 同上 | 43.74 / 61.67 | 42.90 / 60.13 | 27.75 |
-| 独立peer / background | 1 | 4 → 4 | 1 → 1 | 5.87 / 7.85 | 6.34 / 8.05 | 2.52 |
-| 独立peer / background | 10 | 7 → 7 | 2 → 2 | 27.22 / 30.90 | 26.28 / 29.98 | 3.33 |
-| 独立peer / background | 50 | 22 → 22 | 7 → 7 | 126.10 / 150.38 | 126.04 / 144.24 | 26.49 |
-| HTTP peer | 1 | 4 → 4 | 1 → 1 | 6.01 / 7.88 | 5.38 / 7.15 | 2.86 |
-| HTTP peer | 10 | 7 → 7 | 2 → 2 | 25.69 / 30.26 | 26.34 / 31.07 | 5.45 |
-| HTTP peer | 50 | 22 → 22 | 7 → 7 | 124.92 / 141.42 | 124.18 / 154.10 | 32.51 |
+| daemon POST | 1 | 10 → 10 | 正式页大小断言8 | 7.22 / 11.03 | 8.21 / 12.55 | 4.95 |
+| daemon POST | 10 | 20 → 20 | 同上 | 9.75 / 17.60 | 10.49 / 16.92 | 7.04 |
+| daemon POST | 50 | 65 → 65 | 同上 | 32.35 / 46.75 | 30.43 / 42.74 | 11.54 |
+| 独立peer / background | 1 | 4 → 4 | 1 → 1 | 4.45 / 6.34 | 4.35 / 6.53 | 2.09 |
+| 独立peer / background | 10 | 7 → 7 | 2 → 2 | 22.31 / 27.84 | 23.04 / 26.96 | 6.20 |
+| 独立peer / background | 50 | 22 → 22 | 7 → 7 | 105.21 / 121.15 | 102.79 / 122.45 | 22.30 |
+| HTTP peer | 1 | 4 → 4 | 1 → 1 | 4.64 / 5.80 | 4.50 / 6.78 | 2.13 |
+| HTTP peer | 10 | 7 → 7 | 2 → 2 | 22.23 / 25.50 | 21.53 / 26.92 | 6.19 |
+| HTTP peer | 50 | 22 → 22 | 7 → 7 | 102.55 / 121.95 | 101.20 / 131.44 | 28.50 |
 
-**不声称尾延迟严格≤5ms**：成对p95有超线档位，主机同时有其他开发/QA；即使daemon 1条查询相同也有6.07ms成对尾差。daemon三档p50略降、50条两组p95也下降；HTTP peer 50条两组p95差12.68ms。页大小和查询次数在全部31对样本完全相同，没有预检的43次新增SELECT。按续做指令「共享主机噪声时以查询次数相同为主证据」交付原值，不能把它改写为≤5ms或单凭尾差证明回归；最终验收由QA判断。
+**不声称尾延迟严格≤5ms**：成对p95有超线档位，主机同时有其他开发/QA。daemon三档桥调用始终为10/20/65，50条两组p95从46.75到42.74ms；HTTP peer 50条两组p95从121.95到131.44ms，成对额外p95为28.50ms。页大小和查询次数在全部31对样本完全相同，没有预检的43次新增SELECT。按续做指令「共享主机噪声时以查询次数相同为主证据」交付原值，不能把它改写为≤5ms或单凭尾差证明回归；最终验收由QA判断。
 
 ## 24 MiB长消息与护栏
 
@@ -106,13 +106,13 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 
 引用 [A2报告](MUL-398-repository-wikis-a2-db-bytes.md) 的1842观测/1443构建行、26/46/92仓库模型；A/A2已在main（d905961b/d6714966），晚于v0.2.84，与C-1同包或更早上线。发布冻结期间209仍为v0.2.83，不能声称Explorer取证时生产已生效。
 
-现有scale脚本的MeteredDb补透传dialect，避免新迁移把PG当SQLite；两侧用相同脚本，不改产品查询。warmup1+n5，after默认env未设置；本轮仍保留该路由64 MiB例外，但每次请求所有SQL总量<1 MB，所以每条SQL亦<6 MiB且符合8 MiB。原始同口径数据在 [wiki-measurements.json](MUL-398-c1-wiki-measurements.json)。
+现有scale脚本的MeteredDb补透传dialect，避免新迁移把PG当SQLite；两侧用相同脚本，不改产品查询。最终本地PG15.19因裁剪包缺LLVM JIT动态库，两侧统一关闭JIT后重跑；warmup1+n5，after默认env未设置。本轮仍保留该路由64 MiB例外，但每次请求所有SQL总量<1 MB，所以每条SQL亦<6 MiB且符合8 MiB。原始同口径数据在 [wiki-measurements.json](MUL-398-c1-wiki-measurements.json)。
 
 | 仓库数 | db_bytes before → after | dbq | before p50/max ms | after p50/max ms | db_parse_ms before → after |
 |---|---:|---:|---:|---:|---:|
-| 26 | 661,146 → 661,146 | 136 | 146.77 / 150.17 | 135.79 / 143.51 | 4.4 → 4.1 |
-| 46 | 763,247 → 763,247 | 236 | 242.34 / 256.58 | 246.95 / 261.21 | 5.9 → 4.7 |
-| 92 | 998,077 → 998,077 | 466 | 423.57 / 478.32 | 435.39 / 502.32 | 10.1 → 9.1 |
+| 26 | 661,146 → 661,146 | 136 | 143.62 / 149.52 | 109.69 / 138.51 | 3.7 → 4.2 |
+| 46 | 763,247 → 763,247 | 236 | 183.32 / 238.46 | 190.37 / 209.78 | 5.7 → 4.7 |
+| 92 | 998,077 → 998,077 | 466 | 283.04 / 332.07 | 394.78 / 482.43 | 8.1 → 9.3 |
 
 比A2历史989,981 B略大；当前main已有后续改动，本轮以相同main基线与fixture比较，C-1本身前后没有变化，未单独归因历史差值。92档离1,000,000 B只余1,923 B，不能外推更多仓库仍<1 MB。26档保存的响应按key排序完全相同，SHA-256 `704b69e098b787b71727474fb753496cb41bd9b3534545c269cf6c5fcbda8829`；脚本只保存第一档完整响应，不声称另两档执行了完整响应SHA对比。
 
@@ -134,7 +134,9 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 | getter忽略上下文只用env | 1 pass / 5 fail；例外HTTP Expected200 Received500；queued长样本拒绝；例外页大小/值断言失败 |
 | 指标关闭时return next() | 4 pass / 2 fail；非例外真实PG Expected500 Received200，关闭指标页大小8而非1 |
 
-最终提交后的串行验证与最新SHA的CI结果以MUL-398交付评论/PR checks记录为准：tsc、arch、docs:test/check、CLI checker、snapshot，以及真实PG全量和SQLite全量（默认hermetic8 MiB、不额外设置replylimit）。报告不把仍未执行的最终检查写成通过。
+`8a24e769` 上串行验证：`bunx tsc --noEmit`通过；架构110/110；`docs:check`通过；CLI checker 678 mapped / 96 exempt / 0 missing（774路由）；路由快照一致；C-1真实PG定向6/6；真实PG全量4088 pass / 0 fail（309文件）；SQLite全量在正常网络环境3797 pass / 0 fail（309文件）。两次全量均未额外设置回包上限，使用hermetic 8 MiB默认值。
+
+SQLite第一次全量额外包在无网络命名空间，3796 pass / 1 fail：MUL-338的“立即探测”用例预期`gateway.invalid` DNS立刻报错，但隔离网络里约8秒超时后状态仍为ready。该文件单独在同样隔离环境重跑5/1，纯main `5f696786`同样5/1；正常网络下当前head单文件6/0、全量3797/0（DNS立即返回ENOTFOUND）。失败请求`db_queries=0`，与PG护栏无关，未改该用例断言或产品逻辑。最终提交后的CI结果以MUL-398交付评论/PR checks的最新SHA为准。
 
 ## 范围与回滚
 
