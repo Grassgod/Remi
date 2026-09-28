@@ -485,3 +485,11 @@ tsc 0 error，架构 92 pass，docs:check 通过，CLI checker 仍为
 **3679 pass / 0 fail / 0 违例（828.25s）**；MUL-301 PG audit 实测
 **11.32s**，本次没有复现第四轮超时。合 MUL-474 后再次顺序运行 PG 和
 SQLite 完整目录，最终结果、20 轮手册和最新 head CI 见第五轮交付评论。
+
+最后一次推送前 fetch 又得到 `0c2b3865`（MUL-449），无冲突合入为
+`7652c963`；`context.ts` 的新增 Task claim surface 与队列代码同时保留。
+再次运行上述十文件真实 PG 定向为 **243 pass / 0 fail（76.34s）**；
+tsc、架构、文档、CLI checker 和路由快照仍通过。最终完整目录运行使用
+这个代码合并结果。另校正 409 深度统计接口残留的“没有 SAVEPOINT”旧注释，
+明确本分支的嵌套实现使用 SAVEPOINT，但 409 的 owner 路径仍断言深度 1；
+此次仅改注释，不改事务边界或执行行为。

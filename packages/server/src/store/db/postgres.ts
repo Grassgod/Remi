@@ -108,9 +108,9 @@ export interface SqlDatabase {
    */
   readonly inTransaction?: boolean;
   /**
-   * Deepest `transaction()` nesting seen by this handle. Postgres has no
-   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
-   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   * Deepest `transaction()` nesting seen by this handle. Nested PostgreSQL
+   * calls use SAVEPOINTs; paths with an explicit transaction owner still
+   * assert this is 1 so their helpers cannot silently add transaction frames.
    */
   readonly maxTransactionDepth?: number;
 
