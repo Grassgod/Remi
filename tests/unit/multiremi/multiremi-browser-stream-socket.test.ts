@@ -10,12 +10,15 @@ import { startMultiremiServer } from "@multiremi/api.js";
 import { createEmptyLiveHub, type HubSubscription } from "@multiremi/api/hub/live-hub.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import { createStreamAuthReader, type StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
+import { WSClient } from "../../../frontend/packages/core/api/ws-client.js";
 import {
   authenticateBrowserWebSocket,
   createStore,
   expectNoWebSocketMessage,
   nextWebSocketMessage,
+  nextWebSocketMessages,
   resetMultiremiTestEnv,
+  waitWebSocketOpen,
 } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -142,6 +145,51 @@ describe.each(["log", "trace"] as const)("MUL-438 pending %s subscriptions over 
 });
 
 describe("MUL-438 browser stream endpoints", () => {
+  it("lets a real WSClient subscribe between open and auth_ack without breaking authentication", async () => {
+    const store = createStore();
+    const workspace = store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
+    const issue = store.createIssue({ title: "Client handshake", workspaceId: workspace.id });
+    const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
+    const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
+    const verify = store.verifyAccessToken.bind(store);
+    const entered = deferred();
+    const release = deferred();
+    const finished = deferred();
+    store.verifyAccessToken = async (...args) => {
+      entered.resolve();
+      await release.promise;
+      try { return await verify(...args); } finally { finished.resolve(); }
+    };
+    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1", authToken: null });
+    const client = new WSClient(`ws://127.0.0.1:${server.port}/ws?workspace_id=${workspace.id}`);
+    client.setAuth(token.token, workspace.slug);
+    client.connect();
+    const socket = (client as unknown as { ws: WebSocket }).ws;
+    let acknowledged = false;
+    try {
+      await waitWebSocketOpen(socket);
+      await entered.promise;
+      client.subscribeStream("log", session.id, { onAck: () => { acknowledged = true; } });
+      await expectNoWebSocketMessage(socket);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+      const handshakeAndAck = nextWebSocketMessages(socket, 2);
+      release.resolve();
+      expect(await handshakeAndAck).toMatchObject([
+        { type: "auth_ack" },
+        { type: "stream.ack", payload: { stream: "log", id: session.id } },
+      ]);
+      expect(acknowledged).toBe(true);
+      expect(client.authenticated).toBe(true);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      release.resolve();
+      await finished.promise;
+      client.disconnect();
+      server.stop(true);
+    }
+  });
+
   it("serves log streams on /ws, refuses trace there, and refuses log on /api/trace/ws", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();

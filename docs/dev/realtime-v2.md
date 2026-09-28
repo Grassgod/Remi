@@ -55,12 +55,15 @@ trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts]
 
 Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL` / `TRACE_STREAM_FACTS_SQL`），不使用同步 bridge；SQLite 与测试退回 store 同步读取。`userId === null`（主令牌/开放模式）保留本地管理员语义。
 
+鉴权等待期间，退订、连接关闭和同一流的新订阅都会使旧请求失效；旧结果不再登记 Hub 订阅，也不发送迟到的 ack 或错误。
+
 ## 断线续传、退避与 resync
 
 [ws-client.ts](../../frontend/packages/core/api/ws-client.ts)：
 
 - 重连为 1s→30s 抖动指数退避（`reconnectDelayMs`），失败计数在认证成功后归零。
 - 每 25s 发一次 `ping`（Bun `idleTimeout` 为 120s）。
+- OPEN 只表示传输已打开；当前连接收到 `auth_ack` 后才发送流订阅。重连重新等待认证，已关闭或被替换连接的事件不影响当前连接。
 - 认证成功后对每条活动流重发 `stream.subscribe`：有本地帧则 `from_seq = 本地 head + 1`，否则沿用调用方原始锚点。
 - 收到 `resync` 与收到重连走同一恢复动作：重订阅所有流，再跑一次非流式缓存的失效（[use-realtime-sync.ts](../../frontend/packages/core/realtime/use-realtime-sync.ts)）。
 

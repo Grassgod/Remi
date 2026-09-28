@@ -117,6 +117,38 @@ describe("MUL-438 WSClient streams", () => {
     ]);
   });
 
+  it("queues subscriptions until the current socket authenticates, including reconnects", () => {
+    const ws = new WSClient("ws://example.test/ws");
+    ws.setAuth("tok", "acme");
+    ws.connect();
+    const socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    ws.subscribeStream("log", "ises_1", {});
+    expect(socket.streamFrames).toEqual([]);
+    expect(ws.authenticated).toBe(false);
+    socket.serverSend({ type: "auth_ack" });
+    expect(socket.streamFrames).toHaveLength(1);
+    expect(ws.authenticated).toBe(true);
+
+    socket.drop();
+    expect(ws.authenticated).toBe(false);
+    vi.runOnlyPendingTimers();
+    const reconnected = FakeWebSocket.instances.at(-1)!;
+    reconnected.open();
+    const onAuthenticated = vi.fn();
+    ws.onAuthenticated_(onAuthenticated);
+    ws.subscribeStream("log", "ises_2", {});
+    const cancelled = ws.subscribeStream("log", "ises_cancelled", {});
+    cancelled.unsubscribe();
+    expect(reconnected.streamFrames).toEqual([]);
+    expect(ws.authenticated).toBe(false);
+    expect(onAuthenticated).not.toHaveBeenCalled();
+    reconnected.serverSend({ type: "auth_ack" });
+    expect(reconnected.streamFrames.map((frame) => frame.payload.id)).toEqual(["ises_1", "ises_2"]);
+    expect(onAuthenticated).toHaveBeenCalledTimes(1);
+    ws.disconnect();
+  });
+
   it("tracks the local head and resumes from head + 1 after a reconnect", () => {
     const { ws, socket } = connected();
     const subscription = ws.subscribeStream("log", "ises_1", {});

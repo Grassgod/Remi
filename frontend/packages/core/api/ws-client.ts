@@ -123,6 +123,7 @@ export interface WSClientIdentity {
 
 export class WSClient {
   private ws: WebSocket | null = null;
+  private authenticatedSocket: WebSocket | null = null;
   private baseUrl: string;
   private token: string | null = null;
   private workspaceSlug: string | null = null;
@@ -178,20 +179,21 @@ export class WSClient {
     if (this.identity?.os)
       url.searchParams.set("client_os", this.identity.os);
 
-    this.ws = new WebSocket(url.toString());
+    const socket = new WebSocket(url.toString());
+    this.ws = socket;
+    this.authenticatedSocket = null;
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket || this.disposed) return;
       if (!this.cookieAuth && this.token) {
-        this.ws!.send(
+        socket.send(
           JSON.stringify({ type: "auth", payload: { token: this.token } }),
         );
-        return;
       }
-
-      this.onAuthenticated();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket || this.disposed) return;
       let msg: WSMessage;
       try {
         msg = JSON.parse(event.data as string) as WSMessage;
@@ -210,7 +212,7 @@ export class WSClient {
         return;
       }
       if ((msg as any).type === "auth_ack") {
-        this.onAuthenticated();
+        this.onAuthenticated(socket);
         return;
       }
       // `resync` is a process-level recovery signal: the cross-process link came
@@ -235,7 +237,9 @@ export class WSClient {
       }
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
+      this.authenticatedSocket = null;
       this.stopPing();
       if (this.disposed) return;
       const delayMs = reconnectDelayMs(this.reconnectAttempt);
@@ -244,13 +248,15 @@ export class WSClient {
       this.reconnectTimer = setTimeout(() => this.connect(), delayMs);
     };
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
       // Suppress — onclose handles reconnect; errors during StrictMode
       // double-fire are expected in dev and harmless.
     };
   }
 
-  private onAuthenticated() {
+  private onAuthenticated(socket: WebSocket) {
+    if (this.ws !== socket || this.authenticatedSocket === socket) return;
+    this.authenticatedSocket = socket;
     this.logger.info("connected");
     const isResume = this.hasConnectedBefore;
     this.reconnectAttempt = 0;
@@ -284,11 +290,14 @@ export class WSClient {
   }
 
   get authenticated(): boolean {
-    return this.hasConnectedBefore && this.ws?.readyState === WebSocket.OPEN;
+    return this.authenticatedSocket !== null
+      && this.authenticatedSocket === this.ws
+      && this.ws?.readyState === WebSocket.OPEN;
   }
 
   disconnect() {
     this.disposed = true;
+    this.authenticatedSocket = null;
     this.stopPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -343,7 +352,7 @@ export class WSClient {
         const current = this.streams.get(key);
         if (!current) return;
         this.streams.delete(key);
-        this.send({ type: "stream.unsubscribe", payload: { stream, id } } as never);
+        if (this.authenticated) this.send({ type: "stream.unsubscribe", payload: { stream, id } } as never);
       },
     };
   }
@@ -376,10 +385,12 @@ export class WSClient {
     const fromSeq = entry.pendingFromSeq ?? (entry.head > 0 ? entry.head + 1 : 1);
     entry.pendingFromSeq = null;
     entry.sent = true;
-    this.send({
-      type: "stream.subscribe",
-      payload: { stream: entry.stream, id: entry.id, from_seq: fromSeq },
-    } as never);
+    if (this.authenticated) {
+      this.send({
+        type: "stream.subscribe",
+        payload: { stream: entry.stream, id: entry.id, from_seq: fromSeq },
+      } as never);
+    }
   }
 
   /**
