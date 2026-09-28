@@ -432,9 +432,7 @@ export class DaemonProtocolLayer {
    * it would make this machine look alive for a runtime it does not own.
    */
   private handleHeartbeat(heartbeat: DaemonSessionHeartbeat): DaemonHeartbeatReplyPayload {
-    // Membership is re-checked here, not only at the handshake: a credential can
-    // outlive its owner's place in the workspace, and the terminal close code
-    // exists so the daemon stops reconnecting instead of retrying forever.
+    // Recheck daemon-wide authority before stamping any runtime heartbeat.
     if (this.heartbeatOwnerCheck(heartbeat)) return { runtime_acks: [] };
     // Reading the maintenance row also enforces the drain lease TTL lazily, so a
     // crashed updater cannot leave the platform draining forever. The row itself
@@ -482,8 +480,7 @@ export class DaemonProtocolLayer {
   }
 
   /**
-   * Re-check the daemon owner's membership on each heartbeat and close 4401 when
-   * it is gone.
+   * Re-check retirement, credential validity and owner membership on each hb.
    *
    * The v1 path made this check per message; v2 keeps the property without paying
    * it per frame, because the only thing a stale credential can still do before
@@ -494,6 +491,14 @@ export class DaemonProtocolLayer {
     if (!session || !(session instanceof DaemonProtocolSession)) return false;
     const token = session.ownerAccessToken;
     if (!token || token.type !== "daemon") return false;
+    if (this.store.isDaemonRetired(token.workspaceId, heartbeat.daemonId)) {
+      session.closeWithCode(DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired, "daemon_retired");
+      return true;
+    }
+    if (!this.store.isAccessTokenStillValid(token)) {
+      session.closeWithCode(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked, "authority_revoked");
+      return true;
+    }
     if (isOwnerStillMember(this.store, token)) return false;
     session.closeWithCode(
       DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked,

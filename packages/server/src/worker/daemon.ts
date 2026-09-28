@@ -1088,7 +1088,9 @@ export class MultiremiDaemon {
       },
       onTerminal: async code => {
         if (this.stopped) return;
-        log.error(`daemon protocol authority rejected (close ${code}); entering cleanup-only mode`);
+        const reason = code === 4410 ? "daemon_retired" : "authority_revoked";
+        const status = code === 4410 ? 410 : 401;
+        log.error(`daemon authorization was revoked or retired: HTTP ${status} ${reason} (protocol close ${code}); entering cleanup-only mode`);
         await this.stopAfterTerminalAuthority();
       },
       onStateChange: () => { this.taskDownlinks.connectionChanged(); this.wakeClaim(); },

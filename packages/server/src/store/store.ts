@@ -2381,6 +2381,10 @@ runMigrations(this.db);
     return this.accessTokens.getAccessToken(id);
   }
 
+  isAccessTokenStillValid(token: MultiremiAccessToken): boolean {
+    return this.accessTokens.isAccessTokenStillValid(token);
+  }
+
   bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
     const normalizedDaemonId = daemonId.trim();
     if (!normalizedDaemonId) return null;

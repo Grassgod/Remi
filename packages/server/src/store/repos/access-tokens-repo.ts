@@ -157,6 +157,19 @@ export class AccessTokensRepo {
     return row ? toAccessToken(row) : null;
   }
 
+  /** Recheck a connected daemon's credential without writing last_used_at. */
+  isAccessTokenStillValid(previous: MultiremiAccessToken): boolean {
+    const current = this.getAccessToken(previous.id);
+    return Boolean(current
+      && current.tokenPrefix === previous.tokenPrefix
+      && current.createdAt === previous.createdAt
+      && current.type === previous.type
+      && current.workspaceId === previous.workspaceId
+      && current.daemonId === previous.daemonId
+      && current.userId === previous.userId
+      && accessTokenIsValid(current, Date.now()));
+  }
+
   /** Atomically claim an unbound daemon token for its first registered daemon. */
   bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
     const normalizedDaemonId = cleanOptionalString(daemonId);
@@ -270,11 +283,10 @@ export class AccessTokensRepo {
     if (!row) return null;
     const accessToken = toAccessToken(row);
     if (allowedTypes?.length && !allowedTypes.includes(accessToken.type)) return null;
-    if (accessToken.revokedAt) return null;
     // One clock read for both checks below: the expiry comparison and the throttle decision
     // must not disagree because the clock moved between them.
     const nowMs = Date.now();
-    if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= nowMs) return null;
+    if (!accessTokenIsValid(accessToken, nowMs)) return null;
     // The row read above is the one whose hash, type, revocation and expiry were just checked, and
     // the only write since is this `last_used_at` stamp — which the returned value does not carry
     // a stale copy of because `lastUsedAt` is not part of the validation. Re-reading it cost one
@@ -315,6 +327,10 @@ export class AccessTokensRepo {
     rememberLastUsedAtWrite(tokenId, { writtenAt: nowMs, lastUsedAt }, nowMs);
     return lastUsedAt;
   }
+}
+
+function accessTokenIsValid(token: MultiremiAccessToken, nowMs: number): boolean {
+  return !token.revokedAt && (!token.expiresAt || Date.parse(token.expiresAt) > nowMs);
 }
 
 /**

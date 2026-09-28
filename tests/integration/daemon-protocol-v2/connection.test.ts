@@ -20,6 +20,8 @@ describe("daemon protocol v2 real connection", () => {
       const h = await fixture({ providers: ["claude", "codex"] });
       await h.startDaemon();
       await h.settleHeartbeat();
+      const token = h.store.listAccessTokens("local").find(value => value.daemonId === "dmn_fixture")!;
+      const lastUsedAt = h.store.getAccessToken(token.id)!.lastUsedAt;
       expect(h.sockets).toHaveLength(1);
       expect(h.daemons[1]!.daemonProtocolClient()).toBe(h.client);
       const hello = h.ledger.find(entry => entry.type === "hello")!.frame;
@@ -30,9 +32,38 @@ describe("daemon protocol v2 real connection", () => {
         await h.settleHeartbeat();
       }
       expect(h.ledger.filter(entry => entry.type === "hb")).toHaveLength(4);
+      expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
       expect(heartbeat).not.toHaveBeenCalled();
       expect((await h.health()).protocol).toMatchObject({ state: "ok", server_min: 2, self: 2, next_probe_at: null });
     } finally { heartbeat.mockRestore(); }
+  });
+
+  it("closes a retired daemon with 4410 on the next heartbeat", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const closeCode = new Promise<number>(resolve => h.sockets[0]!.native.addEventListener("close", event => resolve(event.code), { once: true }));
+    const plan = h.store.getDaemonRetirementPlan("local", "dmn_fixture");
+    expect(h.store.retireDaemon("local", "dmn_fixture", plan.snapshot, "local").status).toBe("retired");
+    h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+    expect(await closeCode).toBe(4410);
+    await waitFor(() => h.client.connectionState() === "terminal", "retired daemon terminal state");
+    expect(h.layer.registry.size).toBe(0);
+  });
+
+  it.each(["revoked", "expired"] as const)("closes a %s daemon credential with 4401 on the next heartbeat", async state => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const token = h.store.listAccessTokens("local").find(value => value.daemonId === "dmn_fixture")!;
+    const lastUsedAt = h.store.getAccessToken(token.id)!.lastUsedAt;
+    const closeCode = new Promise<number>(resolve => h.sockets[0]!.native.addEventListener("close", event => resolve(event.code), { once: true }));
+    h.db.run(`UPDATE multiremi_access_tokens SET ${state === "revoked" ? "revoked_at" : "expires_at"} = ? WHERE id = ?`,
+      [new Date(Date.now() - 1_000).toISOString(), token.id]);
+    h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+    expect(await closeCode).toBe(4401);
+    await waitFor(() => h.client.connectionState() === "terminal", "revoked credential terminal state");
+    expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
