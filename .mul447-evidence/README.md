@@ -8,6 +8,10 @@ fallback. Steps 2 and 3 are not implemented. Independent strict QA is pending.
 - Initial branch: `agent/MUL-447` at `b95dd2fa`.
 - Ordered merge of `agent/MUL-403` at `c366a949`: `6fd1e434`.
 - Then merge of `agent/MUL-421` at `17e92d48`: `f0f340b9`.
+- Before the final push, merged the updated parent at `d81525cb` (Hub #308).
+  Main synchronization remains owned by MUL-436 step 3. The combined startup
+  preserves the single role resolution, peer fanout, v2 daemon drain and browser
+  Hub drain; role-only fixtures explicitly inject the existing EmptyLiveHub.
 - Parent rulings: `cmt_i2j9hbxusljl`, `cmt_culn1zd0rgk3`.
 - Prerequisite reconciliation: `69143233`. It preserves the main branch's
   batched runtime list and MUL-421's protocol projection, without raising the
@@ -68,6 +72,12 @@ bun test tests/arch/ tests/unit/daemon/ tests/integration/daemon-protocol-v2/ \
   tests/unit/multiremi/cli-capabilities-manifest.test.ts
 ```
 
+After the Hub parent merge, wiring/role/terminal/integration regressions completed
+with **48 pass, 0 fail, 12 existing Postgres skips** across five files. Hub core,
+regressions, trace contract, sequence origin, architecture isolation, Feishu host
+and trace subscription tests completed with **170 pass, 0 fail** across seven
+files. The local integration record was regenerated on that combined tree.
+
 ## Mutation Tests
 
 Actual source mutations, not simulated expectations:
@@ -100,7 +110,8 @@ stream on the existing native message.
 ## Item 5 Gap
 
 `subscribeHumanRequests` is API-process local in the Hub interface; the concrete
-Hub on `agent/MUL-436` is also API-process local. The connector lives with
+Hub from MUL-436 (#308, now merged into the parent) is also API-process local.
+The connector lives with
 `MultiremiDaemon`, in another process. `task.human_request.settled` appears in
 the daemon protocol vocabulary, but `agent/MUL-421` has no producer or receiver
 for this push. No existing cross-process E5/Hub event subscription is available

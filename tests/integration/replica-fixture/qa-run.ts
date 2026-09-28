@@ -20,12 +20,12 @@
  *   bun run tests/integration/replica-fixture/run.ts --only opfs-off
  *   bun run tests/integration/replica-fixture/run.ts --headed --keep
  */
+import type { ServerWebSocket } from "bun";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import type { ServerWebSocket } from "bun";
 import { launchBrowser } from "../../../frontend/scripts/perf/lib/harness";
 import { appendRows, ackFor, frameFor, newMockHub, patchFrameFor, patchRow, readAsset, seedLog, type MockHubState } from "./server";
 
@@ -159,7 +159,7 @@ function startServer(assetDir: string) {
         : url.pathname.endsWith(".js")
           ? "text/javascript"
           : "application/octet-stream";
-      return new Response(new Uint8Array(asset), { headers: { "content-type": type } });
+      return new Response(new Blob([new Uint8Array(asset)]), { headers: { "content-type": type } });
     },
     websocket: {
       open(socket: ServerWebSocket<never>) {

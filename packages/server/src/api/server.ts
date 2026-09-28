@@ -70,6 +70,16 @@ import {
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
+import {
+  createHub,
+  type HubImpl,
+  type ObservableLiveHub,
+} from "./hub/hub-core.js";
+import type { HubRingLimits } from "./hub/ring-buffer.js";
+import type { LiveHub } from "./hub/live-hub.js";
+import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
+import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -195,12 +205,6 @@ import {
   type PeerChannel,
 } from "./peer/peer-channel.js";
 import { registerPeerRoutes } from "./peer/peer-routes.js";
-// Imported through the package alias rather than a relative path: `@multiremi/*`
-// resolves to this same package, and it is the spelling the C0 wiring guard
-// (`tests/arch/c0-live-hub-isolation.test.ts`) and the rest of the server use.
-import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
-import type { LiveHub } from "@multiremi/api/hub/live-hub.js";
-import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import { broadcastBrowserResync, createBrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import type { BrowserResyncHandle, BrowserStreamHandler } from "@multiremi/api/hub/browser-stream.js";
 import {
@@ -297,6 +301,18 @@ export interface MultiremiApiOptions {
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
   /**
+   * MUL-403 C1: the Live Hub this app serves subscriptions from.
+   *
+   * Undefined builds the real one (`HubImpl` over the local transport) so every
+   * entry point — `startMultiremiServer`, the snapshot harness, tests — gets a hub
+   * without a second wiring path. This is an alias of `liveHub`. Pass a prepared
+   * hub to share one instance, or `null` to leave the app without one (the health
+   * routes then omit the `hub.*` fields rather than reporting zeros).
+   */
+  hub?: LiveHub | ObservableLiveHub | null;
+  /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
+  hubRingLimits?: Partial<HubRingLimits>;
+  /**
    * MUL-461: injected role takes precedence over the startup configuration;
    * unset or unrecognized resolves to `all`, which is main's behavior. The option
    * exists so a test (and `startMultiremiServer`) can pin the role without env.
@@ -324,9 +340,8 @@ export interface MultiremiApiOptions {
    */
   createRealtimeFanout?: (options: RealtimeFanoutOptions) => RealtimeFanout;
   /**
-   * MUL-438: the Live Hub this process fans streams out through. Undefined builds
-   * the C0 empty hub over the local transport, which is what the browser socket
-   * needs while C1 (MUL-436) is still in flight. Tests inject a real or fake hub.
+   * The shared Hub for browser sockets, health and human requests. Undefined
+   * builds a real HubImpl over the local transport. Tests may inject EmptyLiveHub.
    */
   liveHub?: LiveHub;
   /**
@@ -348,6 +363,16 @@ export interface MultiremiApiOptions {
  * route meet dashboard auth instead.
  */
 const PEER_INTERNAL_PATHS = new Set(["/internal/peer/events", "/internal/peer/health"]);
+
+function resolveAppHub(options: MultiremiApiOptions, apiRole: ApiRole): LiveHub | null {
+  if (options.liveHub !== undefined) return options.liveHub;
+  if (options.hub !== undefined) return options.hub;
+  return createHub({
+    transport: createLocalHubTransport(),
+    role: apiRole,
+    ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
+  });
+}
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
@@ -393,6 +418,24 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
       : options.daemonDirectBaseUrl,
   );
+  // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
+  // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
+  // an explicitly injected hub is shared rather than rebuilt.
+  const hub = resolveAppHub(options, effectiveApiRole);
+
+  // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
+  // detach handle, but an app has no shutdown hook — the listener lives exactly as
+  // long as the store and the hub it points at, which is the app's own lifetime.
+  //
+  // "Who consumes" follows the same flag that decides who runs background jobs,
+  // resolved the same way so an explicitly constructed app and an env-configured one
+  // cannot disagree: `backgroundJobs: false` is a read-only candidate, and it must
+  // not subscribe even on a host whose environment says otherwise.
+  if (hub) {
+    const backgroundJobs = options.backgroundJobs ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+    attachHumanRequestFeed({ store, hub, enabled: backgroundJobs });
+  }
+
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -643,8 +686,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     ...(apiRoleConfigured ? { role: effectiveApiRole } : {}),
     ...extra,
   });
-  app.get("/health", (c) => c.json(healthBody()));
-  app.get("/readyz", (c) => c.json(healthBody()));
+  app.get("/health", (c) => c.json(healthBody(hubHealthPayload(hub))));
+  app.get("/readyz", (c) => c.json(healthBody(hubReadyzPayload(hub))));
   app.get("/healthz", (c) => c.json(healthBody()));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
@@ -909,6 +952,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   // guard, the middleware chain and the metrics lines all read it, so a request
   // cannot be refused by one layer and accepted by another.
   const effectiveApiRole = startupConfig.effective.apiRole;
+  const liveHub = resolveAppHub(options, effectiveApiRole);
+  if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
   log.info(`[effective-config] ${JSON.stringify(startupConfig.effective)}`);
@@ -997,6 +1042,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ...options,
     apiRoleConfiguration: roleConfiguration,
     store,
+    liveHub,
     scheduler,
     realtimeState,
     sessionArchives,
@@ -1039,14 +1085,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       browserScope: browserScopeWebSockets,
     },
   });
-  // MUL-438: the process's Live Hub and the browser socket's v2 stream handler.
-  //
-  // The hub is C1's (MUL-436) and ships in the same release train; C3 is written
-  // against the C0 seam so this wiring does not wait for it. `EmptyLiveHub` is
-  // the C0 implementation and answers honestly ("I hold nothing") rather than
-  // fabricating a head, so a socket that subscribes today gets an ack with an
-  // empty range instead of frames that do not exist yet.
-  const liveHub: LiveHub = options.liveHub ?? createEmptyLiveHub(createLocalHubTransport());
   // A caller-supplied auth reader owns its pool; when this function builds the
   // Postgres one, it also owns closing it at shutdown.
   const ownedReadPool = options.streamAuth
@@ -1242,6 +1280,10 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
         // The socket caught up: pausable traffic (offers, non-critical pushes)
         // may resume. `res` and `ack` were never paused, so nothing else to do.
         if (ws.data.kind === "daemon-protocol") ws.data.session?.handleDrain();
+        if (ws.data.kind === "browser") {
+          const handler = ws.data.streamEndpoint === "trace" ? traceStreams : browserStreams;
+          handler.notifyDrain(ws);
+        }
       },
       close(ws) {
         realtimeState.connections = Math.max(0, realtimeState.connections - 1);
@@ -1304,6 +1346,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     store.stopNotificationDeliverySweeper();
     bodyHtmlBackfill?.stop();
     closeOwnedReadPool();
+    if (options.liveHub === undefined && options.hub === undefined) (liveHub as HubImpl).shutdown();
     return stopServer(closeActiveConnections);
   };
   return serverWithResync;

@@ -131,7 +131,7 @@ export type HumanRequestListener = (event: HumanRequestEvent) => void;
  * pins it so it cannot drift unnoticed.
  */
 export interface LiveHub extends TraceSink, ConversationLogListener {
-  /** Subscribe by stream key. `fromSeq` is exclusive; see `HubSubscription`. */
+  /** Subscribe by stream key. `fromSeq` is inclusive; A-0's bare task id is exclusive. */
   subscribe(key: HubStreamKey, fromSeq: number, onFrames: HubFrameListener): HubSubscription;
   /** A-0's spelling: the same trace stream addressed by a bare task id. */
   subscribe(taskId: string, fromSeq: number, onEvents: TraceSinkListener): TraceSinkSubscription;

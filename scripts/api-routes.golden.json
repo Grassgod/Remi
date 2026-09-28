@@ -21285,6 +21285,12 @@
             "lastHeartbeatAt": "<timestamp>",
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
+            "protocol": {
+              "version": 1,
+              "state": "rejected",
+              "min_version": "0.2.83",
+              "last_error": null
+            },
             "executionGroupIds": [
               "eg_28e77cae80e6822ff0223ecf2c27d4a7"
             ]
@@ -23062,6 +23068,12 @@
           "metadata": {
             "feishu_bot_menu": true,
             "feishu_concierge_config_v1": true
+          },
+          "protocol": {
+            "version": 1,
+            "state": "rejected",
+            "min_version": "0.2.83",
+            "last_error": null
           },
           "owner_id": "local",
           "visibility": "public",
@@ -24975,7 +24987,26 @@
       "path": "/health",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "streams": 0,
+          "frames": 0,
+          "ring_bytes": 0,
+          "known_heads": 0,
+          "subscriptions": 0,
+          "lagging_subscribers": 0,
+          "flush_p95_ms": 0,
+          "flush_samples": 0,
+          "fill_count": 0,
+          "fill_failures": 0,
+          "hole_waits": 0,
+          "hole_wait_ms": 0,
+          "dropped_frames": 0,
+          "pending_frames": 0,
+          "evicted_streams": 0
+        }
       }
     },
     {
@@ -25015,7 +25046,14 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "peer_link": false,
+          "fill_count": 0,
+          "hub_hole_wait_ms": 0
+        }
       }
     },
     {

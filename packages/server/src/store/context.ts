@@ -200,6 +200,25 @@ export type CreateIssueCommentOptions =
   | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
   | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
 
+/**
+ * One human-request transition, as the store recorded it.
+ *
+ * Deliberately *not* expressed as a task event. `notifyTaskEvent("task:running")`
+ * fires once per task resume, and a task resumes only when its **last** pending
+ * request settles — so a task with two open requests would report one transition
+ * and lose the other. E5 keys its cards by request id (MUL-403 §2 item 4), so the
+ * store publishes the request that changed instead of the task that happened to
+ * move with it.
+ */
+export interface HumanRequestTransition {
+  type: "created" | "responded" | "expired" | "cancelled";
+  request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest;
+  /** Workspace of the owning task, so a consumer does not have to look it up. */
+  workspaceId: string;
+}
+
+export type HumanRequestListener = (transition: HumanRequestTransition) => void;
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (
@@ -746,6 +765,7 @@ export class StoreContext {
   readonly taskEventListeners = new Set<TaskEventListener>();
   readonly taskMessagesListeners = new Set<TaskMessagesListener>();
   readonly workspaceEventListeners = new Set<WorkspaceEventListener>();
+  readonly humanRequestListeners = new Set<HumanRequestListener>();
   readonly analyticsEvents: MultiremiAnalyticsEvent[] = [];
   readonly metricCounters = new Map<string, MultiremiMetricCounter>();
 
@@ -950,6 +970,23 @@ export class StoreContext {
         listener({ task, messages });
       } catch {
         // Realtime broadcast is best-effort and must not roll back the append.
+      }
+    }
+  }
+
+  /**
+   * Publish one human-request transition.
+   *
+   * Called by the store facade right after each of the three write paths returns
+   * the row it changed, so the transition is reported exactly once and while the
+   * row is durable.
+   */
+  notifyHumanRequest(transition: HumanRequestTransition): void {
+    for (const listener of [...this.humanRequestListeners]) {
+      try {
+        listener(transition);
+      } catch {
+        // Realtime listeners are best-effort and must not roll back the write.
       }
     }
   }

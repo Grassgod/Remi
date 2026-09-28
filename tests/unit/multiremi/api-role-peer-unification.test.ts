@@ -29,6 +29,12 @@ import {
 import { resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
 import * as apiRoleConfig from "@multiremi/config/api-role.js";
 import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
+import { createEmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+
+// These role/peer fixtures predate Hub metrics. Real Hub wiring is covered by
+// hub-server-wiring.test.ts; keep this fixture's non-observable Hub explicit.
+function fixtureHub() { return createEmptyLiveHub(createLocalHubTransport()); }
 
 it("resolves the role once during a real server start and retains the unconfigured default", async () => {
   delete process.env.MULTIREMI_API_ROLE;
@@ -37,7 +43,7 @@ it("resolves the role once during a real server start and retains the unconfigur
   expect(resolveStartupApiRole({ MULTIREMI_API_ROLE: "all" })).toEqual({ role: "all", configured: true });
   const resolver = spyOn(apiRoleConfig, "resolveApiRole");
   const { store, db } = memoryStore();
-  const server = startMultiremiServer({ store, port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
+  const server = startMultiremiServer({ store, liveHub: fixtureHub(), port: 0, hostname: "127.0.0.1", backgroundJobs: false, authToken: null });
   try {
     expect(resolver).toHaveBeenCalledTimes(1);
     const base = `http://127.0.0.1:${server.port}`;
@@ -156,6 +162,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      liveHub: fixtureHub(),
       apiRole: "runtime",
       createRealtimeFanout: spy.createRealtimeFanout,
     });
@@ -196,6 +203,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      liveHub: fixtureHub(),
       apiRole: "runtime",
       createRealtimeFanout: spy.createRealtimeFanout,
     });
@@ -219,7 +227,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
   it("behaves exactly like main when neither env nor apiRole is set", async () => {
     delete process.env[ROLE_ENV];
     const { store, db } = memoryStore();
-    const app = createMultiremiApp({ store, authToken: null });
+    const app = createMultiremiApp({ store, liveHub: fixtureHub(), authToken: null });
     const spy = roleSpy();
     const server = startMultiremiServer({
       store,
@@ -227,6 +235,7 @@ describe("MUL-462/461 — injected apiRole drives guard, fanout and health toget
       port: 0,
       hostname: "127.0.0.1",
       authToken: null,
+      liveHub: fixtureHub(),
       createRealtimeFanout: spy.createRealtimeFanout,
     });
     try {

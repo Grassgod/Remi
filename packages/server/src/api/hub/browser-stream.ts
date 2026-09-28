@@ -4,9 +4,8 @@
  * This module is the socket end of the Live Hub: it owns the per-connection
  * subscription bookkeeping, the payload validation, the authorization call and
  * the four `stream.*` server frames. The hub itself (ring buffer, replay, gap
- * arithmetic) is C1's MUL-436 and is reachable only through the C0 seam
- * (`subscribe(key, fromSeq, onFrames)`), which is why this file can be written
- * and tested against a fake hub before that lands.
+ * arithmetic) is C1's MUL-436. Real sockets use its backpressure-aware sink;
+ * the C0 listener spelling remains available for empty hubs and test doubles.
  *
  * ## Layout
  *
@@ -34,6 +33,7 @@
  */
 
 import type { HubFrame, HubStreamKey, HubStreamName, HubSubscription, LiveHub } from "./live-hub.js";
+import type { HubImpl, HubSinkSubscription, HubSubscriberSink } from "./hub-core.js";
 import { hubLogStreamKey, hubTraceStreamKey } from "@multiremi/contracts/live-hub.js";
 import type { MultiremiWebSocketClient } from "../helpers/realtime-types.js";
 import {
@@ -46,7 +46,7 @@ import {
 export type BrowserStreamEndpoint = HubStreamName;
 
 export interface BrowserStreamHandlerDeps {
-  hub: LiveHub;
+  hub: LiveHub & Partial<Pick<HubImpl, "subscribeWithSink">>;
   auth: StreamAuthReader;
   /** The kind this socket accepts; the other one answers `wrong_endpoint`. */
   endpoint: BrowserStreamEndpoint;
@@ -56,6 +56,7 @@ interface ActiveStreamSubscription {
   stream: HubStreamName;
   id: string;
   unsubscribe: () => void;
+  notifyDrain: () => void;
 }
 
 export interface BrowserStreamHandler {
@@ -64,6 +65,8 @@ export interface BrowserStreamHandler {
   handleUnsubscribe(client: MultiremiWebSocketClient, event: Record<string, unknown>): void;
   /** Drop every subscription this connection holds. Called from `close`. */
   disposeClient(client: MultiremiWebSocketClient): void;
+  /** Resume this socket's paused streams after the transport has drained. */
+  notifyDrain(client: MultiremiWebSocketClient): void;
   /** How many streams this connection currently holds; for tests and logs. */
   subscriptionCount(client: MultiremiWebSocketClient): number;
 }
@@ -220,24 +223,27 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       // the listener during `subscribe` — C0's empty one — leaves the buffer
       // empty and takes the same path.
       let ackSent = false;
-      let buffered: readonly HubFrame[] = [];
-      // The keyed overload is the one this call resolves to: the listener is a
-      // `HubFrameListener`, and `LiveHub`'s declaration order is what makes that
-      // pick unambiguous (C0 pins it in its contract test).
-      let subscription: HubSubscription;
-      try {
-        subscription = deps.hub.subscribe(streamKey(parsed.stream, parsed.id), parsed.fromSeq, (_key, batch) => {
+      let alive = true;
+      const buffered: Array<() => void> = [];
+      const emit = (deliver: () => void) => {
+        if (!alive) return;
+        if (ackSent) deliver();
+        else buffered.push(deliver);
+      };
+      const sink: HubSubscriberSink = {
+        getBufferedAmount: () => client.getBufferedAmount?.() ?? 0,
+        send: (batch) => {
           if (batch.length === 0) return;
-          if (!ackSent) {
-            buffered = [...buffered, ...batch];
-            return;
-          }
-          sendFrame(client, "stream.data", {
-            stream: parsed.stream,
-            id: parsed.id,
-            frames: batch,
-          });
-        });
+          emit(() => sendFrame(client, "stream.data", { stream: parsed.stream, id: parsed.id, frames: batch }));
+        },
+        gap: (from, to) => emit(() => sendStreamGap(client, parsed.stream, parsed.id, from, to)),
+      };
+      let subscription: HubSubscription & Partial<Pick<HubSinkSubscription, "notifyDrain">>;
+      try {
+        const hubKey = streamKey(parsed.stream, parsed.id);
+        subscription = deps.hub.subscribeWithSink
+          ? deps.hub.subscribeWithSink(hubKey, parsed.fromSeq, sink)
+          : deps.hub.subscribe(hubKey, parsed.fromSeq, (_key, batch) => sink.send(batch));
       } catch {
         // A hub that refuses the key (an unknown kind, a closed hub) is reported
         // to the client rather than thrown at the message handler.
@@ -247,7 +253,8 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       active.set(key, {
         stream: parsed.stream,
         id: parsed.id,
-        unsubscribe: () => subscription.unsubscribe(),
+        unsubscribe: () => { alive = false; subscription.unsubscribe(); },
+        notifyDrain: () => subscription.notifyDrain?.(),
       });
       sendFrame(client, "stream.ack", {
         stream: parsed.stream,
@@ -258,15 +265,8 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
         gap: subscription.gap ?? null,
       });
       ackSent = true;
-      if (buffered.length > 0) {
-        const replay = buffered;
-        buffered = [];
-        sendFrame(client, "stream.data", {
-          stream: parsed.stream,
-          id: parsed.id,
-          frames: replay,
-        });
-      }
+      for (const deliver of buffered) { if (alive) deliver(); }
+      buffered.length = 0;
     },
 
     handleUnsubscribe(client, event) {
@@ -288,6 +288,10 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
       if (!active) return;
       for (const subscription of active.values()) subscription.unsubscribe();
       active.clear();
+    },
+
+    notifyDrain(client) {
+      for (const subscription of byClient.get(client)?.values() ?? []) subscription.notifyDrain();
     },
 
     subscriptionCount(client) {
