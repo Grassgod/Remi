@@ -177,6 +177,24 @@ export function formatActivity(
       return t(($) => $.activity.issue_status_forced, {
         status: statusLabel(details.status ?? "?", t),
       });
+    case "decision_requested":
+      return t(($) => $.activity.decision_requested);
+    case "decision_answered":
+      return t(($) => $.activity.decision_answered);
+    case "decision_received":
+      return t(($) => $.activity.decision_received);
+    case "decision_escalated":
+      return t(($) => $.activity.decision_escalated);
+    case "decision_reminder":
+      return t(($) => $.activity.decision_reminder);
+    case "decision_card_skipped":
+      return t(($) => $.activity.decision_card_skipped);
+    case "decision_card_queued":
+      return t(($) => $.activity.decision_card_queued);
+    case "decision_card_reminder":
+      return t(($) => $.activity.decision_card_reminder);
+    case "decision_card_degraded":
+      return t(($) => $.activity.decision_card_degraded);
     // MUL-400 E3: dependency gate and automatic start.
     case "dependency_auto_started":
       return t(($) => $.activity.dependency_auto_started, { key: details.satisfiedByKey ?? details.satisfied_by_key ?? "?" });

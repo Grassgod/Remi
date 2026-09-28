@@ -20,6 +20,14 @@ export const BatchUpdateIssuesResponseSchema = z.object({
 // to {} so consumers never need to nil-guard `issue.metadata`.
 const IssueMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({});
 
+export const IssueParentDoneGrantSchema = z.object({
+  granted_at: z.string(),
+  granted_by: z.string(),
+  agent_id: z.string(),
+  effective: z.boolean(),
+  ineffective_reason: z.enum(["assignee_changed", "owner_not_agent"]).nullable(),
+}).loose();
+
 export const IssueSchema = z.object({
   runtime_workspace_id: z.string().nullable().optional(),
   id: z.string(),
@@ -35,6 +43,9 @@ export const IssueSchema = z.object({
   creator_type: z.string(),
   creator_id: z.string(),
   parent_issue_id: z.string().nullable(),
+  parent_done_grant_at: z.string().nullable().optional(),
+  parent_done_grant_by: z.string().nullable().optional(),
+  parent_done_grant_agent_id: z.string().nullable().optional(),
   blocked_by: z.array(z.string()).optional(),
   issue_kind: z.enum(["execution", "intake"]).default("execution"),
   source_issue_id: z.string().nullable().default(null),
@@ -49,6 +60,87 @@ export const IssueSchema = z.object({
   archived_at: z.string().nullable().default(null),
   created_at: z.string(),
   updated_at: z.string(),
+}).loose();
+
+export const IssueDetailSchema = IssueSchema.extend({
+  pending_decision_count: z.number().int().nonnegative(),
+  parent_done_grant: IssueParentDoneGrantSchema.nullable(),
+}).loose();
+
+const IssueDecisionKindSchema = z.enum([
+  "merge",
+  "production_change",
+  "criteria",
+  "question",
+  "permission",
+  "other",
+]);
+
+export const IssueDecisionAnswerSchema = z.object({
+  answererType: z.enum(["member", "agent"]),
+  answererId: z.string(),
+  answer: z.string(),
+  reason: z.string(),
+  overturn: z.string().nullable(),
+  answeredAt: z.string(),
+}).loose();
+
+export const IssueDecisionSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  issueId: z.string(),
+  sourceIssueId: z.string(),
+  sourceTaskId: z.string().nullable(),
+  kind: IssueDecisionKindSchema,
+  title: z.string(),
+  body: z.string(),
+  options: z.array(z.string()).nullable(),
+  status: z.enum(["pending", "escalated", "answered", "withdrawn"]),
+  answer: IssueDecisionAnswerSchema.nullable(),
+  answeredByMemberId: z.string().nullable(),
+  answeredAt: z.string().nullable(),
+  history: z.array(IssueDecisionAnswerSchema),
+  ownerAgentId: z.string().nullable(),
+  createdByAgentId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).loose();
+
+export const IssueDecisionEntrySchema = z.object({
+  id: z.string(),
+  bucket: z.enum(["waiting_on_human", "pending_owner", "answered"]),
+  type: z.enum(["decision", "human_request"]),
+  kind: IssueDecisionKindSchema,
+  title: z.string(),
+  body: z.string().nullable(),
+  status: z.string(),
+  issueId: z.string(),
+  sourceIssueId: z.string().nullable(),
+  sourceTaskId: z.string().nullable(),
+  options: z.array(z.string()).nullable(),
+  payload: z.record(z.string(), z.unknown()).optional(),
+  answer: IssueDecisionAnswerSchema.nullable(),
+  history: z.array(IssueDecisionAnswerSchema).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).loose();
+
+export const IssueDecisionListSchema = z.object({
+  waiting_on_human: z.array(IssueDecisionEntrySchema),
+  owner_and_answered: z.object({
+    pending: z.array(IssueDecisionEntrySchema),
+    answered: z.array(IssueDecisionEntrySchema),
+  }).loose(),
+  count: z.number().int().nonnegative(),
+}).loose();
+
+export const IssueDecisionMutationResponseSchema = z.object({
+  decision: IssueDecisionSchema,
+}).loose();
+
+export const IssueParentDoneGrantMutationResponseSchema = z.object({
+  issue: z.record(z.string(), z.unknown()),
+  parent_done_grant: IssueParentDoneGrantSchema.nullable(),
 }).loose();
 
 export const ListIssuesResponseSchema = z.object({

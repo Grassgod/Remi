@@ -82,6 +82,7 @@ function renderMain(
       members={[]}
       agents={[]}
       canModerateComments={false}
+      getActorName={(_type, id) => id}
       onShowKeyResults={vi.fn()}
       onScrollContainerRef={vi.fn()}
       scrollContainerEl={null}

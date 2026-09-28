@@ -1,3 +1,4 @@
+import type { MultiremiIssueParentDoneGrant } from "@multiremi/contracts";
 import type { Label } from "./label";
 
 export type IssueStatus =
@@ -47,6 +48,14 @@ export interface Issue {
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;
+  /** Raw grant columns carried by issue rows and `issue:updated` events. */
+  parent_done_grant_at?: string | null;
+  parent_done_grant_by?: string | null;
+  parent_done_grant_agent_id?: string | null;
+  /** Detail-only derived grant state. `null` means no grant was recorded. */
+  parent_done_grant?: MultiremiIssueParentDoneGrant | null;
+  /** Detail-only count of decisions and human requests waiting on a member. */
+  pending_decision_count?: number;
   /** Unmet prerequisite keys on child-list responses. */
   blocked_by?: string[];
   issue_kind?: "execution" | "intake";

@@ -36,6 +36,13 @@ export interface ZeroJumpFixture {
   userId: string;
   shortIssueId: string;
   parentIssueId: string;
+  waitingChildIssueId: string;
+  ungrantedParentIssueId: string;
+  ineffectiveParentIssueId: string;
+  disabledParentIssueId: string;
+  decisionActivityIssueId: string;
+  parentOwnerAgentId: string;
+  replacementAgentId: string;
   longIssueId: string;
   longDefaultSessionId: string;
   longSessionIds: string[];
@@ -112,11 +119,37 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     });
   }
 
+  const parentOwner = store.createAgent({
+    id: "agt_zerojump_parent_owner",
+    name: "Parent owner agent",
+    provider: "codex",
+    workspaceId: workspace.id,
+    ownerId: user.id,
+    visibility: "workspace",
+  });
+  const replacementAgent = store.createAgent({
+    id: "agt_zerojump_parent_replacement",
+    name: "Replacement owner agent",
+    provider: "codex",
+    workspaceId: workspace.id,
+    ownerId: user.id,
+    visibility: "workspace",
+  });
+  const sourceAgent = store.createAgent({
+    id: "agt_zerojump_decision_source",
+    name: "Decision source agent",
+    provider: "codex",
+    workspaceId: workspace.id,
+    ownerId: user.id,
+    visibility: "workspace",
+  });
   const parentIssue = store.createIssue({
     id: "iss_zerojump_parent",
     title: "Parent issue with four sub-issues",
     description: "The child list belongs in the sidebar while this document stays still.",
     status: "in_progress",
+    assigneeType: "agent",
+    assigneeId: parentOwner.id,
   });
   const parentSession = store.getOrCreateDefaultIssueSession(parentIssue.id, user.id);
   store.createIssueComment(parentIssue.id, {
@@ -127,9 +160,130 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
   });
   store.createIssue({ title: "Blocked child", status: "blocked", parentIssueId: parentIssue.id });
   const waitingChild = store.createIssue({ title: "Waiting child", status: "backlog", parentIssueId: parentIssue.id });
-  const activeChild = store.createIssue({ title: "Active child", status: "in_progress", parentIssueId: parentIssue.id });
+  const activeChild = store.createIssue({
+    title: "Active child",
+    status: "in_progress",
+    parentIssueId: parentIssue.id,
+    assigneeType: "agent",
+    assigneeId: sourceAgent.id,
+  });
   store.createIssue({ title: "Completed child", status: "done", parentIssueId: parentIssue.id });
   store.createIssueDependency(waitingChild.id, { dependsOnIssueId: activeChild.id, type: "blocked_by" });
+
+  const parentOwnerTask = store.createTask({
+    id: "tsk_zerojump_parent_owner",
+    agentId: parentOwner.id,
+    issueId: parentIssue.id,
+    issueSessionId: parentSession.id,
+    prompt: "Decide requests raised by child issues",
+  });
+  const sourceTask = store.createTask({
+    id: "tsk_zerojump_decision_source",
+    agentId: sourceAgent.id,
+    issueId: activeChild.id,
+    prompt: "Raise decisions for the parent",
+  });
+  const decisionActor = { type: "agent" as const, id: sourceAgent.id, taskId: sourceTask.id };
+  const productionDecision = store.createIssueDecision(activeChild.id, {
+    kind: "production_change",
+    title: "Approve the production rollout",
+    body: "May the child deploy the verified image during tonight's maintenance window?",
+    options: ["Wait", "Approve rollout"],
+  }, decisionActor);
+  const answeredDecision = store.createIssueDecision(activeChild.id, {
+    kind: "merge",
+    title: "Merge after QA",
+    body: "The owner answered this first; a member can review and change that answer.",
+    options: ["Wait", "Merge after QA"],
+  }, decisionActor);
+  store.answerIssueDecision(parentIssue.id, answeredDecision.id, {
+    answer: "Merge after QA",
+    reason: "All required checks passed",
+    overturn: "Change the answer if QA finds a regression",
+  }, { type: "agent", id: parentOwner.id, taskId: parentOwnerTask.id });
+  store.createIssueDecision(activeChild.id, {
+    kind: "criteria",
+    title: "Confirm the acceptance criteria",
+    body: "The owner is still reviewing this item.",
+    options: ["Keep reviewing", "Criteria accepted"],
+  }, decisionActor);
+  const humanRequestTask = store.createTask({
+    id: "tsk_zerojump_human_request",
+    agentId: sourceAgent.id,
+    issueId: activeChild.id,
+    prompt: "Ask a member to choose the rollout window",
+  });
+  store.createTaskHumanRequest({
+    taskId: humanRequestTask.id,
+    kind: "question",
+    payload: {
+      message: "Choose the rollout window",
+      questions: [{
+        fieldKey: "window",
+        question: {
+          question: "When should the rollout begin?",
+          header: "Rollout window",
+          options: [
+            { label: "Tonight", description: "Use the scheduled maintenance window" },
+            { label: "Tomorrow", description: "Wait for another review cycle" },
+          ],
+          multiSelect: false,
+        },
+      }],
+    },
+  });
+  store.grantParentDone(parentIssue.id, member.id);
+
+  const ungrantedParent = store.createIssue({
+    id: "iss_zerojump_parent_ungranted",
+    title: "Parent without done authorization",
+    status: "in_progress",
+    assigneeType: "agent",
+    assigneeId: parentOwner.id,
+  });
+  store.createIssue({ title: "Ungrant parent child", parentIssueId: ungrantedParent.id, status: "in_progress" });
+
+  const ineffectiveParent = store.createIssue({
+    id: "iss_zerojump_parent_ineffective",
+    title: "Parent with expired authorization",
+    status: "in_progress",
+    assigneeType: "agent",
+    assigneeId: parentOwner.id,
+  });
+  store.createIssue({ title: "Expired grant child", parentIssueId: ineffectiveParent.id, status: "in_progress" });
+  store.grantParentDone(ineffectiveParent.id, member.id);
+  store.updateIssue(ineffectiveParent.id, { assigneeType: "agent", assigneeId: replacementAgent.id });
+
+  const disabledOwner = store.createWorkspaceMember({
+    id: "usr_zerojump_member_owner",
+    workspaceId: workspace.id,
+    userId: "usr_zerojump_member_owner",
+    name: "Member owner",
+    role: "member",
+  });
+  const disabledParent = store.createIssue({
+    id: "iss_zerojump_parent_disabled",
+    title: "Parent owned by a member",
+    status: "in_progress",
+    assigneeType: "member",
+    assigneeId: disabledOwner.id,
+  });
+  store.createIssue({ title: "Member-owned parent child", parentIssueId: disabledParent.id, status: "in_progress" });
+
+  const decisionActivityIssue = store.createIssue({
+    id: "iss_zerojump_decision_activity",
+    title: "Decision activity aggregate timeline fixture",
+    status: "in_progress",
+  });
+  store.createIssueDecision(decisionActivityIssue.id, {
+    kind: "question",
+    title: "Choose the release channel",
+    body: "This activity exercises the aggregate Issue timeline formatter.",
+    options: ["Stable", "Preview"],
+  }, { type: "member", id: member.id, taskId: null });
+  if (productionDecision.status !== "escalated") {
+    throw new Error("production decision fixture must wait on a member");
+  }
 
   // ── long issue: 250 comments over three sessions ──────────────────────────
   // Agents give the sessions distinct participants; the store joins comment
@@ -292,6 +446,13 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     userId: user.id,
     shortIssueId: shortIssue.id,
     parentIssueId: parentIssue.id,
+    waitingChildIssueId: waitingChild.id,
+    ungrantedParentIssueId: ungrantedParent.id,
+    ineffectiveParentIssueId: ineffectiveParent.id,
+    disabledParentIssueId: disabledParent.id,
+    decisionActivityIssueId: decisionActivityIssue.id,
+    parentOwnerAgentId: parentOwner.id,
+    replacementAgentId: replacementAgent.id,
     longIssueId: longIssue.id,
     longDefaultSessionId: defaultSession.id,
     longSessionIds,

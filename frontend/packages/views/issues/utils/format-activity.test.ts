@@ -399,3 +399,37 @@ describe("formatActivity — dependency activities", () => {
     expect(formatActivity(activity("dependency_auto_started"), t)).toBe('activity.dependency_auto_started {"key":"?"}');
   });
 });
+
+describe("formatActivity — decision activities", () => {
+  const actions = [
+    "decision_requested",
+    "decision_answered",
+    "decision_received",
+    "decision_escalated",
+    "decision_reminder",
+    "decision_card_skipped",
+    "decision_card_queued",
+    "decision_card_reminder",
+    "decision_card_degraded",
+  ] as const;
+
+  it.each(actions)("localizes %s instead of exposing the raw action", (action) => {
+    expect(formatActivity(activity(action), t)).toBe(`activity.${action}`);
+  });
+
+  it("ships copy for every decision activity in all four locales", async () => {
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"),
+      import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"),
+      import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) {
+      const copy = bundle.default.activity as Record<string, string>;
+      for (const action of actions) {
+        expect(copy[action]).toBeTruthy();
+        expect(copy[action]).not.toBe(action);
+      }
+    }
+  });
+});

@@ -1,4 +1,17 @@
 export type {
+  AnswerIssueDecisionInput,
+  MultiremiIssueDecision,
+  MultiremiIssueDecisionAnswer,
+  MultiremiIssueDecisionAnswererType,
+  MultiremiIssueDecisionBucket,
+  MultiremiIssueDecisionEntry,
+  MultiremiIssueDecisionKind,
+  MultiremiIssueDecisionList,
+  MultiremiIssueDecisionStatus,
+  MultiremiIssueParentDoneGrant,
+  MultiremiIssueParentDoneGrantIneffectiveReason,
+} from "@multiremi/contracts";
+export type {
   Issue,
   IssueDependency,
   IssueStatus,

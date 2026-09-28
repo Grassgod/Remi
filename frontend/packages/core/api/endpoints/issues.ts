@@ -1,4 +1,5 @@
 import type {
+  AnswerIssueDecisionInput,
   CreateIssueRequest,
   GroupedIssuesResponse,
   Issue,
@@ -8,6 +9,9 @@ import type {
   ListGroupedIssuesParams,
   ListIssuesParams,
   ListIssuesResponse,
+  MultiremiIssueDecision,
+  MultiremiIssueDecisionList,
+  MultiremiIssueParentDoneGrant,
   SearchIssuesResponse,
   SearchProjectsResponse,
   UpdateIssueRequest,
@@ -24,7 +28,11 @@ import {
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
+  IssueDecisionListSchema,
+  IssueDecisionMutationResponseSchema,
+  IssueDetailSchema,
   IssueSchema,
+  IssueParentDoneGrantMutationResponseSchema,
   QuickCreateIssueResponseSchema,
   IssueRetitleResponseSchema,
   IssueWorkspaceResponseSchema,
@@ -120,7 +128,77 @@ export class IssuesEndpoints {
   }
 
   async getIssue(id: string): Promise<Issue> {
-    return this.http.fetch(`/api/issues/${id}`);
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}`);
+    return parseStrictResponse<Issue>(raw, IssueDetailSchema, {
+      endpoint: "GET /api/issues/:id",
+    });
+  }
+
+  async listIssueDecisions(id: string): Promise<MultiremiIssueDecisionList> {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/decisions`);
+    return parseStrictResponse<MultiremiIssueDecisionList>(raw, IssueDecisionListSchema, {
+      endpoint: "GET /api/issues/:id/decisions",
+    });
+  }
+
+  async answerIssueDecision(
+    id: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+  ): Promise<MultiremiIssueDecision> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/issues/${id}/decisions/${decisionId}/answer`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    return parseStrictResponse<{ decision: MultiremiIssueDecision }>(
+      raw,
+      IssueDecisionMutationResponseSchema,
+      { endpoint: "POST /api/issues/:id/decisions/:decisionId/answer" },
+    ).decision;
+  }
+
+  async grantParentDone(id: string): Promise<MultiremiIssueParentDoneGrant> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/multiremi/issues/${id}/parent-done-grant`,
+      { method: "POST" },
+    );
+    const parsed = parseStrictResponse<{
+      issue: unknown;
+      parent_done_grant: MultiremiIssueParentDoneGrant | null;
+    }>(
+      raw,
+      IssueParentDoneGrantMutationResponseSchema,
+      { endpoint: "POST /api/multiremi/issues/:id/parent-done-grant" },
+    );
+    if (!parsed.parent_done_grant) {
+      throw new ApiContractError(
+        "POST /api/multiremi/issues/:id/parent-done-grant",
+        "Server did not return the created parent done grant",
+      );
+    }
+    return parsed.parent_done_grant;
+  }
+
+  async revokeParentDone(id: string): Promise<null> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/multiremi/issues/${id}/parent-done-grant`,
+      { method: "DELETE" },
+    );
+    const parsed = parseStrictResponse<{
+      issue: unknown;
+      parent_done_grant: MultiremiIssueParentDoneGrant | null;
+    }>(
+      raw,
+      IssueParentDoneGrantMutationResponseSchema,
+      { endpoint: "DELETE /api/multiremi/issues/:id/parent-done-grant" },
+    );
+    if (parsed.parent_done_grant !== null) {
+      throw new ApiContractError(
+        "DELETE /api/multiremi/issues/:id/parent-done-grant",
+        "Server retained the revoked parent done grant",
+      );
+    }
+    return null;
   }
 
   async getIssueWorkspace(id: string): Promise<{ workspace: IssueWorkspace | null }> {

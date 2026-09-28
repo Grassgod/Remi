@@ -68,6 +68,12 @@ export const issueKeys = {
     [...issueKeys.projectGanttAll(wsId), projectId] as const,
   detail: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "detail", id] as const,
+  detailAll: (wsId: string) =>
+    [...issueKeys.all(wsId), "detail"] as const,
+  decisions: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "decisions", id] as const,
+  decisionsAll: (wsId: string) =>
+    [...issueKeys.all(wsId), "decisions"] as const,
   generated: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "generated", id] as const,
   /** Prefix for every per-Issue workspace checkout, regardless of workspace. */
@@ -496,6 +502,13 @@ export function issueDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.detail(wsId, id),
     queryFn: () => api.getIssue(id),
+  });
+}
+
+export function issueDecisionsOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.decisions(wsId, id),
+    queryFn: () => api.listIssueDecisions(id),
   });
 }
 

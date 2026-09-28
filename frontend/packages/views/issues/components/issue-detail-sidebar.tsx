@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import {
   generatedIssuesOptions,
-  childIssuesOptions,
   issueDependenciesOptions,
   issueDetailOptions,
   issueKeys,
@@ -46,6 +45,7 @@ import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
 import { IssueDependencyEditor } from "./issue-dependency-editor";
+import { ParentDoneGrantControl } from "./parent-done-grant-control";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -65,6 +65,8 @@ interface IssueDetailSidebarProps {
   issueSessions: IssueSession[];
   usage: IssueUsageSummary | undefined;
   canManageArchives: boolean;
+  isMember: boolean;
+  childIssues: Issue[];
   onCreateSubIssue: () => void;
 }
 
@@ -87,12 +89,13 @@ export function IssueDetailSidebar({
   issueSessions,
   usage,
   canManageArchives,
+  isMember,
+  childIssues,
   onCreateSubIssue,
 }: IssueDetailSidebarProps) {
   const { t } = useT("issues");
   const { t: tRuntime } = useT("runtimes");
   const paths = useWorkspacePaths();
-  const { data: childIssues = [] } = useQuery(childIssuesOptions(issue.workspace_id, issueId));
   const openChildren = childIssues.filter((child) => child.status !== "done" && child.status !== "cancelled").length;
   const { data: dependencies = [] } = useQuery(issueDependenciesOptions(issue.workspace_id, issueId));
   const unmetPrerequisites = dependencies.filter((dependency) => dependency.direction === "blocked_by" && dependency.depends_on_issue?.status !== "done").length;
@@ -264,6 +267,12 @@ export function IssueDetailSidebar({
           )}
         </div>}
       </div>
+
+      <ParentDoneGrantControl
+        issue={issue}
+        isMember={isMember}
+        hasChildren={childIssues.length > 0}
+      />
 
       {/* Issue hierarchy — parent above children, so the rail reads in the
           same direction as the tree (parent → this issue → sub-issues).
