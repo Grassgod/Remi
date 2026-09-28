@@ -12,6 +12,7 @@ import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
 import type { MultiremiDaemon, MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import type { PeerChannel } from "../../../packages/server/src/api/peer/peer-channel.js";
 
 export interface LedgerEntry {
   sessionId: string;
@@ -75,6 +76,8 @@ export class DaemonProtocolHarness {
   private runError: unknown;
   private createDaemons!: () => MultiremiDaemon[];
   private apiRole: "all" | "runtime" = "all";
+  private peerChannel: PeerChannel | null = null;
+  private peerSecret = "";
   get client() { return this.daemons[0]!.daemonProtocolClient(); }
   get daemon() { return this.daemons[0]!; }
   get url() { return `http://127.0.0.1:${this.server.port}`; }
@@ -87,6 +90,8 @@ export class DaemonProtocolHarness {
     cliVersion?: string;
     updateRunner?: (version: string) => Promise<string>;
     apiRole?: "all" | "runtime";
+    peerChannel?: PeerChannel;
+    peerSecret?: string;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
   } = {}): Promise<DaemonProtocolHarness> {
@@ -95,6 +100,8 @@ export class DaemonProtocolHarness {
       h.store.ensureLocalWorkspace();
       const daemonId = options.omitDaemonId ? "protocol-fixture-device" : "dmn_fixture";
       h.apiRole = options.apiRole ?? "all";
+      h.peerChannel = options.peerChannel ?? null;
+      h.peerSecret = options.peerSecret ?? "";
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
       h.createDaemons = () => instantiateCoResidentWorkerDaemons((options.providers ?? ["claude"]).map(provider => ({
@@ -132,6 +139,7 @@ export class DaemonProtocolHarness {
     this.server = startMultiremiServer({
       store: this.store, scheduler: null, backgroundJobs: false, hostname: "127.0.0.1", port,
       authToken: "fixture-master", apiRole: this.apiRole,
+      peerChannel: this.peerChannel, peerSecret: this.peerSecret,
       onDaemonProtocol: layer => {
         this.layer = layer;
         const open = layer.openSession.bind(layer);
