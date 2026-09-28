@@ -39,6 +39,23 @@ function item(
 }
 
 describe("inbox grouping", () => {
+  it("keeps parent notifications distinct, groups them by parent, and orders urgent outcomes first", () => {
+    const now = new Date(2026, 7, 26, 12, 0, 0);
+    const parent = { issue_id: "parent-1", issue_parent_id: "parent-1", issue_parent_key: "MUL-1", issue_parent_title: "Parent" };
+    const rows = [
+      item("done", "child_issue_terminal", new Date(2026, 7, 26, 11).toISOString(), { ...parent, details: { outcome: "done" } }),
+      item("blocked", "child_issue_terminal", new Date(2026, 7, 26, 10).toISOString(), { ...parent, details: { outcome: "blocked" } }),
+      item("failed", "child_issue_terminal", new Date(2026, 7, 26, 9).toISOString(), { ...parent, details: { outcome: "failed" } }),
+      item("decision", "decision_requested", new Date(2026, 7, 26, 8).toISOString(), parent),
+    ];
+    const distinct = deduplicateInboxItems(rows);
+    expect(distinct).toHaveLength(4);
+    const [group] = groupInboxItemsByDate(distinct, now);
+    expect(group?.entries).toHaveLength(1);
+    expect(group?.entries[0]?.items.map((entry) => entry.id)).toEqual(["failed", "blocked", "decision", "done"]);
+    expect(inboxItemSelectionKey(rows[0]!)).toBe("done");
+  });
+
   it("groups rows into periodic review date buckets", () => {
     const now = new Date(2026, 7, 26, 12, 0, 0);
     const items = [

@@ -24,6 +24,7 @@ export interface CreateIssueRequest {
 }
 
 export interface UpdateIssueRequest {
+  force?: boolean;
   runtime_workspace_id?: string | null;
   title?: string;
   description?: string;
@@ -57,6 +58,7 @@ export interface IssueRetitleResponse {
 }
 
 export interface ListIssuesParams {
+  top_level_only?: boolean;
   limit?: number;
   offset?: number;
   workspace_id?: string;
@@ -97,6 +99,7 @@ export interface IssueActorRef {
 }
 
 export interface ListGroupedIssuesParams {
+  top_level_only?: boolean;
   group_by: "assignee";
   limit?: number;
   offset?: number;
