@@ -3263,6 +3263,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // Why a decision lane carried plain text instead of a card. NULL means the
   // delivery is a normal card (or not a decision lane at all).
   addColumnIfMissing(db, "multiremi_feishu_bot_outbound_deliveries", "degraded TEXT");
+  ensureFeishuOutboundKindsSchema(db, dialect);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind
@@ -4180,6 +4181,75 @@ const HUMAN_REQUEST_PUSH_LEGACY_TABLE = `${HUMAN_REQUEST_PUSH_TABLE}_legacy`;
  * anywhere in the schema), so the surrounding code only has to turn them off
  * for the rebuild's duration to keep the RENAME from rewriting its own FKs.
  */
+export function ensureFeishuOutboundKindsSchema(db: SqlDatabase, dialect?: SqlDatabaseDialect): void {
+  const table = "multiremi_feishu_bot_outbound_deliveries";
+  addColumnIfMissing(db, table, "unit_key TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(db, table, "cascade_failure INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissing(db, table, "delivery_mode TEXT");
+  if (isPostgresDialect(db, dialect)) {
+    db.transaction(() => {
+      const constraints = db.query(`SELECT c.conname FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE t.relname = ? AND n.nspname = current_schema() AND c.contype = 'u'
+          AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute
+            WHERE attrelid = t.oid AND attname = 'task_id')]::smallint[]`).all(table) as Array<{ conname: string }>;
+      for (const constraint of constraints) {
+        const name = constraint.conname.replaceAll('"', '""');
+        db.exec(`ALTER TABLE ${table} DROP CONSTRAINT "${name}"`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+    return;
+  }
+  const uniqueIndexes = db.query(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number; partial: number }>;
+  const oldUnique = uniqueIndexes.some(index => {
+    if (Number(index.unique) !== 1 || Number(index.partial) === 1) return false;
+    const columns = db.query(`PRAGMA index_info("${index.name.replaceAll('"', '""')}")`).all() as Array<{ name: string }>;
+    return columns.length === 1 && columns[0]!.name === "task_id";
+  });
+  if (!oldUnique) { ensureFeishuOutboundKindIndexes(db); return; }
+  const backup = `${table}_c5_backup`;
+  if (tableExists(db, backup)) throw new Error("C5 outbound migration: live unique key and backup coexist; inspect before migrating");
+  const schema = db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string };
+  const relaxed = schema.sql.replace(/\btask_id\s+TEXT\s+UNIQUE\b/i, "task_id TEXT");
+  if (relaxed === schema.sql) throw new Error("C5 outbound migration: unexpected task_id unique constraint");
+  const columns = (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .map(column => `"${column.name.replaceAll('"', '""')}"`).join(", ");
+  const indexes = db.query("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL")
+    .all(table) as Array<{ name: string; sql: string }>;
+  const foreignKeys = Number((db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys);
+  if (foreignKeys) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE ${table} RENAME TO ${backup}`);
+      db.exec(relaxed);
+      db.exec(`INSERT INTO ${table} (${columns}) SELECT ${columns} FROM ${backup}`);
+      for (const index of indexes) {
+        // Index names are global in SQLite; the original indexes stay on the retained backup.
+        const definition = index.sql.slice(index.sql.toUpperCase().indexOf(" ON "));
+        db.exec(`CREATE ${/^CREATE UNIQUE/i.test(index.sql) ? "UNIQUE " : ""}INDEX "${index.name.replaceAll('"', '""')}_c5"${definition}`);
+      }
+      ensureFeishuOutboundKindIndexes(db);
+    })();
+  } finally {
+    if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function ensureFeishuOutboundKindIndexes(db: SqlDatabase): void {
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_outbound_task_kind_unit
+    ON multiremi_feishu_bot_outbound_deliveries(task_id, COALESCE(kind, ''), COALESCE(unit_key, ''))`);
+  // A Task's compatibility carrier is either a pre-upgrade NULL row or a CoT row.
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_outbound_task_carrier
+    ON multiremi_feishu_bot_outbound_deliveries(task_id)
+    WHERE task_id IS NOT NULL AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feishu_outbound_pending_c5
+    ON multiremi_feishu_bot_outbound_deliveries(status, available_at, leased_until, created_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_feishu_outbound_kind_c5
+    ON multiremi_feishu_bot_outbound_deliveries(kind, status, available_at)`);
+}
+
 function allowNullableHumanRequestPushWakeTaskId(db: SqlDatabase, dialect: SqlDatabaseDialect): void {
   if (isPostgresDialect(db, dialect)) {
     // Postgres can relax the column in place, and the PRAGMA below is SQLite

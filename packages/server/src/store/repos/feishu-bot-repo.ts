@@ -1003,7 +1003,7 @@ export class FeishuBotRepo {
              reply_to_message_id, body, status, available_at, created_at, updated_at,
              mention_snapshot, interaction_open_id, presentation_checkpoint
            ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending', ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(task_id) DO NOTHING`,
+           ON CONFLICT DO NOTHING`,
           [createId("fbo"), workspaceId, String(binding.id), task.id, chatId,
             threadId, replyToMessageId,
             now, now, now, toJson(chatType === "group" && openId
@@ -1950,12 +1950,19 @@ export class FeishuBotRepo {
     const replyToMessageId = cleanOptionalString(row.reply_to_message_id);
     if (!chatId || !replyToMessageId) return;
     const now = nowIso();
+    const existing = this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(task.id) as Row | null;
+    if (existing) {
+      this.ctx.db.run(`UPDATE multiremi_feishu_bot_outbound_deliveries SET body = ?, updated_at = ? WHERE id = ?`,
+        [body, now, existing.id]);
+      return;
+    }
     this.ctx.db.run(
       `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
          reply_to_message_id, body, status, available_at, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-       ON CONFLICT(task_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
+       ON CONFLICT DO NOTHING`,
       [
         createId("fbo"),
         task.workspaceId,
