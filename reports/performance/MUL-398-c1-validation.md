@@ -120,6 +120,8 @@ daemon消息约1 KiB。peer引用读取相同50条消息，每条正文列合计
 
 新增正式用例涵盖env取值/非法告警、165条真实注册Hono模式、background独立项、三上下文8行/普通1行、metrics0真实PG护栏、queued长样本。生产/测试默认一致的hermetic守卫保留；新增AST调用方守卫。
 
+首轮PG全量为3898 pass / 2 fail，均是既有peer小上限探针：原来没有请求上下文，现在会命中已授权的后台64 MiB例外。保留其原断言与样本，将小上限探针包在非例外fixture请求上下文中，真实peer入口的8行由C-1正式用例单独覆盖。该文件随后7 pass / 0 fail；128 KiB探针仍拒绝262,384 B回包并发送header-only refetch，未改分页算法、未跳过用例或放宽断言。最终全量结果以下述最终head检查为准。
+
 | 变异（运行后立即还原） | 正式失败证据 |
 |---|---|
 | 删background项 | 4 pass / 2 fail；后台有效值Expected67,108,864 Received8,388,608；20×512 KiB queued样本抛PostgresReplyTooLargeError |

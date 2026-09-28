@@ -7,6 +7,7 @@ import { createRealtimeFanout } from "@multiremi/api/realtime-fanout.js";
 import { createPeerChannel } from "@multiremi/api/peer/peer-channel.js";
 import { registerPeerRoutes } from "@multiremi/api/peer/peer-routes.js";
 import { taskMessageRealtimePayload } from "@multiremi/api/wire/tasks.js";
+import { createRequestMetricsMiddleware } from "@multiremi/observability/request-metrics.js";
 import { fanoutBrowserClient } from "../../fixtures/multiremi/task-message-fanout-fixture.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -42,7 +43,7 @@ async function withReplyLimit(bytes: number, run: () => Promise<void>): Promise<
   const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(bytes);
   resetDbReplyLimitForTest();
-  try { await run(); }
+  try { await withNonExceptionContext(run); }
   finally {
     if (previous === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previous;
@@ -50,7 +51,17 @@ async function withReplyLimit(bytes: number, run: () => Promise<void>): Promise<
   }
 }
 
-function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: number) {
+// C-1 exempts the real peer route and background work; small-limit probes use an ordinary context.
+async function withNonExceptionContext(run: () => Promise<void>): Promise<void> {
+  const app = new Hono();
+  app.use("*", createRequestMetricsMiddleware({ enabled: false, slowRequestMs: 500,
+    summaryIntervalMs: 60_000, summaryTopRoutes: 10, bufferCapacity: 256, role: "all" }));
+  app.onError(error => { throw error; });
+  app.get("/api/peer-limit-fixture", async c => { await run(); return c.body(null, 204); });
+  await app.request("/api/peer-limit-fixture");
+}
+
+function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: number, probeSmallLimit = false) {
   const store = new MultiremiStore(writer);
   const receiverStore = new MultiremiStore(reader);
   const agent = store.createAgent({ name: "Reference probe", provider: "codex" });
@@ -98,6 +109,7 @@ function fanoutPair(writer: SqlDatabase, reader: SqlDatabase, maxEventBytes?: nu
     });
   });
   const app = new Hono();
+  if (probeSmallLimit) app.use("*", (_c, next) => withNonExceptionContext(next));
   const secret = "fake-reference-peer-secret";
   registerPeerRoutes(app, { peer: receiver, secret });
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: app.fetch });
@@ -245,7 +257,7 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
 
   it("pages below a deliberately small PG bridge limit instead of reading the whole range", async () => {
     await withReplyLimit(512 * 1024, () => withPgPair(async (writer, reader) => {
-      const pair = fanoutPair(writer, reader, 1024);
+      const pair = fanoutPair(writer, reader, 1024, true);
       try {
         pair.store.appendTaskMessages(pair.task.id, Array.from({ length: 32 }, () => ({ type: "assistant", content: CONTENT })));
         await pair.drained();
@@ -266,7 +278,7 @@ describe.skipIf(!PG_ADMIN_URL)("peer current-committed message references on rea
 
   it("sends a header-only refetch frame and counts a reference read failure when one row cannot fit", async () => {
     await withPgPair(async (writer, reader) => {
-      const pair = fanoutPair(writer, reader, 1024);
+      const pair = fanoutPair(writer, reader, 1024, true);
       const previous = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
       try {
         pair.store.appendTaskMessages(pair.task.id, [{ type: "assistant", content: CONTENT }]);
