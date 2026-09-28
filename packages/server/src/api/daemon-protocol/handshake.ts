@@ -26,6 +26,7 @@ import {
   type DaemonHelloPayload,
   type DaemonHelloRuntime,
   type DaemonRejectPayload,
+  type DaemonRuntimeCapabilities,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { readInteger, readPayload, readString } from "./frames.js";
 
@@ -73,6 +74,7 @@ export function parseDaemonHello(payload: Record<string, unknown>): DaemonHelloP
       active_task_ids: Array.isArray(runtime.active_task_ids)
         ? runtime.active_task_ids.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim())
         : [],
+      capabilities: readPayload(runtime.capabilities) as DaemonRuntimeCapabilities,
     });
   }
   if (runtimes.length === 0) return { ok: false, reason: "malformed_hello" };

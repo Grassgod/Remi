@@ -370,9 +370,11 @@ export class DaemonProtocolClient {
     if (this.state !== "connected") return;
     const advertised = [...this.advertised];
     const generation = this.generation;
-    const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 } };
-    for (const { lane } of advertised) {
+    const payload: DaemonHeartbeatPayload = { active_task_count: 0, outbox: { pending: 0, unacked: 0 }, runtimes: [] };
+    for (const { lane, runtimeId } of advertised) {
       const current = lane.heartbeat();
+      const runtime = lane.runtime();
+      if (runtime?.runtime_id === runtimeId) payload.runtimes!.push({ runtime_id: runtimeId, capabilities: runtime.capabilities });
       payload.active_task_count += current.active_task_count;
       payload.outbox!.pending += current.outbox?.pending ?? 0;
       payload.outbox!.unacked += current.outbox?.unacked ?? 0;

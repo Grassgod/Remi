@@ -21,10 +21,17 @@ import {
   DAEMON_PROTOCOL_VERSION,
   type DaemonHeartbeatReplyPayload,
   type DaemonProtocolCap,
+  type DaemonRuntimeCapabilities,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { createId } from "@multiremi/ids.js";
 import { multiremiVersion } from "@multiremi/version.js";
-import type { MultiremiAccessToken, MultiremiDaemonHeartbeatAck } from "@multiremi/contracts/types.js";
+import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+  type MultiremiAccessToken,
+  type MultiremiDaemonHeartbeatAck,
+} from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
   startWsFrameMetricsSummary,
@@ -41,7 +48,25 @@ import {
   type DaemonSessionHello,
   type DaemonSessionRuntimeAuthorization,
 } from "./session.js";
-import type { DaemonParsedFrame } from "./frames.js";
+import { readPayload, type DaemonParsedFrame } from "./frames.js";
+
+function runtimeCapabilityOptions(capabilities: DaemonRuntimeCapabilities | undefined) {
+  const reported = capabilities ?? {};
+  const version = (value: unknown) => {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+  };
+  return {
+    supportsBatchImport: reported.supports_batch_import === true,
+    supportsDirectoryScan: reported.supports_directory_scan === true,
+    supportsSkillDirectory: reported.supports_skill_directory === true,
+    supportsBotMenu: reported.supports_bot_menu === true,
+    agentPluginProtocol: version(reported.agent_plugin_protocol),
+    supportsFeishuBotConfig: version(reported.feishu_concierge_protocol) >= FEISHU_CONCIERGE_PROTOCOL_VERSION,
+    supportsDecisionCard: version(reported.feishu_decision_card) >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+    supportsIssueDecisionCard: version(reported.feishu_issue_decision_card) >= FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+  };
+}
 
 /** How a v2 connection's identity is established before `hello` is read. */
 export interface DaemonProtocolIdentity {
@@ -125,6 +150,8 @@ export class DaemonProtocolLayer {
       onHello: hello => {
         for (const runtimeId of session.runtimeIds) {
           this.store.recordDaemonProtocol(runtimeId, hello.daemonId, DAEMON_PROTOCOL_VERSION, hello.cliVersion);
+          const runtime = hello.runtimes.find(entry => entry.runtimeId === runtimeId);
+          this.store.heartbeatRuntime(runtimeId, { claimPending: false, ...runtimeCapabilityOptions(runtime?.capabilities) });
         }
         for (const hooks of this.sessionHooks) hooks.hello?.(session, hello);
       },
@@ -442,6 +469,7 @@ export class DaemonProtocolLayer {
 
     const ackGeneration = readNonNegativeInteger(heartbeat.payload.drain_ack_generation);
     const activeTaskCount = readNonNegativeInteger(heartbeat.payload.active_task_count);
+    const reportedRuntimes = Array.isArray(heartbeat.payload.runtimes) ? heartbeat.payload.runtimes.map(readPayload) : [];
 
     // Keyed by runtime id so the reply can be assembled in the order the `hello`
     // advertised, which is the order the daemon reads it in.
@@ -449,7 +477,9 @@ export class DaemonProtocolLayer {
     for (const runtimeId of heartbeat.runtimeIds) {
       // `claimPending: false` because the v2 server does not sweep the pending
       // families on a heartbeat (MUL-389's merged poll): those become pushes in A-4.
-      const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false });
+      const reported = reportedRuntimes.find(entry => entry.runtime_id === runtimeId);
+      const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false,
+        ...runtimeCapabilityOptions(readPayload(reported?.capabilities) as DaemonRuntimeCapabilities) });
       if (ack.status === "runtime_gone") {
         // The row vanished between the handshake and now. Same report as a
         // handshake-time exclusion: tell the daemon, do not close the socket, and

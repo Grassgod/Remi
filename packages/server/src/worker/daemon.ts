@@ -51,7 +51,7 @@ import {
 import { registerDaemonOfferHandler } from "./daemon-offers.js";
 import { DaemonTaskDownlinks } from "./daemon-downlinks.js";
 import { registerDaemonRuntimeDownlinks } from "./daemon-runtime-downlinks.js";
-import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -224,6 +224,9 @@ import type {
   SubmitFeishuBotMessageResult,
 } from "@multiremi/contracts/types.js";
 import {
+  FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
   MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION,
   MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
@@ -1064,6 +1067,7 @@ export class MultiremiDaemon {
         provider: this.options.provider,
         max_concurrency: this.options.maxConcurrency,
         active_task_ids: [...this.activeTaskIds],
+        capabilities: this.runtimeCapabilities(),
       } : null,
       heartbeat: () => ({
         active_task_count: this.activeTaskCount,
@@ -1079,10 +1083,12 @@ export class MultiremiDaemon {
       probeUpgrade: async () => {
         if (this.stopped || !this.options.runtimeId) return;
         try {
+          const capabilities = this.runtimeCapabilities();
           const ack = await this.client.heartbeatRuntime(
             this.options.runtimeId, this.sshMeshManager.getHeartbeatStatus(),
             { ackGeneration: this.appliedDrainGeneration, activeTaskCount: this.activeTaskCount },
-            false, false, this.pollAbort.signal,
+            capabilities.supports_bot_menu === true,
+            Boolean(capabilities.feishu_concierge_protocol), this.pollAbort.signal,
           );
           if (ack.pending_update) await this.handleRuntimeUpdate(this.options.runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");
         } catch (error) {
@@ -1246,6 +1252,20 @@ export class MultiremiDaemon {
 
   async ensureTopicWorkspace(sessionKey: string, topicId: string): Promise<string | null> {
     return this.topicWorkspaces.ensureTopicWorkspace(sessionKey, topicId);
+  }
+
+  private runtimeCapabilities(): DaemonRuntimeCapabilities {
+    const concierge = this.feishuConcierge !== null;
+    return {
+      supports_batch_import: true,
+      supports_directory_scan: true,
+      supports_skill_directory: true,
+      supports_bot_menu: this.botMenuPublisher !== null,
+      agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+      feishu_concierge_protocol: concierge ? FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION : 0,
+      feishu_decision_card: concierge ? FEISHU_DECISION_CARD_PROTOCOL_VERSION : 0,
+      feishu_issue_decision_card: concierge ? FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION : 0,
+    };
   }
 
   setBotMenuPublisher(

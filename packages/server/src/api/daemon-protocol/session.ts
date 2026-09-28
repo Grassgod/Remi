@@ -39,6 +39,7 @@ import {
   DAEMON_UPLINK_WINDOW_FRAMES,
   daemonFrameCategory,
   type DaemonProtocolCap,
+  type DaemonRuntimeCapabilities,
   type DaemonWelcomePayload,
 } from "@multiremi/contracts/daemon-protocol.js";
 import {
@@ -142,6 +143,7 @@ export interface DaemonSessionHello {
     provider: string;
     maxConcurrency: number;
     activeTaskIds: string[];
+    capabilities?: DaemonRuntimeCapabilities;
   }>;
   caps: DaemonProtocolCap[];
 }
@@ -737,6 +739,7 @@ export class DaemonProtocolSession {
         provider: runtime.provider,
         maxConcurrency: runtime.max_concurrency,
         activeTaskIds: runtime.active_task_ids,
+        capabilities: runtime.capabilities,
       })),
       caps: parsed.hello.caps,
     });

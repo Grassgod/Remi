@@ -369,9 +369,11 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 
 ## 4. heartbeat 与 pending_*
 
-`hb` 上行每 15 s，载荷只含 `active_task_count`、outbox 统计、`drain_ack_generation`。
-服务端只做两件事：更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS` 5 分钟的规则不动，
-platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbeatRuntime` 里 7 类待办的
+`hb` 上行每 15 s，载荷包含 `active_task_count`、outbox 统计、`drain_ack_generation`，
+以及各 runtime 的 `{ runtime_id, capabilities }`。能力字段与 HTTP heartbeat 同名同语义；
+缺失的字段视为不支持，覆盖旧值。服务端更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS`
+5 分钟的规则不动，platform-maintenance 与 ssh-mesh 继续用它）、记录 drain ack，并在能力
+变化时更新 runtime metadata，不因无变化的心跳重写 metadata。`heartbeatRuntime` 里 7 类待办的
 合并轮询（MUL-389）在 v2 服务端不再由心跳触发。
 
 **`hb` 的回复按 runtime 逐条给出，且不关连接。** 服务端用 `res` 回
@@ -684,7 +686,11 @@ concierge 走 WS rpc `trace.fetch`，**不保留** daemon 侧的 HTTP 读路由�
 
 ```
 daemon → hello   { protocol: 2, daemon_id, cli_version, launched_by,
-                   runtimes: [{ runtime_id, provider, max_concurrency, active_task_ids }],
+                   runtimes: [{ runtime_id, provider, max_concurrency, active_task_ids,
+                                capabilities: { supports_batch_import, supports_directory_scan,
+                                  supports_skill_directory, supports_bot_menu,
+                                  agent_plugin_protocol, feishu_concierge_protocol,
+                                  feishu_decision_card, feishu_issue_decision_card } }],
                    caps: ["offer", "steer.push", "trace.read", "trace.subscribe"] }
 server → welcome { protocol: 2, server_version, min_cli_version, session_id,
                    hb_interval_ms: 15000,
@@ -693,6 +699,10 @@ server → welcome { protocol: 2, server_version, min_cli_version, session_id,
 server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
                    min_cli_version, hint }   然后 close(4426)
 ```
+
+服务端在首次派活或推送前写入 `hello` 的 runtime 能力；重连时重新声明。连上后能力变化由下一次
+`hb` 更新。上述能力缺失均按 false/0 处理，不能沿用数据库里的旧值。`feishu_concierge_protocol`
+达到服务端支持版本时同时表示 `supportsFeishuBotConfig`。
 
 服务端在 `hello` 时按 `protocol` 与 `cli_version` 双重判定。`caps` 是加法位：新增帧不升主版本，
 删帧或改语义才升。

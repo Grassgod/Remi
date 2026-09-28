@@ -1990,6 +1990,9 @@ export class RuntimesRepo {
     // Capability flags a daemon re-advertises on every heartbeat. Collected once
     // so the three metadata-writing branches below stay in step.
     const metadataPatch: Record<string, unknown> = {};
+    if (options.supportsBatchImport !== undefined) metadataPatch.supports_batch_import = options.supportsBatchImport;
+    if (options.supportsDirectoryScan !== undefined) metadataPatch.supports_directory_scan = options.supportsDirectoryScan;
+    if (options.supportsSkillDirectory !== undefined) metadataPatch.supports_skill_directory = options.supportsSkillDirectory;
     if (options.supportsBotMenu !== undefined) metadataPatch.feishu_bot_menu = options.supportsBotMenu;
     if (options.supportsFeishuBotConfig !== undefined) {
       metadataPatch[FEISHU_CONCIERGE_CONFIG_CAPABILITY] = options.supportsFeishuBotConfig;
@@ -2003,7 +2006,7 @@ export class RuntimesRepo {
     if (options.supportsIssueDecisionCard !== undefined) {
       metadataPatch[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] = options.supportsIssueDecisionCard ? 1 : 0;
     }
-    const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
+    const hasMetadataPatch = Object.entries(metadataPatch).some(([key, value]) => runtime.metadata[key] !== value);
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
     let agentPluginProtocol = previousAgentPluginProtocol;
     let pluginStateChanges: MultiremiAgentPluginRuntimeState[] = [];
@@ -2024,10 +2027,19 @@ export class RuntimesRepo {
         const protocol = normalizeAgentPluginProtocol(options.agentPluginProtocol);
         const now = nowIso();
         const metadata = { ...lockedRuntime.metadata, agent_plugin_protocol: protocol, ...metadataPatch };
-        this.ctx.db.run(
-          "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
-          [toJson(metadata), now, now, runtimeId],
-        );
+        const metadataChanged = lockedRuntime.metadata.agent_plugin_protocol !== protocol
+          || Object.entries(metadataPatch).some(([key, value]) => lockedRuntime.metadata[key] !== value);
+        if (metadataChanged) {
+          this.ctx.db.run(
+            "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+            [toJson(metadata), now, now, runtimeId],
+          );
+        } else {
+          this.ctx.db.run(
+            "UPDATE multiremi_runtimes SET status = 'online', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+            [now, now, runtimeId],
+          );
+        }
         // The row this transaction just wrote is the row every later branch reads, so it is
         // materialized from `metadata` instead of being selected back out.
         const updatedRuntime = withRuntimeLiveness({ ...lockedRuntime, metadata, status: "online", lastHeartbeatAt: now, updatedAt: now });

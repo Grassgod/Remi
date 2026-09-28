@@ -289,12 +289,26 @@ export type DaemonProtocolReply = DaemonProtocolOkReply | DaemonProtocolErrorRep
 
 // ── Handshake payloads ──────────────────────────────────────────────────────
 
+/** Per-runtime capability fields use the same names and versions as the HTTP heartbeat. */
+export interface DaemonRuntimeCapabilities {
+  supports_batch_import?: boolean;
+  supports_directory_scan?: boolean;
+  supports_skill_directory?: boolean;
+  supports_bot_menu?: boolean;
+  agent_plugin_protocol?: number;
+  feishu_concierge_protocol?: number;
+  feishu_decision_card?: number;
+  feishu_issue_decision_card?: number;
+}
+
 export interface DaemonHelloRuntime {
   runtime_id: string;
   provider: string;
   max_concurrency: number;
   /** Tasks this process is executing right now; used to reconcile after a reconnect. */
   active_task_ids: string[];
+  /** Missing fields explicitly mean unsupported, including after a restart. */
+  capabilities?: DaemonRuntimeCapabilities;
 }
 
 /** `hello`, daemon -> server, once per connection, before anything else. */
@@ -440,9 +454,8 @@ export interface DaemonTraceAppendPayload {
  *
  * Best-effort liveness for one daemon process: losing a heartbeat costs nothing
  * because the next one recomputes the same facts. The payload is deliberately
- * three fields - a live socket already proves every runtime it advertises is
- * reachable, so the only things the server cannot derive are the daemon's own
- * view of its load, its queue, and whether it has applied a drain.
+ * A live socket proves reachability. Each runtime also re-advertises its
+ * capabilities because a host can gain or lose one after the initial hello.
  */
 export interface DaemonHeartbeatPayload {
   /** Tasks this process is executing right now, across every runtime it serves. */
@@ -451,6 +464,7 @@ export interface DaemonHeartbeatPayload {
   outbox?: DaemonHeartbeatOutboxStats;
   /** Drain generation this daemon has applied; absent means "none observed yet". */
   drain_ack_generation?: number;
+  runtimes?: Array<{ runtime_id: string; capabilities?: DaemonRuntimeCapabilities }>;
 }
 
 /**

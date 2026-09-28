@@ -3,6 +3,15 @@ import { MultiremiDaemon, type MultiremiDaemonOptions } from "@multiremi/daemon.
 import type { MultiremiDaemonClient } from "@multiremi/client.js";
 import { startMultiremiServer as startNativeServer } from "@multiremi/api.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
+import type { DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+
+export function runtimeCapabilitiesInFrame(frame: Record<string, any>, runtimeId: string): DaemonRuntimeCapabilities {
+  const runtime = frame.p?.runtimes?.find((entry: { runtime_id?: string }) => entry.runtime_id === runtimeId);
+  if (!runtime || typeof runtime.capabilities !== "object" || runtime.capabilities === null) {
+    throw new Error(`Missing ${frame.t} capabilities for ${runtimeId}`);
+  }
+  return runtime.capabilities as DaemonRuntimeCapabilities;
+}
 
 const serverLayers = new Map<string, DaemonProtocolLayer>();
 
