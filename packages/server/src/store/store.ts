@@ -83,6 +83,19 @@ import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/auto
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import {
+  ConversationLogRepo,
+  type AppendConversationLogInput,
+  type ConversationLogQuery,
+  type ConversationLogWindowInput,
+  type UpdateConversationLogInput,
+} from "@multiremi/store/repos/conversation-log-repo.js";
+import type {
+  ConversationLogEntry,
+  ConversationLogListener,
+  ConversationLogLocation,
+  ConversationLogWindow,
+} from "@multiremi/contracts/conversation-log";
+import {
   IssuesRepo,
   ParentStatusGuardError,
   type IssueTimelineCursor,
@@ -97,6 +110,11 @@ import {
   type SessionArchiveStatusSnapshot,
   type SessionArchiveWorkspaceUsage,
 } from "@multiremi/store/repos/session-archives-repo.js";
+import {
+  TaskTracesRepo,
+  type TaskTraceArchivePointer,
+} from "@multiremi/store/repos/task-traces-repo.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
@@ -283,6 +301,7 @@ import type {
   MultiremiIssueShare,
   MultiremiIssueSession,
   MultiremiSessionArchive,
+  MultiremiSessionArchiveSubjectKind,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
   MultiremiFeedback,
@@ -504,9 +523,11 @@ export class MultiremiStore {
   private knowledge: KnowledgeRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
+  private conversationLog: ConversationLogRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
+  private taskTraces: TaskTracesRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private daemonProfiles: DaemonProfilesRepo;
@@ -567,12 +588,14 @@ export class MultiremiStore {
     this.knowledge = new KnowledgeRepo(this.ctx);
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
+    this.conversationLog = new ConversationLogRepo(this.ctx);
     this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
       debounceMs: options.agentIssueUpdateDebounceMs,
     });
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
+    this.taskTraces = new TaskTracesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
     this.daemonProfiles = new DaemonProfilesRepo(this.ctx);
@@ -728,6 +751,13 @@ runMigrations(this.db);
     return this.sessionArchives.list(issueId);
   }
 
+  listSessionArchivesForSubject(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+  ): MultiremiSessionArchive[] {
+    return this.sessionArchives.listSubject(kind, subjectId);
+  }
+
   getSessionArchiveWorkspaceUsage(workspaceId: string): SessionArchiveWorkspaceUsage {
     return this.sessionArchives.workspaceUsage(workspaceId);
   }
@@ -740,17 +770,22 @@ runMigrations(this.db);
     return this.sessionArchives.status(issueId, sourceRevision, sha256);
   }
 
+  /** Same snapshot as {@link getSessionArchiveStatus}, for any archive subject. */
+  getSessionArchiveSubjectStatus(
+    kind: MultiremiSessionArchiveSubjectKind,
+    subjectId: string,
+    sourceRevision?: string | null,
+    sha256?: string | null,
+  ): SessionArchiveStatusSnapshot {
+    return this.sessionArchives.subjectStatus(kind, subjectId, sourceRevision, sha256);
+  }
+
   initSessionArchive(input: InitSessionArchiveInput, id: string, relativePath: string): {
     archive: MultiremiSessionArchive;
     created: boolean;
   } {
     const initialized = this.sessionArchives.init(input, id, relativePath);
-    if (!initialized) {
-      throw Object.assign(
-        new Error("Issue is deleting or its workspace has already been cleaned"),
-        { code: "issue_archive_lifecycle_closed" },
-      );
-    }
+    if (!initialized) throw this.sessionArchiveNotWritable(input.subjectKind);
     return initialized;
   }
 
@@ -760,17 +795,41 @@ runMigrations(this.db);
     relativePath: string,
   ): { archive: MultiremiSessionArchive; created: boolean } {
     const reported = this.sessionArchives.reportFailure(input, id, relativePath);
-    if (!reported) {
-      throw Object.assign(
+    if (!reported) throw this.sessionArchiveNotWritable(input.subjectKind);
+    return reported;
+  }
+
+  /**
+   * The refusal a subject write gets when its lifecycle fence rejects it.
+   *
+   * Issue subjects keep the historical code and message because the daemon and
+   * the delete path both branch on it; Chat and Task subjects name their own
+   * owner instead, since there is no Issue workspace involved.
+   */
+  private sessionArchiveNotWritable(subjectKind: MultiremiSessionArchiveSubjectKind): Error {
+    if (subjectKind === "issue") {
+      return Object.assign(
         new Error("Issue is deleting or its workspace has already been cleaned"),
         { code: "issue_archive_lifecycle_closed" },
       );
     }
-    return reported;
+    return Object.assign(
+      new Error(
+        `${subjectKind} session archive is not writable: the Runtime no longer owns this subject`,
+      ),
+      { code: "session_archive_subject_not_writable" },
+    );
   }
 
   touchWritableSessionArchive(id: string, runtimeId: string): MultiremiSessionArchive | null {
     return this.sessionArchives.touchWritableArchive(id, runtimeId);
+  }
+
+  withLockedSessionArchiveSharedPaths<T>(
+    id: string, runtimeId: string, attemptCount: number,
+    mode: "promote" | "cleanup", action: (archive: MultiremiSessionArchive) => T,
+  ): T | null {
+    return this.sessionArchives.withLockedSharedPaths(id, runtimeId, attemptCount, mode, action);
   }
 
   claimSessionArchiveUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {
@@ -803,6 +862,22 @@ runMigrations(this.db);
     return this.sessionArchives.markReadyAttempt(id, runtimeId, attemptCount, uploadedSizeBytes);
   }
 
+  completeSessionArchiveWithTracePointers(
+    id: string,
+    runtimeId: string,
+    attemptCount: number,
+    uploadedSizeBytes: number,
+    pointers: readonly TaskTraceArchivePointer[],
+  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+    return this.sessionArchives.completeWithTracePointers(
+      id,
+      runtimeId,
+      attemptCount,
+      uploadedSizeBytes,
+      pointers,
+    );
+  }
+
   markSessionArchiveFailedAttempt(
     id: string,
     runtimeId: string,
@@ -826,6 +901,22 @@ runMigrations(this.db);
 
   retrySessionArchive(id: string): MultiremiSessionArchive | null {
     return this.sessionArchives.retry(id);
+  }
+
+  getTaskTrace(taskId: string): MultiremiTaskTrace | null {
+    return this.taskTraces.get(taskId);
+  }
+
+  listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {
+    return this.taskTraces.listForArchive(archiveId);
+  }
+
+  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number {
+    return this.taskTraces.writeArchivePointers(pointers);
+  }
+
+  clearTaskTraceArchivePointers(archiveId: string): number {
+    return this.taskTraces.clearArchivePointers(archiveId);
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }
@@ -3784,6 +3875,139 @@ runMigrations(this.db);
     return this.sessions.listSessionEvents(sessionId, input);
   }
 
+  // ── conversation log (MUL-402 B1) ────────────────────────────────────────
+  // The read side of the v2 conversation storage. `window` and `locate` accept a
+  // `query(sql, params)` seam so MUL-403's read pool can be wired in without
+  // touching the SQL; both default to the primary handle.
+
+  /** Allocate the next seq for a session; the caller owns the transaction. */
+  nextSeqWithinTransaction(sessionId: string): number {
+    return this.conversationLog.nextSeqWithinTransaction(sessionId);
+  }
+
+  /** Insert one row at an allocated or explicit seq; the caller owns the transaction. */
+  appendWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.appendWithinTransaction(input);
+  }
+
+  /** Public append that opens its own transaction. */
+  appendConversationLogWithinTransaction(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.append(input);
+  }
+
+  /** In-place update with `revision++`; the caller owns the transaction. */
+  updateWithinTransaction(sessionId: string, seq: number, input: UpdateConversationLogInput): ConversationLogEntry | null {
+    return this.conversationLog.updateWithinTransaction(sessionId, seq, input);
+  }
+
+  /** Bump `log_version` without touching a row, for head-only freshness. */
+  touchSessionWithinTransaction(sessionId: string, at?: string): void {
+    this.conversationLog.touchSessionWithinTransaction(sessionId, at);
+  }
+
+  /** Create the head row and counter for a session; idempotent. */
+  ensureSessionHeadWithinTransaction(
+    sessionId: string,
+    input: { bodyMd: string; title?: string | null },
+  ): ConversationLogEntry {
+    return this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input);
+  }
+
+  /** Sync the `head` row of an Issue session, one row per session. */
+  syncIssueHeadWithinTransaction(
+    sessionId: string,
+    issue: { title: string; description?: string | null },
+    createdAt?: string,
+  ): ConversationLogEntry {
+    return this.conversationLog.syncIssueHeadWithinTransaction(sessionId, issue, createdAt);
+  }
+
+  /** Sync a chat `head` row from the session title. */
+  syncChatHeadWithinTransaction(sessionId: string, title: string | null, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncChatHeadWithinTransaction(sessionId, title, createdAt);
+  }
+
+  /** The `turn` card of a task, if one exists. */
+  findTurnEntry(taskId: string): ConversationLogEntry | null {
+    return this.conversationLog.findTurnEntry(taskId);
+  }
+
+  /** Update a task's `turn` card in place, bumping `revision`. */
+  updateTurnCardWithinTransaction(
+    taskId: string,
+    fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
+  ): ConversationLogEntry | null {
+    return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
+  }
+
+  appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
+    return this.conversationLog.append(input);
+  }
+
+  /** In-place update with `revision++`; the caller owns the transaction. */
+  updateConversationLogWithinTransaction(
+    sessionId: string,
+    seq: number,
+    input: UpdateConversationLogInput,
+  ): ConversationLogEntry | null {
+    return this.conversationLog.updateWithinTransaction(sessionId, seq, input);
+  }
+
+  getConversationLogEntry(sessionId: string, seq: number, query?: ConversationLogQuery | null): ConversationLogEntry | null {
+    return this.conversationLog.getEntry(sessionId, seq, query);
+  }
+
+  getConversationLogEntryById(id: string): ConversationLogEntry | null {
+    return this.conversationLog.getEntryById(id);
+  }
+
+  getConversationLogHead(sessionId: string, query?: ConversationLogQuery | null) {
+    return this.conversationLog.getHead(sessionId, query);
+  }
+
+  /** A window of shown entries; hidden markers never appear. */
+  conversationLogWindow(sessionId: string, input: ConversationLogWindowInput = {}): ConversationLogWindow {
+    return this.conversationLog.window(sessionId, input);
+  }
+
+  /** Locate one entry's seq by id, for deep links. */
+  locateConversationLogEntry(sessionId: string, id: string, query?: ConversationLogQuery | null): ConversationLogLocation | null {
+    return this.conversationLog.locate(sessionId, id, query);
+  }
+
+  /** Shown entries in the inclusive seq range, oldest first. */
+  listConversationLogShown(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+    return this.conversationLog.listShown(sessionId, input);
+  }
+
+  /** Sync the `head` row to the Issue title and description (one row per session). */
+  syncConversationLogIssueHead(sessionId: string, issue: { title: string; description?: string | null }, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncIssueHeadWithinTransaction(sessionId, issue, createdAt);
+  }
+
+  /** Sync a chat `head` row from the session title. */
+  syncConversationLogChatHead(sessionId: string, title: string | null, createdAt?: string): ConversationLogEntry {
+    return this.conversationLog.syncChatHeadWithinTransaction(sessionId, title, createdAt);
+  }
+
+  /** Every row including hidden markers, for projections and wake-up. */
+  listConversationLogEntries(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): ConversationLogEntry[] {
+    return this.conversationLog.listAll(sessionId, input);
+  }
+
+  listConversationLogEntriesByTask(taskId: string): ConversationLogEntry[] {
+    return this.conversationLog.listByTask(taskId);
+  }
+
+  /** The write hook C's Live Hub implements; B1 leaves it empty. */
+  setConversationLogListener(listener: ConversationLogListener | null): void {
+    this.conversationLog.setConversationLogListener(listener);
+  }
+
+  ensureConversationLogHead(sessionId: string, input: { bodyMd: string; title?: string | null }): ConversationLogEntry {
+    return this.ctx.db.transaction(() => this.conversationLog.ensureSessionHeadWithinTransaction(sessionId, input))();
+  }
+
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
     return this.sessions.getOrCreateSessionAgentLane(sessionId, agentId, executionScope);
   }
@@ -4500,6 +4724,14 @@ runMigrations(this.db);
 
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {
     return this.chat.listChatMessages(chatSessionId);
+  }
+
+  listChatMessagesFromLog(chatSessionId: string): MultiremiChatMessage[] {
+    return this.chat.listChatMessagesFromLog(chatSessionId);
+  }
+
+  listChatMessagesPageFromLog(chatSessionId: string, limit: number, beforeId?: string | null, beforeCreatedAt?: string | null) {
+    return this.chat.listChatMessagesPageFromLog(chatSessionId, limit, beforeId, beforeCreatedAt);
   }
 
   sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
