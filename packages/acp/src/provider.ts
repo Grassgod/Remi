@@ -19,7 +19,7 @@ import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js"
 import { AcpClient } from "./client.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
-import { hasOneMillionContext, resolveClaudeContextModel } from "./adapters/claude-code/model-context.js";
+import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
 import type {
   SessionNotification,
   SessionUpdate,
@@ -54,6 +54,8 @@ export interface AcpProviderOptions {
   baseUrl?: string;
   /** Default model. */
   model?: string | null;
+  /** Administrator-declared Claude gateway models using the 1M context window. */
+  claudeOneMillionModels?: readonly string[];
   /** Default timeout in seconds. */
   timeout?: number;
   /** Tools to allow. */
@@ -243,8 +245,11 @@ interface PoolEntry {
   pluginPathsKey: string;
   pluginFingerprint: string;
   codexHome: string | null;
+  /** Session env is fixed at creation; a changed declaration requires a new process. */
+  customModelOption: string | null;
   /** Values currently in force, so a re-apply is only sent when they change. */
   appliedModel: string | null;
+  appliedContext: string | null;
   appliedEffort: string | null;
   /** Last permission mode we logged about, so a fallback is reported once per session. */
   warnedPermissionMode: string | null;
@@ -747,11 +752,10 @@ export class AcpProvider implements Provider {
     const cwd = options?.cwd ?? this._options.cwd ?? homedir();
     const mcpServers = this._options.getMcpServers?.() ?? [];
     const mcpServersKey = JSON.stringify(mcpServers);
-    const requestedModel = options?.model ?? this._options.model ?? null;
-    const model = this._adapter.agentType === "claude"
-      ? resolveClaudeContextModel(requestedModel,
-        this._options.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT ?? process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT)
-      : requestedModel;
+    const model = options?.model ?? this._options.model ?? null;
+    const customModelOption = this._adapter.agentType === "claude"
+      ? resolveClaudeContextSelection(model, this._options.claudeOneMillionModels).customModelOption
+      : null;
     const effort = options?.effort ?? null;
     const pluginPaths = absolutePluginPaths(pluginOptions?.pluginPaths ?? this._options.pluginPaths);
     const pluginPathsKey = JSON.stringify(pluginPaths);
@@ -774,7 +778,8 @@ export class AcpProvider implements Provider {
         existing.mcpServersKey !== mcpServersKey ||
         existing.pluginPathsKey !== pluginPathsKey ||
         existing.pluginFingerprint !== pluginFingerprint ||
-        existing.codexHome !== codexHome;
+        existing.codexHome !== codexHome ||
+        existing.customModelOption !== customModelOption;
       if (stale && existing.client.alive) {
         const reason = existing.cwd !== cwd
           ? `cwd ${existing.cwd} -> ${cwd}`
@@ -782,7 +787,9 @@ export class AcpProvider implements Provider {
             ? "mcpServers changed"
             : existing.pluginFingerprint !== pluginFingerprint || existing.pluginPathsKey !== pluginPathsKey
               ? "Agent Plugins changed"
-              : "CODEX_HOME changed";
+              : existing.customModelOption !== customModelOption
+                ? "Claude context declaration changed"
+                : "CODEX_HOME changed";
         console.warn(
           `[acp] ${this._adapter.agentType}: recreating session for ${chatId} — ` +
             `${reason} (fixed at process/session creation and cannot be re-applied)`,
@@ -824,6 +831,7 @@ export class AcpProvider implements Provider {
 
     const sessionMeta = this._adapter.buildSessionMeta({
       model,
+      claudeEnv: customModelOption ? { ANTHROPIC_CUSTOM_MODEL_OPTION: customModelOption } : undefined,
       claudeSettings: this._options.claudeSettings,
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
       systemPrompt: options?.systemPrompt,
@@ -881,7 +889,9 @@ export class AcpProvider implements Provider {
         pluginPathsKey,
         pluginFingerprint,
         codexHome,
+        customModelOption,
         appliedModel: null,
+        appliedContext: null,
         appliedEffort: null,
         warnedPermissionMode: null,
       };
@@ -906,7 +916,11 @@ export class AcpProvider implements Provider {
     entry.modes = result.modes;
     entry.configOptions = result.configOptions;
     entry.models = result.models;
-    entry.appliedModel = currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY);
+    // Apply the declaration once even when new/resume/load already selected the ID.
+    entry.appliedModel = this._adapter.agentType === "claude"
+      ? null
+      : currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY);
+    entry.appliedContext = null;
     entry.appliedEffort = currentConfigValue(result.configOptions, EFFORT_OPTION_CATEGORY);
   }
 
@@ -955,22 +969,35 @@ export class AcpProvider implements Provider {
     if (entry.modes) entry.modes = { ...entry.modes, currentModeId: effectiveMode };
   }
 
+  private async _applyModel(entry: PoolEntry, model: string): Promise<void> {
+    if (model === entry.appliedModel && entry.appliedContext === entry.customModelOption) return;
+    if (entry.customModelOption) {
+      try {
+        await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, entry.customModelOption);
+      } catch (error) {
+        if (!entry.client.alive) throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[acp_model_context_fallback] claude: model="${model}", selection="${entry.customModelOption}": ${reason}; ` +
+            "running with the standard context window",
+        );
+        await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model);
+      }
+    } else if (!await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model)) {
+      return;
+    }
+    // Remember fallback too, and re-read effort after either model selection.
+    entry.appliedModel = model;
+    entry.appliedContext = entry.customModelOption;
+    entry.appliedEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
+  }
+
   /**
    * Model first, then effort: switching rewrites the valid effort values and
    * may reset or retain the current effort, depending on the bridge.
    */
   private async _applyModelAndEffort(entry: PoolEntry, model: string | null, effort: string | null): Promise<void> {
-    if (model && model !== entry.appliedModel) {
-      if (await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model)) {
-        entry.appliedModel = model;
-        // The agent just rewrote the effort option: codex re-derives it from the
-        // new model's supported list (dist/index.js:29372-29374) and claude
-        // rebuilds and re-clamps it (dist/acp-agent.js:4084-4100). Re-read what
-        // it now reports, or a requested effort equal to the pre-switch value
-        // would look already-applied and be skipped.
-        entry.appliedEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
-      }
-    }
+    if (model) await this._applyModel(entry, model);
     const requestedEffort = effort?.trim() || null;
     if (requestedEffort) {
       const option = selectConfigOption(entry.configOptions, EFFORT_OPTION_CATEGORY);
@@ -1011,7 +1038,7 @@ export class AcpProvider implements Provider {
       if (option?.currentValue === value) return true;
       if (!option) throw new Error(`[acp_model_context_unsupported] Claude cannot select ${value}: no model selector`);
       // Claude ACP resolves full IDs against its SDK modelInfos, including
-      // resolvedModel aliases (e.g. claude-fable-5-1[1m] -> fable[1m]).
+      // resolvedModel aliases (e.g. claude-opus-5-5[1m] -> opus[1m]).
       // Let that resolver validate the request; never silently drop the hint.
       change = { configId: option.id, value };
     }
@@ -1034,7 +1061,10 @@ export class AcpProvider implements Provider {
     if (result?.configOptions) entry.configOptions = result.configOptions;
     if (claudeOneMillion) {
       const selected = currentConfigValue(entry.configOptions, category);
-      if (!selected || !hasOneMillionContext(selected)) {
+      const selectedOption = selectConfigOption(entry.configOptions, category);
+      const declaredCustomRow = entry.customModelOption === value && selectedOption
+        && flattenSelectOptions(selectedOption).some(item => item.value === selected && item.description?.includes(value));
+      if (!selected || (!hasOneMillionContext(selected) && !declaredCustomRow)) {
         throw new Error(`[acp_model_context_unsupported] Claude did not select ${value} (selected: ${selected ?? "unknown"})`);
       }
     } else if (this._adapter.agentType === "codex"
