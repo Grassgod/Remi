@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { StoreContext } from "@multiremi/store/context.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { ChildMutation, RaceOperation, RaceResult } from "./fixtures/parent-status-race-worker.js";
 
@@ -94,6 +95,43 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       if (previousKey === undefined) delete process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
       else process.env.MULTIREMI_SCM_ENCRYPTION_KEY = previousKey;
     });
+
+    for (const rollback of [false, true]) {
+      it(`old-parent re-derivation ${rollback ? "rolls back" : "commits"} with its events`, () => {
+        const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
+        const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
+        const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+        store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+        store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
+        if (database instanceof PostgresSyncDatabase) database.resetTransactionDepthStats();
+        const events: boolean[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => {
+          if (event.type === "activity:created" && (event.payload.entry as { action?: string })?.action === "parent_status_derived") {
+            events.push(database.inTransaction === true);
+          }
+        });
+        const original = StoreContext.prototype.appendIssueActivity;
+        StoreContext.prototype.appendIssueActivity = function (issueId, input, queue) {
+          original.call(this, issueId, input, queue);
+          if (rollback && issueId === oldParent.id && input.type === "parent_status_derived") {
+            throw new Error("old-parent rollback injection");
+          }
+        };
+        try {
+          const move = () => store.updateIssue(child.id, { parentIssueId: newParent.id });
+          if (rollback) expect(move).toThrow("old-parent rollback injection");
+          else move();
+        } finally {
+          StoreContext.prototype.appendIssueActivity = original;
+          unsubscribe();
+        }
+        // The child write is already durable when its post-commit hook runs.
+        expect(store.getIssue(child.id)?.parentIssueId).toBe(newParent.id);
+        expect(store.getIssue(oldParent.id)?.status).toBe(rollback ? "in_review" : "in_progress");
+        expect(events).toEqual(rollback ? [] : [false]);
+        if (database instanceof PostgresSyncDatabase) expect(database.maxTransactionDepth).toBe(1);
+      });
+    }
 
     for (const path of ["api", "scm"] as const) {
       for (const mutation of mutations) {
