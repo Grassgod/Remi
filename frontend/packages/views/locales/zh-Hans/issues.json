@@ -364,6 +364,7 @@
     "unavailable_description": "链接可能已过期，或分享已被停止。",
     "trace_loading": "正在加载过程记录…",
     "trace_failed": "过程记录加载失败，请收起后重试",
+    "trace_truncated": "（内容过长已截断，原始 {{bytes}} 字节）",
     "trace_unreachable": "daemon〈{{name}}〉当前离线",
     "trace_lost": "已随 daemon 退役丢失",
     "trace_backfilling": "归档回填中",

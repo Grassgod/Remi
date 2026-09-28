@@ -50,7 +50,10 @@ const SharedTaskSchema = z.object({
 }).loose();
 
 export const SharedTaskTracePageSchema = z.object({
-  events: z.array(z.object({ seq: z.number().int().positive(), type: z.string(), ts: z.string() }).loose()),
+  events: z.array(z.object({
+    seq: z.number().int().positive(), type: z.string(), ts: z.string(),
+    truncated: z.literal(true).optional(), original_bytes: z.number().int().positive().optional(),
+  }).loose()),
   next_after_seq: z.number().int().nonnegative(),
   head: z.number().int().nonnegative(),
   eof: z.boolean(),

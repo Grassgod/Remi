@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryDaemonTraceReader, type DaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
-import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { TraceReader, TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
@@ -24,6 +26,106 @@ function pointer(location: MultiremiTaskTrace["location"]): MultiremiTaskTrace {
     eventCount: null, headSeq: null, closed: null, updatedAt: "2026-09-28T00:00:00Z",
   };
 }
+
+async function archiveReaderFor(events: TraceEvent[]): Promise<TraceReader> {
+  const root = mkdtempSync(join(tmpdir(), "mul429-trace-budget-"));
+  dirs.push(root);
+  const store = createStore();
+  store.ensureLocalWorkspace();
+  const runtime = store.registerRuntime({ id: "rt_trace", name: "Trace runtime", provider: "codex", daemonId: "dmn_trace", workspaceId: "local" });
+  const issue = store.createIssue({ title: "Trace budget", workspaceId: "local" });
+  store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
+  const body = [
+    { format: TRACE_FILE_FORMAT, task_id: "tsk_trace", session_id: "ises_fixture", agent_id: "agt_fixture", provider: "codex", started_at: "2026-09-28T00:00:00Z" },
+    ...events,
+    { end: { status: "completed", head: events.at(-1)!.seq, event_count: events.length, ended_at: "2026-09-28T01:00:00Z" } },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n";
+  const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: { tsk_trace: body } });
+  const service = new SessionArchiveService(store, { root, maxBytes: 8 * 1024 * 1024, minFreeBytes: 0 });
+  const archive = service.initialize({
+    workspaceId: "local", subjectKind: "issue", subjectId: issue.id, issueId: issue.id,
+    runtimeId: runtime.id, daemonId: "dmn_trace", sourceRevision: fixture.sourceRevision,
+    sha256: fixture.sha256, sizeBytes: fixture.sizeBytes,
+  }).archive;
+  const claim = await service.claimUploadAttempt(runtime.id, issue.id, archive.id);
+  await service.upload(runtime.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes as BodyInit).body);
+  await service.complete(runtime.id, issue.id, archive.id, claim.uploadAttempt!);
+  return new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => null), archive: new SessionArchiveReader({ store, root }) });
+}
+
+describe("TraceReader oversized first event", () => {
+  for (const source of ["daemon", "archive"] as const) {
+    it(`QA B5: a legal JSON-expanded event must not masquerade as an empty trace (${source})`, async () => {
+      const trace = new InMemoryTraceStore(() => "2026-09-28T00:00:00Z");
+      const original = trace.append("tsk_trace", [
+        { type: "text", content: "first" },
+        { type: "text", content: "\u0001".repeat(180_000) },
+        { type: "text", content: "last" },
+      ]).events;
+      expect(original[1]!.content).toHaveLength(180_000);
+      const originalBytes = Buffer.byteLength(JSON.stringify(original[1]));
+      expect(originalBytes).toBeGreaterThan(TRACE_READ_MAX_BYTES);
+      const store = createStore();
+      const reader = source === "archive" ? await archiveReaderFor(original) : new TraceReader({
+        store, daemon: new InMemoryDaemonTraceReader(() => trace),
+        archive: new SessionArchiveReader({ store, root: "/nonexistent" }), getPointer: () => pointer("daemon"),
+      });
+      for (const after of [0, 1, 2]) {
+        const page = await reader.readTrace("tsk_trace", after);
+        expect(page).toMatchObject({ state: "ok", source, head: 3, next_after_seq: after + 1, eof: after === 2 });
+        expect(page.events.map((event) => event.seq)).toEqual([after + 1]);
+        expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES);
+        if (after === 1) {
+          expect(page.events[0]).toMatchObject({ truncated: true, original_bytes: originalBytes });
+          expect(page.events[0]!.content!.length).toBeLessThan(180_000);
+        } else expect(page.events[0]!.content).toBe(after === 0 ? "first" : "last");
+      }
+      expect(original[1]!.content).toHaveLength(180_000);
+    });
+  }
+
+  it.each(["content", "output", "input"] as const)("shortens %s on Unicode code-point boundaries and preserves identifiers", async (field) => {
+    const text = "中文😀\u0001".repeat(200);
+    const event: TraceEvent = {
+      seq: 7, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash",
+      tool_call_id: "call_boundary", status: "completed",
+      [field]: field === "input" ? { command: text } : text,
+    };
+    const reader = await archiveReaderFor([event]);
+    const page = await reader.readTrace("tsk_trace", 0, 200, 512);
+    expect(page).toMatchObject({ state: "ok", head: 7, next_after_seq: 7, eof: true });
+    const result = page.events[0]!;
+    expect(result).toMatchObject({ seq: 7, type: event.type, tool: event.tool, tool_call_id: event.tool_call_id, status: event.status, truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(event)) });
+    const shortened = field === "input" ? result.input!.command as string : result[field]!;
+    expect(shortened.length).toBeGreaterThan(0);
+    expect(text.startsWith(shortened)).toBe(true);
+    expect(Buffer.from(shortened, "utf8").toString("utf8")).toBe(shortened);
+    expect(shortened).not.toMatch(/[\uD800-\uDBFF]$/);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(512);
+  });
+
+  it("shortens content, output and nested input in order before using the minimal identity fallback", async () => {
+    const event: TraceEvent = {
+      seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_result", tool: "Bash", tool_call_id: "call_order", status: "completed",
+      content: "中".repeat(300), output: "😀".repeat(300), input: { nested: { command: "\u0001".repeat(300) } },
+    };
+    const reader = await archiveReaderFor([event]);
+    const page = await reader.readTrace("tsk_trace", 0, 200, 512);
+    expect(page.events[0]).toMatchObject({ content: "", output: "", truncated: true });
+    expect((page.events[0]!.input!.nested as { command: string }).command.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(512);
+
+    const minimalReader = await archiveReaderFor([{ ...event, meta: { huge: "x".repeat(2000) } }]);
+    const minimal = await minimalReader.readTrace("tsk_trace", 0, 200, 256);
+    expect(minimal.events[0]).toEqual({
+      seq: event.seq, ts: event.ts, type: event.type, tool: event.tool,
+      tool_call_id: event.tool_call_id, status: event.status, truncated: true,
+      original_bytes: Buffer.byteLength(JSON.stringify({ ...event, meta: { huge: "x".repeat(2000) } })),
+    });
+    expect(Buffer.byteLength(JSON.stringify(minimal.events))).toBeLessThanOrEqual(256);
+  });
+});
 
 describe("TraceReader states and hot routing", () => {
   it("writes a daemon pointer on claim, none for an empty terminal trace, and lost for abandon", () => {

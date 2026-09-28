@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent, TraceReadEvent } from "@multiremi/contracts/trace.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
@@ -10,7 +10,7 @@ export const TRACE_READ_MAX_BYTES = 1024 * 1024;
 
 export type TraceReadState = "ok" | "unreachable" | "not_found" | "backfilling" | "lost";
 export interface TraceReadResult {
-  events: TraceEvent[];
+  events: TraceReadEvent[];
   next_after_seq: number;
   head: number;
   eof: boolean;
@@ -102,16 +102,53 @@ export class TraceReader {
     source: "daemon" | "archive", maxBytes: number,
     location: Pick<TraceReadResult, "runtime_id" | "runtime_name"> = {},
   ): TraceReadResult {
-    const page: TraceEvent[] = [];
-    let bytes = 0;
+    const page: TraceReadEvent[] = [];
+    let bytes = 2;
     for (const event of events) {
       const size = Buffer.byteLength(JSON.stringify(event), "utf8") + (page.length ? 1 : 0);
-      if (bytes + size > maxBytes) break;
+      if (bytes + size > maxBytes) {
+        if (page.length) break;
+        let shortened: TraceReadEvent = {
+          ...structuredClone(event), truncated: true,
+          original_bytes: Buffer.byteLength(JSON.stringify(event), "utf8"),
+        };
+        const fits = () => Buffer.byteLength(JSON.stringify(shortened), "utf8") + 2 <= maxBytes;
+        const shorten = (text: string, set: (value: string) => void) => {
+          if (fits()) return;
+          const points = Array.from(text);
+          let low = 0;
+          let high = points.length;
+          set("");
+          if (!fits()) return;
+          while (low < high) {
+            const middle = Math.ceil((low + high) / 2);
+            set(points.slice(0, middle).join(""));
+            if (fits()) low = middle;
+            else high = middle - 1;
+          }
+          set(points.slice(0, low).join(""));
+        };
+        for (const key of ["content", "output"] as const) {
+          const value = shortened[key];
+          if (typeof value === "string") shorten(value, (text) => { shortened[key] = text; });
+        }
+        const shortenInput = (input: object) => {
+          for (const [key, value] of Object.entries(input)) {
+            if (fits()) break;
+            if (typeof value === "string") shorten(value, (text) => { (input as Record<string, unknown>)[key] = text; });
+            else if (value && typeof value === "object") shortenInput(value);
+          }
+        };
+        if (shortened.input) shortenInput(shortened.input);
+        if (!fits()) {
+          const { seq, ts, type, tool, tool_call_id, status } = event;
+          shortened = { seq, ts, type, tool, tool_call_id, status, truncated: true, original_bytes: shortened.original_bytes };
+        }
+        page.push(shortened);
+        break;
+      }
       page.push(event);
       bytes += size;
-    }
-    if (events.length > 0 && page.length === 0) {
-      return { ...empty(afterSeq, "not_found", source, "event_exceeds_budget"), ...location };
     }
     return {
       events: page,

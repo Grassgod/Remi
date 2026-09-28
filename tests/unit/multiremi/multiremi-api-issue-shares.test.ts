@@ -9,6 +9,38 @@ afterEach(resetMultiremiTestEnv);
 const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 
 describe("Multiremi API - issue sharing", () => {
+  for (const endpoint of ["page", "share"] as const) {
+    it(`${endpoint} trace keeps the JSON-expanded event within 1MiB and pages through last`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const trace = new InMemoryTraceStore(() => "2026-09-28T00:00:00Z");
+      const runtime = store.registerRuntime({ id: "rt_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
+      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Budget issue", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+      store.markTaskTraceDaemon(task.id, runtime.id);
+      const original = trace.append(task.id, [
+        { type: "text", content: "first" }, { type: "text", content: "\u0001".repeat(180_000) }, { type: "text", content: "last" },
+      ]).events;
+      const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
+      const share = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+      expect(share.status).toBe(201);
+      const token = (await share.json()).share.token;
+      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      for (const after of [0, 1, 2]) {
+        const response = await app.request(`${path}?after_seq=${after}`, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1024 * 1024 + 512);
+        const page = JSON.parse(text);
+        expect(page).toMatchObject({ state: "ok", head: 3, next_after_seq: after + 1, eof: after === 2 });
+        expect(page.events.map((event: { seq: number }) => event.seq)).toEqual([after + 1]);
+        if (after === 1) expect(page.events[0]).toMatchObject({ truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(original[1])) });
+        else expect(page.events[0].content).toBe(after === 0 ? "first" : "last");
+      }
+    });
+  }
+
   it("hard-denies task credentials from minting, reading, extending, or revoking share capabilities", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();

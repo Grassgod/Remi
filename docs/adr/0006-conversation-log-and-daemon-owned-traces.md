@@ -134,6 +134,14 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
    missing card statistics or unavailable live reads retain the legacy-table
    fallback until MUL-432 removes that table.
+   B5's page/share trace endpoints and their CLI readers return `TraceReadEvent`:
+   a first event exceeding the serialized page budget is shortened by Unicode
+   code point in `content`, `output`, then string values inside `input`, and
+   returned alone with `truncated: true` and `original_bytes` (the original
+   event JSON's UTF-8 size). Identifiers and the real head/cursor are preserved;
+   if payload removal is insufficient, only identifiers and these markers remain.
+   These read-only markers are not persisted or added to daemon frames. The
+   share view appends a truncation notice and continues paging to `eof`.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and
