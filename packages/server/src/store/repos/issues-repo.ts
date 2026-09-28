@@ -336,6 +336,16 @@ export class IssueDecisionError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
 }
 
+/**
+ * MUL-412. `idempotent` marks the Feishu card path, where a replayed callback
+ * or a double tap must return the settled row instead of writing a second
+ * answer. The HTTP answer route leaves it off: a member re-answering from the
+ * web or CLI is a deliberate revision (S4).
+ */
+export interface AnswerIssueDecisionOptions {
+  idempotent?: boolean;
+}
+
 export type IssueDeletionBlockCode =
   | "issue_not_found"
   | "issue_has_active_tasks"
@@ -510,6 +520,19 @@ export class IssuesRepo {
     return row ? toIssueDecision(row) : null;
   }
 
+  /**
+   * A decision by its own id (MUL-412). The Feishu decision-card lane is keyed
+   * by decision id alone — a bot host is told the decision, not the parent
+   * Issue, and resolving the Issue from the row is what makes the workspace
+   * check possible.
+   */
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_issue_decisions WHERE id = ?",
+    ).get(decisionId) as Row | null;
+    return row ? toIssueDecision(row) : null;
+  }
+
   countPendingIssueDecisions(issueId: string): number {
     const row = this.ctx.db.query(
       `SELECT
@@ -616,6 +639,9 @@ export class IssuesRepo {
           body: title, data: { decision_id: id, kind, direct: true },
         }, events);
         this.notifyDecisionRequested(target, decision, events);
+        // A3: only the two "a person must decide this" cases get a card. A row
+        // the parent's owner agent answers itself stays in the web workbench.
+        this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(target, decision, events);
       }
       return decision;
     })();
@@ -624,7 +650,13 @@ export class IssuesRepo {
     return created;
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
     const answer = String(input.answer ?? "").trim();
     const reason = String(input.reason ?? "").trim();
     const overturn = String(input.overturn ?? "").trim();
@@ -644,6 +676,13 @@ export class IssuesRepo {
         throw new IssueDecisionError(403, "only the parent owner task can answer a pending decision");
       }
       if (decision.status === "withdrawn") throw new IssueDecisionError(409, "decision was withdrawn");
+      // A card click is a single-shot interaction: Feishu redelivers callbacks,
+      // a person can double-tap, and the card is still on screen after the web
+      // answered it. Replaying one must not append a second history entry, a
+      // second activity or a second wakeup. A deliberate re-answer from the web
+      // or CLI keeps the documented member-overturns-agent behavior, so the
+      // guard lives on the card path only.
+      if (options.idempotent && decision.status === "answered") return decision;
       const record: MultiremiIssueDecisionAnswer = {
         answererType: actor.type, answererId: actor.id, answer, reason,
         overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
@@ -674,6 +713,10 @@ export class IssuesRepo {
         this.queueDecisionRound(parent, owner, `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`, changes, events);
       }
       this.decisionEvent(events, "decision:updated", result);
+      // In-place terminal rewrite. The delivery row is written inside this
+      // transaction so a rollback leaves neither an answer nor a patch, and the
+      // realtime event is queued rather than emitted mid-transaction.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.tasks().runCollectedChildStatusChanges(changes);
@@ -701,6 +744,8 @@ export class IssuesRepo {
       }, events);
       this.notifyDecisionRequested(parent, result, events);
       this.decisionEvent(events, "decision:updated", result);
+      // S5b: the escalation is what turns a web-only decision into a card.
+      this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(parent, result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
@@ -726,6 +771,9 @@ export class IssuesRepo {
       this.ctx.db.run("UPDATE multiremi_issue_decisions SET status = 'withdrawn', updated_at = ? WHERE id = ?", [nowIso(), decision.id]);
       const result = this.getIssueDecision(issueId, decisionId)!;
       this.decisionEvent(events, "decision:updated", result);
+      // A withdrawn decision is a terminal state of its own (E4 has no expiry),
+      // so the card on screen is rewritten rather than left actionable.
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
       return result;
     })();
     this.ctx.emitCommitEvents(events);
