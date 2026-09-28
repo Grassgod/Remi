@@ -4,11 +4,35 @@ import type { MultiremiDaemonClient, MultiremiDaemonHeartbeatConfigAck } from "@
 
 /** Source tests do not receive the release build's MULTIREMI_VERSION define. */
 export class TestMultiremiDaemon extends MultiremiDaemon {
+  private testRun: Promise<void> | null = null;
+  private readonly testRequests = new Set<Promise<unknown>>();
   constructor(options: MultiremiDaemonOptions) {
     super({
       ...options,
       protocolClientOptions: { cliVersion: version, ...options.protocolClientOptions },
     });
+    // The legacy steer feed stops its timer without awaiting its final HTTP read.
+    const client = (this as unknown as { client: MultiremiDaemonClient }).client;
+    const listSteers = client.listPendingTaskSteerMessages.bind(client);
+    client.listPendingTaskSteerMessages = (...args) => {
+      const request = listSteers(...args);
+      this.testRequests.add(request);
+      void request.then(() => this.testRequests.delete(request), () => this.testRequests.delete(request));
+      return request;
+    };
+  }
+
+  override start(): Promise<void> {
+    this.testRun = super.start();
+    void this.testRun.catch(() => {});
+    return this.testRun;
+  }
+
+  async stopAndDrainTestWork(): Promise<void> {
+    this.stop();
+    await this.testRun?.catch(() => {});
+    await this.daemonProtocolClient().drain();
+    while (this.testRequests.size) await Promise.allSettled([...this.testRequests]);
   }
 }
 

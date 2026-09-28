@@ -15,8 +15,14 @@ import { MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;
+let activeDaemon: MultiremiDaemon | null = null;
+const activeServers = new Set<{ stop(closeActiveConnections?: boolean): unknown }>();
 
-afterEach(() => {
+afterEach(async () => {
+  await activeDaemon?.stopAndDrainTestWork();
+  activeDaemon = null;
+  for (const server of activeServers) server.stop(true);
+  activeServers.clear();
   db?.close();
   db = null;
   if (workDir) {
@@ -55,6 +61,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer", "claude");
     store.registerRuntime({ id: runtimeId, name: "steer-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-steer", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const sendOptions: SendOptions[] = [];
@@ -85,7 +92,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer",
@@ -120,7 +127,8 @@ describe("Bun Multiremi daemon steering", () => {
       expect(steerMessages).toHaveLength(1);
       expect(steerMessages[0]?.content).toBe("改用中文输出");
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -132,6 +140,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-late", "claude");
     store.registerRuntime({ id: runtimeId, name: "late-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-late", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     let steerId: string | null = null;
@@ -160,7 +169,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-late",
@@ -187,7 +196,8 @@ describe("Bun Multiremi daemon steering", () => {
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -199,6 +209,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-duppoll", "claude");
     store.registerRuntime({ id: runtimeId, name: "duppoll-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-dup", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     // Proxy that snapshots upstream responses immediately but delays delivery
     // of the second pending-steer GET (the feed poll that observed the steer
@@ -223,6 +234,7 @@ describe("Bun Multiremi daemon steering", () => {
       },
     });
 
+    activeServers.add(proxy);
     const prompts: string[] = [];
     const response: AgentResponse = {
       text: "",
@@ -259,7 +271,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${proxy.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
@@ -284,8 +296,9 @@ describe("Bun Multiremi daemon steering", () => {
       // The held poll really did observe the steer before consumption.
       expect(steerGets).toBeGreaterThanOrEqual(2);
     } finally {
+      await activeDaemon?.stopAndDrainTestWork();
       proxy.stop(true);
-      server.stop();
+      server.stop(true);
     }
   });
 
@@ -297,6 +310,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-force", "claude");
     store.registerRuntime({ id: runtimeId, name: "force-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-force", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const response: AgentResponse = {
@@ -327,7 +341,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-force",
@@ -352,7 +366,8 @@ describe("Bun Multiremi daemon steering", () => {
       expect(prompts[1]).toContain("Deliver now");
       expect(prompts[1]).toContain("先给结论");
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 
@@ -364,6 +379,7 @@ describe("Bun Multiremi daemon steering", () => {
     const runtimeId = daemonRuntimeIdForTest("daemon-steer-cancel", "claude");
     store.registerRuntime({ id: runtimeId, name: "cancel-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "root-cancel", hostname: "127.0.0.1", port: 0 });
+    activeServers.add(server);
 
     const prompts: string[] = [];
     const providerFactory: MultiremiDaemonProviderFactory = () => ({
@@ -378,7 +394,7 @@ describe("Bun Multiremi daemon steering", () => {
     });
 
     try {
-      const daemon = new MultiremiDaemon({
+      const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         daemonId: "daemon-steer-cancel",
@@ -397,7 +413,8 @@ describe("Bun Multiremi daemon steering", () => {
       expect(prompts).toHaveLength(1);
       expect(store.getTask(task.id)?.status).toBe("cancelled");
     } finally {
-      server.stop();
+      await activeDaemon?.stopAndDrainTestWork();
+      server.stop(true);
     }
   });
 });
