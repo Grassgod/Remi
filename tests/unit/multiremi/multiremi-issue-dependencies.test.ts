@@ -1913,10 +1913,14 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
         tasks: allTaskRows(store, dependent.id),
         force: allActivityRows(store, dependent.id, "dependency_force_started").length,
       }).toEqual({ kind, status: "todo", tasks: [], force: 1 });
-      if (kind === "archived") {
-        expect(allActivityRows(store, dependent.id, "dispatch_skipped").at(-1)!.data)
-          .toMatchObject({ reason: "force_start_dispatch_failed" });
-      }
+      const expectedReason = kind === "member"
+        ? "member_assignee"
+        : kind === "none"
+          ? "no_assignee"
+          : "no_runnable_agent";
+      expect(allActivityRows(store, dependent.id, "dispatch_skipped")).toHaveLength(1);
+      expect(allActivityRows(store, dependent.id, "dispatch_skipped")[0]!.data)
+        .toMatchObject({ reason: expectedReason });
     }
   });
 
@@ -1935,16 +1939,21 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
     store.updateIssue(dependent.id, { status: "todo", force: true, actorType: "member", actorId: "mem_local" });
 
     expectSingleStart(store, dependent.id, "gate-already-open");
+    expect(allTaskRows(store, dependent.id).map((row) => row.status)).toEqual(["queued"]);
+    expect(allActivityRows(store, dependent.id, "issue_assigned")).toHaveLength(1);
     expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
     expect(allActivityRows(store, dependent.id, "dependency_auto_started")).toEqual([]);
     // The member's own transition is the record that survives: the store writes
     // `issue_updated` as the actor's own request (status, force, actor), which is
     // the third start kind this ruling names.
     const updated = allActivityRows(store, dependent.id, "issue_updated");
-    expect(updated.some((entry) => {
-      const data = (entry.data ?? null) as Record<string, unknown> | null;
-      return data?.status === "todo" && data?.force === true;
-    })).toBe(true);
+    expect(updated).toHaveLength(1);
+    expect(updated[0]!.data).toMatchObject({
+      status: "todo",
+      force: true,
+      actorType: "member",
+      actorId: "mem_local",
+    });
   });
 });
 

@@ -457,6 +457,8 @@
     "dispatch_skipped": "생성되었지만 디스패치되지 않았습니다. 이 issue를 실행할 agent가 없습니다",
     "dispatch_skipped_reason": "생성되었지만 디스패치되지 않았습니다: {{reason}}",
     "dispatch_skipped_no_runnable_agent": "생성되었지만 디스패치되지 않았습니다: 담당자에게 실행 가능한 agent가 없습니다",
+    "dispatch_skipped_member_assignee": "상태가 변경되었지만 디스패치되지 않았습니다: 담당자가 멤버입니다",
+    "dispatch_skipped_no_assignee": "상태가 변경되었지만 디스패치되지 않았습니다: 담당자가 없습니다",
     "squad_leader_evaluated": "스쿼드 트리거를 평가했습니다",
     "squad_leader_action": "평가 후 작업을 수행했습니다",
     "squad_leader_action_reason": "평가 후 작업을 수행했습니다: {{reason}}",

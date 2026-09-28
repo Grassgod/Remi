@@ -266,10 +266,20 @@ export interface IssuesSurface {
     options: UpdateIssueOptions,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
-  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number };
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  };
   /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
   runIssueUpdatePostCommit(
-    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,

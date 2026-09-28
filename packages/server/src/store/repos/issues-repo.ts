@@ -330,10 +330,42 @@ type IssueDeletionBlockedResult = Extract<BeginIssueDeletionResult, { ok: false 
  * `skipped` is set when the owner cannot run the work (no owner, a member
  * owner, an archived assignee, a squad with no runnable agent). The status
  * change still commits — the member asked for it — and the reason is recorded
- * after the COMMIT as a `dispatch_skipped` activity.
+ * in the same transaction as a `dispatch_skipped` activity.
  */
 interface ForcedStartOutcome {
   skipped: { reason: string; error: string } | null;
+}
+
+interface IssueCreationTransactionOwner {
+  childStatusChanges: ChildStatusChangeCollector;
+  deferredEvents: CommitEventQueue;
+}
+
+/**
+ * The public types keep ordinary callers honest, but API adapters and tests can
+ * still reach these methods through `any`. Reject a partial owner before the
+ * first SQL statement so a rollback cannot leave queued in-memory events that
+ * describe rows which never committed.
+ */
+function assertIssueCreationTransactionOwner(
+  value: unknown,
+): asserts value is IssueCreationTransactionOwner {
+  if (!value || typeof value !== "object") {
+    throw new Error("issue creation inside a transaction requires a transaction owner");
+  }
+  const owner = value as Partial<IssueCreationTransactionOwner>;
+  if (!Array.isArray(owner.childStatusChanges)) {
+    throw new Error("issue creation transaction owner requires childStatusChanges");
+  }
+  const queue = owner.deferredEvents as Partial<CommitEventQueue> | undefined;
+  if (!queue || typeof queue !== "object") {
+    throw new Error("issue creation transaction owner requires deferredEvents");
+  }
+  for (const field of ["workspace", "enqueuedTasks", "issueActivities"] as const) {
+    if (!Array.isArray(queue[field])) {
+      throw new Error(`issue creation deferredEvents requires ${field}`);
+    }
+  }
 }
 
 interface ReactionInput {
@@ -407,16 +439,14 @@ export class IssuesRepo {
    * decides whether it owns the transaction, because Postgres has no savepoints
    * here and callers such as Feishu ingestion and autopilots already hold one.
    */
-  createIssue(input: CreateIssueInput, transaction?: {
-    childStatusChanges: ChildStatusChangeCollector;
-    deferredEvents: CommitEventQueue;
-  }): MultiremiIssue {
+  createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
     // (the `issue_created` activity, the parent re-derivation) has to wait for
     // that COMMIT — a browser must never render a row a ROLLBACK would erase.
     // A caller that already owns a transaction keeps its own queue.
+    if (transaction !== undefined) assertIssueCreationTransactionOwner(transaction);
     if (this.ctx.db.inTransaction) {
-      if (!transaction) throw new Error("createIssue inside a transaction requires a child-status collector and deferredEvents");
+      assertIssueCreationTransactionOwner(transaction);
       return this.createIssueWithinTransaction(input, transaction.childStatusChanges, transaction.deferredEvents);
     }
     const commitEvents = createCommitEventQueue();
@@ -750,6 +780,7 @@ export class IssuesRepo {
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): MultiremiIssue {
+    assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
@@ -2164,7 +2195,6 @@ export class IssuesRepo {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
-    forcedStartSkipped: { reason: string; error: string } | null;
   } {
     let cancelledTasks = 0;
     // Every `force` that tries to leave `backlog`, whether or not the gate was
@@ -2295,7 +2325,6 @@ export class IssuesRepo {
         previous: current,
         cancelledTasks: 0,
         handledForcedStart: false,
-        forcedStartSkipped: null,
       };
     }
     this.ctx.db.run(
@@ -2378,6 +2407,9 @@ export class IssuesRepo {
       body: null,
       data: input,
     }, deferredEvents);
+    if (dispatchOutcome?.skipped) {
+      this.recordForcedStartSkipped(next, dispatchOutcome.skipped, input, deferredEvents);
+    }
     // MUL-400 E1: a member override has to be auditable next to the write it
     // allowed, including the child count it overrode at the time.
     if (
@@ -2425,7 +2457,6 @@ export class IssuesRepo {
       previous: current,
       cancelledTasks,
       handledForcedStart: forceStartAttempt,
-      forcedStartSkipped: dispatchOutcome?.skipped ?? null,
     };
   }
 
@@ -2442,7 +2473,7 @@ export class IssuesRepo {
       issue: MultiremiIssue;
       previous: MultiremiIssue;
       cancelledTasks: number;
-      forcedStartSkipped?: { reason: string; error: string } | null;
+      handledForcedStart: boolean;
     },
     input: UpdateIssueInput,
     collector: ChildStatusChangeCollector,
@@ -2455,9 +2486,6 @@ export class IssuesRepo {
     // The hook gets its OWN queue, so a hook failure cannot retroactively
     // publish events for rows its rolled-back transaction just erased.
     this.ctx.emitCommitEvents(deferredEvents);
-    if (result.forcedStartSkipped) {
-      this.recordForcedStartSkipped(updated, result.forcedStartSkipped, input);
-    }
     if (updated === previous) return;
     const hookEvents = createCommitEventQueue();
     // The write above is committed; the hook runs after it on purpose (ADR
@@ -2539,9 +2567,22 @@ export class IssuesRepo {
     // `updateIssueWithOutcome`), so `createTaskWithinTransaction` can take it
     // again inside this transaction without inverting the order.
 
-    // A member owner, or none at all, has no agent to run: the status change is
-    // the whole outcome, exactly as before.
-    if (!ownerType || !ownerId || ownerType === "member") return { skipped: null };
+    if (!ownerType || !ownerId) {
+      return {
+        skipped: {
+          reason: "no_assignee",
+          error: "Issue has no assignee",
+        },
+      };
+    }
+    if (ownerType === "member") {
+      return {
+        skipped: {
+          reason: "member_assignee",
+          error: "Member assignees do not run tasks",
+        },
+      };
+    }
 
     const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
     if (!taskAgent) {
@@ -2550,7 +2591,7 @@ export class IssuesRepo {
       log.warn(`dependency force-start dispatch skipped for ${current.id}: no runnable agent for ${ownerType}:${ownerId}`);
       return {
         skipped: {
-          reason: "force_start_dispatch_failed",
+          reason: "no_runnable_agent",
           error: `No runnable agent for ${ownerType}: ${ownerId}`,
         },
       };
@@ -2563,6 +2604,7 @@ export class IssuesRepo {
       prompt: current.title,
       parentTaskId,
     }, childStatusChanges, deferredEvents);
+    deferredEvents.enqueuedTasks.push(task);
     this.ctx.appendIssueActivity(current.id, {
       actorType,
       actorId,
@@ -2590,15 +2632,14 @@ export class IssuesRepo {
   }
 
   /**
-   * The `dispatch_skipped` row for a forced start that could not run. Written
-   * after the transaction committed, because the status change it explains is
-   * kept: the member asked for the transition and gets it, with the reason
-   * recorded next to it, exactly like assign-on-update.
+   * The `dispatch_skipped` row for a forced start that could not run. The owner
+   * calls this before COMMIT so the status change and the reason cannot split.
    */
   private recordForcedStartSkipped(
     issue: MultiremiIssue,
     skipped: { reason: string; error: string },
     input: UpdateIssueInput,
+    deferredEvents: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
@@ -2614,7 +2655,7 @@ export class IssuesRepo {
         assignee_id: issue.assigneeId,
         ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id ?? null),
       },
-    });
+    }, deferredEvents);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -3175,6 +3216,7 @@ export class IssuesRepo {
           prompt: current.title,
           parentTaskId,
         }, nested, deferredEvents);
+        deferredEvents.enqueuedTasks.push(task);
         this.ctx.appendIssueActivity(dependent.id, {
           actorType: "system",
           actorId: SYSTEM_AUTHOR_ID,
@@ -4118,10 +4160,9 @@ export class IssuesRepo {
     const unmet = this.listUnmetPrerequisites(id);
     if (!unmet.length) return;
     if (input.force === true) {
-      // The override is auditable, and the work really starts: the caller
-      // dispatches through `assignIssue` once the status write commits (see
-      // `dispatchForcedStart`), so a forced issue is never left as a `todo`
-      // with nothing queued.
+      // The override and its dispatch decision are part of the caller's owner
+      // transaction. Runnable agent/squad owners get a round; member, missing,
+      // or unavailable owners get `dispatch_skipped` with the requested status.
       this.recordDependencyForceStarted(id, {
         source: "status",
         status: nextStatus,

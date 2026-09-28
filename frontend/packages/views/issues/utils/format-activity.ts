@@ -232,6 +232,12 @@ export function formatActivity(
       if (details.reason === "no_runnable_agent") {
         return t(($) => $.activity.dispatch_skipped_no_runnable_agent);
       }
+      if (details.reason === "member_assignee") {
+        return t(($) => $.activity.dispatch_skipped_member_assignee);
+      }
+      if (details.reason === "no_assignee") {
+        return t(($) => $.activity.dispatch_skipped_no_assignee);
+      }
       // MUL-400 E3: the dependency hold has its own copy instead of showing the
       // raw reason string.
       if (details.reason === "dependencies_unmet") {

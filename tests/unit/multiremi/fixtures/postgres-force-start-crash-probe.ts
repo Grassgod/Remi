@@ -14,6 +14,10 @@
  *     Pre-fix that commit is the status write alone, so the crash strands a
  *     `todo` with no round. Post-fix it is the whole forced start, so the same
  *     instant leaves `todo` WITH its queued round and the force record.
+ *   - `after-gate-open-commit` — the same post-COMMIT/pre-event seam with a
+ *     prerequisite the parent test has already marked `done`. The request is
+ *     an ordinary member start, so `issue_updated` is its only dependency-start
+ *     record and must already be durable when this process exits.
  *
  * Usage: bun run <this file> <databaseUrl> <issueId> <mode> [exitCode]
  */
@@ -21,7 +25,7 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 const [databaseUrl, issueId, mode, exitCodeRaw] = process.argv.slice(2);
-const MODES = ["before-commit", "after-status-commit"];
+const MODES = ["before-commit", "after-status-commit", "after-gate-open-commit"];
 const exitCode = Number(exitCodeRaw ?? 19);
 
 if (!databaseUrl || !issueId || !MODES.includes(mode ?? "")) {
@@ -82,7 +86,7 @@ if (mode === "before-commit") {
           | null;
         if (row?.status === "todo") {
           armed = false;
-          announce("after-status-commit");
+          announce(mode === "after-gate-open-commit" ? "after-gate-open-commit" : "after-status-commit");
           // A real process exit: the transaction is committed, the connection
           // dies with the process, and nothing after this point runs.
           process.exit(exitCode);
@@ -107,5 +111,5 @@ try {
   console.error(`probe failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(3);
 } finally {
-  if (mode !== "after-status-commit") db.close();
+  if (mode === "before-commit") db.close();
 }

@@ -52,13 +52,14 @@ squad rule about ordering was prose. The observable failures were:
      with nothing queued.
    - `updateIssueWithOutcome` — `backlog -> todo`/`in_progress` with an unmet
      prerequisite is a 409 `dependencies_unmet`. A member may override with
-     `force: true`: the status change commits, `dependency_force_started` is
-     recorded, the rows stay, and the store then dispatches through
-     `assignIssue` with the internal force option, so an agent- or squad-owned
-     issue really gets a round. A member-owned or unowned issue is a status
-     change only, because there is no agent to run it. A dispatch that cannot run
-     (archived owner, no runnable agent) is reported as `dispatch_skipped`
-     rather than rolled back, matching assign-on-update.
+     `force: true`: the status change, `dependency_force_started` and the
+     dispatch decision share the same transaction, and the dependency rows stay.
+     A runnable agent or squad gets one round and `issue_assigned` in that
+     transaction. A member-owned or unowned issue gets the requested status but
+     no round, and records `dispatch_skipped` in the same transaction because
+     there is no agent to run it. An archived owner or a squad with no runnable
+     agent follows the same status-plus-`dispatch_skipped` rule rather than
+     rolling the status back. There is no post-COMMIT call to `assignIssue`.
    - `POST /api/issues` with `blocked_by` — the issue row, its number, its
      dependency rows and the cycle/ancestor checks are **one transaction**, so a
      rejected prerequisite leaves nothing behind: no orphan issue and no
@@ -67,6 +68,16 @@ squad rule about ordering was prose. The observable failures were:
      (Feishu ingestion and autopilots do), because Postgres has no savepoints on
      this bridge. An issue with an unmet prerequisite parks at `backlog`
      whatever status was requested.
+
+   **The outermost owner holds the only transaction.** A flow that already owns
+   the transaction passes its required child-status collector and commit-event
+   queue into every `...WithinTransaction` writer; those writers never issue
+   their own `BEGIN` or `COMMIT`, and the owner replays and drains only after its
+   COMMIT (or drops both on rollback). Messaging follows the same rule:
+   direct, approved and proposal owners call the transaction-internal outcome
+   writer, while the standalone `recordOutcome` wrapper opens a transaction only
+   for independent callers. This is required because the PostgreSQL bridge has
+   no savepoints: an inner COMMIT would make the outer rollback ineffective.
 
    *Layer 2 — task creation (`createTaskWithinWorkspaceLock` in tasks-repo),
    the single funnel every task is born in:* creating the **first** task of a
@@ -129,47 +140,53 @@ squad rule about ordering was prose. The observable failures were:
      targeted by a batch keeps its status, gets no round, and is reported
      per-row as skipped with `dependencies_unmet`. Choosing this over dropping
      batch `force` entirely keeps S1's documented behaviour intact;
-   - a single forced start dispatches exactly once: the status write, the
-     `dependency_force_started` record, the `issue_assigned` record and the
-     round are **one transaction** (see 3a), and the route's assign-on-update
-     step is skipped for that request, so no round is created and immediately
-     cancelled.
+   - a single forced start makes exactly one dispatch decision in the status
+     transaction (see 3a): a runnable agent or squad gets `issue_assigned` and
+     one round; a member, an unowned issue, an archived agent or a squad with no
+     runnable agent gets `dispatch_skipped` and no round. The route does no
+     second assign-on-update step for that request.
 
    **3a. The forced start is one transaction, and its audit names the record it
-   really produced.** `updateIssueWithOutcome` writes the status, the force
-   record, the assignment and the round together, under the lock order
-   `createTaskWithinTransaction` uses (`multiremi_workspaces` row first, then the
-   Issue row the status write already locked). A process that dies after the
-   COMMIT therefore cannot leave a `todo` with nothing queued — the state the
-   pre-fix code produced by writing the status first and dispatching afterwards,
-   which no automatic path could repair because both the gate and the automatic
-   start only scan `backlog`. Any unexpected failure rolls the whole attempt
-   back: the issue stays `backlog` with no round and no activity. An owner that
-   cannot run the work (none at all, a member, an archived assignee, a squad with
-   no runnable agent) is decided before the INSERT: the status change and its
-   `dispatch_skipped` report both stand, because that is what the member asked
-   for.
+   really produced.** `updateIssueWithOutcome` owns the transaction and calls the
+   transaction-internal status writer. Under the lock order used by
+   `createTaskWithinTransaction` (`multiremi_workspaces` row first, then the
+   Issue row), that writer records the status and force audit, makes the dispatch
+   decision and, for a runnable agent or squad, writes `issue_assigned` and
+   exactly one round. A member or an issue with no owner has no runnable agent:
+   it writes the requested status and exactly one `dispatch_skipped`, but no task.
+   An archived agent or a squad with no runnable agent is handled the same way.
+   The skip row is part of the status transaction, so rollback leaves neither;
+   an unexpected failure leaves the issue at `backlog` with no round and no
+   activity.
 
-   A PATCH force and a comment-driven round can race. The PATCH assignment path
-   cancels active issue tasks, so it may cancel a comment round that committed
-   just before it. This requires two concurrent human actions and is not changed
-   by this decision.
-
-   **One attempt leaves exactly one task row and exactly one start record.**
-   Which record depends on what the lock saw, and all three are legitimate:
+   **A runnable agent or squad gets exactly one task row; every committed attempt
+   gets exactly one start-classification record.** Which start record the lock
+   chooses depends on the race, and all three are legitimate. `issue_assigned`
+   and `dispatch_skipped` describe dispatch and are not additional start
+   classifications:
 
    | When the force request took the row lock | Start record |
    | --- | --- |
    | prerequisites still unmet | `dependency_force_started` |
-   | every prerequisite already `done` | the member's `issue_updated` (backlog -> todo) and `issue_assigned`, with no dependency start activity |
+   | every prerequisite already `done` | the member's `issue_updated` (`backlog -> todo`), with no dependency start activity; dispatch is `issue_assigned` for a runnable agent/squad or `dispatch_skipped` otherwise |
    | the automatic start won the row first | `dependency_auto_started` |
 
    The middle row is the race ruling: a force request that finds the gate
    already open crosses nothing, so it is an ordinary member start and must not
-   claim an override. Recording a `dependency_force_started` there would report
-   an override that never happened, and leaving nothing at all would make the
-   attempt indistinguishable from a dropped request. Never zero records, never
-   two.
+   claim an override. Its `issue_updated` row is written in the same transaction
+   as the `backlog -> todo` status change, including when the owner is a member or
+   absent. Recording a `dependency_force_started` there would report an override
+   that never happened; writing the activity after COMMIT would recreate a crash
+   window in which the status survived with no start record. Keeping each of the
+   three records with the state change makes the invariant literal: never zero
+   start-classification records, never two.
+
+   Before the status override became transaction-owned, a PATCH force raced
+   through the post-COMMIT `assignIssue` path and could cancel a comment-driven
+   round that had just committed. The transaction-owned path no longer calls
+   `assignIssue`, so that cancellation window is absent on this baseline.
+   Concurrent human actions still remain independent requests and are not
+   coalesced by this decision.
 4. **Waiting state is `backlog` + unmet prerequisite.** No new status is added,
    so every surface that already understands `backlog` shows waiting issues
    correctly, and `GET /api/issues/child-progress` reports them as `waiting`.
