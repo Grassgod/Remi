@@ -109,6 +109,7 @@ describe("daemon Session archive GC orchestration", () => {
       },
       registerCurrentRuntime: async () => "rt_shutdown",
       ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},
@@ -169,6 +170,7 @@ describe("daemon Session archive GC orchestration", () => {
       activeTaskAborts: new Set<AbortController>(),
       issueWorkspaceLifecycleLocks: locker,
       ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
         renewTaskDispatchLease: async () => "dispatched",
@@ -313,6 +315,7 @@ describe("daemon Session archive GC orchestration", () => {
       },
       registerCurrentRuntime: async () => "rt_barrier",
       ensureOutbox: reports(),
+      ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},

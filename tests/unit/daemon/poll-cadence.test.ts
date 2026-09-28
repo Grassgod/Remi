@@ -143,6 +143,7 @@ function createLoopDaemon(options: {
       pumpAll: () => {},
       close: async () => {},
     }),
+    ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
     awaitTaskReportDrain: async () => ({ delivered: 0, pending: 0, failed: false }),
     cleanupTaskPrivateTempDirectory: async () => {},
     stopRepoCheckoutServerFn: () => {},

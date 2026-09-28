@@ -1,4 +1,4 @@
-import { reportFrame } from "../../fixtures/report-session.js";
+import { reportFrame, reportTraceSink } from "../../fixtures/report-session.js";
 /**
  * Control-plane delivery of the Feishu concierge assignment (MUL-206).
  *
@@ -313,14 +313,22 @@ describe("Feishu bot control-plane delivery", () => {
     expect(test.store.claimTask("rt_a")).toBeNull();
     expect(test.store.claimTask("rt_claude")?.id).toBe(submitted.taskId);
     test.store.startTask(submitted.taskId);
-    const sent = await test.app.request(`${taskPath}/messages`, {
-      method: "POST", headers: daemonHeaders(executor.token),
-      body: JSON.stringify({ messages: [{ type: "text", content: "Answer from Claude" }] }),
-    });
-    expect(sent.status).toBe(200);
+    const sent = await reportFrame(test.store, "trace.append", { task_id: submitted.taskId, closed: false,
+      events: [{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "text", content: "Answer from Claude" }] },
+      { runtimeId: "rt_claude", headers: daemonHeaders(executor.token), authToken: "MASTER" });
+    expect(sent).toMatchObject({ ok: true, hub_head: 1 });
     const messages = await test.app.request(`${taskPath}/messages`, { headers: daemonHeaders(test.tokens.rt_a!) });
     expect(messages.status).toBe(404);
-    expect(test.store.listTaskMessages(submitted.taskId)).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
+    expect(await reportFrame(test.store, "trace.head", { task_id: submitted.taskId },
+      { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: true, head: 1 });
+    const streamed: Array<{ content?: string }> = [];
+    const subscription = reportTraceSink(test.store).subscribe(submitted.taskId, 0, (_id, events) => streamed.push(...events));
+    subscription.unsubscribe();
+    expect(streamed).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
+    expect(test.store.listTaskMessages(submitted.taskId)).toEqual([]);
+    expect(await reportFrame(test.store, "trace.append", { task_id: submitted.taskId, closed: false,
+      events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "foreign write" }] },
+      { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: false, code: "authority_revoked" });
     const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
       payload: { question: "Continue?" } });
     const answer = await test.app.request(`${taskPath}/human-requests/${question.id}/respond`, {
