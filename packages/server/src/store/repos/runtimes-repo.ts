@@ -552,7 +552,7 @@ export class RuntimesRepo {
   }
 
   /**
-   * The same list, narrowed to one workspace in SQL, with the three derived
+   * The same list, narrowed to one workspace in SQL, with derived
    * reads batched per table instead of per Runtime (MUL-473).
    *
    * The old list hydrates all deployment rows before the caller filters them.
@@ -561,15 +561,31 @@ export class RuntimesRepo {
    */
   listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
     const rows = this.ctx.db.query(
-      `SELECT runtime.*, profile.display_name AS daemon_display_name
+      `SELECT runtime.*, profile.display_name AS daemon_display_name,
+              upgrade.status AS protocol_upgrade_status, upgrade.error AS protocol_upgrade_error
        FROM multiremi_runtimes runtime
        LEFT JOIN multiremi_daemon_profiles profile
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
+       LEFT JOIN (
+         SELECT runtime_id, status, error,
+                ROW_NUMBER() OVER (PARTITION BY runtime_id
+                  ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,
+                           created_at DESC, updated_at DESC, id DESC) AS update_rank
+         FROM multiremi_runtime_update_requests
+         WHERE scope = 'cli' AND runtime_id IN (
+           SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?
+         )
+       ) upgrade ON upgrade.runtime_id = runtime.id AND upgrade.update_rank = 1
        WHERE COALESCE(runtime.workspace_id, 'local') = ?
        ORDER BY runtime.updated_at DESC, runtime.id DESC`,
-    ).all(workspaceId) as Row[];
-    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId);
+    ).all(workspaceId, workspaceId) as Row[];
+    return this.hydrateRuntimes(rows.map((row) => {
+      const runtime = toRuntime(row);
+      return { ...runtime, protocol: this.runtimeProtocol(runtime, row.protocol_upgrade_status == null ? null : {
+        status: String(row.protocol_upgrade_status), error: row.protocol_upgrade_error == null ? null : String(row.protocol_upgrade_error),
+      }) };
+    }), workspaceId);
   }
 
   /**
@@ -2314,9 +2330,9 @@ export class RuntimesRepo {
     };
   }
 
-  private runtimeProtocol(runtime: MultiremiRuntime): RuntimeProtocolStatus {
+  private runtimeProtocol(runtime: MultiremiRuntime, latest?: { status: string; error: string | null } | null): RuntimeProtocolStatus {
     const version = runtime.daemonProtocolVersion ?? 1;
-    const latest = this.ctx.db.query(
+    if (latest === undefined) latest = this.ctx.db.query(
       `SELECT status, error FROM multiremi_runtime_update_requests
        WHERE runtime_id = ? AND scope = 'cli'
        ORDER BY CASE WHEN status IN ('pending', 'running') THEN 0 ELSE 1 END,

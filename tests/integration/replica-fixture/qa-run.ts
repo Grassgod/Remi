@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import type { ServerWebSocket } from "bun";
 import { launchBrowser } from "../../../frontend/scripts/perf/lib/harness";
 import { appendRows, ackFor, frameFor, newMockHub, patchFrameFor, patchRow, readAsset, seedLog, type MockHubState } from "./server";
 
@@ -158,7 +159,7 @@ function startServer(assetDir: string) {
         : url.pathname.endsWith(".js")
           ? "text/javascript"
           : "application/octet-stream";
-      return new Response(asset, { headers: { "content-type": type } });
+      return new Response(new Uint8Array(asset), { headers: { "content-type": type } });
     },
     websocket: {
       open(socket: ServerWebSocket<never>) {
@@ -803,7 +804,7 @@ async function readState(page: Page): Promise<PageState> {
  * Polling, not a fixed sleep: the criteria are about time budgets, and a fixed
  * sleep either hides a slow path or makes the run slow for no reason.
  */
-async function waitFor<T>(predicate: () => Promise<T | false>, timeoutMs = 10_000): Promise<T> {
+async function waitFor<T>(predicate: () => T | false | Promise<T | false>, timeoutMs = 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const value = await predicate();

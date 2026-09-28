@@ -37,6 +37,30 @@ describe("database-derived runtime protocol", () => {
     expect(() => store.recordDaemonProtocol("deleted", "dmn_owner", 2, DAEMON_MIN_CLI_VERSION)).not.toThrow();
   });
 
+  it("keeps workspace-batched protocol states identical to the per-runtime read", () => {
+    const store = createLocalStore();
+    const expectedStates = ["rejected", "upgrade_failed", "upgrade_pending", "ok"] as const;
+    for (const state of expectedStates) {
+      const runtime = store.registerRuntime({ id: `rt_${state}`, name: state, provider: "claude", daemonId: `dmn_${state}`,
+        metadata: { cli_version: "0.2.82" } });
+      if (state !== "rejected") {
+        const failed = store.createRuntimeUpdateRequest(runtime.id, { scope: "cli", targetVersion: DAEMON_MIN_CLI_VERSION });
+        store.reportRuntimeUpdateResult(runtime.id, failed.id, { status: "failed", error: "CLI fixture failure" });
+        const acp = store.createRuntimeUpdateRequest(runtime.id, { scope: "acp" });
+        store.reportRuntimeUpdateResult(runtime.id, acp.id, { status: "failed", error: "Must not replace CLI failure" });
+      }
+      if (state === "upgrade_pending") store.createRuntimeUpdateRequest(runtime.id, { scope: "cli", targetVersion: DAEMON_MIN_CLI_VERSION });
+      if (state === "ok") store.recordDaemonProtocol(runtime.id, `dmn_${state}`, 2, DAEMON_MIN_CLI_VERSION);
+    }
+    const listed = store.listRuntimesForWorkspace("local");
+    expect(listed).toHaveLength(4);
+    for (const state of expectedStates) {
+      const runtime = listed.find(runtime => runtime.id === `rt_${state}`)!;
+      expect(runtime.protocol?.state).toBe(state);
+      expect(runtime.protocol).toEqual(store.getRuntime(runtime.id)?.protocol);
+    }
+  });
+
   it("adds exactly one nullable runtime column idempotently without modifying the update table", () => {
     createLocalStore();
     db!.exec("ALTER TABLE multiremi_runtimes DROP COLUMN daemon_protocol_version");
