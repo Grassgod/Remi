@@ -225,4 +225,38 @@ describe("Feishu outbound kind leases", () => {
     expect(db!.query("SELECT task_id, outbound_task_id FROM multiremi_feishu_bot_deliveries WHERE external_message_id = ?")
       .get("om_kind_retrylineage")).toEqual({ task_id: taskId, outbound_task_id: retry.id });
   });
+
+  it("defers a topic seed and an E5 request with jobs=0, then reuses their canonical bindings and decision semantics", () => {
+    const f = configureKindBot(createLocalStore());
+    f.store.heartbeatRuntime(f.runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
+    f.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_deferred_topic", notifyMode: "person", notifyOpenId: "ou_owner" } } });
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const issue = f.store.createIssue({ title: "Deferred topic", workspaceId: "local" });
+    f.store.prepareFeishuIssueTopicWithinTransaction(issue);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const root = claim(f)[0]!;
+    expect(root.kind).toBeUndefined();
+    expect(report(f, root, "sent")).toBe(true);
+    const task = f.store.createTask({ agentId: f.agent.id, workspaceId: "local", issueId: issue.id, prompt: "Ask" });
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    const request = f.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Proceed?" }] } });
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").all()).toEqual([]);
+    expect(claim(f)).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const decision = claim(f)[0]!;
+    expect(decision.kind).toBe("decision_card");
+    expect(decision.taskId).toBeUndefined();
+    expect(decision.humanRequestTaskId).toBe(task.id);
+    expect(decision.humanRequestId).toBe(request.id);
+    expect(report(f, decision, "sent")).toBe(true);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    f.store.respondTaskHumanRequest(request.id, { response: { answers: {} } });
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").all()).toEqual([]);
+    process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+    const patch = claim(f)[0]!;
+    expect(patch.kind).toBe("decision_card_patch");
+    expect(patch.targetMessageId).toBe(`sent_${decision.id}`);
+    expect(db!.query("SELECT id FROM multiremi_feishu_bot_chat_bindings WHERE issue_id = ?").all(issue.id)).toHaveLength(1);
+  });
 });
