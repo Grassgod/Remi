@@ -1,5 +1,6 @@
 import { expect, it, spyOn } from "bun:test";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 it("replays real runAgent finally/workspace and finalize/progress tails once after complete", async () => {
@@ -89,7 +90,17 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
     expect(h.store.getIssueWorkspace(issue.id)).toMatchObject({ status: "ready", lastTaskId: taskId });
     expect(h.client.connectionState()).toBe("connected");
     await h.settleHeartbeat();
-    const frames = h.ledger.filter((entry) => entry.partition === taskId);
+    const head = h.daemon.traceStore().head(taskId)!.head;
+    expect(head).toBeGreaterThan(0);
+    await waitFor(() => daemonTraceService(h!.layer).sink.head(taskId) === head, "trace head replay");
+    const taskFrames = h.ledger.filter((entry) => entry.partition === taskId);
+    for (const entry of taskFrames.filter((entry) => entry.seq === null)) {
+      expect(entry.type).toBe("trace.append");
+      expect(entry.frame.id).toEqual(expect.any(String));
+      expect(entry.frame.seq).toBeUndefined();
+    }
+    // Trace RPCs have a task subject, but do not belong to its outer-seq outbox partition.
+    const frames = taskFrames.filter((entry) => entry.seq !== null);
     const afterComplete = frames.slice(frames.findIndex((entry) => entry.type === "task.complete") + 1);
     expect(afterComplete.length).toBe(4);
     expect(afterComplete.every((entry) => entry.type === "task.workspace"
