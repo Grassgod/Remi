@@ -312,7 +312,8 @@ rewrite.
 
 Permissions follow the human-request lane, with one addition. Only the operator
 named on the card, in the chat it was sent to, may submit; anyone else is told
-「本次没有提交：这条只能由被问的人回答。」. The operator's Feishu `open_id` is then resolved
+「本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是
+这张单的负责人，可以到网页端回答。」. The operator's Feishu `open_id` is then resolved
 server-side to a live, non-archived, non-agent workspace member — one the users
 table already knows through same-app SSO (`external_id`), or through a sender
 row scoped to the same workspace + bot app + `open_id` whose `union_id` links a
@@ -349,13 +350,41 @@ SSO 登录一次 Remi 网页端，或先在本次测试话题给 bot 发一条�
 或凭证，也不写库；同时用 `remi member list --output json` 核对该 member 属于本
 workspace。结果为 0 或多于 1 时，不进入第 2 步。
 
+核验前先确认 SSO secret 已配置；只记录「已配置」，不写值。下面是只读查询模板，
+`$1` 到 `$4` 依次为 workspace id、bot app id、第二个人的 open_id，以及 SSO app
+是否与 bot app 相同。最终只数 `DISTINCT member.id`，不要把同一 member 的 sender
+与 SSO 两条证据误数成两个人：
+
+```sql
+WITH candidate_user AS (
+  SELECT users.id
+  FROM multiremi_users AS users
+  WHERE $4::boolean AND users.external_id = $3
+  UNION
+  SELECT users.id
+  FROM multiremi_feishu_bot_senders AS sender
+  JOIN multiremi_users AS users ON users.feishu_union_id = sender.union_id
+  WHERE sender.workspace_id = $1
+    AND sender.app_id = $2
+    AND sender.open_id = $3
+)
+SELECT DISTINCT member.id
+FROM candidate_user AS candidate
+JOIN multiremi_workspace_members AS member ON member.user_id = candidate.id
+WHERE member.workspace_id = $1
+  AND member.archived_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM multiremi_agents AS agent WHERE agent.id = member.id
+  );
+```
+
 下面 7 步每一步都新建一条 decision；不得复用上一步已经回答、撤回或用于降级
 验证的 decision。
 
 | # | 谁来操作 | 操作 | 飞书上看到什么 | 预期活动 / 数据 |
 |---|---|---|---|---|
 | 1 | 发起人 | 在子单里提一个 `production_change`（`remi issue decision request <child> --kind production_change --title "..." --option 是 --option 否`），或让父单负责人 agent 把一个 `merge` 上交给人 | 父单话题里出现一张**独立卡片**：标题、正文、编号选项、自定义回答框、提交按钮，并 @ 被问的人 | 父单活动 `decision_escalated` 与 `decision_card_queued`（`kind=decision_card`）；投递行 `decision.degraded` 为 NULL |
-| 2 | 第二个人 | 点卡片上的提交 | 第二个人只看到 toast「本次没有提交：这条只能由被问的人回答。」，卡片不变、问题仍在 | 不写任何活动；decision 仍为 `escalated` |
+| 2 | 第二个人 | 点卡片上的提交 | 第二个人只看到 toast「本次没有提交：这条只能由卡片上点名的人回答。请转告对方在卡片上回答；如果你也是这张单的负责人，可以到网页端回答。」，卡片不变、问题仍在 | 不写任何活动；decision 仍为 `escalated` |
 | 3 | 贺华杰（被问的人） | 在卡片里选一项或填自定义回答并提交 | 提示「已提交」，**同一张卡片原地**变成终态：答案、答者、时间，不新增消息 | decision 变 `answered`，压入一条 `history`；父单 `decision_answered`、来源单 `decision_received` 各一条；来源单负责人的排队任务被唤醒；投递走后一条 `decision_card_patch` |
 | 4 | 发起人 | 另提一个 decision，然后在 Remi 工作台网页答掉 | 飞书那张卡片同样**原地**变终态（答案与答者取自网页那次回答） | 与第 3 步相同的一组活动；`decision_card_patch` 只有一条 |
 | 5 | 发起人 | 再提一个 decision，然后撤回（`remi issue decision withdraw <parent> <decision>`） | 卡片**原地**变成「已撤回」，不出现「已超时」字样，也不再可点 | decision 变 `withdrawn`；同样一条 `decision_card_patch`；没有任何 timeout 状态写入 |
@@ -364,7 +393,8 @@ workspace。结果为 0 或多于 1 时，不进入第 2 步。
 
 第 7 步的两种降级必须分别做：`no_topic` 是**不发**（只在网页），`notify_none`
 是**发文字**，两项都在 209 现场验。不可重试的发送失败降级为文字由自动化用例
-验收，不在 209 上人工制造飞书发送失败。跑这一步之前不要在 209 上改任何配置；
+验收，不在 209 上人工制造飞书发送失败。降级为文字的不会收到 50 分钟提醒，和
+S5a 一致。跑这一步之前不要在 209 上改任何配置；
 这是本单交付后由带头大哥安排的实测步骤。
 
 已知产品口径：S4 兜底可能给多位 owner 发收件箱，但飞书卡只点名一个人。
