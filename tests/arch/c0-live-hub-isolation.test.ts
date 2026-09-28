@@ -126,13 +126,11 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
     const consumers: string[] = [];
     for (const file of files) {
       const src = readFileSync(file, "utf8");
+      if (hasLiveHubValueImport(src)) valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
       for (const match of src.matchAll(IMPORT_RE)) {
         const spec = match[1]!;
         if (spec !== "@multiremi/contracts/live-hub" && spec !== "@multiremi/contracts/live-hub.js") continue;
         consumers.push(file.replace(`${REPO_ROOT}/`, ""));
-        if (hasLiveHubValueImport(src)) {
-          valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
-        }
       }
     }
     // Positive control: the scan has to see the imports it is judging, or a typo
