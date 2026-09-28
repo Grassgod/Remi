@@ -279,6 +279,58 @@ describe("Hub peer transport", () => {
     expect(f.hub.snapshot().hub_peer_loss_detected.sequence_gap).toBe(0);
   });
 
+  it("keeps received heartbeats healthy while reconciliation waits on the reader", async () => {
+    const f = pair({ staleMs: 15_000 }); fixtures.push(f);
+    f.hub.subscribe("log:s", 0, () => {});
+    await Bun.sleep(20);
+    let readerCalls = 0;
+    let releaseReader!: () => void;
+    const readerWait = new Promise<void>((resolve) => { releaseReader = resolve; });
+    f.db.fill.logHead = async () => {
+      readerCalls += 1;
+      await readerWait;
+      return null;
+    };
+    try {
+      const receiveHeartbeat = (seq: number) => f.receiver.receive("hub", [
+        { kind: "hb", sender_epoch: "remote-heartbeats", hub_seq: seq },
+      ], { epoch: "remote-heartbeats", batchSeq: seq });
+      receiveHeartbeat(1);
+      await waitFor(() => readerCalls === 1, "blocked reconciliation reader");
+      for (let seq = 2; seq <= 5; seq += 1) {
+        f.setNow((seq - 1) * 5_000);
+        receiveHeartbeat(seq);
+        expect(f.hub.snapshot().peer_link).toBe("healthy");
+        expect(f.hub.snapshot().hub_peer_loss_detected).toMatchObject({
+          first_epoch: 1, epoch_change: 0, sequence_gap: 0,
+        });
+      }
+      expect(f.hub.snapshot().hub_peer_reconcile_streams).toBe(0);
+    } finally {
+      releaseReader();
+      await f.right.settled();
+    }
+    expect(readerCalls).toBe(1);
+  });
+
+  it("ignores malformed frames for link health but counts valid duplicate frames", async () => {
+    const f = pair({ staleMs: 15_000 }); fixtures.push(f);
+    const frame = { kind: "hb", sender_epoch: "remote-heartbeats", hub_seq: 1 };
+    f.receiver.receive("hub", [frame], { epoch: "remote-heartbeats", batchSeq: 1 });
+    await f.right.settled();
+    f.setNow(15_000);
+    expect(f.hub.snapshot().peer_link).toBe("stale");
+    f.receiver.receive("hub", [{ ...frame, hub_seq: "bad" }], { epoch: "remote-heartbeats", batchSeq: 2 });
+    expect(f.hub.snapshot().peer_link).toBe("stale");
+    f.receiver.receive("hub", [frame], { epoch: "remote-heartbeats", batchSeq: 3 });
+    expect(f.hub.snapshot().peer_link).toBe("healthy");
+    await f.right.settled();
+    expect(f.hub.snapshot().hub_peer_duplicate_dropped).toBe(1);
+    expect(f.hub.snapshot().hub_peer_loss_detected).toMatchObject({
+      first_epoch: 1, epoch_change: 0, sequence_gap: 0,
+    });
+  });
+
   it("does not let a delayed pointer lower a reconciled head or clear its version", async () => {
     const f = pair(); fixtures.push(f);
     for (let seq = 0; seq <= 3; seq += 1) f.db.add(seq);

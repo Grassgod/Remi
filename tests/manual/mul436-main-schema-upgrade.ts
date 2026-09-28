@@ -94,11 +94,20 @@ try {
     let duplicateRejected = false;
     try { add("result_card", "result"); } catch { duplicateRejected = true; }
     if (!duplicateRejected) throw new Error("kind/unit uniqueness was not enforced");
-    const indexName = "idx_multiremi_feishu_bot_outbound_decision";
+    const indexName = backend === "sqlite"
+      ? "idx_multiremi_feishu_bot_outbound_decision_c5"
+      : "idx_multiremi_feishu_bot_outbound_decision";
     const indexRows = backend === "sqlite"
-      ? db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?").all(indexName) as Array<{ name: string }>
+      ? db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'multiremi_feishu_bot_outbound_deliveries' AND name = ?")
+        .all(indexName) as Array<{ name: string }>
       : db.query("SELECT indexname AS name FROM pg_indexes WHERE tablename = 'multiremi_feishu_bot_outbound_deliveries' AND indexname = ?").all(indexName) as Array<{ name: string }>;
     if (indexRows.length !== 1) throw new Error("decision delivery index was lost");
+    if (backend === "sqlite") {
+      const indexedColumns = db.query(`PRAGMA index_info("${indexName}")`).all() as Array<{ name: string }>;
+      if (indexedColumns.map((column) => column.name).join(",") !== "decision_id,status,available_at") {
+        throw new Error("live decision delivery index has unexpected columns");
+      }
+    }
     db.query("SELECT 1 FROM multiremi_feishu_bot_outbound_operations LIMIT 1").all();
   }
   console.log(`${backend} ${phase}: E4 and legacy rows preserved${phase === "upgrade" ? ", kind uniqueness and indexes verified" : ""}`);

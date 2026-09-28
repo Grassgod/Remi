@@ -80,6 +80,9 @@ export class PeerHubTransport implements HubTransport {
     this.lastReceivedAt = this.now();
     this.onError = options.onError ?? (() => {});
     this.subscription = this.peer.subscribe(HUB_PEER_TOPIC, (payload) => {
+      if (!this.closed && isPeerHubFrame(payload) && payload.sender_epoch !== this.peer.origin) {
+        this.lastReceivedAt = this.now();
+      }
       this.delivery = this.delivery.then(() => this.receive(payload)).catch(this.onError);
     });
     this.heartbeat = setInterval(() => this.send({ kind: "hb" }), options.heartbeatMs ?? HUB_PEER_HEARTBEAT_MS);
@@ -146,7 +149,6 @@ export class PeerHubTransport implements HubTransport {
     if (this.closed || !isPeerHubFrame(payload)) return;
     const frame = payload;
     if (frame.sender_epoch === this.peer.origin) return;
-    this.lastReceivedAt = this.now();
     if (this.retiredEpochs.has(frame.sender_epoch)) {
       this.duplicateDropped += 1;
       return;
