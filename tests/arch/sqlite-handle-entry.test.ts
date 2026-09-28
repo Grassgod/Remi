@@ -167,11 +167,15 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
   };
   const snippet = (node: ts.Node): string => node.getText(source).replace(/\s+/g, " ").slice(0, 80);
 
-  // Over-approximate same-file string bindings across scopes and assignments. This pruning is sound only
-  // for concatenation: every piece of a possible bun:sqlite specifier must be one of its substrings.
-  // Arrays, object properties, function returns, for-of values, enum members, tagged templates such as
-  // String.raw, join(), concat(), cross-file constants, and eval() remain outside this static scan;
-  // slice(), replace(), or other transforms would require a new analysis.
+  // Over-approximate names from same-file declarations, parameter/destructuring defaults, and assignments.
+  // Evaluate literals, templates, identifiers, +, conditionals, logical/sequence/assignment results,
+  // and parentheses, type wrappers, or await. Substring pruning is sound only for concatenation.
+  // Runtime object/function boundaries are unknown: property/element access (objects, arrays, classes,
+  // namespaces, enums), object keys, for-in/of, spread, call/method returns (String, toString,
+  // valueOf, join, concat), argument-to-parameter flow, return/yield, throw-to-catch, tagged templates
+  // such as String.raw, cross-file constants, eval, and Function. E3 catches a complete specifier passed
+  // as an argument, not fragments such as load("sqlite") later combined with "bun:".
+  // Transforms such as slice() and replace() would require a new analysis.
   const declarations: ts.VariableDeclaration[] = [];
   const bindings = new Map<string, { expression: ts.Expression; append: boolean }[]>();
   const addBinding = (name: string, expression: ts.Expression, append = false): void => {
@@ -222,8 +226,23 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
       return result;
     }
     if (ts.isIdentifier(expression)) return values.get(expression.text) ?? empty();
-    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      return combine(constantStrings(expression.left), constantStrings(expression.right));
+    if (ts.isConditionalExpression(expression)) {
+      return new Set([...constantStrings(expression.whenTrue), ...constantStrings(expression.whenFalse)]);
+    }
+    if (ts.isBinaryExpression(expression)) {
+      const operator = expression.operatorToken.kind;
+      if (operator === ts.SyntaxKind.PlusToken || operator === ts.SyntaxKind.PlusEqualsToken) {
+        return combine(constantStrings(expression.left), constantStrings(expression.right));
+      }
+      if (operator === ts.SyntaxKind.CommaToken || operator === ts.SyntaxKind.EqualsToken) {
+        return constantStrings(expression.right);
+      }
+      if (operator === ts.SyntaxKind.BarBarToken || operator === ts.SyntaxKind.AmpersandAmpersandToken
+        || operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarEqualsToken
+        || operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken
+        || operator === ts.SyntaxKind.QuestionQuestionEqualsToken) {
+        return new Set([...constantStrings(expression.left), ...constantStrings(expression.right)]);
+      }
     }
     if (ts.isTemplateExpression(expression)) {
       const head = empty();
@@ -449,6 +468,33 @@ describe("SQLite handle entry", () => {
     ["dynamic import", ['const { Database } = await import("bun:sqlite");'], ["A:1"]],
     ["template specifier", ['const sqlite = await import(`bun:sqlite`);'], ["A:1"]],
     ["computed specifier", ['const name = "bun:" + "sqlite";', "const sqlite = await import(name);"], ["A:2"]],
+    ["conditional specifier (QA round 3)",
+      ['const moduleName = true ? "bun:sqlite" : "node:fs";',
+        'const { Database } = await import(moduleName);', 'new Database(":memory:");'], ["A:2"]],
+    ["logical-or result",
+      ['let fallback = "";', 'const m = fallback || "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["nullish result",
+      ['let fallback;', 'const m = fallback ?? "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["logical-and result",
+      ['const ready = true;', 'const m = ready && "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["assignment result",
+      ['let m;', 'import(m = "bun:sqlite");'], ["A:2"]],
+    ["append assignment result",
+      ['let m = "bun:";', 'import(m += "sqlite");'], ["A:2"]],
+    ["sequence result",
+      ['let tick = 0;', 'import((tick++, "bun:sqlite"));'], ["A:2"]],
+    ["conditional within concatenation",
+      ['import("bun:" + (flag ? "sqlite" : "unrelated"));'], ["A:1"]],
+    ["conditional within template",
+      ['import(`bun:${flag ? "sqlite" : "x"}`);'], ["A:1"]],
+    ["nullish assignment result",
+      ['let m;', 'import(m ??= "bun:sqlite");'], ["A:2"]],
+    ["logical-or assignment result",
+      ['let m;', 'import(m ||= "bun:sqlite");'], ["A:2"]],
+    ["logical-and assignment result",
+      ['let m = "bun:sqlite";', 'import(m &&= "bun:sqlite");'], ["A:2"]],
+    ["conditional label result is conservatively rejected",
+      ['label(flag ? "bun:sqlite" : "x");'], ["A:1"]],
     ["function scope shadow (QA round 2)",
       ['const moduleName = "bun:sqlite";', 'function unrelated() {', '  const moduleName = "node:fs";',
         '  return moduleName;', '}', 'const sqlite = await import(moduleName);'], ["A:6"]],
@@ -540,6 +586,9 @@ describe("SQLite handle entry", () => {
       'const label = "bun:sqlite";\n// new Database(":memory:");\nconst example = `new Database(":memory:")`;',
       'const m = "node:fs";\n{ const m = "node:path"; }\nimport(m);',
       'let m = "a"; m += m; m += m; import(m);',
+      'import(flag ? "node:fs" : "node:path");',
+      'const m = x || "node:fs"; import(m);',
+      'check(name === "bun:sqlite");',
       `db.exec(${JSON.stringify(`CREATE TABLE example (${"column TEXT, ".repeat(30)}id TEXT)`)})`,
     ];
     for (const text of allowed) {
