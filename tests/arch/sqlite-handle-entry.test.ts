@@ -65,7 +65,8 @@ interface Scan {
 const unwrap = (expression: ts.Expression): ts.Expression => {
   while (ts.isParenthesizedExpression(expression) || ts.isAwaitExpression(expression)
     || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)
-    || ts.isNonNullExpression(expression) || ts.isSatisfiesExpression(expression)) expression = expression.expression;
+    || ts.isNonNullExpression(expression) || ts.isSatisfiesExpression(expression)
+    || ts.isExpressionWithTypeArguments(expression)) expression = expression.expression;
   return expression;
 };
 
@@ -169,7 +170,9 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
 
   // Over-approximate names from same-file declarations, parameter/destructuring defaults, and assignments.
   // Evaluate literals, templates, identifiers, +, conditionals, logical/sequence/assignment results,
-  // and parentheses, type wrappers, or await. Substring pruning is sound only for concatenation.
+  // and await. Erase parentheses (including JSDoc casts), as/satisfies, angle-bracket casts,
+  // non-null assertions, and generic instantiation type arguments before evaluating the value.
+  // Substring pruning is sound only for concatenation.
   // Runtime object/function boundaries are unknown: property/element access (objects, arrays, classes,
   // namespaces, enums), object keys, for-in/of, spread, call/method returns (String, toString,
   // valueOf, join, concat), argument-to-parameter flow, return/yield, throw-to-catch, tagged templates
@@ -551,6 +554,18 @@ describe("SQLite handle entry", () => {
     });
   }
 
+  test("scanner rejects a SQLite specifier behind generic instantiation", () => {
+    const source = [
+      "export {};",
+      'const moduleName = "bun:sqlite" as unknown as (<T>() => T);',
+      'const { Database } = await import(moduleName<string> as unknown as string);',
+      'new Database(":memory:");',
+    ].join("\n");
+    for (const extension of ["ts", "tsx"]) {
+      expect(summary(scanSqliteUse(source, `probe.${extension}`))).toEqual(["A:3"]);
+    }
+  });
+
   const custom = "packages/shared/src/db/sqlite-custom.ts";
   const factory = "packages/server/src/store/db/sqlite.ts";
   const inside: [string, string, string[], string[]][] = [
@@ -589,6 +604,7 @@ describe("SQLite handle entry", () => {
       'import(flag ? "node:fs" : "node:path");',
       'const m = x || "node:fs"; import(m);',
       'check(name === "bun:sqlite");',
+      'const f = <T>(x: T) => x; const g = f<string>; g("node:fs");',
       `db.exec(${JSON.stringify(`CREATE TABLE example (${"column TEXT, ".repeat(30)}id TEXT)`)})`,
     ];
     for (const text of allowed) {
@@ -626,6 +642,21 @@ describe("SQLite handle entry", () => {
     });
   }
 
+  test("construction check follows generic instantiation of a Database alias", () => {
+    const source = [
+      'import { Database } from "bun:sqlite";',
+      "const Open = Database as unknown as <T>() => typeof Database;",
+      "const D = Open<never>;",
+      'new D(":memory:");',
+    ].join("\n");
+    for (const extension of ["ts", "tsx"]) {
+      const found = sqliteConstructions(source, `probe.${extension}`);
+      expect(found).toHaveLength(1);
+      expect(found[0].line).toBe(4);
+      expect(found[0].column).toBe(1);
+    }
+  });
+
   test("construction check ignores comments, string literals, types, and unrelated databases", () => {
     expect(sqliteConstructions(`
       import { Database } from "bun:sqlite";
@@ -638,5 +669,6 @@ describe("SQLite handle entry", () => {
     expect(sqliteConstructions('import { type Database } from "bun:sqlite"; new Database();')).toEqual([]);
     expect(sqliteConstructions('import { Database } from "another-db"; new Database();')).toEqual([]);
     expect(sqliteConstructions('import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js"; openSqliteDatabase();')).toEqual([]);
+    expect(sqliteConstructions('class Other {} const Generic = Other as unknown as <T>() => typeof Other; const D = Generic<string>; new D();')).toEqual([]);
   });
 });
