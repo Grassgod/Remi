@@ -8,10 +8,32 @@ import { sessionEventCompatibilityResponse } from "@multiremi/api/wire/issues.js
 import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { prepareConversationBackfillFixture } from "./fixtures/conversation-log-backfill.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openConversationLogTarget, readOnlyConversationTransaction } from "../../../scripts/reconcile-conversation-log.js";
+
+/** Row count and a SHA-256 over the canonically serialized rows of every table the given connection can see. */
+function tableFingerprint(backend: "sqlite" | "pg", db: SqlDatabase): Record<string, { count: number; hash: string }> {
+  const catalog = (backend === "sqlite"
+    ? db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+    : db.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename").all()) as Array<Record<string, string>>;
+  return Object.fromEntries(catalog.map((row) => {
+    const table = backend === "sqlite" ? row.name : row.tablename;
+    const rows = db.query(`SELECT * FROM ${table}`).all();
+    return [table, { count: rows.length,
+      hash: createHash("sha256").update(rows.map((entry) => canonicalConversationJson(entry)).sort().join("\n")).digest("hex") }];
+  }));
+}
+
+/** Fingerprints the SQLite file the CLI was pointed at, opened the way the CLI opens it. */
+function sqliteFileFingerprint(path: string): Record<string, { count: number; hash: string }> {
+  const file = openConversationLogTarget({ sqlite: path });
+  try { return tableFingerprint("sqlite", file); } finally { file.close(); }
+}
 
 describe("MUL-427 B7: conversation backfill and reconciliation", () => {
   for (const backend of ["sqlite", "pg"] as const) {
@@ -112,18 +134,38 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
       });
     }, 45_000);
 
+    for (const field of ["task_id", "created_at"] as const) {
+      it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: reconciles a ${field} corruption confined to the log row`, async () => {
+        await withStore(backend, (store, db) => {
+          const issue = store.createIssue({ title: `Independent ${field} corruption`, workspaceId: "local" });
+          const comment = store.createIssueComment(issue.id, { body: "Raw body\nno normalization", taskId: "tsk_source_hash" });
+          const entry = store.getConversationLogEntryById(comment.id)!;
+          expect(reconcileConversationLog(db).mismatches).toEqual([]);
+          db.run(`UPDATE multiremi_conversation_log SET ${field} = ? WHERE id = ?`,
+            [field === "task_id" ? "tsk_tampered_hash" : "2026-01-01T00:00:00.000Z", comment.id]);
+          expect(db.query("SELECT task_id, created_at FROM multiremi_issue_comments WHERE id = ?").get(comment.id))
+            .toEqual({ task_id: "tsk_source_hash", created_at: entry.created_at });
+          const tampered = reconcileConversationLog(db);
+          expect(tampered.mismatches).toEqual([{ sessionId: String(comment.issueSessionId), seq: entry.seq, reason: "content_hash" }]);
+          expect(tampered.sessions.find((session) => session.sessionId === comment.issueSessionId)?.sourceDigest)
+            .not.toBe(tampered.sessions.find((session) => session.sessionId === comment.issueSessionId)?.logDigest);
+        });
+      }, 30_000);
+    }
+
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: reconciliation CLI is read-only and emits JSON, Markdown and a self-contained preview`, async () => {
       await withStore(backend, async (store, db, target) => {
         prepareConversationBackfillFixture(store, db);
+        store.ensureLocalWorkspace();
         db.transaction(() => backfillConversationLogWithinTransaction(db))();
         const dir = mkdtempSync(join(tmpdir(), "mul427-reconcile-"));
         try {
-          const snapshot = () => ["multiremi_conversation_log", "multiremi_conversation_heads", "multiremi_schema_migrations",
-            "multiremi_session_events", "multiremi_issue_comments", "multiremi_chat_messages"]
-            .map((table) => db.query(`SELECT * FROM ${table} ORDER BY 1`).all());
-          const before = snapshot();
           const sqlitePath = join(dir, "fixture.sqlite");
-          if (backend === "sqlite") await Bun.write(sqlitePath, (db as import("bun:sqlite").Database).serialize());
+          if (backend === "sqlite") await Bun.write(sqlitePath, (db as Database).serialize());
+          // The CLI opens the SQLite file (not the fixture's in-memory handle) or the Postgres database the fixture points at.
+          const before = backend === "sqlite" ? sqliteFileFingerprint(sqlitePath) : tableFingerprint("pg", db);
+          expect(Object.keys(before).length).toBeGreaterThan(100);
+          expect(before.multiremi_workspaces.count).toBe(1);
           const out = join(dir, "report");
           const childProcess = Bun.spawn({ cmd: [Bun.which("bun")!, "run", "scripts/reconcile-conversation-log.ts",
             ...(backend === "sqlite" ? ["--sqlite", sqlitePath] : ["--postgres-env", "MUL427_CLI_TEST_DATABASE_URL"]), "--out", out],
@@ -137,7 +179,34 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
           const html = await Bun.file(`${out}.html`).text();
           expect(html).toContain("<!doctype html>");
           expect(html).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
-          expect(snapshot()).toEqual(before);
+          const after = backend === "sqlite" ? sqliteFileFingerprint(sqlitePath) : tableFingerprint("pg", db);
+          expect(after).toEqual(before);
+        } finally { rmSync(dir, { recursive: true, force: true }); }
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: the CLI read-only target rejects an active write`, async () => {
+      await withStore(backend, async (store, db, target) => {
+        prepareConversationBackfillFixture(store, db);
+        store.ensureLocalWorkspace();
+        const dir = mkdtempSync(join(tmpdir(), "mul427-reconcile-write-"));
+        const envName = "MUL427_CLI_TEST_DATABASE_URL";
+        const previous = process.env[envName];
+        try {
+          const sqlitePath = join(dir, "fixture.sqlite");
+          if (backend === "sqlite") await Bun.write(sqlitePath, (db as Database).serialize());
+          if (backend === "pg") process.env[envName] = target;
+          const cliDb = openConversationLogTarget(backend === "sqlite" ? { sqlite: sqlitePath } : { pgEnv: envName });
+          const write = "UPDATE multiremi_workspaces SET updated_at = '2026-01-01T00:00:00.000Z' WHERE 1 = 0";
+          const refusal = backend === "pg" ? /read-only transaction/ : /readonly database/;
+          try {
+            if (backend === "sqlite") expect(() => cliDb.run(write)).toThrow(refusal);
+            expect(() => readOnlyConversationTransaction(cliDb, () => cliDb.run(write))).toThrow(refusal);
+            expect(Number(db.query("SELECT COUNT(*) AS count FROM multiremi_workspaces").get()!.count)).toBe(1);
+          } finally {
+            cliDb.close();
+            if (previous === undefined) delete process.env[envName]; else process.env[envName] = previous;
+          }
         } finally { rmSync(dir, { recursive: true, force: true }); }
       });
     }, 30_000);
@@ -239,4 +308,28 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
       } finally { small.close(); }
     });
   }, 45_000);
+
+  it.skipIf(!pgAdminUrl)("pg: 800 control-character rows stay inside the real 64 MiB worker batch bound", async () => {
+    await withStore("pg", (store, db) => {
+      const issue = store.createIssue({ title: "Bounded control-character batches", workspaceId: "local" });
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      db.run(`INSERT INTO multiremi_session_events (id, session_id, seq, author_type, kind, body, metadata, created_at)
+        SELECT 'eve_ctrl_batch_' || n, ?, n, 'member', 'message', repeat(chr(1), 17000),
+          '{"text":"' || repeat('\\u0001', 17000) || '"}', '2026-01-01T00:00:00.000Z'
+        FROM generate_series(1, 800) AS n`, [session.id]);
+      const migration = db.transaction(() => backfillConversationLogWithinTransaction(db))();
+      expect(migration.mismatches).toEqual([]);
+      expect(migration.counts.sessionEvents).toBe(800);
+      expect(migration.counts.insertedRows).toBeGreaterThanOrEqual(800);
+      expect(migration.counts.maxReadResultBytes + 1024).toBeLessThan(64 * 1024 * 1024);
+      const reconciliation = reconcileConversationLog(db);
+      expect(reconciliation.mismatches).toEqual([]);
+      expect(reconciliation.counts.maxReadResultBytes + 1024).toBeLessThan(64 * 1024 * 1024);
+      expect(reconciliation.sessions.every((row) => row.sourceDigest === row.logDigest)).toBe(true);
+      expect(store.getConversationLogEntryById("eve_ctrl_batch_800")).toMatchObject({ session_id: session.id, seq: 800,
+        body_md: "\u0001".repeat(17_000), metadata: { text: "\u0001".repeat(17_000) } });
+    });
+    // Measured 53.3 s for a single run (real PG, 127.0.0.1, fixture database included); the timeout keeps
+    // headroom for a loaded machine without weakening the 64 MiB assertion.
+  }, 180_000);
 });
