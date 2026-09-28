@@ -169,11 +169,12 @@ describe("CLI capabilities manifest", () => {
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
       mapped: 677,
-      // A-5 removes 24 daemon-internal HTTP routes, leaving user commands intact.
-      exempt: 68,
+      // A-5 removes 24 daemon routes; A-6 removes the remaining trace writer.
+      exempt: 67,
       missing: 0,
-      total: 745,
+      total: 744,
     });
+    expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
