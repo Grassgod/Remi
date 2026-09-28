@@ -59,6 +59,20 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.clock.pendingTimerCount).toBe(0);
   });
 
+  it("records task and runtime partition keys with sequence numbers at real API ingress", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    // Business dispatch remains A-3/A-5; this only checks the ingress ledger.
+    h.client.send({ t: "task.progress", rt: runtimeId, seq: 1, p: { task_id: "tsk_ledger", step: 1 } });
+    h.client.send({ t: "runtime.update_result", rt: runtimeId, seq: 2, p: { id: "update-ledger", status: "completed" } });
+    await waitFor(() => h.ledger.filter(entry => entry.seq !== null).length === 2, "server ingress ledger");
+    expect(h.ledger.filter(entry => entry.seq !== null).map(({ partition, seq }) => ({ partition, seq }))).toEqual([
+      { partition: "tsk_ledger", seq: 1 }, { partition: `rt:${runtimeId}`, seq: 2 },
+    ]);
+  });
+
   it("supports daemon stop/start and real API restart on the same port", async () => {
     const h = await fixture();
     await h.startDaemon();

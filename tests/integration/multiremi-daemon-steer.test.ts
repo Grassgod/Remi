@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon, type MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;

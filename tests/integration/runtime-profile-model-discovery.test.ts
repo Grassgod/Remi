@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 
 for (const provider of ["codex", "claude"] as const) {
   it(`discovers custom ${provider} models, caches refreshes and executes the selected model`, async () => {

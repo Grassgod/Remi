@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlink
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 const roots: string[] = [];

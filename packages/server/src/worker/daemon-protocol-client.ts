@@ -374,7 +374,9 @@ export class DaemonProtocolClient {
         if (!entry || entry.lane.runtime()?.runtime_id !== entry.runtimeId) continue;
         this.queueLane(entry.lane, () => entry.lane.onHeartbeatAck(ack));
       }
-    }).catch(error => this.report(error)));
+    }).catch(error => {
+      if (generation === this.generation && this.state === "connected") this.report(error);
+    }));
     this.hbTimer = this.schedule(() => this.heartbeatTick(), DAEMON_HEARTBEAT_INTERVAL_MS);
   }
 

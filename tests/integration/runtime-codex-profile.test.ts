@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 
 it("delivers encrypted Runtime profile keys to task execution while preserving the base home", async () => {
   const root = mkdtempSync(join(tmpdir(), "remi-profile-daemon-"));

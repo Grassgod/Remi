@@ -209,6 +209,19 @@ describe("daemon protocol v2 client", () => {
     expect(b.client.connectionState()).toBe("connecting");
   });
 
+  it("logs only the upgrade-wait notice when rejection interrupts an in-flight heartbeat", async () => {
+    const b = bed();
+    const socket = b.sockets[0]!;
+    socket.emit("open");
+    socket.frame({ t: "welcome", p: { protocol: 2, session_id: "upgrade-pending-hb" } });
+    expect(b.client.diagnostics().pending_rpcs).toBe(1);
+    socket.emit("close", { code: 4426 });
+    await b.client.drain();
+    expect(b.logs).toEqual(["daemon protocol rejected by server (min 2, self 2); waiting for pending_update, no tasks will be claimed"]);
+    expect(b.errors).toEqual([]);
+    expect(b.client.diagnostics().pending_rpcs).toBe(0);
+  });
+
   it("pairs out-of-order RPC responses and respects retryable flags, timeout and disconnect", async () => {
     const b = bed();
     const socket = b.sockets[0]!;

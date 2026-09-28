@@ -12,13 +12,13 @@ import type { AgentResponse, SendOptions } from "@shared/contracts/provider-type
 import { startMultiremiServer } from "@multiremi/api.js";
 import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
-  MultiremiDaemon,
   MultiremiRuntimeReregisterGate,
   installCodexPluginReadinessHome,
   preflightAgentPluginProvider,
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
