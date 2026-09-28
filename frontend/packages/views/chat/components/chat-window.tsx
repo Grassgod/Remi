@@ -653,6 +653,7 @@ export function ChatWindow({
             </TooltipContent>
           </Tooltip>
           <SessionDropdown
+            chatVisible={chatVisible}
             sessions={sessions}
             // Use the full agent list (incl. archived) so historical
             // sessions can still resolve their avatar.
@@ -894,6 +895,7 @@ export function ChatWindow({
                 </div>
               ) : (
                 <SessionDropdown
+                  chatVisible={chatVisible}
                   presentation="list"
                   sessions={sessions}
                   agents={agents}

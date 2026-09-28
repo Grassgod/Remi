@@ -241,6 +241,10 @@ MUL-367 的脚本量的是「H1 出现、骨架归零」，因此它看不见内
 | 深链目标读态 | 候选在同等条件下**优先选未读**（所在分组条目里至少一条 `read=false`）。未读目标会走「自动已读成功 → refetch → 渲染」这条真实用户最常见的路径，而允许表保证它可完成；报告记 `targetRead` 与 `targetGroupHasUnread` |
 | 目标深度 | `targetDepth: { timelineRequests, targetIndexFromLatest }`，从本轮已捕获的 `/comments` 响应计算，不额外预查 |
 
+页面 gate 的发布者在最后一个实例卸载时释放该次访问，取消 idle、兜底 timer；发布者自己的帧回调同时取消。同 pathname 重挂也从关闭开始，缓存内容仍在下一帧与 idle 后放行。无发布者时由最后一个消费者释放 registry；会话级 shell 标志保持打开。异步回调绑定 gate 实例，旧回调不能打开同路径的新实例。
+
+聊天 aggregate pending 的两个 observer 是 ChatFab 和 [SessionDropdown](../../frontend/packages/views/chat/components/session-dropdown.tsx)。后者常驻于隐藏 ChatWindow，条件为 `chatVisible || shellGateOpen`：隐藏时等会话首 gate，用户打开窗口或进入聊天页面时立即查询。共享 key 的去重不能替代每个 observer 的 enabled；[壳层守卫](../../frontend/packages/views/layout/shell-deferred-queries.test.tsx)挂载完整 DashboardLayout、ChatFab 与真实隐藏 ChatWindow，核对门控前请求为 0。
+
 **warmup 也挂护栏**：`--warmup` 会访问每个被测路由，其中包含深链的 `?issue=` URL，而该 URL 会自动把目标标为已读。warmup 页与测量轮使用同一套护栏与允许表，否则预热会改变后续测量读到的 fixture 状态。
 
 参数：`--base-url`、`--rounds`（默认 3）、`--window peak|offpeak`、`--name`、`--out`、`--compare`、`--selectors auto|contract|legacy`、`--only <prefix>`、`--warmup`、`--issue-short`（默认 `iss_in41j1x1dq66`，MUL-67）、`--issue-long`（默认 `iss_enbrunyg86jc`，MUL-70；**MUL-395 前后对比固定用这一条**）、`--issue-xlong`（默认 `iss_o2skonppbq2u`，MUL-454；≥200 条评论的 `detail-xlong`，传空串跳过该场景）、`--issue-running`（默认现场选取，排除 MUL-383 `iss_j67lb0r8djw4` 及其全部子单，以及 MUL-454 `iss_o2skonppbq2u`；选不到则 `skipped: all-running-issues-in-mul383-family`）、`--inbox-item`（默认在探测窗口内自动选取）、`--inbox-probe-pages`（默认 10）、`--hover-lead-ms`（默认 150）、`--entry-quiet-ms`（默认 500，0 关闭）。`targetSelection` 取 `auto | pinned | none`。

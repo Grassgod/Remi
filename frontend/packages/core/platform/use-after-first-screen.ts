@@ -87,6 +87,8 @@ interface RouteGate {
    * dev` compile, where the timer fired ~500 ms before the rows.
    */
   hasPublisher: boolean;
+  publishers: number;
+  consumers: number;
 }
 
 const gates = new Map<string, RouteGate>();
@@ -156,7 +158,7 @@ function scheduleGateIdle(routeKey: string): void {
   if (!gate || gate.passed || gate.cancelIdle) return;
   gate.cancelIdle = scheduleAfterFirstIdle(() => {
     const current = gates.get(routeKey);
-    if (!current) return;
+    if (current !== gate) return;
     current.cancelIdle = null;
     if (current.fallbackHandle) {
       clearTimeout(current.fallbackHandle);
@@ -179,9 +181,25 @@ function ensureGate(routeKey: string): RouteGate {
     cancelIdle: null,
     fallbackHandle: null,
     hasPublisher: false,
+    publishers: 0,
+    consumers: 0,
   };
   gates.set(routeKey, gate);
   return gate;
+}
+
+function releaseRoute(routeKey: string, gate: RouteGate, publisher: boolean): void {
+  if (gates.get(routeKey) !== gate) return;
+  if (publisher) gate.publishers -= 1;
+  else gate.consumers -= 1;
+  // The last publisher ends this page visit even if shell consumers persist.
+  // Publisherless routes instead live until their last consumer unmounts.
+  if (gate.publishers > 0 || (!publisher && gate.consumers > 0)) return;
+  if (gate.fallbackHandle) clearTimeout(gate.fallbackHandle);
+  gate.cancelIdle?.();
+  gates.delete(routeKey);
+  if (currentRouteKey === routeKey) currentRouteKey = null;
+  notify();
 }
 
 /**
@@ -218,7 +236,7 @@ function armFallbackIfPublisherless(routeKey: string): void {
   if (!gate || gate.hasPublisher || gate.passed || gate.contentReady || gate.fallbackHandle) return;
   gate.fallbackHandle = setTimeout(() => {
     const current = gates.get(routeKey);
-    if (!current || current.passed || current.contentReady || current.hasPublisher) return;
+    if (current !== gate || current.passed || current.contentReady || current.hasPublisher) return;
     current.contentReady = true;
     scheduleGateIdle(routeKey);
   }, contentFallbackMs);
@@ -272,7 +290,11 @@ export function markRouteHasContentPublisher(routeKey: string): void {
  */
 export function useRouteContentReady(routeKey: string, ready: boolean): void {
   useLayoutEffect(() => {
+    if (!routeKey) return;
     markRouteHasContentPublisher(routeKey);
+    const gate = ensureGate(routeKey);
+    gate.publishers += 1;
+    return () => releaseRoute(routeKey, gate, true);
   }, [routeKey]);
   useEffect(() => {
     if (!routeKey) return;
@@ -335,8 +357,15 @@ export function useAfterFirstScreen(
     // publisher claims it in layout; otherwise consumers own fallback routes.
     if (renderedPath && renderedPath !== routeKey) return;
     claimRoute(routeKey);
-    const handle = setTimeout(() => armFallbackIfPublisherless(routeKey), 0);
-    return () => clearTimeout(handle);
+    const gate = ensureGate(routeKey);
+    gate.consumers += 1;
+    const handle = setTimeout(() => {
+      if (gates.get(routeKey) === gate) armFallbackIfPublisherless(routeKey);
+    }, 0);
+    return () => {
+      clearTimeout(handle);
+      releaseRoute(routeKey, gate, false);
+    };
   }, [routeKey, renderedPath]);
 
   const getSnapshot = useCallback((): boolean => {
