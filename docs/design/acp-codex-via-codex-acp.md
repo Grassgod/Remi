@@ -17,7 +17,7 @@ summary: 说明任务到 Codex ACP 的当前执行链、配置来源、会话隔
 
 ## 协议与隔离
 
-客户端在 initialize 声明 AIR `sessionFailure`，provider 将通知或 prompt 结果中的 error severity 统一抛为失败；`end_turn` 本身不代表任务成功。只对未回报此能力的旧 bridge，daemon 才检查末条已输出的短错误文本。模型不可用、5xx 与能力排队满 5 分钟可使用配置的备用模型，每条恢复链只切一次；429/529 继续同模型有界重试。分类、恢复及兼容取舍见 [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md)。
+客户端在 initialize 声明 AIR `sessionFailure`，从响应顶层 `InitializeResult._meta.jetbrains.air.capabilities` 读取支持情况；`agentCapabilities._meta` 只作兼容读取。provider 将通知或 prompt 结果中的 error severity 统一抛为失败；`end_turn` 本身不代表任务成功。只对未回报此能力的旧 bridge，daemon 才检查末条已输出的短错误文本；已协商的 bridge 正常引用错误示例不会触发文本兜底。Codex 压缩请求失败按其 AIR 错误处理；Claude 的原生压缩工具失败是独立 metadata 出口，共用 provider 也会记录。模型不可用、5xx 与能力排队满 5 分钟可使用配置的备用模型，每条恢复链只切一次；429/529 继续同模型有界重试，`invalid_request_error`（如 image input 不支持）不切备用。RPC 错误只追加脱敏的白名单字符串字段，不序列化原始 data。分类、恢复及兼容取舍见 [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md)。
 
 同步提问工具 `request_user_input` 在 Codex 0.157.1 的 Default 模式下也会暴露给模型，但默认调用即返回 "unavailable in Default mode"。Remi 在 `mergeCodexSessionConfig` 中为每个会话 Home 补齐 `[features] default_mode_request_user_input = true`，工具才可在 Default 模式下调用；该开关仍标为 "under development"，升级检查见[配套升级说明](../daemon-runtime-upgrades.md)。表单经 ACP 的 `elicitation/create`（form）到 Remi 问题卡，字段映射与版本判定见 [acp-elicitation.ts](../../packages/contracts/src/acp-elicitation.ts)。
 

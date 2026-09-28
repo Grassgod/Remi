@@ -3,7 +3,8 @@
 ## Status
 
 Accepted for MUL-478. Implements the decision in issue comment
-`cmt_uuiy9i1f4fp3`; retains MUL-336's single model switch per recovery chain.
+`cmt_uuiy9i1f4fp3` and the native compaction recovery refinement in
+`cmt_n5vqhlx6rone`; retains MUL-336's single model switch per recovery chain.
 
 ## Context
 
@@ -18,6 +19,10 @@ Claude ACP rejects failed turns, but its error detail lives in JSON-RPC
 also mention lack of access and be mistaken for an authentication failure.
 
 Both pinned bridges already support JetBrains AIR `sessionFailure` metadata.
+They advertise it in top-level `InitializeResult._meta`, not under
+`agentCapabilities`. Claude's native `/compact` failure is a separate exit:
+`tool_call_update(status=failed, _meta.contextCompaction.error)` followed by
+`end_turn`, without an AIR error.
 Their categories are broad (for example Claude uses `request` for both an
 invalid request and model lookup), so categories alone cannot determine Remi's
 recovery policy. Keep the original title/details and RPC `errorKind` as well.
@@ -29,20 +34,32 @@ the configured fallback even when a candidate Runtime supported it.
 ## Decision
 
 1. The ACP client advertises AIR `sessionFailure` to both bridges and records
-   whether both sides negotiated support. `AcpProvider` consumes the failure metadata
+   whether both sides negotiated support using `InitializeResult._meta`;
+   nested `agentCapabilities._meta` is only a compatibility fallback.
+   `AcpProvider` consumes the failure metadata
    from `session_info_update` and `PromptResult`. Error severity throws
    `AcpSessionFailureError`, using the daemon's existing exception path.
    Warning severity does not fail the turn. Failure state resets for every
    prompt and notifications for other sessions are ignored.
-2. Preserve JSON-RPC error data as structured information and append at most
-   500 characters to the error message. Failure classification prefers known
+   Independently of AIR negotiation, a failed context compaction tool also
+   fails the prompt, retaining its error as details. Only assistant text after
+   that failure in the same prompt clears it and logs a recovery warning;
+   earlier output, compaction banners and thinking do not clear it. This does
+   not clear independent AIR errors or treat ordinary failed tools as fatal.
+2. Preserve JSON-RPC error data for structured classification, but exclude it
+   from JSON serialization. Append only string `errorKind`, `message` and
+   `details` fields (or legacy string data), redact credential patterns before
+   truncating the appended text to 500 characters. Failure classification prefers known
    structured error kinds, then uses text. Model unavailability precedes auth;
    HTTP status matching excludes request IDs and UUID fragments.
+   Availability text must describe the model itself, not an unsupported input
+   feature; `invalid_request_error` is recognized even without an HTTP code.
 3. For bridges without negotiated support, the daemon checks only the final
    emitted message in a naturally completed turn. It must be a short text
    message beginning with a known Codex transport error prefix and classify as
    a provider/model failure. Earlier progress cannot hide this final error.
-   Bridges with typed support use metadata as the failure authority.
+   Bridges with typed support use structured metadata, including native
+   compaction failures, as the failure authority.
 4. The fallback set includes account-pool exhaustion, quota exhaustion, model
    unavailability, provider server errors and `queued_model_unavailable`.
    Rate limiting/overload (429/529) still retries the same model with bounded

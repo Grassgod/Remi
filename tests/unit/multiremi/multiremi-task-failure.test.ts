@@ -72,8 +72,20 @@ describe("Multiremi task failure classification", () => {
     "There's an issue with the selected model (deepseek-flash). It may not exist or you may not have access to it.",
     '[acp_model_unsupported] codex: cannot select model "deepseek-flash"',
     'Model "deepseek-flash" not supported',
+    "Model deepseek-flash is not available",
+    "The model is not found",
   ])("recognizes unavailable models ahead of auth and server rules: %s", (error) => {
     expect(classifyTaskFailure(error)).toBe(TaskFailureReason.AgentModelNotFoundOrUnavailable);
+  });
+
+  it.each([
+    'invalid_request_error: model gpt-6: image input is not supported',
+    '{"error":{"type":"invalid_request_error","message":"model gpt-6: image input is not supported"}}',
+    'invalid_request_error: model gpt-6: parameter not available for image input',
+    'model gpt-6: image input is not supported',
+  ])("keeps input-shape errors out of model fallback: %s", (error) => {
+    expect(classifyTaskFailure(error)).toBe(TaskFailureReason.ApiInvalidRequest);
+    expect(classifyDaemonTaskFailure("codex", error)).toBe(TaskFailureReason.ApiInvalidRequest);
   });
 
   it.each(["401", "402", "403", "429", "529", "512"])("does not read HTTP %s from request identifiers", (code) => {

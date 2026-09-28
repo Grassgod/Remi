@@ -17,7 +17,7 @@ import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { AcpClient } from "./client.js";
-import { AcpSessionFailureError, readSessionFailure, type AcpSessionFailure } from "./session-failure.js";
+import { AcpSessionFailureError, readSessionFailure, record, type AcpSessionFailure } from "./session-failure.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { hasOneMillionContext, resolveClaudeContextModel } from "./adapters/claude-code/model-context.js";
@@ -591,7 +591,9 @@ export class AcpProvider implements Provider {
     const eventQueue: ProviderEvent[] = [];
     let promptDone = false;
     let promptError: Error | null = null;
-    const failureState: { failure: AcpSessionFailure | null } = { failure: null };
+    const failureState: { failure: AcpSessionFailure | null; compaction: AcpSessionFailure | null } = { failure: null, compaction: null };
+    const turnFailure = () => failureState.failure?.severity === "error"
+      ? failureState.failure : failureState.compaction ?? failureState.failure;
     let resolveWaiting: (() => void) | null = null;
 
     const pushEvent = (evt: ProviderEvent) => {
@@ -640,10 +642,26 @@ export class AcpProvider implements Provider {
       }
       if (update.sessionUpdate === "agent_message_chunk") {
         const text = extractChunkText((update as Record<string, any>).content);
-        if (!isCompactionChunk(text)) entry.promptState.text += text;
+        if (!isCompactionChunk(text)) {
+          entry.promptState.text += text;
+          if (text.trim() && failureState.compaction) {
+            failureState.compaction = null;
+            console.warn("[AcpProvider] Assistant continued after a context compaction failure");
+          }
+        }
       }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
+        const compaction = record(record(update._meta)?.contextCompaction);
+        // Claude /compact can resolve end_turn after this failed tool, without
+        // an AIR failure. Only later assistant output in this prompt recovers it.
+        if (status === "failed" && compaction) {
+          failureState.compaction = {
+            id: update.toolCallId, revision: 1, category: "unknown", severity: "error",
+            title: "Context compaction failed",
+            details: typeof compaction.error === "string" ? compaction.error : "Compacting failed",
+          };
+        }
         if (status === "completed" || status === "failed") {
           entry.promptState.completedToolCount++;
         }
@@ -658,7 +676,7 @@ export class AcpProvider implements Provider {
         promptDone = true;
         const failure = readSessionFailure(result._meta);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
-        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, failureState.failure);
+        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, turnFailure());
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
           promptError = new Error("Cancelled");
         }
@@ -698,7 +716,8 @@ export class AcpProvider implements Provider {
       entry.lastUsed = Date.now();
     }
 
-    if (failureState.failure?.severity === "error") throw new AcpSessionFailureError(failureState.failure, promptError ?? undefined);
+    const failure = turnFailure();
+    if (failure?.severity === "error") throw new AcpSessionFailureError(failure, promptError ?? undefined);
     if (promptError) throw promptError;
   }
 

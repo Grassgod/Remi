@@ -33,11 +33,34 @@ export function readSessionFailure(meta: unknown): AcpSessionFailure | null {
   };
 }
 
+function redactRpcDetail(text: string): string {
+  return text
+    .replace(/\bBearer\s+[^\s"'`,;&}]+/gi, "Bearer [REDACTED]")
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[REDACTED]@")
+    .replace(/\bsk-[a-z0-9_-]+/gi, "[REDACTED]")
+    .replace(/\b(?:ghp|gho)_[a-z0-9]{4,}\b/gi, "[REDACTED]")
+    .replace(/\b[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{4,}\b/gi, "[REDACTED]")
+    .replace(/(\b(?:api[_-]?key|auth[_-]?token|access[_-]?token|key|token|password|secret)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s"'`,;&}]+)/gi, "$1[REDACTED]");
+}
+
+function rpcDetail(data: unknown): string {
+  if (typeof data === "string") return redactRpcDetail(data).slice(0, 500);
+  const source = record(data);
+  if (!source) return "";
+  const allowed: Record<string, string> = {};
+  for (const key of ["errorKind", "message", "details"]) {
+    if (typeof source[key] === "string") allowed[key] = redactRpcDetail(source[key]);
+  }
+  return Object.keys(allowed).length ? JSON.stringify(allowed).slice(0, 500) : "";
+}
+
 export class AcpRpcError extends Error {
   constructor(code: number, message: string, readonly data?: unknown) {
-    const detail = data == null ? "" : (typeof data === "string" ? data : JSON.stringify(data)).slice(0, 500);
-    super(`RPC error ${code}: ${message}${detail ? `: ${detail}` : ""}`);
+    const detail = rpcDetail(data);
+    super(`RPC error ${code}: ${redactRpcDetail(message)}${detail ? `: ${detail}` : ""}`);
     this.name = "AcpRpcError";
+    // Keep structured hints for classification, out of JSON/log serialization.
+    Object.defineProperty(this, "data", { value: data, enumerable: false });
   }
 }
 

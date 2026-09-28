@@ -12,7 +12,9 @@ Windows 通过 Node 启动随仓库提供的无扩展名 `remi-claude-agent-acp`
 
 ## Runtime 自定义连接
 
-客户端在 initialize 声明 AIR `sessionFailure`，provider 将 error severity 通知抛成任务失败，并保留 RPC `error.data` 中的 `errorKind`。AIR category 比 Remi 的失败原因更粗，不能单独据它区分模型不可用和无效请求。模型不可用/5xx 可使用备用模型，auth 不消耗切换次数；具体恢复口径见 [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md)。
+客户端在 initialize 声明 AIR `sessionFailure`，从响应顶层 `InitializeResult._meta.jetbrains.air.capabilities` 读取支持情况；`agentCapabilities._meta` 只作兼容读取。provider 将 error severity 通知抛成任务失败，并保留 RPC `error.data` 中的 `errorKind` 用于分类。错误文本仅追加白名单字符串字段，先脱敏再限长 500 字符，不序列化原始 data。AIR category 比 Remi 的失败原因更粗，不能单独据它区分模型不可用和无效请求。模型不可用/5xx 可使用备用模型，auth 和无效请求不消耗切换次数；具体恢复口径见 [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md)。
+
+原生 `/compact` 失败另走 `tool_call_update(status: "failed", _meta.contextCompaction.error)`，随后可能正常返回 `end_turn`，不保证发 AIR error。provider 独立记录这条失败，以 error 文本作为详情；只有同一轮失败后再次输出 assistant 文本才视为恢复并记 warning。前一轮或失败前的正常输出、压缩横幅、thinking 和普通工具失败不改变这项判断。
 
 Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容接口和一个默认模型。填写连接名称、API 基础地址、模型 ID，以及 API Key 或本机 `REMI_CLAUDE_*` 环境变量名；请求鉴权可选 Bearer Token 或 `x-api-key`。地址填写服务基础路径，Claude Code 在其后请求 `/v1/messages`，例如网关是 `https://gateway.example/anthropic`，不要填写完整 messages 路径。允许 Runtime 可访问的 HTTP(S) 本机或局域网地址，服务端不主动请求该地址。
 

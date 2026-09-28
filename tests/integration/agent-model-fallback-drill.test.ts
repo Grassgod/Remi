@@ -70,7 +70,7 @@ interface Drill {
   leaderId?: string;
 }
 
-type FailureShape = "legacy-text" | "typed" | "rpc-detail" | "rpc-kind" | "compaction" | "typed-prose";
+type FailureShape = "legacy-text" | "typed" | "rpc-detail" | "rpc-kind" | "compaction" | "native-compaction" | "typed-prose";
 
 function failureProviderFactory(engineModels: Drill["engineModels"], shape: FailureShape): MultiremiDaemonProviderFactory {
   const baseFactory = gatewayProviderFactory(engineModels);
@@ -92,11 +92,12 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
     // Exercise the production ACP provider's event/result/RPC handling; only
     // the bridge's stdio endpoint is replaced with this controllable client.
     const provider = new AcpProvider(options);
+    let turn = 0;
     const client = {
       typedSessionFailures: true,
       _options: { onSessionUpdate: (_event: unknown) => {} },
       prompt: async () => {
-        engineModels.push(options.model ?? null);
+        if (turn++ === 0) engineModels.push(options.model ?? null);
         const update = (value: unknown) => client._options.onSessionUpdate({ sessionId: "fallback-native-session", update: value });
         if (options.model !== PRIMARY_MODEL) {
           update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: FALLBACK_OUTPUT } });
@@ -108,6 +109,12 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
         }
         if (shape === "rpc-detail") throw new AcpRpcError(-32603, "Internal error", "API Error: 503 Service Unavailable");
         if (shape === "rpc-kind") throw new AcpRpcError(-32603, "Internal error", { errorKind: "model_not_found" });
+        if (shape === "native-compaction") {
+          if (turn === 1) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Earlier successful turn. ".repeat(50) } });
+          else update({ sessionUpdate: "tool_call_update", toolCallId: "compact:1", status: "failed",
+            _meta: { contextCompaction: { version: 1, error: "Error during compaction: API Error: 503 Service Unavailable" }, claudeCode: { toolName: "compact" } } });
+          return { stopReason: "end_turn" };
+        }
         if (shape === "compaction") update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Compacting..." } });
         update({ sessionUpdate: "session_info_update", _meta: { jetbrains: { air: { sessionFailure: {
           id: "turn:error", revision: 1, category: "service", severity: "error", title: "unexpected status 503 Service Unavailable",
@@ -116,6 +123,13 @@ function failureProviderFactory(engineModels: Drill["engineModels"], shape: Fail
       },
     };
     (provider as any)._ensureSession = async () => ({ client, acpSessionId: "fallback-native-session" });
+    if (shape === "native-compaction" && options.model === PRIMARY_MODEL) {
+      const send = provider.sendStream.bind(provider);
+      provider.sendStream = async function* (message, sendOptions) {
+        yield* send(message, sendOptions);
+        yield* send("/compact", sendOptions);
+      };
+    }
     provider.discoverModelCapabilities = base.discoverModelCapabilities!;
     return provider;
   };
@@ -344,7 +358,7 @@ describe("MUL-478 turn failure recovery drill", () => {
     { provider: "claude", shape: "rpc-detail", reason: TaskFailureReason.AgentProviderServerError },
     { provider: "claude", shape: "rpc-kind", reason: TaskFailureReason.AgentModelNotFoundOrUnavailable },
     { provider: "codex", shape: "compaction", reason: TaskFailureReason.AgentProviderServerError },
-    { provider: "claude", shape: "compaction", reason: TaskFailureReason.AgentProviderServerError },
+    { provider: "claude", shape: "native-compaction", reason: TaskFailureReason.AgentProviderServerError },
   ];
   for (const { provider, shape, reason } of cases) {
     drillIt(`${provider} ${shape}: fails, switches and returns once`, async () => {

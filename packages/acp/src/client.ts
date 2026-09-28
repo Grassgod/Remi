@@ -127,7 +127,8 @@ export class AcpClient {
   }
 
   get typedSessionFailures(): boolean {
-    const capabilities = airMetadata(this._initializeResult?.agentCapabilities?._meta)?.capabilities;
+    const capabilities = airMetadata(this._initializeResult?._meta)?.capabilities
+      ?? airMetadata(this._initializeResult?.agentCapabilities?._meta)?.capabilities;
     return this._requestedSessionFailures && Array.isArray(capabilities) && capabilities.includes("sessionFailure");
   }
 

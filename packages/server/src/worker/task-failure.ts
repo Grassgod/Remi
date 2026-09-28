@@ -64,12 +64,16 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   }
 
   if (
-    (lower.includes("model") && containsAny(lower, "not found", "not supported", "not available")) ||
+    // Match availability of the model itself, not "model X: image input is
+    // not supported" or another unsupported request feature.
+    /\bmodel\s+(?:["']?[^\s:"',()[\]{}]+["']?\s+)?(?:is\s+)?(?:not found|not supported|not available)\b/.test(lower) ||
     containsAny(lower, "issue with the selected model", "is not supported by any configured account",
       "unknown model", "model_not_found", "acp_model_unsupported", "cannot select model", "http 404", "404 page not found")
   ) {
     return TaskFailureReason.AgentModelNotFoundOrUnavailable;
   }
+
+  if (classifyPoisonedError(lower)) return TaskFailureReason.ApiInvalidRequest;
 
   if (statuses.some((status) => status === 401 || status === 403) || containsAny(
     lower,
@@ -161,7 +165,8 @@ export function classifyPoisonedOutput(output: string): TaskFailureReasonValue |
 
 export function classifyPoisonedError(error: string): TaskFailureReasonValue | null {
   const lower = String(error ?? "").toLowerCase();
-  if (lower.includes("invalid_request_error") && lower.includes("400")) return TaskFailureReason.ApiInvalidRequest;
+  if (lower.includes("invalid_request_error")
+    || /\b(?:image|audio|video|text) input\s+(?:is\s+)?not supported\b/.test(lower)) return TaskFailureReason.ApiInvalidRequest;
   return null;
 }
 
