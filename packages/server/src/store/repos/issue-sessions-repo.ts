@@ -491,8 +491,28 @@ export class IssueSessionsRepo {
     if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
     const sinceSeq = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
     const toSeq = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
-    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId), { includeMarkerTargetSeq: true })
-      .filter((event) => event.seq > sinceSeq && (toSeq == null || event.seq <= toSeq));
+    const projected = conversationLogProjectionEvents(
+      this.ctx.conversationLog().listConversationLogEntries(sessionId),
+      { includeMarkerTargetSeq: true },
+    ).filter((event) => event.seq > sinceSeq && (toSeq == null || event.seq <= toSeq));
+    // Delegation returns still write only the legacy event until the inbox
+    // migration. Keep them visible on the shared sequence axis meanwhile.
+    return [...projected, ...this.legacyDelegationReports(sessionId, sinceSeq, toSeq)].sort((a, b) => a.seq - b.seq);
+  }
+
+  private legacyDelegationReports(sessionId: string, sinceSeq = 0, toSeq: number | null = null): MultiremiSessionEvent[] {
+    const rows = (toSeq == null
+      ? this.ctx.db.query(
+        `SELECT * FROM multiremi_session_events
+         WHERE session_id = ? AND kind = 'delegation_report' AND seq > ?
+         ORDER BY seq ASC`,
+      ).all(sessionId, sinceSeq)
+      : this.ctx.db.query(
+        `SELECT * FROM multiremi_session_events
+         WHERE session_id = ? AND kind = 'delegation_report' AND seq > ? AND seq <= ?
+         ORDER BY seq ASC`,
+      ).all(sessionId, sinceSeq, toSeq)) as Row[];
+    return rows.map(toSessionEvent);
   }
 
   getOrCreateSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane {
@@ -811,7 +831,8 @@ export class IssueSessionsRepo {
   }
 
   private projectionEvents(sessionId: string): MultiremiSessionEvent[] {
-    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
+    const projected = conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
+    return [...projected, ...this.legacyDelegationReports(sessionId)].sort((a, b) => a.seq - b.seq);
   }
 
   private sessionAuthorName(authorType: string, authorId: string | null): string | null {

@@ -44,22 +44,19 @@ export interface SqlDatabase {
    * backend rather than probing.
    */
   readonly dialect?: SqlDatabaseDialect;
-  readonly inTransaction?: boolean;
   query(sql: string): SqlStatement;
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
   /**
-   * True while a `transaction()` callback is open. `BEGIN` cannot nest on
-   * either backend, so a helper that may run inside or outside a transaction
-   * checks this instead of guessing from its call site.
+   * True while a `transaction()` callback is open. Helpers that may run inside
+   * or outside a transaction check this instead of guessing from the call site.
    */
   readonly inTransaction?: boolean;
   /**
-   * Deepest `transaction()` nesting seen by this handle. Postgres has no
-   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
-   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   * Deepest `transaction()` nesting seen by this handle. Guarded paths assert
+   * this is 1 so their writes remain in one outer transaction.
    */
   readonly maxTransactionDepth?: number;
   close(): void;

@@ -398,11 +398,13 @@ interface ReactionInput {
 type CreateIssueCommentOptions =
   | {
     deferAgentMentionDispatch?: boolean;
+    deferDispatch?: boolean;
     withinTransaction?: false;
     deferredEvents?: CommitEventQueue;
   }
   | {
     deferAgentMentionDispatch?: boolean;
+    deferDispatch?: boolean;
     /**
      * The caller already owns a database transaction (the organizer action
      * facade). Every write inside must use the `WithinTransaction` flavour,
@@ -4436,6 +4438,7 @@ export class IssuesRepo {
       /** Set when the skip came from a comment-driven dispatch. */
       commentId?: string | null;
     },
+    deferredEvents?: CommitEventQueue,
   ): void {
     const data = {
       reason: "dependencies_unmet",
@@ -4461,7 +4464,7 @@ export class IssuesRepo {
       type: "dispatch_skipped",
       body: null,
       data,
-    });
+    }, deferredEvents);
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
@@ -4529,10 +4532,17 @@ export class IssuesRepo {
     }
     const deferredEvents = createCommitEventQueue();
     const childStatusChanges: ChildStatusChangeCollector = [];
+    const issue = this.getIssue(issueId);
+    const body = input.body ?? input.content ?? "";
+    const splitAssigneeDispatch = (input.authorType ?? "member") === "member"
+      && (issue?.assigneeType === "agent" || issue?.assigneeType === "squad")
+      && this.resolveCommentMentionTargets(body, issue.workspaceId).length === 0
+      && this.resolveCommentMemberMentionTargets(body, issue.workspaceId).length === 0;
     const comment = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
-      issueId, input, { ...options, deferredEvents }, childStatusChanges,
+      issueId, input, { ...options, deferredEvents, deferDispatch: splitAssigneeDispatch }, childStatusChanges,
     ))();
     this.ctx.emitCommitEvents(deferredEvents);
+    if (splitAssigneeDispatch) this.triggerAssigneeAutoResponse(this.getIssue(issueId)!, comment, false, undefined, childStatusChanges);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     return comment;
   }
@@ -4662,7 +4672,7 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
-    if (options.deferAgentMentionDispatch) return comment;
+    if (options.deferAgentMentionDispatch || options.deferDispatch) return comment;
     const mentionTasks = this.triggerCommentMentions(issue, comment, commentEvent.seq, options.deferredEvents, childStatusChanges);
     this.triggerAssigneeAutoResponse(
       issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0, options.deferredEvents, childStatusChanges,

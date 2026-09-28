@@ -27,7 +27,6 @@ const A0_MODULES = [
   { specifier: "@multiremi/contracts/trace", wired: true },
   { specifier: "@multiremi/worker/trace-store", wired: false },
   { specifier: "@multiremi/api/trace/trace-sink", wired: true },
-  { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: false },
   // A-0b additions: the shared sanitize point and the derived read-side values.
   // Both are called only by tests and by other A-0 modules so far. A-6 wires
   // `trace-sanitize` into the daemon's write path and A-5/A-8 wire

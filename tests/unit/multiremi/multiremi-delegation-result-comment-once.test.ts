@@ -262,6 +262,10 @@ async function runCancelledReturnSnapshotCase(
         "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
         [beforeDispatch, beforeDispatch, inRunCommentId],
       );
+      rawDb(store).run(
+        "UPDATE multiremi_conversation_log SET created_at = ? WHERE id = ?",
+        [beforeDispatch, inRunCommentId],
+      );
     }
 
     const selects = countResultCommentSelectsForTask(store, childTask.id);
@@ -438,6 +442,10 @@ async function runSkippedManualWakeCancellationSnapshotCase(
       rawDb(store).run(
         "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
         [beforeDispatch, beforeDispatch, inRunCommentId],
+      );
+      rawDb(store).run(
+        "UPDATE multiremi_conversation_log SET created_at = ? WHERE id = ?",
+        [beforeDispatch, inRunCommentId],
       );
     }
     const manualResponse = await requestJson(base, "/api/multiremi/tasks", childToken.token, {
