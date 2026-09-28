@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle, Save } from "lucide-react";
+import { AlertTriangle, LoaderCircle, Save } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@multiremi/core/auth";
 import { issueTopicConfigOptions } from "@multiremi/core/feishu-bot/queries";
@@ -106,6 +106,18 @@ export function IssueTopicSection() {
         </p>
       </div>
 
+      {configQuery.data?.invalid && (
+        <div role="alert" className="flex gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0 space-y-1">
+            <p>{t(($) => $.feishu.issueTopics.config_invalid)}</p>
+            <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              {configQuery.data.invalid.message}
+            </p>
+          </div>
+        </div>
+      )}
+
       <Card>
         <CardContent className="space-y-5">
           <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
@@ -204,7 +216,7 @@ export function IssueTopicSection() {
               <p className="text-xs text-muted-foreground">{t(($) => $.feishu.issueTopics.read_only)}</p>
             ) : <span />}
             {canManage && (
-              <Button onClick={handleSave} disabled={!canSave || !dirty}>
+              <Button onClick={handleSave} disabled={!canSave || (!dirty && !configQuery.data?.invalid)}>
                 {save.isPending
                   ? <LoaderCircle className="size-4 animate-spin" />
                   : <Save className="size-4" />}

@@ -4466,6 +4466,12 @@ export interface IssueTopicConfig {
   notifyOpenId?: string;
 }
 
+/** Static validation details for a stored Issue topic configuration. */
+export interface IssueTopicConfigInvalid {
+  code: "issue_topic_config_invalid";
+  message: string;
+}
+
 export interface FeishuBotOutboundMention {
   mode: IssueTopicNotifyMode;
   openId?: string;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
@@ -88,6 +88,128 @@ function prepareReport(store: MultiremiStore) {
 }
 
 describe("Feishu Issue topics", () => {
+  for (const scenario of ["missing recipient", "invalid recipient", "invalid projects", "different chat"] as const) {
+    it(`accepts inbound messages with an invalid person config (${scenario})`, () => {
+      const { store, revision } = scaffold();
+      store.submitFeishuBotMessage("local", "rt_bot", {
+        revision, externalSessionKey: "oc_discovery", externalMessageId: "om_discovery",
+        senderOpenId: "ou_issue_topic_owner", text: "Hello",
+      });
+      store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
+      const project = store.createProject({ title: "Topic project", workspaceId: "local" });
+      const issueTopics = {
+        enabled: true, chatId: "oc_issue_topics", notifyMode: "person",
+        ...(scenario === "missing recipient" ? {} : { notifyOpenId: "invalid-private-recipient" }),
+        projectIds: scenario === "invalid projects" ? [42] : [project.id],
+      };
+      store.updateWorkspace("local", { settings: { issueTopics } });
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = store.submitFeishuBotMessage("local", "rt_bot", {
+          revision, chatType: "group", chatId: scenario === "different chat" ? "oc_other" : "oc_issue_topics",
+          externalSessionKey: "oc_issue_topics:thread:om_invalid_config", externalMessageId: "om_invalid_config",
+          senderOpenId: "ou_issue_topic_owner", text: "Accept this group message",
+        });
+        expect(result.senderAllowed).toBe(true);
+        expect(store.getTask(result.taskId)).not.toBeNull();
+        const issueId = store.getFeishuIssueIdForChatSession(result.chatSessionId);
+        if (scenario === "different chat") {
+          expect(issueId).toBeNull();
+          expect(store.listIssues({ workspaceId: "local" })).toHaveLength(0);
+        } else {
+          expect(store.getIssue(issueId!)?.projectId).toBe(scenario === "invalid projects" ? null : project.id);
+          expect(store.getTask(result.taskId)?.issueId).toBe(issueId);
+          expect(store.listIssues({ workspaceId: "local" })).toHaveLength(1);
+        }
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("invalid issueTopics config for local");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("invalid-private-recipient");
+        expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(issueTopics);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  it("returns recovered settings and static validation details for an invalid stored config", async () => {
+    const { store } = scaffold();
+    const issueTopics = {
+      enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId: "invalid-private-recipient",
+    };
+    store.updateWorkspace("local", { settings: { issueTopics } });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const response = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      workspace_id: "local",
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+      invalid: {
+        code: "issue_topic_config_invalid",
+        message: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+      },
+    });
+    expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(issueTopics);
+  });
+
+  it("keeps the full response unchanged for valid stored settings", async () => {
+    const { store } = scaffold();
+    const project = store.createProject({ title: "Topic project", workspaceId: "local" });
+    store.updateWorkspace("local", { settings: { issueTopics: {
+      enabled: true, chatId: "oc_issue_topics", projectIds: [project.id], notifyMode: "person", notifyOpenId: "ou_reviewer",
+    } } });
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const response = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      workspace_id: "local",
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
+    });
+  });
+
+  for (const notifyOpenId of [undefined, "invalid-private-recipient"]) {
+    it(`rejects an omitted recipient repair with a static 400 (stored recipient=${notifyOpenId === undefined ? "missing" : "invalid"})`, async () => {
+      const { store } = scaffold();
+      const issueTopics = { enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId };
+      store.updateWorkspace("local", { settings: { issueTopics } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const response = await app.request("/api/workspaces/local/issue-topics", {
+        method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ enabled: true, chat_id: "oc_repaired" }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        code: "issue_topic_config_invalid",
+        error: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+      });
+      expect(store.getWorkspace("local")?.settings.issueTopics).toEqual(JSON.parse(JSON.stringify(issueTopics)));
+    });
+  }
+
+  for (const repair of [{ notify_mode: "none" }, { notify_open_id: "ou_repaired" }]) {
+    it(`repairs an invalid stored person config by replacing ${Object.keys(repair)[0]}`, async () => {
+      const { store } = scaffold();
+      store.updateWorkspace("local", { settings: { preserved: "setting", issueTopics: {
+        enabled: true, chatId: "oc_issue_topics", notifyMode: "person", notifyOpenId: "invalid-private-recipient", projectIds: [42],
+      } } });
+      const app = createMultiremiApp({ store, authToken: "MASTER" });
+      const path = "/api/workspaces/local/issue-topics";
+      const response = await app.request(path, {
+        method: "PUT", headers: JSON_HEADERS,
+        body: JSON.stringify({ enabled: true, chat_id: "oc_repaired", ...repair }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).not.toHaveProperty("invalid");
+      expect(body.config).toMatchObject({
+        chat_id: "oc_repaired", project_ids: null,
+        notify_mode: "notify_mode" in repair ? "none" : "person",
+        notify_open_id: "notify_open_id" in repair ? "ou_repaired" : null,
+      });
+      expect(store.getWorkspace("local")?.settings.preserved).toBe("setting");
+      expect(JSON.stringify(store.getWorkspace("local")?.settings)).not.toContain("invalid-private-recipient");
+      expect(await (await app.request(path, { headers: JSON_HEADERS })).json()).toEqual(body);
+    });
+  }
+
   for (const rollback of [false, true]) {
     it(`publishes group Issue creation ${rollback ? "never on rollback" : "after commit"}`, () => {
       const { store, revision } = scaffold();
