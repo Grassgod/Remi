@@ -741,6 +741,60 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("publishes the self-transactional system-comment activity after its outer COMMIT (Postgres)", () => {
+    const { workspaceId } = freshWorkspace();
+    const issue = store.createIssue({ title: "PG wrapper issue", workspaceId, status: "in_progress" });
+    const events: Array<{ action: string; inTransaction: boolean; lastControl: string | undefined }> = [];
+    const unsubscribe = store.onWorkspaceEvent((event) => {
+      const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
+      if (event.type === "activity:created") {
+        events.push({
+          action: entry?.action ?? "",
+          inTransaction: db.inTransaction,
+          lastControl: counter.controls.at(-1)?.sql,
+        });
+      }
+    });
+    // MUL-402 12:20 ruling (a): the main wrapper owns its COMMIT, not a savepoint.
+    counter.reset();
+    try {
+      store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper", "PG wrapper body");
+    } finally {
+      unsubscribe();
+    }
+    expect(counter.maxTopLevel).toBe(1);
+    counter.assertTransactionControl("createTaskFailureSystemComment COMMIT");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(1);
+    expect(events).toEqual([{ action: "comment_created", inTransaction: false, lastControl: "COMMIT" }]);
+
+    const rollbackEvents: string[] = [];
+    const unsubscribeRollback = store.onWorkspaceEvent((event) => { rollbackEvents.push(event.type); });
+    const original = StoreContext.prototype.appendIssueActivity;
+    StoreContext.prototype.appendIssueActivity = function patched(
+      this: StoreContext,
+      ...args: Parameters<StoreContext["appendIssueActivity"]>
+    ) {
+      const result = original.apply(this, args);
+      if (args[1].type === "comment_created") throw new Error("PG wrapper rollback injection");
+      return result;
+    };
+    counter.reset();
+    try {
+      expect(() => store.createTaskFailureSystemComment(issue.id, null, "tsk_pg_wrapper_2", "PG rollback body"))
+        .toThrow("PG wrapper rollback injection");
+    } finally {
+      StoreContext.prototype.appendIssueActivity = original;
+      unsubscribeRollback();
+    }
+    counter.assertTransactionControl("createTaskFailureSystemComment ROLLBACK");
+    expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
+    expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(0);
+    expect(counter.controls.filter((control) => control.sql === "ROLLBACK")).toHaveLength(1);
+    expect(rollbackEvents).toHaveLength(0);
+    expect(store.listIssueComments(issue.id).filter((comment) => comment.body === "PG rollback body")).toHaveLength(0);
+  });
+
   it("records actual PG transaction control for the remaining SQLite-suite entry points", () => {
     let observed = 0;
     const check = (label: string, action: () => void) => {
