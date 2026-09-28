@@ -161,6 +161,7 @@ describe("daemon Session archive GC orchestration", () => {
       activeTaskIds: new Set<string>(),
       activeTaskAborts: new Set<AbortController>(),
       issueWorkspaceLifecycleLocks: locker,
+      taskDownlinks: { observeCancellation: () => () => {}, release: () => {} },
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
         renewTaskDispatchLease: async () => "dispatched",

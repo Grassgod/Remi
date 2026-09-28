@@ -1,6 +1,7 @@
 // Daemon and browser websocket upgrades, workspace-scoped fanout, and the
 // privacy boundaries on chat/member/invitation events.
 import { afterEach, describe, expect, it } from "bun:test";
+import { watchRuntimeFrames } from "../../fixtures/runtime-downlinks.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { notifyBrowserWorkspaceEvent } from "../../../packages/server/src/api/realtime.js";
 import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage, expectWebSocketRejected, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv, signTestJwt, waitWebSocketOpen } from "./helpers.js";
@@ -15,6 +16,24 @@ function v2Hello(daemonId: string, runtimeIds: string[]): string {
 }
 
 describe("Multiremi API — realtime websockets", () => {
+  it("never broadcasts daemon-only input notifications to browsers", () => {
+    const frames: string[] = [];
+    const browser = { data: { kind: "browser", authenticated: true, workspaceId: "local", userId: "local",
+      accessToken: null, scopeSubscriptions: [] }, sendText: (frame: string) => frames.push(frame), close: () => {} };
+    const registry = new Map([["local", new Set([browser])]]) as any;
+    for (const type of ["daemon:dispatch_conditions_changed", "daemon:pending_changed", "daemon:maintenance_changed",
+      "daemon:feishu_changed", "daemon:ssh_mesh_changed", "daemon:task_input"]) {
+      notifyBrowserWorkspaceEvent(registry, new Map(), new Map(), {
+        type, workspaceId: "local", payload: { task_id: "private_task", request_id: "private_request" },
+      });
+    }
+    expect(frames).toEqual([]);
+    notifyBrowserWorkspaceEvent(registry, new Map(), new Map(), {
+      type: "daemon:models_updated", workspaceId: "local", payload: { runtime_id: "rt_public" },
+    });
+    expect(frames).toHaveLength(1);
+  });
+
   it("selects a human or restricted workspace-event frame per browser recipient", () => {
     const humanFrames: string[] = [];
     const taskFrames: string[] = [];
@@ -190,20 +209,22 @@ describe("Multiremi API — realtime websockets", () => {
     const model = store.createRuntimeModelListRequest(runtime.id);
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`);
+    const inbox = watchRuntimeFrames(ws);
     try {
       await waitWebSocketOpen(ws);
       ws.send(v2Hello("daemon-ws", [runtime.id, second.id]));
-      expect(await nextWebSocketMessage(ws)).toMatchObject({ v: 2, t: "welcome" });
+      expect(await inbox.next("welcome")).toMatchObject({ v: 2, t: "welcome" });
+      expect((await inbox.next("runtime.model_list")).p).toEqual({ id: model.id });
       expect(await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()).toMatchObject({ enabled: true, connections: 1, transport: "websocket" });
       ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-1", p: { active_task_count: 0 } }));
-      const ack = await nextWebSocketMessage(ws);
+      const ack = await inbox.next("res", "hb-1");
       expect(ack).toMatchObject({ t: "res", re: "hb-1", p: { runtime_acks: [
         { runtime_id: runtime.id, status: "ok" },
         { runtime_id: second.id, status: "ok" },
       ] } });
       expect(ack.p.runtime_acks[0].pending_model_list).toBeUndefined();
       expect(store.getRuntimeModelListRequest(runtime.id, model.id)?.status).toBe("pending");
-      const nextOffer = nextWebSocketMessage(ws);
+      const nextOffer = inbox.next("task.offer");
       const queued = store.createTask({ agentId: agent.id, prompt: "push dispatch" });
       const offer = await nextOffer;
       expect(offer).toMatchObject({ t: "task.offer", rt: runtime.id, p: { id: queued.id } });
@@ -212,19 +233,21 @@ describe("Multiremi API — realtime websockets", () => {
       store.cancelTask(queued.id);
       const update = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v3.0.0" });
       ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-pending", p: { active_task_count: 0 } }));
-      const pendingAck = await nextWebSocketMessage(ws);
+      const updateFrame = await inbox.next("runtime.update");
+      expect(updateFrame.p.id).toBe(update.id);
+      const pendingAck = await inbox.next("res", "hb-pending");
       expect(pendingAck.p.runtime_acks[0].pending_update).toBeUndefined();
       expect(store.getRuntimeUpdateRequest(runtime.id, update.id)?.status).toBe("pending");
       expect(store.deleteRuntime(runtime.id)).toBeTrue();
       ws.send(JSON.stringify({ v: 2, t: "hb", id: "hb-2", p: { active_task_count: 0 } }));
-      expect(await nextWebSocketMessage(ws)).toMatchObject({ t: "res", re: "hb-2", p: { runtime_acks: [
+      expect(await inbox.next("res", "hb-2")).toMatchObject({ t: "res", re: "hb-2", p: { runtime_acks: [
         { runtime_id: runtime.id, status: "runtime_gone", runtime_gone: true },
         { runtime_id: second.id, status: "ok" },
       ] } });
       ws.close();
       await Bun.sleep(25);
       expect(await (await fetch(`http://127.0.0.1:${server.port}/health/realtime`)).json()).toMatchObject({ connections: 0 });
-    } finally { ws.close(); server.stop(true); }
+    } finally { inbox.close(); ws.close(); server.stop(true); }
   });
 
   it("serves browser workspace websocket fanout with workspace isolation", async () => {
@@ -696,18 +719,21 @@ describe("Multiremi API — realtime websockets", () => {
       authToken: "root-secret",
     });
     const sockets: WebSocket[] = [];
+    const inboxes = new Map<WebSocket, ReturnType<typeof watchRuntimeFrames>>();
     const connect = async (token: string, daemonId: string, ids: string[]) => {
       const socket = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`, { headers: { Authorization: `Bearer ${token}` } } as never);
       sockets.push(socket);
+      const inbox = watchRuntimeFrames(socket);
+      inboxes.set(socket, inbox);
       await waitWebSocketOpen(socket);
       socket.send(v2Hello(daemonId, ids));
-      expect(await nextWebSocketMessage(socket)).toMatchObject({ t: "welcome" });
+      expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
       return socket;
     };
     try {
       const local = await connect(daemonToken.token, "daemon-local", ["rt_ws_local", "rt_ws_other_daemon", "rt_ws_remote"]);
       local.send(JSON.stringify({ v: 2, t: "hb", id: "hb-auth", p: { active_task_count: 0 } }));
-      expect(await nextWebSocketMessage(local)).toMatchObject({ t: "res", re: "hb-auth", p: { runtime_acks: [
+      expect(await inboxes.get(local)!.next("res", "hb-auth")).toMatchObject({ t: "res", re: "hb-auth", p: { runtime_acks: [
         { runtime_id: "rt_ws_local", status: "ok" },
         { runtime_id: "rt_ws_other_daemon", status: "runtime_gone", runtime_gone: true },
         { runtime_id: "rt_ws_remote", status: "runtime_gone", runtime_gone: true },
@@ -735,17 +761,18 @@ describe("Multiremi API — realtime websockets", () => {
       expect(retired.status).toBe(401);
       const master = await connect("root-secret", "daemon-local", ["rt_ws_local"]);
       master.send(JSON.stringify({ v: 2, t: "hb", id: "hb-master", p: { active_task_count: 0 } }));
-      expect(await nextWebSocketMessage(master)).toMatchObject({ t: "res", re: "hb-master", p: { runtime_acks: [{ runtime_id: "rt_ws_local", status: "ok" }] } });
+      expect(await inboxes.get(master)!.next("res", "hb-master")).toMatchObject({ t: "res", re: "hb-master", p: { runtime_acks: [{ runtime_id: "rt_ws_local", status: "ok" }] } });
       expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(1);
       expect(store.getRuntime("rt_ws_remote")?.lastHeartbeatAt).toBe(remoteHeartbeat);
       expect(store.getRuntime("rt_ws_other_daemon")?.lastHeartbeatAt).toBe(otherDaemonHeartbeat);
     } finally {
       for (const socket of sockets) socket.close();
+      for (const inbox of inboxes.values()) inbox.close();
       server.stop(true);
     }
   });
 
-  it("preserves Plugin capability while desired uses the HTTP fallback until business pushes are wired", async () => {
+  it("preserves Plugin capability and pushes a revision matching the RPC snapshot", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_ws_plugin_revision",
@@ -779,24 +806,29 @@ describe("Multiremi API — realtime websockets", () => {
       `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
       { headers: { Authorization: `Bearer ${daemonToken.token}` } } as any,
     );
+    const inbox = watchRuntimeFrames(socket);
     try {
       await waitWebSocketOpen(socket);
       socket.send(v2Hello("daemon-ws-plugin", [runtime.id]));
-      expect(await nextWebSocketMessage(socket)).toMatchObject({ t: "welcome" });
+      expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
+      const revision = await inbox.next("plugin.desired_revision");
       socket.send(JSON.stringify({
         v: 2, t: "hb", id: "hb-plugin", p: { active_task_count: 0 },
       }));
-      const ack = await nextWebSocketMessage(socket);
+      const ack = await inbox.next("res", "hb-plugin");
       expect(ack).toMatchObject({
         t: "res", re: "hb-plugin",
         p: { runtime_acks: [{ runtime_id: runtime.id, status: "ok" }] },
       });
       expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
-      const desired = await fetch(`http://127.0.0.1:${server.port}/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`, { headers: { Authorization: `Bearer ${daemonToken.token}` } });
-      expect(desired.status).toBe(200);
-      expect((await desired.json() as any).revision).toBe(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision);
+      socket.send(JSON.stringify({ v: 2, t: "plugin.desired", id: "desired-1", rt: runtime.id, p: {} }));
+      const desired = await inbox.next("res", "desired-1");
+      expect(desired.p.ok).toBe(true);
+      expect(desired.p.revision).toBe(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).revision);
+      expect(revision.p.revision).toBe(desired.p.revision);
     } finally {
       socket.close();
+      inbox.close();
       server.stop(true);
     }
   });

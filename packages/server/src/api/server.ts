@@ -143,6 +143,10 @@ import {
   type DaemonProtocolSocket,
 } from "./daemon-protocol/index.js";
 import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
+import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
+import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
+import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
+import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
@@ -864,7 +868,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: daemonProtocol,
-    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki) });
+    prepare: task => prepareTaskOffer(store, task, offerProjectKnowledge, repositoryWiki),
+    onRuntimeReady: (rt, ids) => downlinks.runtimeReady(rt, ids) });
+  const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
+    nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
+    snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
+      ...taskInputSnapshot(store, rt, activeIds, id => downlinks.forgetTask(rt, id))] });
+  registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
@@ -876,9 +886,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const unsubscribeTaskEvent = store.onTaskEvent((event) => {
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
+    // MUL-462: 换成实时扇出
+    downlinks.taskChanged(event.task.runtimeId, event.task.id);
     if (["task:completed", "task:failed", "task:cancelled"].includes(event.type)) {
       // MUL-462: 换成实时扇出
       offers.terminal(event.task.id, event.task.runtimeId);
+      // MUL-462: 换成实时扇出
+      downlinks.kickWorkspace(event.task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
     }
   });
   const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
@@ -886,6 +900,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   });
   const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
     notifyBrowserWorkspaceEvent(browserWebSockets, browserUserWebSockets, browserScopeWebSockets, event);
+    // MUL-462: 换成实时扇出
+    downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
     if (event.type === "daemon:models_updated") {
       // MUL-462: 换成实时扇出
       offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);

@@ -1358,6 +1358,10 @@ runMigrations(this.db);
     });
   }
 
+  sshMeshDirectiveForRuntime(runtimeId: string): MultiremiSshMeshHeartbeatAck | null {
+    return this.sshMesh.directiveForRuntime(runtimeId);
+  }
+
   recordControlPlaneSshMeshHeartbeat(
     workspaceId: string,
     nodeId: string,
@@ -2020,6 +2024,23 @@ runMigrations(this.db);
     supportsAttachments = false,
   ): MultiremiFeishuBotOutboundDelivery | null {
     return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
+  }
+
+  pendingFeishuBotOutbound(workspaceId: string, runtimeId: string): MultiremiFeishuBotOutboundDelivery | null {
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, undefined, true, true, true, "peek");
+  }
+
+  nextFeishuBotOutboundWakeAt(runtimeId: string): number | null {
+    const workspaceId = this.runtimes.getRuntimeLite(runtimeId)?.workspaceId;
+    return workspaceId ? this.feishuBot.nextOutboundWakeAt(workspaceId, runtimeId) : null;
+  }
+
+  claimAcknowledgedFeishuBotOutbound(workspaceId: string, runtimeId: string, id: string, claimToken: string): void {
+    this.feishuBot.claimOutbound(workspaceId, runtimeId, undefined, true, true, true, { id, claimToken });
+  }
+
+  discardPendingFeishuBotOutbound(workspaceId: string, runtimeId: string, id: string): void {
+    this.feishuBot.discardPendingOutbound(workspaceId, runtimeId, id);
   }
 
   getFeishuBotOutboundAttachment(
@@ -2701,10 +2722,13 @@ runMigrations(this.db);
   }
 
   private withSshMeshLifecycleLock<T>(workspaceId: string, operation: () => T): T {
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       return operation();
     })();
+    this.ctx.emitWorkspaceEvent({ type: "daemon:ssh_mesh_changed", workspaceId,
+      actorType: "system", actorId: null, payload: {} });
+    return result;
   }
 
   private assertNoDaemonRetirementRekeyInProgress(workspaceId: string): void {
@@ -3140,6 +3164,14 @@ runMigrations(this.db);
     supportsDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
+  }
+
+  pendingRuntimeRequests(runtimeId: string) { return this.runtimes.pendingRuntimeRequests(runtimeId); }
+  claimAcknowledgedRuntimeRequest(runtimeId: string, kind: string, id: string): void {
+    this.runtimes.claimAcknowledgedRuntimeRequest(runtimeId, kind, id);
+  }
+  discardRuntimePendingRequest(runtimeId: string, kind: string, id: string): void {
+    this.runtimes.discardRuntimePendingRequest(runtimeId, kind, id);
   }
 
   createIssue(input: CreateIssueInput, transaction?: {
@@ -4013,15 +4045,21 @@ runMigrations(this.db);
   }
 
   createProjectDevice(projectId: string, input: CreateProjectDeviceInput): MultiremiProjectDevice {
-    return this.projects.createProjectDevice(projectId, input);
+    const device = this.projects.createProjectDevice(projectId, input);
+    this.publishDaemonDispatchConditionsChanged(this.projects.getProject(projectId)!.workspaceId);
+    return device;
   }
 
   deleteProjectDevice(projectId: string, daemonId: string): void {
-    return this.projects.deleteProjectDevice(projectId, daemonId);
+    this.projects.deleteProjectDevice(projectId, daemonId);
+    const project = this.projects.getProject(projectId);
+    if (project) this.publishDaemonDispatchConditionsChanged(project.workspaceId);
   }
 
   replaceProjectDevices(projectId: string, input: ReplaceProjectDevicesInput): MultiremiProjectDevice[] {
-    return this.projects.replaceProjectDevices(projectId, input);
+    const devices = this.projects.replaceProjectDevices(projectId, input);
+    this.publishDaemonDispatchConditionsChanged(this.projects.getProject(projectId)!.workspaceId);
+    return devices;
   }
 
   listProjectsForDaemon(workspaceId: string, daemonId: string): MultiremiProject[] {

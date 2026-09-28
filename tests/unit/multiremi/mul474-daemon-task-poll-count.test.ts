@@ -24,6 +24,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
+import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
+import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -176,9 +178,11 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds GET steer and never reads the task payload", async () => {
+  it("bounds the steer push snapshot and never reads the task payload", async () => {
     const scaffolded = await scaffold();
-    const sql = await countRoute(scaffolded, "GET", `/api/daemon/tasks/${scaffolded.fixture.taskId}/steer`);
+    scaffolded.probe.reset();
+    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId, new Set([scaffolded.fixture.taskId]), () => {});
+    const sql = [...scaffolded.probe.statements];
     expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.steer);
     expectNoTaskPayloadReads(sql);
   });
@@ -377,13 +381,21 @@ describe("MUL-474 daemon task authority matrix", () => {
     const foreign = { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" };
 
     expect((await app.request(`${taskPath}/status`, { headers: owner })).status).toBe(200);
-    expect((await app.request(`${taskPath}/steer`, { headers: owner })).status).toBe(200);
+    const steer = store.createTaskSteerMessage({ taskId: fixture.taskId, kind: "steer", content: "owner-only" });
+    const connection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.daemonToken), masterToken: false } });
+    try {
+      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer.id)).toEqual([steer.id]);
+    } finally { await connection.close(); }
+    const foreignConnection = await openRuntimeDownlinks(store, fixture.runtimeId,
+      { identity: { accessToken: await store.verifyAccessToken(fixture.foreignDaemonToken), masterToken: false } });
+    try { expect(foreignConnection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0); }
+    finally { await foreignConnection.close(); }
 
     // A non-owner daemon keeps the exact refusal it had before the reorder. This
     // Task has no Feishu transport binding, so neither exception applies.
     for (const [method, path, body] of [
       ["GET", `${taskPath}/status`, undefined],
-      ["GET", `${taskPath}/steer`, undefined],
       ["GET", `${taskPath}/messages`, undefined],
       ["POST", `${taskPath}/messages`, JSON.stringify({ messages: [{ type: "text", content: "x" }] })],
       ["POST", `${taskPath}/complete`, JSON.stringify({ output: "x" })],
@@ -411,13 +423,10 @@ describe("MUL-474 daemon task authority matrix", () => {
 
   it("refuses a non-owner on the steer/consume write path too", async () => {
     const { scaffolded } = await authorityScaffold();
-    const { app, fixture } = scaffolded;
-    const response = await app.request(`/api/daemon/tasks/${fixture.taskId}/steer/consume`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${fixture.foreignDaemonToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ ids: [] }),
-    });
-    expect(response.status).toBe(403);
+    const { store, fixture } = scaffolded;
+    const response = await requestRuntimeRpc(store, fixture.foreignRuntimeId, "steer.consume",
+      { task_id: fixture.taskId, steer_ids: [] }, fixture.foreignDaemonToken, AUTH_TOKEN);
+    expect(response).toMatchObject({ ok: false, code: "authority_revoked" });
   });
 
   it("keeps the Feishu host exception working for a Chat task on another daemon", async () => {

@@ -312,7 +312,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 服务端每 runtime 一个常驻单飞泵（沿用 `preparingClaims` 的单飞思想），基础触发源四个：
 `onTaskEnqueued`、任务终态或 reject 释放容量、`hb` 报告的 `active_task_count` 变化、`hello`。
-另由 `daemon:models_updated` 的模型能力变化、Agent / Plugin 就绪 / Runtime / Project 路由配置变化、
+另由 `daemon:models_updated` 的模型能力变化、Agent / Plugin 就绪 / Runtime / Project 路由配置与设备绑定变化、
 30 s reject 冷却到期、延迟重试的 `next_retry_at` 到期、断连后未 start 的 accept 租约 90 s 恢复到期触发。
 Chat 恢复、Issue workspace 归属/清理、维护 drain 释放都在写入后触发；drain 租约到期另有定时触发。
 终态释放 Agent 或执行 lane 容量时唤醒同 workspace 的在线 runtime，不只唤醒原 runtime。
@@ -402,7 +402,9 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 
 008 的 `rt_fkmqtl` 被分配为飞书 concierge，今天心跳 3 s；出站改推送后这个 3 s 节奏不再需要。
 
-各 `pending_*` 改为**创建即推**：在各自的写入口挂 store 事件，WS 层订阅并推给对应 daemon。
+各 `pending_*` 改为**创建即推**：写入口在提交后发布既有实时事件，经 MUL-462 的进程间扇出
+到 runtime 进程，再调用下行泵的统一 `kick(runtimeId)`。v2 连接层不直接订阅 `store.on*`，
+也不另建进程间通道。进程内的 hello、ack 和 drain 直接调用同一入口。
 状态机为 `pending → sent(seq) → acked(claimed) → result`；未 ack 前断连回到 pending，
 下次 `hello` 快照重推。
 

@@ -1,4 +1,5 @@
 import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 // The compatibility surface the upstream (Go) clients still call: register/deregister,
 // local user + workspace, invitations, config/cli token, health, cloud runtime,
 // billing/lark/chat batches, and the linked-resource console workflows.
@@ -1025,10 +1026,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local", metadata: { cli_version: DAEMON_MIN_CLI_VERSION, parallel_agent_execution: 1 } });
     const app = createMultiremiApp({ store });
 
-    // An upstream daemon build predates Agent Plugins entirely: it sends no
-    // `agent_plugin_protocol`, so the ack must stay byte-compatible with the
-    // shape it has always received. `agent_plugins` is additive and only ever
-    // appears for a daemon that asked for the Plugin protocol.
+    // v1 retains only the upgrade channel; business configuration arrives as v2 events.
     const legacyHeartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1038,13 +1036,14 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const legacyHeartbeatBody = await legacyHeartbeat.json();
     expect(legacyHeartbeatBody.agent_plugins).toBeUndefined();
     expect(Object.keys(legacyHeartbeatBody).sort()).toEqual([
-      "claude_profile",
-      "codex_profile",
       "drain",
-      "relay",
       "status",
-      "workspace_settings",
     ]);
+    const pushed = await receiveRuntimeInputs(store, runtime.id);
+    expect(pushed).toHaveProperty("codex_profile");
+    expect(pushed).toHaveProperty("claude_profile");
+    expect(pushed).toHaveProperty("relay");
+    expect(pushed).toHaveProperty("workspace_settings");
 
     expect((await app.request("/readyz")).status).toBe(200);
     expect((await app.request("/healthz")).status).toBe(200);

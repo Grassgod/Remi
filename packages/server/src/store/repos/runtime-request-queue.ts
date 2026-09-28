@@ -58,6 +58,29 @@ export class RuntimeRequestQueue<T> {
     return row ? this.spec.hydrate(row) : null;
   }
 
+  /** Pending rows remain unclaimed until the downlink sequence is acknowledged. */
+  pending(runtimeId: string, limit = 1): T[] {
+    const cutoff = new Date(Date.now() - this.spec.pendingTimeoutMs).toISOString();
+    const rows = this.db.query(`SELECT * FROM ${this.spec.table}
+      WHERE runtime_id = ? AND status = 'pending' AND ${this.spec.pendingDeadlineColumn ?? "created_at"} >= ?
+      ORDER BY created_at ASC LIMIT ?`).all(runtimeId, cutoff, limit) as Row[];
+    return rows.map(this.spec.hydrate);
+  }
+
+  claimAcknowledged(runtimeId: string, requestId: string): T | null {
+    this.expire(runtimeId);
+    const now = nowIso();
+    const row = this.db.query(`UPDATE ${this.spec.table} SET status = 'running', run_started_at = ?, updated_at = ?
+      WHERE id = ? AND runtime_id = ? AND status = 'pending' RETURNING *`).get(now, now, requestId, runtimeId) as Row | null;
+    return row ? this.spec.hydrate(row) : null;
+  }
+
+  discardPending(runtimeId: string, requestId: string): void {
+    this.db.run(`UPDATE ${this.spec.table} SET status = 'failed', error = ?, updated_at = ?
+      WHERE id = ? AND runtime_id = ? AND status = 'pending'`,
+    ["Downlink exceeds the 1 MiB daemon protocol frame limit", nowIso(), requestId, runtimeId]);
+  }
+
   /**
    * Move the oldest pending request to `running` and return it, or null when the queue is empty.
    *

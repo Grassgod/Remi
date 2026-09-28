@@ -338,18 +338,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
-  app.get("/api/daemon/runtimes/:runtimeId/agent-plugins/desired", (c) => {
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"), authToken);
-    if (denied) return denied;
-    try {
-      return c.json(daemonAgentPluginDesiredResponse(
-        store.getRuntimeAgentPluginDesiredSnapshot(c.req.param("runtimeId")),
-      ));
-    } catch (error) {
-      return pluginErrorResponse(c, error);
-    }
-  });
-
   app.post("/api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state", async (c) => {
     const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"), authToken);
     if (denied) return denied;

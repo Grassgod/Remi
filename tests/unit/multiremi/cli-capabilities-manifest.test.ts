@@ -173,9 +173,9 @@ describe("CLI capabilities manifest", () => {
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
       // MUL-419 A-3 removes four daemon-internal polling routes, not user commands.
-      exempt: 88,
+      exempt: 83,
       missing: 0,
-      total: 765,
+      total: 760,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });

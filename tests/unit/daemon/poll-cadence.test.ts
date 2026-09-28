@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, jest } from "bun:test";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
-import { injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
 import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker/daemon-protocol-client.js";
+import { DaemonTaskDownlinks } from "@multiremi/worker/daemon-downlinks.js";
+import { registerDaemonRuntimeDownlinks } from "@multiremi/worker/daemon-runtime-downlinks.js";
 import type { FeishuBotRuntimeState } from "@multiremi/contracts/types.js";
 
 interface LoopProbe {
@@ -14,6 +15,7 @@ interface LoopProbe {
   claimIdleLadder: number[];
   reconciles: number;
   run: Promise<void>;
+  push(type: string, payload: Record<string, unknown>): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -50,6 +52,7 @@ function createLoopDaemon(options: {
     claimIdleLadder: [],
     reconciles: 0,
     run: Promise.resolve(),
+    push: async () => {},
     stop: async () => {},
   };
 
@@ -182,6 +185,52 @@ function createLoopDaemon(options: {
     },
   });
 
+  let sequence = 0;
+  let push!: (type: string, payload: Record<string, unknown>) => void;
+  const protocolClient = new DaemonProtocolClient({ serverUrl: "http://127.0.0.1:1", daemonId: "cadence", cliVersion: "0.2.83",
+    connect: () => {
+      const listeners = new Map<string, Set<(event: any) => void>>();
+      const emit = (type: string, event: any) => { for (const listener of listeners.get(type) ?? []) listener(event); };
+      push = (type, payload) => emit("message", { data: JSON.stringify({ v: 2, t: type, seq: ++sequence, rt: "rt_cadence", p: payload }) });
+      queueMicrotask(() => {
+        emit("open", {});
+        emit("message", { data: JSON.stringify({ v: 2, t: "welcome", p: { protocol: 2, session_id: "cadence" } }) });
+        if (options.startLoop !== false) push("plugin.desired_revision", { revision: "rev-1" });
+      });
+      return {
+        bufferedAmount: 0,
+        send(text: string) {
+          const frame = JSON.parse(text);
+          if (!frame.id) return;
+          const payload = frame.t === "plugin.desired" ? (() => {
+            state.desiredGets++; probe.desiredGets++;
+            return options.desired?.(state) ?? { runtime_id: "rt_cadence", revision: "rev-1", plugins: [] };
+          })() : { runtime_acks: [{ runtime_id: "rt_cadence", status: "ok" }] };
+          queueMicrotask(() => emit("message", { data: JSON.stringify({ v: 2, t: "res", re: frame.id, p: { ok: true, ...payload as object } }) }));
+        },
+        close() {},
+        addEventListener(type: string, listener: (event: any) => void) {
+          if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(listener);
+        },
+        removeEventListener(type: string, listener: (event: any) => void) { listeners.get(type)?.delete(listener); },
+      };
+    } });
+  const taskDownlinks = new DaemonTaskDownlinks(protocolClient, () => "rt_cadence");
+  const input = daemon as unknown as {
+    handleHeartbeatAck(rt: string, input: Record<string, unknown>): Promise<boolean>;
+    reconcileRuntimeAgentPlugins(rt: string, revision: string): Promise<void>;
+  };
+  registerDaemonRuntimeDownlinks(protocolClient, () => "rt_cadence", (rt, ack) => input.handleHeartbeatAck(rt, ack as unknown as Record<string, unknown>),
+    (rt, revision) => input.reconcileRuntimeAgentPlugins(rt, revision));
+  const lane: DaemonProtocolLane = {
+    runtime: () => ({ runtime_id: "rt_cadence", provider: "claude", max_concurrency: 1, active_task_ids: [] }),
+    heartbeat: () => ({ active_task_count: 0 }), onHeartbeatAck: async () => {},
+    probeUpgrade: async () => {}, onTerminal: async () => {}, onStateChange: () => taskDownlinks.connectionChanged(),
+  };
+  Object.assign(daemon, { protocolClient, protocolLane: lane, taskDownlinks });
+  protocolClient.addLane(lane); protocolClient.startLane(lane);
+  probe.push = async (type, payload) => { await flushMicrotasks(); push(type, payload); await protocolClient.drain(); };
+
   probe.daemon = daemon;
   probe.run = options.startLoop === false ? Promise.resolve() : daemon.start();
   probe.stop = async () => {
@@ -251,13 +300,12 @@ function track(probe: LoopProbe): LoopProbe {
 }
 
 describe("daemon poll cadence", () => {
-  it("skips the desired GET while the ack revision is unchanged", async () => {
+  it("skips the desired RPC snapshot while the pushed revision is unchanged", async () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon({ startLoop: false }));
     for (let round = 0; round <= 6; round++) {
       jest.setSystemTime(1_000_000 + round * 10_000);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+      await probe.push("plugin.desired_revision", { revision: "rev-1" });
     }
     expect(probe.desiredGets).toBe(1);
     expect(probe.reconciles).toBeGreaterThanOrEqual(7);
@@ -267,8 +315,7 @@ describe("daemon poll cadence", () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon({ startLoop: false }));
     jest.setSystemTime(1_000_000);
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+    await probe.push("plugin.desired_revision", { revision: "rev-1" });
     const internal = probe.daemon as unknown as {
       lastDesired: unknown; desiredFetchedAt: number; lastDesiredRefreshAt: number;
       agentPluginReconciler: { clearReportedStates(): void }; clearDesiredAgentPlugins(): void;
@@ -284,35 +331,31 @@ describe("daemon poll cadence", () => {
     expect(internal.lastDesiredRefreshAt).toBe(0);
     expect(cleared).toBe(1);
     jest.setSystemTime(1_030_000);
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+    await probe.push("plugin.desired_revision", { revision: "rev-1" });
     expect(probe.desiredGets).toBe(2);
   }, 20_000);
 
-  it("re-fetches desired state when the ack revision moves", async () => {
+  it("re-fetches desired state when the pushed revision moves", async () => {
     jest.useFakeTimers();
     let revision = "rev-1";
     const probe = track(createLoopDaemon({ startLoop: false, desired: () => ({ runtime_id: "rt_cadence", revision, plugins: [] }) }));
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision } } });
+    await probe.push("plugin.desired_revision", { revision });
     const initialGets = probe.desiredGets;
     expect(initialGets).toBe(1);
     revision = "rev-2";
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision } } });
+    await probe.push("plugin.desired_revision", { revision });
     expect(probe.desiredGets).toBe(initialGets + 1);
   });
 
-  it("keeps an old server on the fallback refresh and always refreshes every 10 minutes", async () => {
+  it("does not run a 30s desired fallback when unrelated frames arrive", async () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon({ startLoop: false, pluginDesiredRefreshMs: 30_000 }));
+    await probe.push("plugin.desired_revision", { revision: "rev-1" });
     for (let round = 0; round <= 15; round++) {
       jest.setSystemTime(1_000_000 + round * 10_000);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok" } });
+      await probe.push("workspace.settings", { settings: {} });
     }
-    expect(probe.desiredGets).toBeGreaterThanOrEqual(4);
-    expect(probe.desiredGets).toBeLessThanOrEqual(6);
+    expect(probe.desiredGets).toBe(1);
     expect(probe.desiredGets).toBeLessThan(16);
   });
 
@@ -321,21 +364,19 @@ describe("daemon poll cadence", () => {
     const probe = track(createLoopDaemon({ startLoop: false }));
     for (const offset of [0, 60_000, 9 * 60_000, 11 * 60_000 + 30_000]) {
       jest.setSystemTime(1_000_000 + offset);
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", agent_plugins: { revision: "rev-1" } } });
+      await probe.push("plugin.desired_revision", { revision: "rev-1" });
       if (offset <= 9 * 60_000) expect(probe.desiredGets).toBe(1);
     }
     expect(probe.desiredGets).toBe(2);
   });
 
-  it("keeps HTTP heartbeat out of the main loop while plugin fallback remains", async () => {
+  it("keeps HTTP heartbeat and the 30s desired fallback out of the main loop", async () => {
     jest.useFakeTimers();
     const probe = track(createLoopDaemon());
     await flushMicrotasks();
     await advance(180_000);
     expect(probe.heartbeats).toBe(0);
-    expect(probe.desiredGets).toBeGreaterThanOrEqual(6);
-    expect(probe.desiredGets).toBeLessThanOrEqual(7);
+    expect(probe.desiredGets).toBe(1);
   });
 
   it("keeps once mode free of HTTP claims and heartbeats", async () => {
@@ -354,6 +395,7 @@ describe("daemon poll cadence", () => {
     expect(probe.claims).toBe(0);
     expect(probe.claimTimes).toEqual([]);
     expect(probe.heartbeats).toBe(0);
+    expect(probe.desiredGets).toBe(2);
   }, 20_000);
 
   it("does not spin the poll loop while claims are paused or draining", async () => {
@@ -420,8 +462,7 @@ describe("daemon poll cadence", () => {
     expect(internal.claimsPaused).toBe(false);
     expect(wakes).toBe(2);
     internal.serverDrainActive = true;
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
+    await probe.push("platform.drain", { mode: "normal", generation: 2 });
     expect(internal.serverDrainActive).toBe(false);
     expect(internal.claimsPaused).toBe(false);
     expect(wakes).toBeGreaterThanOrEqual(3);
@@ -435,8 +476,7 @@ describe("daemon poll cadence", () => {
     let wokeAt: number | null = null;
     internal.waitWake = () => { wokeAt = Date.now(); };
     const queuedAt = Date.now();
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(probe.daemon, { input: { runtime_id: "rt_cadence", status: "ok", drain: { mode: "normal", generation: 2 } } });
+    await probe.push("platform.drain", { mode: "normal", generation: 2 });
     expect(wokeAt).not.toBeNull();
     expect(wokeAt! - queuedAt).toBeLessThanOrEqual(1000);
     expect(internal.serverDrainActive).toBe(false);

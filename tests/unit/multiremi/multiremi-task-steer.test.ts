@@ -6,6 +6,7 @@ import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { buildSteerInjectionPrompt, mergeTaskUsageEntries, TaskSteerFeed } from "@multiremi/worker/steer.js";
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { openRuntimeDownlinks } from "../../fixtures/runtime-downlinks.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -199,12 +200,11 @@ describe("task steer API", () => {
     expect(refusedBody.code).toBe("steer_pending");
     expect(store.getTaskStatus(task.id)).toBe("running");
 
-    const consume = await app.request(`/api/daemon/tasks/${task.id}/steer/consume`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ ids: [message.id] }),
-    });
-    expect(consume.status).toBe(200);
+    const connection = await openRuntimeDownlinks(store, task.runtimeId!);
+    try {
+      expect(await connection.rpc("steer.consume", { task_id: task.id, steer_ids: [message.id] }))
+        .toMatchObject({ ok: true });
+    } finally { await connection.close(); }
     const completed = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
       method: "POST",
       headers: auth,
@@ -217,25 +217,19 @@ describe("task steer API", () => {
   it("serves pending steers to the daemon and marks them consumed", async () => {
     const store = createStore();
     const task = createRunningTask(store);
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const auth = { Authorization: "Bearer root-secret", "Content-Type": "application/json" };
-
     const message = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "switch" });
-
-    const pending = await app.request(`/api/daemon/tasks/${task.id}/steer`, { headers: auth });
-    expect(pending.status).toBe(200);
-    expect((await pending.json()).messages).toEqual([expect.objectContaining({ id: message.id })]);
-
-    const consume = await app.request(`/api/daemon/tasks/${task.id}/steer/consume`, {
-      method: "POST",
-      headers: auth,
-      body: JSON.stringify({ ids: [message.id] }),
-    });
-    expect(consume.status).toBe(200);
-    expect((await consume.json()).consumed).toEqual([expect.objectContaining({ id: message.id })]);
-
-    const drained = await app.request(`/api/daemon/tasks/${task.id}/steer`, { headers: auth });
-    expect((await drained.json()).messages).toHaveLength(0);
+    const connection = await openRuntimeDownlinks(store, task.runtimeId!);
+    try {
+      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer))
+        .toEqual([expect.objectContaining({ id: message.id })]);
+      const consume = await connection.rpc("steer.consume", { task_id: task.id, steer_ids: [message.id] });
+      expect(consume.ok).toBe(true);
+      expect(consume.consumed).toEqual([expect.objectContaining({ id: message.id })]);
+      connection.frames.length = 0;
+      await connection.kick();
+      expect(connection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0);
+      expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
+    } finally { await connection.close(); }
   });
 });
 
@@ -283,33 +277,35 @@ describe("steer worker helpers", () => {
     ]);
   });
 
-  it("markHandled immunizes the feed against an in-flight poll returning the same steer", async () => {
-    // First poll (fired by start()) is held open while the authoritative
-    // path handles the same steer directly — the late response must neither
-    // enqueue the duplicate nor fire the interrupt.
-    const resolvers: Array<(msgs: MultiremiTaskSteerMessage[]) => void> = [];
-    const feed = new TaskSteerFeed(
-      { listPendingTaskSteerMessages: () => new Promise<MultiremiTaskSteerMessage[]>((res) => { resolvers.push(res); }) },
-      "tsk_feed",
-      600_000,
-    );
+  const pushSource = (initial: MultiremiTaskSteerMessage[] = []) => {
+    const listeners = new Set<(message: MultiremiTaskSteerMessage) => void>();
+    return {
+      pendingTaskSteerMessages: () => initial,
+      subscribeTaskSteerMessages: (_taskId: string, listener: (message: MultiremiTaskSteerMessage) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      push: (message: MultiremiTaskSteerMessage) => { for (const listener of listeners) listener(message); },
+    };
+  };
+
+  it("markHandled immunizes the feed against a replayed push of the same steer", () => {
+    const source = pushSource();
+    const feed = new TaskSteerFeed(source, "tsk_feed");
     feed.start();
-    expect(resolvers).toHaveLength(1);
     feed.markHandled(["s1"]);
     let interrupted = 0;
     feed.setInterrupt(() => { interrupted += 1; });
-    resolvers[0]!([steerMessage({ id: "s1", content: "already handled" })]);
-    await Bun.sleep(10);
+    source.push(steerMessage({ id: "s1", content: "already handled" }));
     expect(feed.hasPending).toBe(false);
     expect(interrupted).toBe(0);
     feed.stop();
   });
 
-  it("markHandled drops already-queued duplicates so setInterrupt does not fire on stale ids", async () => {
-    let batch: MultiremiTaskSteerMessage[] = [steerMessage({ id: "s1", content: "queued first" })];
-    const feed = new TaskSteerFeed({ listPendingTaskSteerMessages: async () => batch }, "tsk_feed", 600_000);
+  it("markHandled drops already-queued duplicates so setInterrupt does not fire on stale ids", () => {
+    const source = pushSource([steerMessage({ id: "s1", content: "queued first" })]);
+    const feed = new TaskSteerFeed(source, "tsk_feed");
     feed.start();
-    await Bun.sleep(10);
     expect(feed.hasPending).toBe(true);
 
     feed.markHandled(["s1"]);
@@ -320,29 +316,23 @@ describe("steer worker helpers", () => {
     feed.stop();
   });
 
-  it("feed interrupts a streaming turn when a steer arrives and drains in order", async () => {
-    let batch: MultiremiTaskSteerMessage[] = [];
-    const feed = new TaskSteerFeed(
-      { listPendingTaskSteerMessages: async () => batch },
-      "tsk_feed",
-      250,
-    );
+  it("feed interrupts a streaming turn when a steer arrives and drains in order", () => {
+    const source = pushSource();
+    const feed = new TaskSteerFeed(source, "tsk_feed");
     let interrupted = 0;
     feed.setInterrupt(() => { interrupted += 1; });
     feed.start();
     try {
-      batch = [steerMessage({ id: "s1", content: "first" })];
-      await Bun.sleep(400);
+      source.push(steerMessage({ id: "s1", content: "first" }));
       expect(interrupted).toBe(1);
       expect(feed.take().map((m) => m.id)).toEqual(["s1"]);
 
-      // Same rows still pending server-side are not re-queued.
-      await Bun.sleep(300);
+      source.push(steerMessage({ id: "s1", content: "first" }));
       expect(feed.hasPending).toBe(false);
 
       // A steer that arrived between turns fires the next interrupt immediately.
-      batch = [steerMessage({ id: "s1", content: "first" }), steerMessage({ id: "s2", content: "second" })];
-      await Bun.sleep(400);
+      source.push(steerMessage({ id: "s1", content: "first" }));
+      source.push(steerMessage({ id: "s2", content: "second" }));
       expect(feed.hasPending).toBe(true);
       let lateInterrupt = 0;
       feed.setInterrupt(() => { lateInterrupt += 1; });

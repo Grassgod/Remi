@@ -8,6 +8,7 @@
  * accepted limits are the A-0 constants. A-2 removes A-1's v1 coexistence path.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { watchRuntimeFrames } from "../../fixtures/runtime-downlinks.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { handleDaemonProtocolMessage } from "../../../packages/server/src/api/server.js";
 import {
@@ -208,6 +209,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
       `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
       { headers: { Authorization: `Bearer ${token.token}` } } as never,
     );
+    const inbox = watchRuntimeFrames(socket);
     try {
       await waitWebSocketOpen(socket);
       socket.send(JSON.stringify({
@@ -227,7 +229,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
         },
       }));
 
-      expect(await nextWebSocketMessage(socket)).toMatchObject({ t: "welcome" });
+      expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
       expect(socket.readyState).toBe(WebSocket.OPEN);
 
       socket.send(JSON.stringify({
@@ -237,7 +239,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
         ts: Date.now(),
         p: { active_task_count: 0, drain_ack_generation: 0 },
       }));
-      const reply = await nextWebSocketMessage(socket);
+      const reply = await inbox.next("res", "hb-1");
       expect(reply).toMatchObject({
         t: "res",
         re: "hb-1",
@@ -251,6 +253,7 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
       expect(socket.readyState).toBe(WebSocket.OPEN);
       expect(store.getRuntime("rt_v2")?.lastHeartbeatAt).not.toBeNull();
     } finally {
+      inbox.close();
       socket.close();
       server.stop(true);
     }
@@ -372,18 +375,20 @@ describe("MUL-417 daemon protocol v2 — server wiring", () => {
       `ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`,
       { headers: { Authorization: `Bearer ${token.token}` } } as never,
     );
+    const inbox = watchRuntimeFrames(socket);
     try {
       await waitWebSocketOpen(socket);
       socket.send(helloFrame());
-      await nextWebSocketMessage(socket);
+      await inbox.next("welcome");
       socket.send(JSON.stringify({ v: 2, t: "not.a.frame", id: "q-7", ts: Date.now(), p: {} }));
-      expect(await nextWebSocketMessage(socket)).toMatchObject({
+      expect(await inbox.next("res", "q-7")).toMatchObject({
         t: "res",
         re: "q-7",
         p: { ok: false, code: "unknown_frame", retryable: false },
       });
       expect(socket.readyState).toBe(WebSocket.OPEN);
     } finally {
+      inbox.close();
       socket.close();
       server.stop(true);
     }

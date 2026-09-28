@@ -1,3 +1,4 @@
+import { receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,22 +69,22 @@ describe("Bun Multiremi runtime directory scan", () => {
     expect(() => store.createRuntimeDirectoryScanRequest(runtime.id)).toThrow("runtime is offline");
   });
 
-  it("only claims a directory scan when the daemon advertises support", () => {
+  it("only claims a directory scan when the daemon advertises support", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_capability", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/srv/work", maxDepth: 4 });
 
     // A heartbeat without the capability must never claim the pending request.
     const withoutSupport = store.heartbeatRuntime(runtime.id, { supportsDirectoryScan: false });
-    expect(withoutSupport.pending_directory_scan).toBeUndefined();
+    expect(withoutSupport).not.toHaveProperty("pending_directory_scan");
     expect(store.getRuntimeDirectoryScanRequest(runtime.id, request.id)?.status).toBe("pending");
 
     // Default options also omit the capability.
-    expect(store.heartbeatRuntime(runtime.id).pending_directory_scan).toBeUndefined();
+    expect(store.heartbeatRuntime(runtime.id)).not.toHaveProperty("pending_directory_scan");
     expect(store.getRuntimeDirectoryScanRequest(runtime.id, request.id)?.status).toBe("pending");
 
     // Advertising support claims the request and embeds the params in the ack.
-    const withSupport = store.heartbeatRuntime(runtime.id, { supportsDirectoryScan: true });
+    const withSupport = (await receiveRuntimeInputs(store, runtime.id));
     expect(withSupport.pending_directory_scan).toEqual({ id: request.id, root: "/srv/work", max_depth: 4 });
     expect(store.getRuntimeDirectoryScanRequest(runtime.id, request.id)?.status).toBe("running");
   });
@@ -305,13 +306,13 @@ describe("Bun Multiremi runtime directory scan", () => {
     expect(forbiddenCompat.status).toBe(403);
   });
 
-  it("embeds the browse mode in params and the heartbeat ack", () => {
+  it("embeds the browse mode in params and the heartbeat ack", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_mode", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "~/code", mode: "browse" });
     expect(request.params).toEqual({ root: "~/code", mode: "browse" });
 
-    const ack = store.heartbeatRuntime(runtime.id, { supportsDirectoryScan: true });
+    const ack = (await receiveRuntimeInputs(store, runtime.id));
     expect(ack.pending_directory_scan).toEqual({ id: request.id, root: "~/code", mode: "browse" });
   });
 

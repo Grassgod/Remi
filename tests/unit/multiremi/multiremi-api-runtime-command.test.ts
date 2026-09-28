@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -87,7 +88,9 @@ describe("Multiremi API - runtime commands", () => {
       body: JSON.stringify({ runtime_id: runtime.id }),
     });
     expect(heartbeat.status).toBe(200);
-    const heartbeatBody = await heartbeat.json();
+    expect((await heartbeat.json()).pending_command).toBeUndefined();
+    const heartbeatBody = await receiveRuntimeInputs(store, runtime.id,
+      { identity: { accessToken: await store.verifyAccessToken(daemonToken.token), masterToken: false } });
     expect(heartbeatBody.pending_command).toMatchObject({
       id: createdBody.id,
       command,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { receiveTaskOffer } from "../../fixtures/task-offer.js";
+import { requestRuntimeRpc, receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -681,7 +682,6 @@ describe("Multiremi API — agent plugins", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const daemonHeaders = { Authorization: `Bearer ${daemonToken.token}` };
 
-    const desiredPath = `/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`;
     const statePath = `/api/daemon/runtimes/${runtime.id}/agent-plugins/${plugin.activeVersionId}/state`;
     const rejectedCredentials = [
       ["same-workspace PAT", localPat.token],
@@ -693,10 +693,9 @@ describe("Multiremi API — agent plugins", () => {
       ["unbound daemon identity", unboundDaemon.token],
     ] as const;
     for (const [label, token] of rejectedCredentials) {
-      const deniedDesired = await app.request(desiredPath, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      expect(deniedDesired.status, `${label} desired state`).toBe(403);
+      const deniedDesired = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, token);
+      expect(deniedDesired.ok, `${label} desired state`).toBe(false);
+      expect(deniedDesired.plugins).toBeUndefined();
       const deniedReport = await app.request(statePath, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -704,10 +703,8 @@ describe("Multiremi API — agent plugins", () => {
       });
       expect(deniedReport.status, `${label} state report`).toBe(403);
     }
-    const masterDesired = await app.request(desiredPath, {
-      headers: { Authorization: "Bearer root-secret" },
-    });
-    expect(masterDesired.status).toBe(200);
+    const masterDesired = await requestRuntimeRpc(store, runtime.id, "plugin.desired");
+    expect(masterDesired.ok).toBe(true);
     const deniedHeartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
       headers: {
@@ -754,11 +751,8 @@ describe("Multiremi API — agent plugins", () => {
     expect(masterHeartbeat.status).toBe(200);
     expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(2);
 
-    const desired = await app.request(desiredPath, {
-      headers: daemonHeaders,
-    });
-    expect(desired.status).toBe(200);
-    const desiredBody = await desired.json();
+    const desiredBody = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, daemonToken.token);
+    expect(desiredBody.ok).toBe(true);
     expect(desiredBody.runtime_id).toBe(runtime.id);
     expect(desiredBody.revision).toMatch(/^[0-9a-f]{64}$/);
     expect(desiredBody.plugins[0]).toMatchObject({
@@ -795,15 +789,13 @@ describe("Multiremi API — agent plugins", () => {
     expect(masterReport.status).toBe(200);
 
     const openApp = createMultiremiApp({ store, authToken: "" });
-    expect((await openApp.request(desiredPath)).status).toBe(200);
+    expect((await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, "", "")).ok).toBe(true);
     expect((await openApp.request(statePath, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
     })).status).toBe(200);
-    expect((await openApp.request(desiredPath, {
-      headers: { Authorization: `Bearer ${localPat.token}` },
-    })).status).toBe(403);
+    expect((await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, localPat.token, "")).ok).toBe(false);
 
     const retry = await app.request(`/api/multiremi/agent-plugins/${plugin.id}/runtimes/retry`, {
       method: "POST",
@@ -936,10 +928,8 @@ describe("Multiremi API — agent plugins", () => {
     expect(forgedRuntimeIdentity.status).toBe(403);
     expect(store.getRuntime("rt_forged_daemon_identity")).toBeNull();
 
-    const desired = await app.request(`/api/daemon/runtimes/${runtimeId}/agent-plugins/desired`, {
-      headers: { Authorization: `Bearer ${daemonToken.token}` },
-    });
-    expect(desired.status).toBe(200);
+    const desired = await requestRuntimeRpc(store, runtimeId, "plugin.desired", {}, daemonToken.token);
+    expect(desired.ok).toBe(true);
 
     const identityChange = await app.request("/api/daemon/register", {
       method: "POST",
@@ -1066,7 +1056,7 @@ describe("Multiremi API — agent plugins", () => {
     });
   });
 
-  it("echoes the desired Plugin revision in the heartbeat ack without extra work", async () => {
+  it("pushes the desired Plugin revision separately from the upgrade-only heartbeat ack", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_api_plugin_ack",
@@ -1092,9 +1082,9 @@ describe("Multiremi API — agent plugins", () => {
     const headers = { Authorization: `Bearer ${daemonToken.token}`, "Content-Type": "application/json" };
 
     const desiredRevision = async () => {
-      const response = await app.request(`/api/daemon/runtimes/${runtime.id}/agent-plugins/desired`, { headers });
-      expect(response.status).toBe(200);
-      return (await response.json()).revision as string;
+      const response = await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, daemonToken.token);
+      expect(response.ok).toBe(true);
+      return response.revision as string;
     };
     const heartbeat = async (protocol: number | undefined = 1) => {
       const response = await app.request("/api/daemon/heartbeat", {
@@ -1106,7 +1096,11 @@ describe("Multiremi API — agent plugins", () => {
         }),
       });
       expect(response.status).toBe(200);
-      return await response.json() as Record<string, any>;
+      const ack = await response.json();
+      expect(ack.agent_plugins).toBeUndefined();
+      if (protocol === 0) return ack;
+      return await receiveRuntimeInputs(store, runtime.id,
+        { identity: { accessToken: await store.verifyAccessToken(daemonToken.token), masterToken: false } });
     };
 
     // The ack revision and the desired snapshot must be the same token, or a

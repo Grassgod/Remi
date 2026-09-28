@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
 import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
@@ -47,6 +47,8 @@ import {
   type DaemonProtocolLane,
 } from "./daemon-protocol-client.js";
 import { registerDaemonOfferHandler } from "./daemon-offers.js";
+import { DaemonTaskDownlinks } from "./daemon-downlinks.js";
+import { registerDaemonRuntimeDownlinks } from "./daemon-runtime-downlinks.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
@@ -248,7 +250,6 @@ export { createEventMapper };
 export { browseRuntimeDirectory, scanRuntimeDirectories };
 
 const log = createLogger("multiremi-daemon");
-const HUMAN_REQUEST_POLL_MS = 2000;
 const RUNTIME_MODEL_PROBE_TIMEOUT_MS = 30_000;
 const RUNTIME_MODEL_RETRY_BASE_MS = 5_000;
 const RUNTIME_MODEL_RETRY_MAX_MS = 5 * 60_000;
@@ -674,6 +675,7 @@ export class MultiremiDaemon {
   private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
+  private runtimeProfileSnapshotReceived = false;
   private runtimeProviderKeys = new Map<string, Promise<string>>();
 
   private applyRuntimeCodexProfile(profile: RuntimeCodexProfile | null | undefined): void {
@@ -809,9 +811,11 @@ export class MultiremiDaemon {
   private waitWake: (() => void) | null = null;
   private readonly protocolClient: DaemonProtocolClient;
   private readonly protocolLane: DaemonProtocolLane;
+  private readonly taskDownlinks: DaemonTaskDownlinks;
   private readonly authorityProbeDelaysMs: number[];
   /** The plugin fallback remains until MUL-419 moves it to RPC/push. */
   private nextPluginDesiredAt = 0;
+  private pluginLocalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private onceTaskAccepted = false;
   private onceOfferTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDesired: { revision: string; artifacts: AgentPluginArtifactSpec[] } | null = null;
@@ -1047,6 +1051,9 @@ export class MultiremiDaemon {
       log,
       ...options.protocolClientOptions,
     });
+    this.taskDownlinks = new DaemonTaskDownlinks(this.protocolClient, () => this.options.runtimeId ?? undefined);
+    registerDaemonRuntimeDownlinks(this.protocolClient, () => this.options.runtimeId,
+      (rt, input) => this.handleHeartbeatAck(rt, input), (rt, revision) => this.reconcileRuntimeAgentPlugins(rt, revision));
     this.protocolLane = {
       runtime: () => this.options.runtimeId && !this.stopped ? {
         runtime_id: this.options.runtimeId,
@@ -1083,7 +1090,7 @@ export class MultiremiDaemon {
         log.error(`daemon protocol authority rejected (close ${code}); entering cleanup-only mode`);
         await this.stopAfterTerminalAuthority();
       },
-      onStateChange: () => this.wakeClaim(),
+      onStateChange: () => { this.taskDownlinks.connectionChanged(); this.wakeClaim(); },
       onConnected: () => {
         const runtime = this.protocolLane.runtime();
         if (runtime) this.protocolClient.send({ t: "runtime.ready",
@@ -1278,7 +1285,6 @@ export class MultiremiDaemon {
       if (this.runtimeModelDiscoveryEnabled && !this.options.once) {
         this.startRuntimeModelRefresh();
       }
-      await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
       this.ready = true;
@@ -1291,7 +1297,7 @@ export class MultiremiDaemon {
       }
 
       this.protocolClient?.startLane(this.protocolLane);
-      this.nextPluginDesiredAt = Date.now();
+      this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
       this.onceTaskAccepted = false;
       while (!this.stopped) {
         try {
@@ -1301,8 +1307,8 @@ export class MultiremiDaemon {
             continue;
           }
           if (Date.now() >= this.nextPluginDesiredAt) {
-            this.nextPluginDesiredAt = Date.now() + this.options.pluginDesiredRefreshMs;
-            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: this.options.once });
+            this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
+            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
           }
 
           await this.waitForNextTick();
@@ -1381,7 +1387,7 @@ export class MultiremiDaemon {
   }
 
 
-  /** The temporary plugin fallback owns this sleep until A-4. */
+  /** Business pushes wake this wait; its timer only forces the ten-minute snapshot. */
   private async waitForNextTick(): Promise<void> {
     if (this.stopped) return;
     const delayMs = Math.max(0, this.nextPluginDesiredAt - Date.now());
@@ -1515,8 +1521,12 @@ export class MultiremiDaemon {
   }
 
   private async handleHeartbeatAck(runtimeId: string, ack: MultiremiDaemonHeartbeatConfigAck): Promise<boolean> {
-    this.applyRuntimeCodexProfile(ack.codex_profile);
-    this.applyRuntimeClaudeProfile(ack.claude_profile);
+    if ("codex_profile" in ack) this.applyRuntimeCodexProfile(ack.codex_profile);
+    if ("claude_profile" in ack) this.applyRuntimeClaudeProfile(ack.claude_profile);
+    if ("codex_profile" in ack || "claude_profile" in ack) {
+      this.runtimeProfileSnapshotReceived = true;
+      if (!this.options.once) this.startRuntimeModelRefresh();
+    }
     const workspaceId = this.options.workspaceId ?? "local";
     if (ack.drain) {
       const draining = ack.drain.mode === "draining";
@@ -1730,7 +1740,7 @@ export class MultiremiDaemon {
 
   private async handleRuntimeCommand(
     runtimeId: string,
-    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_command"]>,
+    request: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_command"]>,
   ): Promise<void> {
     const result = await executeRuntimeCommand({
       command: request.command,
@@ -1758,7 +1768,7 @@ export class MultiremiDaemon {
    */
   private queueBotMenuPublish(
     runtimeId: string,
-    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_bot_menu"]>,
+    request: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_bot_menu"]>,
   ): void {
     this.botMenuPublishChain = this.botMenuPublishChain
       .catch(() => {})
@@ -1770,7 +1780,7 @@ export class MultiremiDaemon {
 
   private async handleBotMenuPublish(
     runtimeId: string,
-    request: NonNullable<MultiremiDaemonHeartbeatAck["pending_bot_menu"]>,
+    request: NonNullable<MultiremiDaemonHeartbeatConfigAck["pending_bot_menu"]>,
   ): Promise<void> {
     if (!this.botMenuPublisher) {
       await this.client.reportBotMenuPublishResult(runtimeId, request.id, {
@@ -1896,7 +1906,7 @@ export class MultiremiDaemon {
   }
 
   private startRuntimeModelRefresh(): void {
-    if (!this.runtimeModelDiscoveryEnabled || this.stopped) return;
+    if (!this.runtimeModelDiscoveryEnabled || this.stopped || !this.runtimeProfileSnapshotReceived) return;
     if (this.runtimeModelRefreshTask) {
       this.wakeRuntimeModelRetry();
       return;
@@ -2252,11 +2262,9 @@ export class MultiremiDaemon {
   /**
    * Converge this Runtime's Agent Plugins toward the server's desired set.
    *
-   * `serverRevision` is the revision the heartbeat ack advertised. When it
-   * matches the cached desired state the loop skips the GET entirely and only
-   * re-runs the local reconcile, which still has to notice retry deadlines and
-   * setup re-checks. A server that predates the ack field passes `null` and falls
-   * back to a periodic refresh.
+   * `serverRevision` arrives as a downlink. Matching revisions reuse the local
+   * desired state; a forced RPC snapshot every ten minutes defends against an
+   * incomplete revision definition.
    *
    * A fetch is forced at startup, after a re-registration, and every
    * `PLUGIN_DESIRED_FORCED_REFRESH_MS` so a revision definition that misses a
@@ -2267,6 +2275,7 @@ export class MultiremiDaemon {
     serverRevision: string | null = null,
     options: { force?: boolean } = {},
   ): Promise<void> {
+    if (this.protocolClient.connectionState() !== "connected") return;
     this.agentPluginReconcileAbort?.abort();
     const abort = new AbortController();
     this.agentPluginReconcileAbort = abort;
@@ -2279,16 +2288,14 @@ export class MultiremiDaemon {
       const mustFetch = cached === null
         || options.force === true
         || now - this.lastDesiredRefreshAt >= PLUGIN_DESIRED_FORCED_REFRESH_MS
-        || (serverRevision === null
-          ? now - this.desiredFetchedAt >= this.options.pluginDesiredRefreshMs
-          : cached.revision !== serverRevision);
+        || (serverRevision !== null && cached.revision !== serverRevision);
       if (mustFetch) {
-        const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId, abort.signal);
+        const desired = await this.taskDownlinks.rpc("plugin.desired", {}) as unknown as Awaited<ReturnType<MultiremiDaemonClient["getRuntimeAgentPluginDesired"]>>;
         if (desired.runtime_id && desired.runtime_id !== runtimeId) {
           throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
         }
         const parsed = desired.plugins.map(agentPluginDesiredFromWire);
-        // The GET is the only view of what the server already knows, so it also
+        // The RPC snapshot is the view of what the server already knows, so it also
         // refreshes the report dedupe baseline: a server-side rewrite then
         // re-reports on the following local reconcile.
         this.agentPluginReconciler.restoreStates(parsed.map((entry) => entry.state));
@@ -2303,6 +2310,20 @@ export class MultiremiDaemon {
       const artifacts = this.lastDesired?.artifacts;
       if (!artifacts) return;
       await this.agentPluginReconciler.reconcile(artifacts, { signal: abort.signal });
+      if (this.pluginLocalRetryTimer !== null) clearTimeout(this.pluginLocalRetryTimer);
+      this.pluginLocalRetryTimer = null;
+      const nextRetry = this.agentPluginReconciler.getStates().map(state => Date.parse(state.nextRetryAt ?? ""))
+        .filter(at => Number.isFinite(at) && at > Date.now()).sort((a, b) => a - b)[0];
+      if (nextRetry !== undefined && !this.stopped) {
+        this.pluginLocalRetryTimer = setTimeout(() => {
+          this.pluginLocalRetryTimer = null;
+          const run = this.reconcileRuntimeAgentPlugins(runtimeId, this.lastDesired?.revision ?? null);
+          this.inflight.add(run);
+          void run.catch(error => log.warn(`Agent Plugin local retry failed: ${error instanceof Error ? error.name : typeof error}`))
+            .finally(() => this.inflight.delete(run));
+        }, nextRetry - Date.now());
+        this.pluginLocalRetryTimer.unref?.();
+      }
     } finally {
       if (this.agentPluginReconcileAbort === abort) {
         this.agentPluginReconcileAbort = null;
@@ -2371,6 +2392,8 @@ export class MultiremiDaemon {
   }
 
   stop(): void {
+    if (this.pluginLocalRetryTimer !== null) clearTimeout(this.pluginLocalRetryTimer);
+    this.pluginLocalRetryTimer = null;
     if (this.onceOfferTimer !== null) clearTimeout(this.onceOfferTimer);
     this.onceOfferTimer = null;
     this.stopped = true;
@@ -3102,8 +3125,9 @@ export class MultiremiDaemon {
     const abort = new AbortController();
     this.activeTaskAborts.add(abort);
     let serverTerminalStatus: Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled"> | null = null;
-    const taskStateWatcher = this.watchTaskState(task.id, abort, (status) => {
+    const stopWatching = this.taskDownlinks.observeCancellation(task.id, (status) => {
       serverTerminalStatus = status;
+      abort.abort();
     });
     let timedOut = false;
     const timeoutMs = Number.isFinite(this.options.taskTimeoutMs) ? Math.max(0, this.options.taskTimeoutMs) : 0;
@@ -3329,12 +3353,6 @@ export class MultiremiDaemon {
         this.finalizeTaskProgress(progressSummarizer, serverTerminalStatus);
         return;
       }
-      if (!timedOut && abort.signal.aborted && await this.wasTaskCancelledByServer(task.id)) {
-        this.outbox?.purgeTask(task.id);
-        log.info(`Task ${task.id} was cancelled by the server`);
-        this.finalizeTaskProgress(progressSummarizer, "cancelled");
-        return;
-      }
       const failureReason = err instanceof LocalDirectoryError
         ? err.failureReason
         : classifyDaemonTaskFailure(task.agent?.provider ?? "", error);
@@ -3377,7 +3395,8 @@ export class MultiremiDaemon {
       if (!activeExecutionReleased) {
         this.releaseActiveTaskSlot();
       }
-      clearInterval(taskStateWatcher);
+      stopWatching();
+      this.taskDownlinks.release(task.id);
       if (timeout) clearTimeout(timeout);
     }
   }
@@ -3802,7 +3821,7 @@ export class MultiremiDaemon {
       provider.setPermissionHandler?.(async (params) => {
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
-          const request = await this.client.createTaskHumanRequest(task.id, {
+          const request = await this.createTaskHumanRequest(task.id, {
             kind: "permission",
             payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
             // Publish the deadline so the topic can remind before it elapses.
@@ -3853,7 +3872,7 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
-        const request = await this.client.createTaskHumanRequest(task.id, {
+        const request = await this.createTaskHumanRequest(task.id, {
           kind: "question",
           payload: {
             session_id: params.sessionId,
@@ -3890,7 +3909,7 @@ export class MultiremiDaemon {
   }
 
   /**
-   * Poll until the request leaves "pending", the task aborts, or the human
+   * Wait for the settled push, task abort, or human
    * timeout elapses. Timeout/abort expires the request server-side; if a human
    * response won that race, the server returns the responded row and we honor it.
    */
@@ -3900,22 +3919,26 @@ export class MultiremiDaemon {
     signal: AbortSignal,
     timeoutMs: number,
   ): Promise<MultiremiTaskHumanRequest | null> {
-    const deadline = Date.now() + Math.max(0, timeoutMs);
-    while (!signal.aborted && Date.now() < deadline) {
-      try {
-        const request = await this.client.getTaskHumanRequest(taskId, requestId);
-        if (request && request.status !== "pending") return request;
-      } catch (err) {
-        log.warn(`Poll human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      await sleep(Math.min(Math.max(this.options.pollIntervalMs, 250), HUMAN_REQUEST_POLL_MS));
-    }
+    const waitSignal = AbortSignal.any([signal, this.pollAbort.signal]);
+    const settled = await this.taskDownlinks.waitForHumanDecision(requestId, waitSignal, timeoutMs);
+    if (settled) return settled;
     try {
-      return await this.client.expireTaskHumanRequest(taskId, requestId, signal.aborted ? "cancelled" : "timeout");
+      const result = await this.taskDownlinks.rpc("human_request.expire", { task_id: taskId, request_id: requestId,
+        status: waitSignal.aborted ? "cancelled" : "timeout" });
+      return result.request as MultiremiTaskHumanRequest | null;
     } catch (err) {
       log.warn(`Expire human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
+  }
+
+  private async createTaskHumanRequest(taskId: string, input: {
+    kind: "permission" | "question"; payload: Record<string, unknown>; timeoutMs?: number;
+  }): Promise<MultiremiTaskHumanRequest> {
+    const result = await this.taskDownlinks.rpc("human_request.create", { task_id: taskId,
+      request_id: randomUUID(), kind: input.kind, payload: input.payload,
+      ...(input.timeoutMs === undefined ? {} : { timeout_ms: input.timeoutMs }) });
+    return result.request as unknown as MultiremiTaskHumanRequest;
   }
 
   private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
@@ -4122,14 +4145,12 @@ export class MultiremiDaemon {
       },
     });
 
-    // Steer channel: the feed polls for mid-run user directives; each batch
+    // Steer channel: the feed receives pushed user directives; each batch
     // soft-interrupts the streaming turn (ACP session/cancel) and is injected
     // as the next prompt on the same provider session, so the transcript and
     // all completed work survive. `force_answer` additionally arms a grace
     // deadline after which the run wraps up with the output produced so far.
-    const steerFeed = new TaskSteerFeed(this.client, task.id, this.options.steerPollIntervalMs, (err) => {
-      log.warn(`Steer poll failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    const steerFeed = new TaskSteerFeed(this.taskDownlinks, task.id);
     let forceAnswerDeadline: number | null = null;
     let forceAnswerExpired = false;
 
@@ -4162,11 +4183,10 @@ export class MultiremiDaemon {
       const recordedSteerIds = new Set<string>();
       const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
         for (const message of messages) recordedSteerIds.add(message.id);
-        // Immunize the feed against its own in-flight poll: a GET that was
-        // already on the wire when these ids were handled must not re-enqueue
+        // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
-        await this.client.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
+        await this.taskDownlinks.consumeTaskSteerMessages(task.id, messages.map((m) => m.id)).catch((err) => {
           log.warn(`Failed to mark steer consumed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
         });
         for (const message of messages) {
@@ -4191,16 +4211,9 @@ export class MultiremiDaemon {
         await recordSteerBatch(messages, true);
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
-      // Authoritative server read; a swallowed error here is safe because the
-      // completeTask steer barrier still refuses to strand a pending steer.
+      // The completion transaction remains the authoritative steer barrier.
       const fetchPendingSteer = async (): Promise<MultiremiTaskSteerMessage[]> => {
-        try {
-          const pending = await this.client.listPendingTaskSteerMessages(task.id);
-          return pending.filter((m) => !recordedSteerIds.has(m.id));
-        } catch (err) {
-          log.warn(`Pending-steer check failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-          return [];
-        }
+        return this.taskDownlinks.pendingTaskSteerMessages(task.id).filter((m) => !recordedSteerIds.has(m.id));
       };
 
       while (true) {
@@ -4264,7 +4277,7 @@ export class MultiremiDaemon {
           }
           if (turnError) throw turnError;
           // The turn ended naturally. A steer accepted by the server but not
-          // yet seen by the 2.5s poll must not be stranded: check once more
+          // yet seen by the push must not be stranded: check once more
           // before trying to finish.
           const pending = await fetchPendingSteer();
           if (pending.length) {
@@ -4303,13 +4316,13 @@ export class MultiremiDaemon {
           await this.client.completeTask(task.id, candidate, finalSessionId, workDir);
         } catch (err) {
           if (!isSteerPendingConflict(err)) throw err;
-          const pendingNow = await this.client.listPendingTaskSteerMessages(task.id).catch(() => [] as MultiremiTaskSteerMessage[]);
+          const pendingNow = await this.taskDownlinks.waitForSteer(task.id, this.options.taskDrainTimeoutMs, signal);
           // Already-recorded ids still pending mean an earlier consume call
           // failed (e.g. transient network) — retry it so the barrier lifts,
           // instead of letting an ignorable consume error become a terminal
           // completion conflict.
           const stale = pendingNow.filter((m) => recordedSteerIds.has(m.id));
-          if (stale.length) await this.client.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
+          if (stale.length) await this.taskDownlinks.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
           const fresh = pendingNow.filter((m) => !recordedSteerIds.has(m.id));
           if (!forceAnswerExpired && fresh.length) {
             await injectSteerBatch(fresh);
@@ -4331,41 +4344,6 @@ export class MultiremiDaemon {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       });
       await provider.close?.();
-    }
-  }
-
-  private watchTaskState(
-    taskId: string,
-    abort: AbortController,
-    onTerminal: (status: Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">) => void,
-  ): ReturnType<typeof setInterval> {
-    let checking = false;
-    const check = async () => {
-      if (abort.signal.aborted || checking) return;
-      checking = true;
-      try {
-        let status = await this.client.getTaskStatus(taskId);
-        if (status === "completed" || status === "failed" || status === "cancelled") {
-          onTerminal(status);
-          if (status === "cancelled") this.outbox?.purgeTask(taskId);
-          abort.abort();
-        }
-      } catch (error) {
-        if (error instanceof MultiremiDaemonHttpError && error.status === 404) {
-          abort.abort();
-        }
-      } finally {
-        checking = false;
-      }
-    };
-    return setInterval(() => void check(), 2500);
-  }
-
-  private async wasTaskCancelledByServer(taskId: string): Promise<boolean> {
-    try {
-      return await this.client.getTaskStatus(taskId) === "cancelled";
-    } catch (err) {
-      return err instanceof MultiremiDaemonHttpError && err.status === 404;
     }
   }
 

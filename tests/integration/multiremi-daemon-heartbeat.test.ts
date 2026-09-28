@@ -9,13 +9,19 @@ import { DaemonProtocolLayer, type DaemonProtocolIdentity } from "@multiremi/api
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { DaemonTaskOffers, prepareTaskOffer } from "@multiremi/api/daemon-protocol/task-offers.js";
+import { DaemonDownlinks } from "@multiremi/api/daemon-protocol/downlinks.js";
+import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-input-snapshot.js";
+import { daemonAgentPluginDesiredResponse } from "@multiremi/api/wire/agent-plugins.js";
+import { createProjectKnowledgeServiceFromEnv } from "@multiremi/project-knowledge/service.js";
+import { createRepositoryWikiServiceFromEnv } from "@multiremi/repository-wiki/service.js";
 
 type Fault = "heartbeat-headers" | "heartbeat-body" | "plugins" | "claim" | "unavailable" | "retired-body";
 let pollingClock: ManualDaemonProtocolClock | null = null;
 let advancePoll: (() => void) | null = null;
 interface FaultSocketData { identity: DaemonProtocolIdentity; session: DaemonProtocolSession | null }
 
-// Real Bun HTTP transport and daemon polling against an isolated API/database.
+// Real HTTP registration and native v2 control traffic against an isolated DB.
 // No production Runtime, provider credentials, or operating-system service is used.
 async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
   const root = mkdtempSync(join(tmpdir(), "remi-heartbeat-recovery-"));
@@ -32,7 +38,17 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
   let pollingNow = Date.now();
   const dateNow = jest.spyOn(Date, "now").mockImplementation(() => pollingNow);
   const state = { armed: false, failures: 0, heartbeats: 0, claims: 0, registrations: 0, cleanupCalls: 0, authorityStatus: 0 };
+  const claimTask = store.claimTask.bind(store);
+  const claimProbe = jest.spyOn(store, "claimTask").mockImplementation((...args) => { state.claims++; return claimTask(...args); });
   const pending: Array<() => void> = [];
+  const knowledge = createProjectKnowledgeServiceFromEnv(store);
+  const wiki = createRepositoryWikiServiceFromEnv(store);
+  const offers = new DaemonTaskOffers({ store, layer: protocol, clock,
+    prepare: task => prepareTaskOffer(store, task, knowledge, wiki) });
+  const downlinks = new DaemonDownlinks({ layer: protocol, snapshot: (rt, session) => runtimeInputSnapshot(store, rt, session) });
+  protocol.registerRpcHandler("plugin.desired", async frame => {
+    return { ok: true, ...daemonAgentPluginDesiredResponse(store.getRuntimeAgentPluginDesiredSnapshot(frame.rt!)) };
+  });
   const work = new Set<Promise<void>>();
   const sockets = new Set<Bun.ServerWebSocket<FaultSocketData>>();
   const serve = (port: number) => Bun.serve<FaultSocketData>({
@@ -79,19 +95,29 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
         if (heartbeat) state.heartbeats++;
         if (claim) state.claims++;
         if (path === "/api/daemon/register") state.registrations++;
+        const terminal = path.match(/^\/api\/daemon\/tasks\/([^/]+)\/(complete|fail)$/);
+        if (terminal) offers.terminal(terminal[1]!, store.getTaskIdentity(terminal[1]!)?.runtimeId ?? null);
       }
       return response;
     },
     websocket: {
       open(socket) {
         sockets.add(socket);
-        socket.data.session = protocol.openSession(socket, socket.data.identity);
+        socket.data.session = protocol.openSession({
+          send(text) {
+            const frame = JSON.parse(text);
+            if (frame.t === "task.offer") {
+              if (fault === "claim" && state.armed) { state.failures++; return text.length; }
+            }
+            return socket.send(text);
+          },
+          close(code, reason) { socket.close(code, reason); },
+        }, socket.data.identity);
       },
       message(socket, message) {
         const frame = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+        if (frame.t === "plugin.desired" && fault === "plugins" && state.armed) { state.failures++; return; }
         if (frame.t === "hb" && state.armed) {
-          // Retirement is exercised through the incomplete HTTP authority body.
-          if (fault === "retired-body") return;
           if (["heartbeat-headers", "heartbeat-body", "unavailable"].includes(fault)) {
             state.failures++;
             if (fault === "heartbeat-headers") return;
@@ -123,8 +149,6 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     pollIntervalMs: 20,
     requestTimeoutMs,
     gcEnabled: false,
-    // Exercise the temporary plugin fallback without waiting 30 real seconds.
-    pluginDesiredRefreshMs: 20,
     workspacesRoot: join(root, "workspaces"),
     repoCacheRoot: join(root, "repos"),
     pluginCacheRoot: join(root, "plugins"),
@@ -135,7 +159,26 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       cleanupForRetirement: async () => { state.cleanupCalls++; },
     },
   });
-  advancePoll = () => { pollingNow += 1_000; daemon.wakeClaim(); };
+  let agentId: string | null = null;
+  let pushedRevision = 0;
+  advancePoll = () => {
+    pollingNow += 1_000; daemon.wakeClaim();
+    const runtime = store.listRuntimes()[0];
+    if (!runtime || !protocol.registry.sessionForRuntime(runtime.id)) return;
+    offers.kick(runtime.id);
+    if (fault === "claim" && !agentId) agentId = store.createAgent({ name: "Network recovery no-op", provider: "claude", runtimeId: runtime.id }).id;
+    if (fault === "claim" && store.listTaskRefs({ runtimeId: runtime.id, statuses: ["queued", "dispatched", "running"] }).length === 0) {
+      const task = store.createTask({ agentId: agentId!, runtimeId: runtime.id, prompt: "No-op", maxAttempts: 1 });
+      offers.enqueued(task);
+    }
+    downlinks.kick(runtime.id);
+    // Invalidate the test's desired cache so the RPC fault is exercised without
+    // reintroducing the deleted 30s HTTP fallback.
+    if (fault === "plugins") {
+      const session = [...sockets][0]?.data.session;
+      session?.sendEvent({ t: "plugin.desired_revision", rt: runtime.id, p: { revision: `fault-${++pushedRevision}` } });
+    }
+  };
   let settled = false;
   let runError: unknown;
   const run = daemon.start().catch((error) => { runError = error; }).finally(() => { settled = true; });
@@ -149,8 +192,10 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       daemon.stop();
       for (const release of pending) release();
       await run;
-      await daemon.daemonProtocolClient().drain();
+      await daemon.stopAndDrainTestWork();
       await Promise.allSettled([...work]);
+      protocol.closeAll();
+      await protocol.drain();
       server.stop(true);
       protocol.stop();
       db.close();
@@ -158,6 +203,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       pollingClock = null;
       advancePoll = null;
       dateNow.mockRestore();
+      claimProbe.mockRestore();
     },
   };
 }

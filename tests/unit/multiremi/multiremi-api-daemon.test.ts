@@ -1,4 +1,5 @@
 import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
+import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 // HTTP surface the daemon itself calls: install commands and token minting,
 // claim/start/complete, task reports, orphan recovery, GC checks, task history.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -420,12 +421,9 @@ describe("Multiremi API — daemon endpoints", () => {
     const runtimeId = registeredBody.runtimes[0].id;
     expect(store.getAccessToken(credential.tokenId)?.daemonId).toBe(credential.daemonId);
 
-    const desired = await app.request(
-      `/api/daemon/runtimes/${runtimeId}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${credential.token}` } },
-    );
-    expect(desired.status).toBe(200);
-    expect(await desired.json()).toMatchObject({ runtime_id: runtimeId, plugins: [] });
+    const desired = await requestRuntimeRpc(store, runtimeId, "plugin.desired", {}, credential.token);
+    expect(desired.ok).toBe(true);
+    expect(desired).toMatchObject({ runtime_id: runtimeId, plugins: [] });
 
     const heartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
@@ -487,10 +485,7 @@ describe("Multiremi API — daemon endpoints", () => {
       purpose: "daemon",
       daemonId: "daemon-legacy-register",
     });
-    expect((await app.request(
-      `/api/daemon/runtimes/${registerRuntimeId}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${legacyRegisterToken.token}` } },
-    )).status).toBe(200);
+    expect((await requestRuntimeRpc(store, registerRuntimeId, "plugin.desired", {}, legacyRegisterToken.token)).ok).toBe(true);
 
     const rollingRuntime = store.registerRuntime({
       id: "rt_legacy_heartbeat",
@@ -521,10 +516,7 @@ describe("Multiremi API — daemon endpoints", () => {
       purpose: "daemon",
       daemonId: "daemon-legacy-heartbeat",
     });
-    expect((await app.request(
-      `/api/daemon/runtimes/${rollingRuntime.id}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${legacyHeartbeatToken.token}` } },
-    )).status).toBe(200);
+    expect((await requestRuntimeRpc(store, rollingRuntime.id, "plugin.desired", {}, legacyHeartbeatToken.token)).ok).toBe(true);
 
     const memberCliToken = await store.createAccessToken({
       name: "Member old daemon",

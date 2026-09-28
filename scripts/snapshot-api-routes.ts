@@ -1606,24 +1606,12 @@ flow("daemon-task-lifecycle", async (rec, refs, store) => {
   await rec.call("GET", `/api/tasks/${id}/prompt`);
   await rec.json("POST", `/api/daemon/tasks/${id}/session`, { session_id: "ses_snapshot", work_dir: "/snapshot/work" });
   await rec.json("POST", `/api/daemon/tasks/${id}/usage`, { usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
-  const human = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Bash" },
-  });
-  const requestId = human.body?.id ?? human.body?.request_id ?? human.body?.request?.id ?? refs.humanRequestId;
+  const requestId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Bash" } }).id;
   await rec.json("POST", `/api/multiremi/tasks/${id}/human-requests/${requestId}/respond`, { outcome: "approved" });
-  const second = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Read" },
-  });
-  const secondId = second.body?.id ?? second.body?.request_id ?? second.body?.request?.id ?? requestId;
+  const secondId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Read" } }).id;
   await rec.json("POST", `/api/tasks/${id}/human-requests/${secondId}/respond`, { outcome: "approved" });
-  const third = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Write" },
-  });
-  const thirdId = third.body?.id ?? third.body?.request_id ?? third.body?.request?.id ?? secondId;
-  await rec.json("POST", `/api/daemon/tasks/${id}/human-requests/${thirdId}/expire`, { status: "timeout" });
+  const thirdId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Write" } }).id;
+  store.expireTaskHumanRequest(thirdId, "timeout");
   await rec.json("POST", `/api/daemon/tasks/${id}/complete`, { result: "done", summary: "complete" });
   await rec.json("POST", `/api/daemon/tasks/${refs.taskId}/fail`, { error: "boom" });
 });

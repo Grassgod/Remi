@@ -8,6 +8,7 @@ import { CHAT_ATTACHMENT_MAX_BYTES, readChatAttachmentBytes } from "@daemon/agen
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiDaemonRuntimeInput,
   MultiremiAgent,
   ReportBotMenuPublishInput,
   MultiremiProjectDocIndexEntry,
@@ -107,7 +108,7 @@ export interface MultiremiDaemonRegisterResponse {
   runtimes: Array<{ id: string; provider?: string; type?: string; claude_profile?: RuntimeClaudeProfile | null; codex_profile?: RuntimeCodexProfile | null }>;
 }
 
-export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonHeartbeatAck {
+export interface MultiremiDaemonHeartbeatConfigAck extends MultiremiDaemonRuntimeInput {
   claude_profile?: RuntimeClaudeProfile | null; codex_profile?: RuntimeCodexProfile | null;
   workspace_settings?: Record<string, unknown>;
   relay?: MultiremiRelayWire;
@@ -359,78 +360,7 @@ export class MultiremiDaemonClient {
       }
       throw error;
     }
-    const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
-    const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
-      ? {
-          id: String(rawOutbound.id ?? ""),
-          claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
-          chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
-          threadId: typeof (rawOutbound.thread_id ?? rawOutbound.threadId) === "string"
-            ? String(rawOutbound.thread_id ?? rawOutbound.threadId)
-            : null,
-          replyToMessageId: typeof (rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId) === "string"
-            ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
-            : null,
-          body: String(rawOutbound.body ?? ""),
-          bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
-          idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
-          mention: parseOutboundMention(rawOutbound.mention),
-          ...(Array.isArray(rawOutbound.attachments) ? {
-            attachments: rawOutbound.attachments.map(normalizeDaemonClaimAttachment),
-          } : {}),
-          ...(Array.isArray(rawOutbound.receipt_message_ids) ? {
-            receiptMessageIds: rawOutbound.receipt_message_ids.filter((id): id is string => typeof id === "string"),
-          } : {}),
-          ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
-          ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
-          ...(typeof rawOutbound.kind === "string" ? {
-            kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
-          } : {}),
-          ...(typeof rawOutbound.human_request_id === "string" ? {
-            humanRequestId: rawOutbound.human_request_id,
-            human_request_id: rawOutbound.human_request_id,
-          } : {}),
-          ...(typeof rawOutbound.human_request_task_id === "string" ? {
-            humanRequestTaskId: rawOutbound.human_request_task_id,
-            human_request_task_id: rawOutbound.human_request_task_id,
-          } : {}),
-          ...(typeof rawOutbound.target_message_id === "string" ? {
-            targetMessageId: rawOutbound.target_message_id,
-            target_message_id: rawOutbound.target_message_id,
-          } : {}),
-          ...(typeof rawOutbound.expires_at === "string" ? {
-            expiresAt: rawOutbound.expires_at,
-            expires_at: rawOutbound.expires_at,
-          } : {}),
-          ...(typeof rawOutbound.degraded === "string" ? {
-            degraded: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
-            degradeReason: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
-          } : {}),
-          ...(typeof rawOutbound.task_id === "string" ? {
-            taskId: rawOutbound.task_id,
-            resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
-          } : {}),
-        }
-      : undefined;
-    // `agent_plugins.revision` is the daemon's change token for the desired
-    // Plugin set: while it is unchanged the poll loop skips that GET entirely.
-    // Normalize it here so a server that omits the field, or a proxy that
-    // reshapes it, degrades to the periodic refresh instead of `undefined`.
-    const rawAgentPlugins = resp.agent_plugins as { revision?: unknown } | undefined;
-    const agentPlugins = typeof rawAgentPlugins?.revision === "string" && rawAgentPlugins.revision
-      ? { revision: rawAgentPlugins.revision }
-      : undefined;
-    // Strip the raw value first: spreading `resp` after this block would
-    // otherwise put a malformed revision back and defeat the normalization.
-    const { agent_plugins: _rawAgentPlugins, ...rest } = resp;
-    void _rawAgentPlugins;
-    return {
-      runtime_id: runtimeId,
-      status: rest.status ?? "ok",
-      ...rest,
-      ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
-      ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
-    } as MultiremiDaemonHeartbeatConfigAck;
+    return normalizeDaemonRuntimeInput(runtimeId, resp);
   }
 
   async reportBotMenuPublishResult(
@@ -1964,4 +1894,79 @@ function booleanOrDefault(value: unknown, fallback: boolean): boolean {
 
 function objectOrDefault(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+export function normalizeDaemonRuntimeInput(runtimeId: string, resp: Partial<MultiremiDaemonHeartbeatConfigAck>): MultiremiDaemonHeartbeatConfigAck {
+  const rawOutbound = resp.pending_feishu_outbound as Record<string, unknown> | undefined;
+  const pendingFeishuOutbound: MultiremiFeishuBotOutboundDelivery | undefined = rawOutbound
+    ? {
+        id: String(rawOutbound.id ?? ""),
+        claimToken: String(rawOutbound.claim_token ?? rawOutbound.claimToken ?? ""),
+        chatId: String(rawOutbound.chat_id ?? rawOutbound.chatId ?? ""),
+        threadId: typeof (rawOutbound.thread_id ?? rawOutbound.threadId) === "string"
+          ? String(rawOutbound.thread_id ?? rawOutbound.threadId)
+          : null,
+        replyToMessageId: typeof (rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId) === "string"
+          ? String(rawOutbound.reply_to_message_id ?? rawOutbound.replyToMessageId)
+          : null,
+        body: String(rawOutbound.body ?? ""),
+        bodyOrigin: (rawOutbound.body_origin ?? rawOutbound.bodyOrigin) === "agent" ? "agent" : "issue",
+        idempotencyKey: String(rawOutbound.idempotency_key ?? rawOutbound.idempotencyKey ?? rawOutbound.id ?? ""),
+        mention: parseOutboundMention(rawOutbound.mention),
+        ...(Array.isArray(rawOutbound.attachments) ? {
+          attachments: rawOutbound.attachments.map(normalizeDaemonClaimAttachment),
+        } : {}),
+        ...(Array.isArray(rawOutbound.receipt_message_ids) ? {
+          receiptMessageIds: rawOutbound.receipt_message_ids.filter((id): id is string => typeof id === "string"),
+        } : {}),
+        ...(parseFeishuPresentation(rawOutbound.presentation) ? { presentation: parseFeishuPresentation(rawOutbound.presentation)! } : {}),
+        ...(isFeishuOpenId(rawOutbound.interaction_open_id) ? { interactionOpenId: rawOutbound.interaction_open_id } : {}),
+        ...(typeof rawOutbound.kind === "string" ? {
+          kind: rawOutbound.kind as MultiremiFeishuBotOutboundDelivery["kind"],
+        } : {}),
+        ...(typeof rawOutbound.human_request_id === "string" ? {
+          humanRequestId: rawOutbound.human_request_id,
+          human_request_id: rawOutbound.human_request_id,
+        } : {}),
+        ...(typeof rawOutbound.human_request_task_id === "string" ? {
+          humanRequestTaskId: rawOutbound.human_request_task_id,
+          human_request_task_id: rawOutbound.human_request_task_id,
+        } : {}),
+        ...(typeof rawOutbound.target_message_id === "string" ? {
+          targetMessageId: rawOutbound.target_message_id,
+          target_message_id: rawOutbound.target_message_id,
+        } : {}),
+        ...(typeof rawOutbound.expires_at === "string" ? {
+          expiresAt: rawOutbound.expires_at,
+          expires_at: rawOutbound.expires_at,
+        } : {}),
+        ...(typeof rawOutbound.degraded === "string" ? {
+          degraded: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
+          degradeReason: rawOutbound.degraded as MultiremiFeishuBotOutboundDelivery["degraded"],
+        } : {}),
+        ...(typeof rawOutbound.task_id === "string" ? {
+          taskId: rawOutbound.task_id,
+          resumeMessageId: typeof rawOutbound.resume_message_id === "string" ? rawOutbound.resume_message_id : null,
+        } : {}),
+      }
+    : undefined;
+  // `agent_plugins.revision` is the daemon's change token for the desired
+  // Plugin set: while it is unchanged the poll loop skips that GET entirely.
+  // Normalize it here so a server that omits the field, or a proxy that
+  // reshapes it, degrades to the periodic refresh instead of `undefined`.
+  const rawAgentPlugins = resp.agent_plugins as { revision?: unknown } | undefined;
+  const agentPlugins = typeof rawAgentPlugins?.revision === "string" && rawAgentPlugins.revision
+    ? { revision: rawAgentPlugins.revision }
+    : undefined;
+  // Strip the raw value first: spreading `resp` after this block would
+  // otherwise put a malformed revision back and defeat the normalization.
+  const { agent_plugins: _rawAgentPlugins, ...rest } = resp;
+  void _rawAgentPlugins;
+  return {
+    runtime_id: runtimeId,
+    status: rest.status ?? "ok",
+    ...rest,
+    ...(agentPlugins ? { agent_plugins: agentPlugins } : {}),
+    ...(pendingFeishuOutbound ? { pending_feishu_outbound: pendingFeishuOutbound } : {}),
+  } as MultiremiDaemonHeartbeatConfigAck;
 }

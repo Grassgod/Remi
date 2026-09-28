@@ -61,6 +61,7 @@ export class DaemonTaskOffers {
     prepare(task: MultiremiTaskWithAgent): Promise<Record<string, unknown> | null>;
     clock?: DaemonProtocolClock;
     sweepMs?: number;
+    onRuntimeReady?(runtimeId: string, activeTaskIds: string[]): void;
   }) {
     this.clock = options.clock ?? systemClock;
     options.layer.registerSessionHooks({
@@ -129,7 +130,10 @@ export class DaemonTaskOffers {
     }).catch(error => {
       console.warn(JSON.stringify({ event: "daemon_offer_failed", runtime_id: runtimeId,
         error_class: error instanceof Error ? error.name : typeof error }));
-    }).finally(() => { pump.running = null; });
+    }).finally(() => {
+      pump.running = null;
+      if (pump.dirty && !pump.waiting && !pump.pending && this.clock.now() >= pump.cooldownUntil) this.kick(runtimeId);
+    });
     pump.running = run;
     this.options.layer.trackBackground(run);
   }
@@ -293,10 +297,13 @@ export class DaemonTaskOffers {
     const runtimeId = frame.rt;
     const ids = frame.payload.active_task_ids;
     if (!runtimeId || !session.runtimeIds.includes(runtimeId) || !Array.isArray(ids) || ids.some(id => typeof id !== "string")) return;
-    for (const id of ids as string[]) {
-      const task = this.options.store.getTaskIdentity(id);
-      if (task?.runtimeId === runtimeId && ["completed", "failed", "cancelled"].includes(task.status)) {
-        session.sendEvent({ t: "task.cancelled", rt: runtimeId, p: { task_id: id, status: task.status } });
+    if (this.options.onRuntimeReady) this.options.onRuntimeReady(runtimeId, ids as string[]);
+    else {
+      for (const id of ids as string[]) {
+        const task = this.options.store.getTaskIdentity(id);
+        if (task?.runtimeId === runtimeId && ["completed", "failed", "cancelled"].includes(task.status)) {
+          session.sendEvent({ t: "task.cancelled", rt: runtimeId, p: { task_id: id, status: task.status } });
+        }
       }
     }
     this.options.store.recoverOrphans(runtimeId, ids as string[]);

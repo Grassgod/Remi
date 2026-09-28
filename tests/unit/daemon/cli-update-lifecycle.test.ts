@@ -6,7 +6,6 @@ import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import { instantiateCoResidentWorkerDaemons } from "../../../apps/remi/cli/multiremi.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import type { DaemonProtocolConnect } from "@multiremi/worker/daemon-protocol-client.js";
-import { injectDaemonHeartbeatInput } from "../../fixtures/daemon-protocol.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -105,7 +104,7 @@ for (const outcome of ["failed", "completed"] as const) {
         id: `tsk_lifecycle_${seq}`, runtime_id: `rt_${provider}`, agent_id: "agt_lifecycle",
         prompt: "no-op", agent: { provider },
       } });
-      await daemons[0]!.daemonProtocolClient().drain();
+      await waitFor(() => replies.has(String(seq)), "offer must be answered while an update is running");
       return replies.get(String(seq));
     };
     let update: Promise<void> | undefined;
@@ -114,19 +113,17 @@ for (const outcome of ["failed", "completed"] as const) {
       expect(await offer(0)).toEqual({ ok: true });
       expect(await offer(1)).toEqual({ ok: true });
       expect(handled).toEqual([1, 1]);
-      // MUL-419: 换回真实 v2 下发
-      update = injectDaemonHeartbeatInput(daemons[0]!, { input: {
-        runtime_id: "rt_claude", status: "ok", pending_update: { id: "upd_test", target_version: "v9.9.9", scope: "cli" },
-      } });
+      push({ t: "runtime.update", rt: "rt_claude", seq: ++sequence,
+        p: { id: "upd_test", target_version: "v9.9.9", scope: "cli" } });
+      update = daemons[0]!.daemonProtocolClient().drain();
       await waitFor(() => updateStarted, "installer must start");
       const pausedHandled = [...handled];
       expect(await offer(0)).toEqual({ ok: false, code: "claims_paused" });
       expect(await offer(1)).toEqual({ ok: false, code: "claims_paused" });
       const siblingHeartbeats = heartbeats[1]!;
       clock.advance(15_000);
-      await daemons[0]!.daemonProtocolClient().drain();
+      await waitFor(() => heartbeats[1]! > siblingHeartbeats, "heartbeat must continue during installation");
       clock.advance(15_000);
-      await daemons[0]!.daemonProtocolClient().drain();
       await waitFor(() => exited[1]! || heartbeats[1]! >= siblingHeartbeats + 2, "sibling must keep heartbeating during installation");
       expect(exited).toEqual([false, false]);
       expect(handled).toEqual(pausedHandled);

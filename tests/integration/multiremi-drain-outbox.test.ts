@@ -11,7 +11,7 @@ import { join } from "node:path";
 import type { AgentResponse } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon as MultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
+import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
@@ -162,8 +162,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       outboxBackoffMs: [20, 20],
       providerFactory,
     });
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const run = daemon.start().catch(() => {});
     try {
       await until(() => daemon.daemonProtocolClient().connectionState() === "connected");
@@ -179,8 +177,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
 
       // Release restores claiming without a daemon restart.
       store.releasePlatformDrain("pop_e2e");
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await until(() => store.getTask(task.id)?.status === "completed", 8_000, "post-release completion");
       expect(ran).toBe(true);
     } finally {
@@ -235,8 +231,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Drain begins mid-task: the daemon acks but the gate stays closed while
       // the task is in flight, and the task is NOT interrupted.
       store.beginPlatformDrain({ operationId: "pop_running", ttlMs: 120_000 });
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       protocolClock.advance(15_000);
       await until(() => store.getPlatformDrainStatus().ackedDaemons === 1, 8_000, "drain ack");
       expect(store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 1, ready: false });
@@ -852,8 +846,6 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
         getLastResponse: () => null,
       }),
     });
-    // MUL-419: 换回真实 v2 下发
-    await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
     const daemonRun = daemon.start();
     try {
       await until(async () => {

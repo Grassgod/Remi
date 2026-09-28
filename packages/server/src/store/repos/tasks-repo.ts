@@ -3914,6 +3914,7 @@ ${placementAfter.sql}
     if (transitionedTask) this.ctx.notifyTaskEvent("task:awaiting_human", transitionedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -3953,6 +3954,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -3976,6 +3978,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -4011,7 +4014,7 @@ ${placementAfter.sql}
 
   /**
    * Record a mid-run user directive for a live task. The daemon's steer
-   * watcher polls unconsumed rows and injects them into the executing
+   * push inbox receives unconsumed rows and injects them into the executing
    * provider session; the row doubles as the audit record. Rejects terminal
    * tasks — there is no run left to steer.
    */
@@ -4022,7 +4025,7 @@ ${placementAfter.sql}
     const id = input.id ?? createId("steer");
     const initial = this.getTask(input.taskId);
     if (!initial) throw new Error(`Task not found: ${input.taskId}`);
-    return this.ctx.db.transaction(() => {
+    const message = this.ctx.db.transaction(() => {
       // Serialize against completeTask/cancelTask on their workspace→session
       // lock order. On Postgres two connections could otherwise each observe
       // "running" / "no pending steer" and commit both the steer insert and
@@ -4055,6 +4058,15 @@ ${placementAfter.sql}
       }
       return this.getTaskSteerMessage(id)!;
     })();
+    this.publishTaskInputChanged(input.taskId);
+    return message;
+  }
+
+  private publishTaskInputChanged(taskId: string): void {
+    const task = this.getTaskIdentity(taskId);
+    if (!task) return;
+    this.ctx.emitWorkspaceEvent({ type: "daemon:task_input", workspaceId: task.workspaceId,
+      actorType: "system", actorId: null, payload: { runtime_id: task.runtimeId, task_id: taskId } });
   }
 
   private withSteerAttachments(row: Row): MultiremiTaskSteerMessage {

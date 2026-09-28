@@ -1,5 +1,5 @@
-// Mid-run steering support for the task worker: a per-run feed that polls the
-// server for unconsumed steer messages, the injection prompt the run loop
+// Mid-run steering support for the task worker: a per-run feed of pushed
+// unconsumed steer messages, the injection prompt the run loop
 // sends into the live provider session, and multi-turn usage accumulation.
 import type { MultiremiTaskSteerMessage, TaskUsageEntry } from "@multiremi/contracts/types.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
@@ -31,11 +31,12 @@ export async function materializeTaskSteerAttachments(
 }
 
 export interface TaskSteerSource {
-  listPendingTaskSteerMessages(taskId: string): Promise<MultiremiTaskSteerMessage[]>;
+  pendingTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[];
+  subscribeTaskSteerMessages(taskId: string, listener: (message: MultiremiTaskSteerMessage) => void): () => void;
 }
 
 /**
- * Polls the server for unconsumed steer messages during one task run.
+ * Receives unconsumed steer messages during one task run.
  *
  * The run loop drains arrivals with {@link take} between provider turns and
  * registers an interrupt callback while a turn is streaming so a mid-turn
@@ -46,30 +47,23 @@ export interface TaskSteerSource {
 export class TaskSteerFeed {
   private queue: MultiremiTaskSteerMessage[] = [];
   private seen = new Set<string>();
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private fetching = false;
+  private unsubscribe: (() => void) | null = null;
   private interrupt: (() => void) | null = null;
 
   constructor(
     private readonly source: TaskSteerSource,
     private readonly taskId: string,
-    private readonly pollMs: number = DEFAULT_STEER_POLL_MS,
-    private readonly onError?: (err: unknown) => void,
   ) {}
 
   start(): void {
-    if (this.timer) return;
-    // Poll immediately: a steer submitted before the run reached this point
-    // must not wait a full interval (or be missed entirely by a short run).
-    void this.poll();
-    this.timer = setInterval(() => {
-      void this.poll();
-    }, Math.max(250, this.pollMs));
+    if (this.unsubscribe) return;
+    this.unsubscribe = this.source.subscribeTaskSteerMessages(this.taskId, message => this.receive(message));
+    for (const message of this.source.pendingTaskSteerMessages(this.taskId)) this.receive(message);
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     this.interrupt = null;
   }
 
@@ -91,7 +85,7 @@ export class TaskSteerFeed {
   /**
    * Mark ids handled outside the feed (the run loop's authoritative fetch
    * observed and processed them directly). Pins them in `seen` and drops any
-   * queued copies, so a poll that was already in flight when the ids were
+   * queued copies, so a replay that arrives after the ids were
    * handled cannot re-enqueue them — a stale duplicate in the queue would
    * fire the next turn's interrupt and cancel it for nothing.
    */
@@ -106,24 +100,11 @@ export class TaskSteerFeed {
     return this.queue.length > 0;
   }
 
-  private async poll(): Promise<void> {
-    if (this.fetching) return;
-    this.fetching = true;
-    try {
-      const messages = await this.source.listPendingTaskSteerMessages(this.taskId);
-      let arrived = false;
-      for (const message of messages) {
-        if (this.seen.has(message.id)) continue;
-        this.seen.add(message.id);
-        this.queue.push(message);
-        arrived = true;
-      }
-      if (arrived) this.interrupt?.();
-    } catch (err) {
-      this.onError?.(err);
-    } finally {
-      this.fetching = false;
-    }
+  private receive(message: MultiremiTaskSteerMessage): void {
+    if (this.seen.has(message.id)) return;
+    this.seen.add(message.id);
+    this.queue.push(message);
+    this.interrupt?.();
   }
 }
 
