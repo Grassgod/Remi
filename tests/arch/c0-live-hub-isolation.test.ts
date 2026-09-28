@@ -13,9 +13,19 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * corresponding entry below (same contract MUL-401's A-0 guard uses).
  */
 
-/** Every module C0 adds, and whether runtime code may import it yet. */
+/**
+ * Every module C0 adds, and whether runtime code may import it yet.
+ *
+ * `@multiremi/contracts/live-hub` was removed from this list by MUL-442 (C7): the
+ * browser replica speaks the v2 frames C0 defines, so it imports the contract's
+ * types — the same relationship MUL-435 (C0) took to A-0's `TraceEvent`, and the
+ * plan's own instruction (C3 未合入时按 C0 契约先写). The three server modules stay
+ * unwired: the hub's implementation is C1/C2/C3's to fill in. The removed entry's
+ * real guarantee is kept below by
+ * 「the contract is referenced by type only」, which is the property that broke
+ * `next build` (MUL-108, MUL-314) rather than the presence of the reference.
+ */
 const C0_MODULES = [
-  { specifier: "@multiremi/contracts/live-hub", wired: false },
   { specifier: "@multiremi/api/hub/live-hub", wired: false },
   { specifier: "@multiremi/api/hub/hub-transport", wired: false },
   { specifier: "@multiremi/api/hub/upstream-contracts", wired: false },
@@ -77,6 +87,34 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
       }
     });
   }
+
+  it("the replica references the v2 frames as types, never as runtime values", () => {
+    // Why this replaces the removed C0_MODULES entry rather than dropping the
+    // check: a *value* import from this module is what broke `next build` twice,
+    // and it is the shape a later edit would reach for by accident (importing
+    // `parseHubStreamKey` into a client module). `import type` is erased, so the
+    // reference costs nothing at runtime; a value import fails here.
+    const replicaDir = join(REPO_ROOT, "frontend/packages/core/replica");
+    const files = listTsFiles(replicaDir).filter((file) => !file.endsWith(".test.ts"));
+    expect(files.length, "no replica modules to scan").toBeGreaterThan(5);
+    const valueImports: string[] = [];
+    const consumers: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(file, "utf8");
+      for (const match of src.matchAll(IMPORT_RE)) {
+        const spec = match[1]!;
+        if (spec !== "@multiremi/contracts/live-hub" && spec !== "@multiremi/contracts/live-hub.js") continue;
+        consumers.push(file.replace(`${REPO_ROOT}/`, ""));
+        if (!/import type\s*\{[^}]*\}\s*from\s*["']@multiremi\/contracts\/live-hub(\.js)?["']/.test(src)) {
+          valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
+        }
+      }
+    }
+    // Positive control: the scan has to see the imports it is judging, or a typo
+    // in the specifier would make this test a permanent green no-op.
+    expect(consumers.length, "the replica no longer imports the v2 frame contract").toBeGreaterThan(0);
+    expect(valueImports, "these files must use `import type` for the v2 frames").toEqual([]);
+  });
 
   it("scans a root set broad enough to catch a real wiring", () => {
     const server = listTsFiles(join(REPO_ROOT, "packages/server/src"));
