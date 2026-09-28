@@ -12,7 +12,9 @@ import {
 import {
   denyCurrentUserWorkspaceAccess,
   denyDaemonRuntimeObservedStateAccess,
+  denyDaemonTokenChatSessionWorkspace,
   denyDaemonTokenRuntimeIdentity,
+  denyDaemonTokenTaskRuntimeIdentity,
   denyDaemonTokenIssueWorkspace,
   isJsonApiError,
   readJsonStrict,
@@ -20,6 +22,8 @@ import {
   requireWorkspaceAdmin,
 } from "../helpers.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
+import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
 import { createId } from "@multiremi/ids.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -58,6 +62,9 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
   return {
     id: archive.id,
     workspace_id: archive.workspaceId,
+    subject_kind: archive.subjectKind,
+    subject_id: archive.subjectId,
+    format: archive.format,
     issue_id: archive.issueId,
     runtime_id: archive.runtimeId,
     daemon_id: archive.daemonId,
@@ -70,6 +77,7 @@ function archiveWire(archive: MultiremiSessionArchive | null): Record<string, un
     relative_path: archive.relativePath,
     metadata: archive.metadata,
     attempt_count: archive.attemptCount,
+    retry_budget_base_attempt: archive.retryBudgetBaseAttempt,
     last_error: archive.lastError,
     next_retry_at: archive.nextRetryAt,
     retry_exhausted_at: archive.retryExhaustedAt,
@@ -205,268 +213,395 @@ function requireIssueAdmin(c: Context, deps: RouterDeps, issueId: string): {
   return { id: issue.id, workspaceId: issue.workspaceId };
 }
 
-function requireDaemonArchiveScope(c: Context, deps: RouterDeps): {
+/**
+ * What a daemon upload route is about.
+ *
+ * `kind` selects which ownership rule the scope check applies, and `id` is the
+ * subject id: an Issue id, a Chat session id, or a one-shot Task id.
+ */
+interface DaemonArchiveSubjectScope {
+  kind: MultiremiSessionArchiveSubjectKind;
+  id: string;
+  workspaceId: string;
   runtimeId: string;
-  issueId: string;
-} | Response {
+}
+
+/**
+ * Resolve the owning Runtime and workspace for one subject.
+ *
+ * Ownership differs per subject and is the whole point of the check:
+ * - `issue` binds to the Issue's workspace row, which must still be owned by
+ *   this Runtime and not already cleaned;
+ * - `chat` binds to `chat_sessions.session_runtime_id`, the Runtime that
+ *   produced the session's provider state;
+ * - `task` binds to `tasks.runtime_id`, the Runtime the one-shot task ran on.
+ */
+function requireDaemonSubjectScope(
+  c: Context,
+  deps: RouterDeps,
+  kind: MultiremiSessionArchiveSubjectKind,
+  param: string,
+): DaemonArchiveSubjectScope | Response {
   const runtimeId = String(c.req.param("runtimeId") ?? "");
-  const issueId = String(c.req.param("issueId") ?? "");
-  const denied = denyDaemonRuntimeObservedStateAccess(c, deps.store, runtimeId, deps.authToken)
-    ?? denyDaemonTokenRuntimeIdentity(c, deps.store, runtimeId)
-    ?? denyDaemonTokenIssueWorkspace(c, deps.store, issueId);
-  if (denied) return denied;
+  const deniedRuntime = denyDaemonRuntimeObservedStateAccess(c, deps.store, runtimeId, deps.authToken)
+    ?? denyDaemonTokenRuntimeIdentity(c, deps.store, runtimeId);
+  if (deniedRuntime) return deniedRuntime;
   const runtime = deps.store.getRuntime(runtimeId);
-  const issue = deps.store.getIssue(issueId);
-  if (!runtime || !issue || (runtime.workspaceId ?? "local") !== issue.workspaceId) {
-    return c.json({ error: "issue archive scope not found" }, 404);
+  if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+  const workspaceId = runtime.workspaceId ?? "local";
+
+  if (kind === "issue") {
+    const issueId = String(c.req.param("issueId") ?? c.req.param(param) ?? "");
+    const denied = denyDaemonTokenIssueWorkspace(c, deps.store, issueId);
+    if (denied) return denied;
+    const issue = deps.store.getIssue(issueId);
+    if (!issue || issue.workspaceId !== workspaceId) {
+      return c.json({ error: "issue archive scope not found" }, 404);
+    }
+    const issueWorkspace = deps.store.getIssueWorkspace(issue.id);
+    if (!issueWorkspace || issueWorkspace.runtimeId !== runtimeId) {
+      return c.json({ error: "issue archive scope not found" }, 404);
+    }
+    if (issueWorkspace.status === "cleaned") {
+      return c.json({
+        error: "Issue workspace has already been cleaned",
+        code: "issue_archive_lifecycle_closed",
+      }, 409);
+    }
+    return { kind, id: issue.id, workspaceId, runtimeId };
   }
-  const issueWorkspace = deps.store.getIssueWorkspace(issueId);
-  if (!issueWorkspace || issueWorkspace.runtimeId !== runtimeId) {
-    return c.json({ error: "issue archive scope not found" }, 404);
+
+  if (kind === "chat") {
+    const sessionId = String(c.req.param("sessionId") ?? c.req.param(param) ?? "");
+    const denied = denyDaemonTokenChatSessionWorkspace(c, deps.store, sessionId);
+    if (denied) return denied;
+    const session = deps.store.getChatSession(sessionId);
+    if (!session || session.workspaceId !== workspaceId) {
+      return c.json({ error: "chat archive scope not found" }, 404);
+    }
+    if (session.sessionRuntimeId !== runtimeId) {
+      return c.json({
+        error: "chat session is not owned by this Runtime",
+        code: "session_archive_subject_not_writable",
+      }, 409);
+    }
+    return { kind, id: session.id, workspaceId, runtimeId };
   }
-  if (issueWorkspace.status === "cleaned") {
+
+  const taskId = String(c.req.param("taskId") ?? c.req.param(param) ?? "");
+  const denied = denyDaemonTokenTaskRuntimeIdentity(c, deps.store, taskId);
+  if (denied) return denied;
+  const task = deps.store.getTask(taskId);
+  if (!task || task.workspaceId !== workspaceId) {
+    return c.json({ error: "task archive scope not found" }, 404);
+  }
+  if (task.runtimeId !== runtimeId) {
     return c.json({
-      error: "Issue workspace has already been cleaned",
-      code: "issue_archive_lifecycle_closed",
+      error: "task is not owned by this Runtime",
+      code: "session_archive_subject_not_writable",
     }, 409);
   }
-  return { runtimeId, issueId };
+  return { kind, id: task.id, workspaceId, runtimeId };
+}
+
+/**
+ * Detect a v1 container from the request the *old daemon* actually sends.
+ *
+ * Upgraded daemons name the v2 format in `metadata.format`. A daemon that has
+ * not upgraded sends no format field at all, so the absence of the v2 marker is
+ * what identifies v1 — trusting the caller to declare it would let exactly the
+ * clients this gate protects slip through.
+ */
+function isLegacyArchiveRequest(metadata: Record<string, unknown> | undefined): boolean {
+  return metadata?.format !== SESSION_ARCHIVE_FORMAT_V2;
+}
+
+/** 409 for a container this server no longer indexes. */
+function legacyArchiveResponse(c: Context): Response {
+  return c.json({
+    error: "session archive format is no longer accepted for new uploads; "
+      + `upgrade the daemon to upload ${SESSION_ARCHIVE_FORMAT_V2}`,
+    code: "session_archive_format_unsupported",
+  }, 409);
 }
 
 export function registerSessionArchiveRoutes(app: Hono, deps: RouterDeps): void {
   const { store, sessionArchives } = deps;
-  const daemonBase = "/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives";
 
-  app.get(`${daemonBase}/status`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    const sourceRevision = c.req.query("source_revision");
-    const sha256 = c.req.query("sha256")?.toLowerCase();
-    let snapshot = store.getSessionArchiveStatus(
-      scope.issueId,
-      sourceRevision,
-      sha256,
-    );
-    await sessionArchives.cleanupExhaustedPartials(snapshot.latest);
-    let physicallyVerifiedAttempt: number | null = null;
-    if (c.req.query("verify_ready") === "1") {
-      // A retry may supersede the row while its bytes are being hashed. Verify
-      // the exact attempt returned to the daemon and fail closed under churn.
-      for (let pass = 0; pass < 3 && snapshot.requestedReady; pass++) {
-        const candidate = snapshot.requestedReady;
-        try {
-          const verified = await sessionArchives.verify(candidate.id);
-          snapshot = store.getSessionArchiveStatus(scope.issueId, sourceRevision, sha256);
-          if (
-            verified.valid
-            && snapshot.requestedReady?.id === candidate.id
-            && snapshot.requestedReady.attemptCount === candidate.attemptCount
-          ) {
-            physicallyVerifiedAttempt = candidate.attemptCount;
-            break;
+  /**
+   * Register the daemon upload protocol for one subject kind.
+   *
+   * Issues, Chats and one-shot Tasks speak the same upload protocol over a
+   * different ownership check, so they share one registration: `path` names the
+   * route segment, `param` holds the subject id, and `kind` selects the scope
+   * rule.
+   */
+  function registerDaemonSubjectRoutes(options: {
+    kind: MultiremiSessionArchiveSubjectKind;
+    path: string;
+    param: string;
+  }): void {
+    const base = `/api/daemon/runtimes/:runtimeId/${options.path}/:${options.param}/session-archives`;
+    const scopeFor = (c: Context): DaemonArchiveSubjectScope | Response =>
+      requireDaemonSubjectScope(c, deps, options.kind, options.param);
+    const selfPath = (scope: DaemonArchiveSubjectScope): string =>
+      `/api/daemon/runtimes/${encodeURIComponent(scope.runtimeId)}/${options.path}`
+      + `/${encodeURIComponent(scope.id)}/session-archives`;
+
+    app.get(`${base}/status`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      const sourceRevision = c.req.query("source_revision");
+      const sha256 = c.req.query("sha256")?.toLowerCase();
+      let snapshot = store.getSessionArchiveSubjectStatus(
+        scope.kind,
+        scope.id,
+        sourceRevision,
+        sha256,
+      );
+      await sessionArchives.cleanupExhaustedPartials(snapshot.latest);
+      let physicallyVerifiedAttempt: number | null = null;
+      if (c.req.query("verify_ready") === "1") {
+        // A retry may supersede the row while its bytes are being hashed. Verify
+        // the exact attempt returned to the daemon and fail closed under churn.
+        for (let pass = 0; pass < 3 && snapshot.requestedReady; pass++) {
+          const candidate = snapshot.requestedReady;
+          try {
+            const verified = await sessionArchives.verify(candidate.id);
+            snapshot = store.getSessionArchiveSubjectStatus(
+              scope.kind,
+              scope.id,
+              sourceRevision,
+              sha256,
+            );
+            if (
+              verified.valid
+              && snapshot.requestedReady?.id === candidate.id
+              && snapshot.requestedReady.attemptCount === candidate.attemptCount
+            ) {
+              physicallyVerifiedAttempt = candidate.attemptCount;
+              break;
+            }
+          } catch (error) {
+            if (!(error instanceof SessionArchiveError)
+              || (error.code !== "session_archive_invalid_state"
+                && error.code !== "session_archive_not_found")) {
+              throw error;
+            }
+            snapshot = store.getSessionArchiveSubjectStatus(
+              scope.kind,
+              scope.id,
+              sourceRevision,
+              sha256,
+            );
           }
-        } catch (error) {
-          if (!(error instanceof SessionArchiveError)
-            || (error.code !== "session_archive_invalid_state"
-              && error.code !== "session_archive_not_found")) {
-            throw error;
-          }
-          snapshot = store.getSessionArchiveStatus(scope.issueId, sourceRevision, sha256);
         }
       }
-    }
-    const requestedAttempt = snapshot.requestedReady?.attemptCount ?? null;
-    return c.json({
-      latest: archiveWire(snapshot.latest),
-      latest_ready: archiveWire(snapshot.latestReady),
-      requested_ready: archiveWire(snapshot.requestedReady),
-      gc_ready: c.req.query("verify_ready") === "1"
-        ? snapshot.gcReady && physicallyVerifiedAttempt === requestedAttempt
-        : snapshot.gcReady,
-    });
-  });
-
-  app.post(`${daemonBase}/init`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    const runtime = store.getRuntime(scope.runtimeId)!;
-    const issue = store.getIssue(scope.issueId)!;
-    const body = await readJsonStrict<InitBody>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return c.json({ error: "invalid request body" }, 400);
-    }
-    if (body.metadata != null && (typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
-      return c.json({ error: "metadata must be an object" }, 400);
-    }
-    const input: InitSessionArchiveInput = {
-      workspaceId: issue.workspaceId,
-      issueId: scope.issueId,
-      runtimeId: scope.runtimeId,
-      daemonId: runtime.daemonId?.trim() || "unbound",
-      sourceRevision: typeof body.source_revision === "string" ? body.source_revision : "",
-      sha256: typeof body.sha256 === "string" ? body.sha256 : "",
-      sizeBytes: typeof body.size_bytes === "number" ? body.size_bytes : Number.NaN,
-      fileCount: body.file_count == null
-        ? null
-        : typeof body.file_count === "number" ? body.file_count : Number.NaN,
-      metadata: body.metadata as Record<string, unknown> | undefined,
-    };
-    try {
-      const initialized = sessionArchives.initialize(input);
-      const claimed = await sessionArchives.claimUploadAttempt(
-        scope.runtimeId,
-        scope.issueId,
-        initialized.archive.id,
-      );
-      const uploadUrl = claimed.uploadAttempt == null
-        ? null
-        : `${daemonBase
-          .replace(":runtimeId", encodeURIComponent(scope.runtimeId))
-          .replace(":issueId", encodeURIComponent(scope.issueId))}/${encodeURIComponent(initialized.archive.id)}/content?attempt=${claimed.uploadAttempt}`;
+      const requestedAttempt = snapshot.requestedReady?.attemptCount ?? null;
       return c.json({
-        archive: archiveWire(claimed.archive),
-        upload_attempt: claimed.uploadAttempt,
-        upload_url: uploadUrl && deps.daemonDirectBaseUrl
-          ? new URL(uploadUrl, deps.daemonDirectBaseUrl).toString()
-          : uploadUrl,
-      }, initialized.created ? 201 : 200);
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
+        latest: archiveWire(snapshot.latest),
+        latest_ready: archiveWire(snapshot.latestReady),
+        requested_ready: archiveWire(snapshot.requestedReady),
+        gc_ready: c.req.query("verify_ready") === "1"
+          ? snapshot.gcReady && physicallyVerifiedAttempt === requestedAttempt
+          : snapshot.gcReady,
+      });
+    });
 
-  app.post(`${daemonBase}/failure`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    const runtime = store.getRuntime(scope.runtimeId)!;
-    const issue = store.getIssue(scope.issueId)!;
-    const body = await readJsonStrict<FailureBody>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return c.json({ error: "invalid request body" }, 400);
-    }
-    if (Object.keys(body).some((key) => key !== "stage" && key !== "error")) {
-      return c.json({ error: "only stage and error are allowed" }, 400);
-    }
-    const error = typeof body.error === "string" ? body.error.trim() : "";
-    if (body.stage !== "prepare") {
-      return c.json({ error: "stage must be prepare" }, 400);
-    }
-    if (!error || error.length > 2_000) {
-      return c.json({ error: "error must be between 1 and 2000 characters" }, 400);
-    }
-    const id = createId("sar");
-    const input: ReportSessionArchiveFailureInput = {
-      workspaceId: issue.workspaceId,
-      issueId: scope.issueId,
-      runtimeId: scope.runtimeId,
-      daemonId: runtime.daemonId?.trim() || "unbound",
-      stage: "prepare",
-      error,
-    };
-    try {
-      const reported = store.reportSessionArchiveFailure(
-        input,
-        id,
-        `failures/${id}/sessions.tar.gz`,
-      );
-      return c.json(
-        { archive: archiveWire(reported.archive) },
-        reported.created ? 201 : 200,
-      );
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
+    app.post(`${base}/init`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      const runtime = store.getRuntime(scope.runtimeId)!;
+      const body = await readJsonStrict<InitBody>(c);
+      if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return c.json({ error: "invalid request body" }, 400);
+      }
+      if (body.metadata != null && (typeof body.metadata !== "object" || Array.isArray(body.metadata))) {
+        return c.json({ error: "metadata must be an object" }, 400);
+      }
+      // The gate runs before `initialize` so no row is created and no attempt is
+      // claimed for a container this server will not index.
+      if (isLegacyArchiveRequest(body.metadata as Record<string, unknown> | undefined)) {
+        return legacyArchiveResponse(c);
+      }
+      const input: InitSessionArchiveInput = {
+        workspaceId: scope.workspaceId,
+        subjectKind: scope.kind,
+        subjectId: scope.id,
+        // Only an Issue subject carries an Issue id.
+        issueId: scope.kind === "issue" ? scope.id : null,
+        format: SESSION_ARCHIVE_FORMAT_V2,
+        runtimeId: scope.runtimeId,
+        daemonId: runtime.daemonId?.trim() || "unbound",
+        sourceRevision: typeof body.source_revision === "string" ? body.source_revision : "",
+        sha256: typeof body.sha256 === "string" ? body.sha256 : "",
+        sizeBytes: typeof body.size_bytes === "number" ? body.size_bytes : Number.NaN,
+        fileCount: body.file_count == null
+          ? null
+          : typeof body.file_count === "number" ? body.file_count : Number.NaN,
+        metadata: body.metadata as Record<string, unknown> | undefined,
+      };
+      try {
+        const initialized = sessionArchives.initialize(input);
+        const claimed = await sessionArchives.claimUploadAttempt(
+          scope.runtimeId,
+          scope,
+          initialized.archive.id,
+        );
+        const uploadUrl = claimed.uploadAttempt == null
+          ? null
+          : `${selfPath(scope)}/${encodeURIComponent(initialized.archive.id)}`
+            + `/content?attempt=${claimed.uploadAttempt}`;
+        return c.json({
+          archive: archiveWire(claimed.archive),
+          upload_attempt: claimed.uploadAttempt,
+          upload_url: uploadUrl && deps.daemonDirectBaseUrl
+            ? new URL(uploadUrl, deps.daemonDirectBaseUrl).toString()
+            : uploadUrl,
+        }, initialized.created ? 201 : 200);
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
 
-  // Hono dispatches HEAD through GET routing before invoking the handler.
-  app.get(`${daemonBase}/:archiveId/content`, (c) => {
-    if (c.req.method !== "HEAD") {
-      return c.json({ error: "method not allowed" }, 405);
-    }
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    try {
-      sessionArchives.preflightUpload(
-        scope.runtimeId,
-        scope.issueId,
-        c.req.param("archiveId"),
-        requiredUploadAttempt(c),
-      );
-      return c.body(
-        null,
-        204,
-        isDirectArchiveRoute(c, deps.daemonDirectBaseUrl)
-          ? { [DIRECT_ARCHIVE_RESPONSE_HEADER]: "1" }
-          : undefined,
-      );
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
-
-  app.put(`${daemonBase}/:archiveId/content`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    try {
-      const archive = await sessionArchives.upload(
-        scope.runtimeId,
-        scope.issueId,
-        c.req.param("archiveId"),
-        requiredUploadAttempt(c),
-        c.req.raw.body,
-      );
-      return c.json({ archive: archiveWire(archive) });
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
-
-  app.post(`${daemonBase}/:archiveId/failure`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    const body = await readJsonStrict<UploadFailureBody>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return c.json({ error: "invalid request body" }, 400);
-    }
-    if (Object.keys(body).some((key) => key !== "error")) {
-      return c.json({ error: "only error is allowed" }, 400);
-    }
-    const error = typeof body.error === "string" ? body.error.trim() : "";
-    if (!error || error.length > 2_000) {
-      return c.json({ error: "error must be between 1 and 2000 characters" }, 400);
-    }
-    try {
-      const archive = sessionArchives.failUpload(
-        scope.runtimeId,
-        scope.issueId,
-        c.req.param("archiveId"),
-        requiredUploadAttempt(c),
+    app.post(`${base}/failure`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      const runtime = store.getRuntime(scope.runtimeId)!;
+      const body = await readJsonStrict<FailureBody>(c);
+      if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return c.json({ error: "invalid request body" }, 400);
+      }
+      if (Object.keys(body).some((key) => key !== "stage" && key !== "error")) {
+        return c.json({ error: "only stage and error are allowed" }, 400);
+      }
+      const error = typeof body.error === "string" ? body.error.trim() : "";
+      if (body.stage !== "prepare") {
+        return c.json({ error: "stage must be prepare" }, 400);
+      }
+      if (!error || error.length > 2_000) {
+        return c.json({ error: "error must be between 1 and 2000 characters" }, 400);
+      }
+      const id = createId("sar");
+      const input: ReportSessionArchiveFailureInput = {
+        workspaceId: scope.workspaceId,
+        subjectKind: scope.kind,
+        subjectId: scope.id,
+        issueId: scope.kind === "issue" ? scope.id : null,
+        runtimeId: scope.runtimeId,
+        daemonId: runtime.daemonId?.trim() || "unbound",
+        stage: "prepare",
         error,
-      );
-      return c.json({ archive: archiveWire(archive) });
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
+      };
+      try {
+        const reported = store.reportSessionArchiveFailure(
+          input,
+          id,
+          `failures/${id}/sessions.zip`,
+        );
+        return c.json(
+          { archive: archiveWire(reported.archive) },
+          reported.created ? 201 : 200,
+        );
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
 
-  app.post(`${daemonBase}/:archiveId/complete`, async (c) => {
-    const scope = requireDaemonArchiveScope(c, deps);
-    if (scope instanceof Response) return scope;
-    try {
-      const archive = await sessionArchives.complete(
-        scope.runtimeId,
-        scope.issueId,
-        c.req.param("archiveId"),
-        requiredUploadAttempt(c),
-      );
-      return c.json({ archive: archiveWire(archive) });
-    } catch (error) {
-      return archiveError(c, error);
-    }
-  });
+    // Hono dispatches HEAD through GET routing before invoking the handler.
+    app.get(`${base}/:archiveId/content`, (c) => {
+      if (c.req.method !== "HEAD") {
+        return c.json({ error: "method not allowed" }, 405);
+      }
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      try {
+        sessionArchives.preflightUpload(
+          scope.runtimeId,
+          scope,
+          c.req.param("archiveId"),
+          requiredUploadAttempt(c),
+        );
+        return c.body(
+          null,
+          204,
+          isDirectArchiveRoute(c, deps.daemonDirectBaseUrl)
+            ? { [DIRECT_ARCHIVE_RESPONSE_HEADER]: "1" }
+            : undefined,
+        );
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
+
+    app.put(`${base}/:archiveId/content`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      try {
+        const archive = await sessionArchives.upload(
+          scope.runtimeId,
+          scope,
+          c.req.param("archiveId"),
+          requiredUploadAttempt(c),
+          c.req.raw.body,
+        );
+        return c.json({ archive: archiveWire(archive) });
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
+
+    app.post(`${base}/:archiveId/failure`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      const body = await readJsonStrict<UploadFailureBody>(c);
+      if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return c.json({ error: "invalid request body" }, 400);
+      }
+      if (Object.keys(body).some((key) => key !== "error")) {
+        return c.json({ error: "only error is allowed" }, 400);
+      }
+      const error = typeof body.error === "string" ? body.error.trim() : "";
+      if (!error || error.length > 2_000) {
+        return c.json({ error: "error must be between 1 and 2000 characters" }, 400);
+      }
+      try {
+        const archive = sessionArchives.failUpload(
+          scope.runtimeId,
+          scope,
+          c.req.param("archiveId"),
+          requiredUploadAttempt(c),
+          error,
+        );
+        return c.json({ archive: archiveWire(archive) });
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
+
+    app.post(`${base}/:archiveId/complete`, async (c) => {
+      const scope = scopeFor(c);
+      if (scope instanceof Response) return scope;
+      try {
+        const archive = await sessionArchives.complete(
+          scope.runtimeId,
+          scope,
+          c.req.param("archiveId"),
+          requiredUploadAttempt(c),
+        );
+        return c.json({ archive: archiveWire(archive) });
+      } catch (error) {
+        return archiveError(c, error);
+      }
+    });
+  }
+
+  registerDaemonSubjectRoutes({ kind: "issue", path: "issues", param: "issueId" });
+  registerDaemonSubjectRoutes({ kind: "chat", path: "chats", param: "sessionId" });
+  registerDaemonSubjectRoutes({ kind: "task", path: "tasks", param: "taskId" });
 
   app.get("/api/workspaces/:id/session-archive", (c) => {
     const workspaceId = c.req.param("id");

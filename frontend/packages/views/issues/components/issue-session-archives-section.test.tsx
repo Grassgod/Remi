@@ -76,6 +76,7 @@ function makeArchive(overrides: Partial<SessionArchive> = {}): SessionArchive {
     relative_path: "issue-1/archive.tar.gz",
     metadata: {},
     attempt_count: 1,
+    retry_budget_base_attempt: 0,
     last_error: null,
     next_retry_at: null,
     retry_exhausted_at: null,
@@ -168,6 +169,16 @@ describe("IssueSessionArchivesSection", () => {
     expect(screen.getByText("upload stalled after 900000ms")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry archive" }));
     await waitFor(() => expect(mockRetry).toHaveBeenCalledWith(archive.id));
+  });
+
+  it("shows attempts since the last manual retry", async () => {
+    const user = userEvent.setup();
+    const archive = makeArchive({ attempt_count: 7, retry_budget_base_attempt: 6 });
+    archivesRef.data = { archives: [archive], latest: archive, latest_ready: archive };
+    renderSection();
+    await user.click(screen.getByRole("button", { name: /Session archives/ }));
+    expect(screen.getByText((_, element) => element?.tagName === "P"
+      && element.textContent?.includes("1 attempts") === true)).toBeInTheDocument();
   });
 
   it("stays hidden for an active issue with no archive", () => {

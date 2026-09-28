@@ -184,6 +184,8 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
+    "GET /api/sessions/:sessionId/log": "session.log.window",
+    "GET /api/sessions/:sessionId/log/locate": "session.log.locate",
     "GET /api/issues/children": "issue.children",
     "GET /api/multiremi/issues/children": "issue.children",
     "GET /api/issues/child-progress": "issue.child-progress",

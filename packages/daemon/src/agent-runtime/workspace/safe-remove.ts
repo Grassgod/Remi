@@ -635,7 +635,7 @@ function openVerifiedCandidate(path: string, label: string, expected: Stats): Op
   return { path, fd, info };
 }
 
-function assertRealDirectoryPath(path: string, expected: Stats, label: string): void {
+export function assertRealDirectoryPath(path: string, expected: Stats, label: string): void {
   const info = lstatIfExists(path);
   if (!info || !info.isDirectory() || info.isSymbolicLink()) {
     throw new Error(`${label} must be a real directory: ${path}`);

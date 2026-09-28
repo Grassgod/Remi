@@ -328,6 +328,20 @@ function sessionCommandSpecs(): CommandSpec[] {
     nativeSpec("session.event.list", ["session", "event", "list"], "List Session events", "read", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [], async (invocation) => {
       await getAndRender(invocation, `${sessionPath(invocation)}/events`, ["events"]);
     }),
+    nativeSpec("session.log.window", ["session", "log", "window"], "Read a Session log window", "read", HUMAN_TASK, [refPositional("session")], [
+      { name: "anchor", type: "integer", valueName: "seq", description: "Anchor sequence" },
+      { name: "before", type: "integer", valueName: "n", description: "Entries at or before anchor" },
+      { name: "after", type: "integer", valueName: "n", description: "Entries after anchor" },
+    ], async (invocation) => {
+      await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log`, ["entries"], {
+        anchor: integerOption(invocation, "anchor"), before: integerOption(invocation, "before"), after: integerOption(invocation, "after"),
+      });
+    }),
+    nativeSpec("session.log.locate", ["session", "log", "locate"], "Locate a Session log entry", "read", HUMAN_TASK, [refPositional("session"), refPositional("entry")], [], async (invocation) => {
+      await getAndRender(invocation, `/api/sessions/${encodePath(positional(invocation, 0, "session"))}/log/locate`, [], {
+        id: positional(invocation, 1, "entry"),
+      });
+    }),
     nativeSpec("session.message.create", ["session", "message", "create"], "Post a Session message", "write", HUMAN_TASK, [refPositional("issue"), refPositional("session")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `${sessionPath(invocation)}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
     }),
