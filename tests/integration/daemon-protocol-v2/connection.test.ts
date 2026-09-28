@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { MultiremiDaemonHttpError, MultiremiDaemonRequestTimeoutError } from "@multiremi/worker/client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
@@ -64,6 +65,31 @@ describe("daemon protocol v2 real connection", () => {
     expect(await closeCode).toBe(4401);
     await waitFor(() => h.client.connectionState() === "terminal", "revoked credential terminal state");
     expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
+  });
+
+  it("reads pending and settled human requests through a real v2 RPC", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "human request RPC", provider: "claude", runtimeId });
+    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "question" });
+    const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(true);
+    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toEqual(request);
+    expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "test" })).toBeTruthy();
+    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(false);
+    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes" } });
+    await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toBeInstanceOf(MultiremiDaemonHttpError);
+    await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toMatchObject({ status: 404 });
+    expect(h.ledger.filter(entry => entry.type === "human_request.get")).toHaveLength(6);
+  });
+
+  it("throws the HTTP-style timeout when human_request.get cannot reach the server", async () => {
+    const h = await fixture({ daemonOptions: { requestTimeoutMs: 50 } });
+    await h.startDaemon();
+    await h.disconnect();
+    await expect(h.daemon.getFeishuBotHumanRequest("tsk_unreachable", "hrq_unreachable"))
+      .rejects.toBeInstanceOf(MultiremiDaemonRequestTimeoutError);
   });
 
   it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {

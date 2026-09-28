@@ -31,6 +31,7 @@ import {
   isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
   MultiremiDaemonHttpError,
+  MultiremiDaemonRequestTimeoutError,
   type MultiremiDaemonHeartbeatConfigAck,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
@@ -43,6 +44,7 @@ import {
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
   DaemonProtocolClient,
+  DaemonProtocolRpcError,
   type DaemonProtocolClientOptions,
   type DaemonProtocolLane,
 } from "./daemon-protocol-client.js";
@@ -1155,7 +1157,7 @@ export class MultiremiDaemon {
   }
 
   async isFeishuBotHumanRequestPending(taskId: string, requestId: string): Promise<boolean> {
-    return (await this.client.getTaskHumanRequest(taskId, requestId))?.status === "pending";
+    return (await this.readFeishuBotHumanRequest(taskId, requestId)).status === "pending";
   }
 
   /** Cards this Runtime still owes click handlers for (MUL-407 restart recovery). */
@@ -1170,7 +1172,26 @@ export class MultiremiDaemon {
   }
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    return this.client.getTaskHumanRequest(taskId, requestId);
+    return this.readFeishuBotHumanRequest(taskId, requestId);
+  }
+
+  private async readFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest> {
+    const path = `/api/daemon/tasks/${taskId}/human-requests/${requestId}`;
+    const timeoutMs = this.options.requestTimeoutMs;
+    try {
+      const reply = await this.taskDownlinks.rpc("human_request.get", { task_id: taskId, request_id: requestId }, timeoutMs);
+      if (!reply.request || typeof reply.request !== "object") throw new Error("human_request.get returned no request");
+      return reply.request as MultiremiTaskHumanRequest;
+    } catch (error) {
+      if (error instanceof DaemonProtocolRpcError) {
+        if (error.code === "daemon_timeout") throw new MultiremiDaemonRequestTimeoutError("GET", path, timeoutMs);
+        const status = error.httpStatus ?? (error.code === "task_not_found" ? 404 : error.code === "authority_revoked" ? 403 : null);
+        if (status !== null) throw new MultiremiDaemonHttpError(status, "GET", path,
+          JSON.stringify({ error: error.detail ?? (status === 404 ? "request not found" : "forbidden for daemon identity"),
+            ...(error.httpCode ? { code: error.httpCode } : {}) }), error.httpCode ?? null);
+      }
+      throw error;
+    }
   }
 
   respondFeishuBotHumanRequest(

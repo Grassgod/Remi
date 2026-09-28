@@ -482,13 +482,12 @@ describe("Feishu decision cards for Issue human requests", () => {
     const request = askQuestion(store, taskId);
     const hostToken = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const host = { Authorization: `Bearer ${hostToken.token}`, "content-type": "application/json" };
-    const exec = { Authorization: `Bearer ${executor.token}`, "content-type": "application/json" };
     const requestPath = `/api/daemon/tasks/${taskId}/human-requests/${request.id}`;
 
     // (1) The topic's host may read the request.
-    const read = await app.request(requestPath, { headers: host });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ request: { id: request.id, status: "pending" } });
+    const read = await requestRuntimeRpc(store, "rt_bot", "human_request.get",
+      { task_id: taskId, request_id: request.id }, hostToken.token, "MASTER");
+    expect(read).toMatchObject({ ok: true, request: { id: request.id, status: "pending" } });
     // (2) The topic's host may answer it.
     const respond = await app.request(`${requestPath}/respond`, {
       method: "POST", headers: host,
@@ -509,9 +508,10 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.getTaskHumanRequest(second.id)?.status).toBe("pending");
     // (4) S2: a genuinely different daemon is refused, on read and on create.
     const stranger = await store.createAccessToken({ name: "stranger", type: "daemon", workspaceId: "local", daemonId: "someone-else" });
-    const strangerHeaders = { Authorization: `Bearer ${stranger.token}`, "content-type": "application/json" };
-    expect((await app.request(requestPath, { headers: strangerHeaders })).status).toBe(403);
     store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude", workspaceId: "local", daemonId: "someone-else" });
+    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.get",
+      { task_id: taskId, request_id: request.id }, stranger.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.create", {
       task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
     }, stranger.token, "MASTER")).toMatchObject({ ok: false, code: "authority_revoked" });
@@ -522,9 +522,9 @@ describe("Feishu decision cards for Issue human requests", () => {
     store.heartbeatRuntime("rt_other", { supportsFeishuBotConfig: true });
     const outsider = await store.createAccessToken({ name: "outsider", type: "daemon",
       workspaceId: otherWorkspace.id, daemonId: "other-host" });
-    expect((await app.request(requestPath, {
-      headers: { Authorization: `Bearer ${outsider.token}`, "content-type": "application/json" },
-    })).status).toBe(403);
+    expect(await requestRuntimeRpc(store, "rt_other", "human_request.get",
+      { task_id: taskId, request_id: request.id }, outsider.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     // The executing daemon keeps full control.
     expect(await requestRuntimeRpc(store, "rt_exec", "human_request.expire", {
       task_id: taskId, request_id: request.id, status: "cancelled",

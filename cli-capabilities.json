@@ -10316,11 +10316,6 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/tasks/:taskId/human-requests/:requestId": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "GET /api/daemon/tasks/:taskId/messages": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",

@@ -3,6 +3,7 @@ import type { DaemonProtocolLayer } from "./index.js";
 import type { DaemonParsedFrame } from "./frames.js";
 import type { DaemonProtocolSession } from "./session.js";
 import { daemonAgentPluginDesiredResponse } from "../wire/agent-plugins.js";
+import { daemonTaskRuntimeIdentityDenial } from "../helpers/auth-guards.js";
 
 const denied = (code = "invalid_report") => ({ ok: false, code, retryable: false });
 
@@ -42,6 +43,20 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
     const request = existing ?? store.createTaskHumanRequest({ id: request_id, taskId, kind,
       payload: payload as Record<string, unknown>, timeoutMs: timeout_ms as number | undefined });
     kick(frame.rt!);
+    return { ok: true, request };
+  });
+  layer.registerRpcHandler("human_request.get", async (frame, session) => {
+    if (!await authorized(frame, session)) return denied("authority_revoked");
+    const { task_id, request_id } = frame.payload;
+    if (typeof task_id !== "string" || typeof request_id !== "string" || !task_id || !request_id) return denied();
+    const refusal = daemonTaskRuntimeIdentityDenial(store, session.ownerAccessToken, task_id, {
+      feishuBotTransport: true, issueHumanRequestTransport: true,
+    });
+    if (refusal) return { ok: false, code: refusal.status === 404 ? "task_not_found" : "authority_revoked",
+      message: refusal.body.error, retryable: false, http_status: refusal.status, http_code: refusal.body.code ?? null };
+    const request = store.getTaskHumanRequest(request_id);
+    if (!request || request.taskId !== task_id) return { ok: false, code: "task_not_found", message: "request not found",
+      retryable: false, http_status: 404, http_code: null };
     return { ok: true, request };
   });
   layer.registerRpcHandler("human_request.expire", async (frame, session) => {

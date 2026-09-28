@@ -902,13 +902,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });
-  app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, c.req.param("taskId"));
-    if (identityDenied) return identityDenied;
-    const request = store.getTaskHumanRequest(c.req.param("requestId"));
-    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
-    return c.json({ request });
-  });
   app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/respond", async (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);

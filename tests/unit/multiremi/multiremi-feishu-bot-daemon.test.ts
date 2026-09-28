@@ -300,21 +300,19 @@ describe("Feishu bot control-plane delivery", () => {
       payload: { question: "Continue?" } });
     const privateQuestion = test.store.createTaskHumanRequest({ taskId: unbound.id, kind: "question",
       payload: { question: "Private?" } });
-    const read = (taskId: string, requestId: string, token: string) =>
-      test.app.request(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`, { headers: daemonHeaders(token) });
+    const read = (runtimeId: string, taskId: string, requestId: string, token: string) =>
+      requestRuntimeRpc(test.store, runtimeId, "human_request.get", { task_id: taskId, request_id: requestId }, token, "MASTER");
 
-    const hosted = await read(submitted.taskId, question.id, test.tokens.rt_a!);
-    expect(hosted.status).toBe(200);
-    expect(await hosted.json()).toMatchObject({ request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
-    expect((await read(submitted.taskId, question.id, executor.token)).status).toBe(200);
-    expect((await read(unbound.id, privateQuestion.id, executor.token)).status).toBe(200);
+    const hosted = await read("rt_a", submitted.taskId, question.id, test.tokens.rt_a!);
+    expect(hosted).toMatchObject({ ok: true, request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
+    expect(await read("rt_claude", submitted.taskId, question.id, executor.token)).toMatchObject({ ok: true });
+    expect(await read("rt_claude", unbound.id, privateQuestion.id, executor.token)).toMatchObject({ ok: true });
     // Not the bot host.
-    expect((await read(submitted.taskId, question.id, test.tokens.rt_b!)).status).toBe(403);
+    expect(await read("rt_b", submitted.taskId, question.id, test.tokens.rt_b!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     // Not a Chat bound to the bot.
-    expect((await read(unbound.id, privateQuestion.id, test.tokens.rt_a!)).status).toBe(403);
+    expect(await read("rt_a", unbound.id, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     // Access to one bound Task does not reach another Task's request.
-    expect((await read(submitted.taskId, privateQuestion.id, test.tokens.rt_a!)).status).toBe(404);
-
+    expect(await read("rt_a", submitted.taskId, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "task_not_found", http_status: 404 });
     const create = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "human_request.create", {
       task_id: submitted.taskId, request_id: crypto.randomUUID(), kind: "question", payload: { question: "Another?" },
     }, token, "MASTER");

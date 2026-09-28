@@ -133,7 +133,7 @@ JSON 文本帧，不用二进制：
 
 ### 1.5 RPC 清单
 
-**daemon → server**：`steer.consume`、`human_request.create`、`human_request.expire`、`plugin.desired`、
+**daemon → server**：`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
 `trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
@@ -141,6 +141,12 @@ JSON 文本帧，不用二进制：
 
 RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `{ "ok": false, "code": <错误码>, "message": "人话", "retryable": <bool> }`。
+
+`human_request.get` 是只读 RPC，请求 `p:{task_id,request_id}`，成功应答 `p:{ok:true,request}`，
+其中 `request` 与原 GET 的 HTTP 200 载荷相同。执行端、绑定 Chat 的 bot host、Issue concierge
+沿用同一任务身份判定；跨 workspace 和未绑定读者拒绝。任务或请求不存在回 `task_not_found`，
+无权限回 `authority_revoked`，均不重试；失败应答另带 `http_status`、`http_code`，供 daemon
+还原原 GET 的业务异常。断线和超时作为请求失败抛给调用方。
 
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
@@ -420,7 +426,7 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 | desired 的 10 分钟强制刷新（ADR 0001 的「revision 定义漏字段」防御） | 保留，改为 WS rpc；不算轮询 |
 | `GET tasks/:id/steer` 2.5 s | 创建即推 `task.steer`，daemon 用 rpc `steer.consume` 标记消费 |
 | `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除 |
-| `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；`human_request.create` / `expire` 走 rpc |
+| `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；读取走 `human_request.get`，创建 / 过期走 rpc |
 | `GET .../gc-check` ×4 与 `workspace/cleaned` | rpc（见 §1.5） |
 | 归档：退役流程要 daemon 打包会话 | 下行 `runtime.archive_sessions` + 上行 `runtime.archive_sessions_result`（见 §4.1）；**不**复用 `pending_command` |
 

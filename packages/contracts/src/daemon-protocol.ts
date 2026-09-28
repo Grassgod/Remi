@@ -122,6 +122,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
 export const DAEMON_UPLINK_RPC_FRAMES = [
   "steer.consume",
   "human_request.create",
+  "human_request.get",
   "human_request.expire",
   "plugin.desired",
   "trace.head",

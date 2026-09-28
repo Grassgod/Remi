@@ -73,7 +73,8 @@ export interface DaemonProtocolClientOptions {
 }
 
 export class DaemonProtocolRpcError extends Error {
-  constructor(readonly code: string, readonly retryable: boolean) {
+  constructor(readonly code: string, readonly retryable: boolean, readonly detail?: string,
+    readonly httpStatus?: number, readonly httpCode?: string | null) {
     super(`daemon RPC failed: ${code}`);
   }
 }
@@ -351,7 +352,10 @@ export class DaemonProtocolClient {
       if (pending) {
         this.pending.delete(frame.re);
         this.cancel(pending.timer);
-        if (frame.payload.ok === false) pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true));
+        if (frame.payload.ok === false) pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true,
+          typeof frame.payload.message === "string" ? frame.payload.message : undefined,
+          typeof frame.payload.http_status === "number" ? frame.payload.http_status : undefined,
+          typeof frame.payload.http_code === "string" ? frame.payload.http_code : null));
         else pending.resolve(frame.payload);
         return;
       }

@@ -767,11 +767,6 @@ export class MultiremiDaemonClient {
     return resp.request;
   }
 
-  async getTaskHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
-    const resp = await this.get<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`);
-    return resp.request ?? null;
-  }
-
   async expireTaskHumanRequest(taskId: string, requestId: string, status: "timeout" | "cancelled"): Promise<MultiremiTaskHumanRequest | null> {
     const resp = await this.post<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/expire`, { status });
     return resp.request ?? null;

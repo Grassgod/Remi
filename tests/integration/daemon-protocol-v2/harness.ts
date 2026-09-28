@@ -82,7 +82,7 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
-    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory">;
+    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs">;
     omitDaemonId?: boolean;
     cliVersion?: string;
     updateRunner?: (version: string) => Promise<string>;
