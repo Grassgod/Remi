@@ -189,6 +189,9 @@ export const PRODUCTION_TRACE_SHAPE = {
     question_response: { content: 24_317, input: 35_774 },
   },
   tasksWithRows: 7_753,
+  /** Per-task percentiles from the MUL-402 description (same read-only survey, 4.89M rows). */
+  taskRows: { p50: 111, p90: 744, p99: 17_394 },
+  taskBytes: { p50: 49_000, p90: 425_000, p99: 2_200_000 },
   tasksWithSeqGaps: 4_759,
   missingSeqs: 426_271,
   widestSpan: { rows: 1_497, head: 12_899 },
@@ -212,8 +215,13 @@ export interface SyntheticCorpusParams {
   tasksWithRows: number;
   /** Multiplies each group's production mean rows per task (1 = production). */
   rowScale: number;
-  /** Log-normal sigma of rows per task around the group mean. */
+  /**
+   * Log-normal sigma of rows per task around the group mean. The default 1.87
+   * gives production's mean/median of 640/111 rows (sigma² = 2 ln(mean/median)).
+   */
   rowsSigma: number;
+  /** Upper bound on rows per task. */
+  maxRowsPerTask: number;
   /** Mean tasks per subject. Issues with an archive match production (2,076 / 209); the rest are assumptions. */
   tasksPerIssueWithArchive: number;
   tasksPerIssueWithoutArchive: number;
@@ -231,7 +239,8 @@ export interface SyntheticCorpusParams {
 }
 
 export const SYNTHETIC_CORPUS_DEFAULTS: Omit<SyntheticCorpusParams, "seed" | "tasksWithRows" | "rowScale"> = {
-  rowsSigma: 1.3,
+  rowsSigma: 1.87,
+  maxRowsPerTask: 30_000,
   tasksPerIssueWithArchive: 2_076 / 209,
   tasksPerIssueWithoutArchive: 6,
   tasksPerChat: 352 / 191,
@@ -576,9 +585,11 @@ function generateCorpus(db: SqlDatabase, params: SyntheticCorpusParams): Synthet
     summary.tasks.with_rows++;
     summary.tasks.by_group[group]++;
     const factor = (shape.groups[group].bytes / shape.groups[group].rows) / (allBytes / allRows);
-    const gaps = random() < rates.gapTask;
     const wide = wideSpanPending && group === "task" && rows >= 2;
     if (wide) wideSpanPending = false;
+    // The wide task has exactly its one gap; any other task with gaps has at least one, even when short.
+    const gaps = !wide && random() < rates.gapTask && rows >= 2;
+    const firstGapAt = gaps ? 1 + randomInt(random, rows - 1) : -1;
     const lastCall = { id: null as string | null, tool: "Bash" };
     let seq = 0;
     let bytes = 0;
@@ -586,7 +597,7 @@ function generateCorpus(db: SqlDatabase, params: SyntheticCorpusParams): Synthet
     for (let i = 0; i < rows; i++) {
       let step = 1;
       if (wide && i === rows - 1) step = shape.widestSpan.head - shape.widestSpan.rows + 1;
-      else if (gaps && i > 0 && random() < 0.04) step += 1 + Math.floor(-Math.log(Math.max(random(), 1e-9)) * 2.5);
+      else if (i === firstGapAt || (gaps && i > 0 && random() < 0.04)) step += 1 + Math.floor(-Math.log(Math.max(random(), 1e-9)) * 2.5);
       missing += step - 1;
       seq += step;
       const type = options.running ? pickWeighted(random, shape.typeRows, typeTotal)
@@ -611,7 +622,7 @@ function generateCorpus(db: SqlDatabase, params: SyntheticCorpusParams): Synthet
 
   const rowsFor = (group: SyntheticGroup) => {
     const mean = (shape.groups[group].rows / shape.groups[group].tasks) * params.rowScale;
-    return Math.max(1, Math.min(15_000, Math.round(logNormal(random, Math.max(1, mean), params.rowsSigma))));
+    return Math.max(1, Math.min(params.maxRowsPerTask, Math.round(logNormal(random, Math.max(1, mean), params.rowsSigma))));
   };
   const subjectSize = (mean: number, left: number) =>
     Math.max(1, Math.min(left, Math.round(logNormal(random, Math.max(1, mean), 0.8))));
