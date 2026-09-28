@@ -1360,6 +1360,41 @@ describe.skipIf(!pgAvailable)("read pool: keyword exemption is context-aware", (
     await pool.close();
   });
 
+  it("allows only the shapes PostgreSQL itself accepts as clause syntax", async () => {
+    // The `)`-precedes rule is the part of this gate that is easiest to get
+    // wrong, so this pins the property directly: for every way I could place a
+    // `)` immediately before `FILTER(`/`OVER(`, PostgreSQL either treats it as
+    // the clause (which is what the rule allows) or rejects the statement as a
+    // syntax error. A shape the gate allows but PostgreSQL *executes* as a
+    // function call is the only thing that would matter, and there is none.
+    pool = makePool(url);
+    const shapes = [
+      `SELECT (SELECT 1) filter(1)`,
+      `SELECT (1) filter(1)`,
+      `SELECT (1) over(1)`,
+      `SELECT count(*) filter(1)`,
+      `SELECT * FROM t WHERE (a) filter(b)`,
+      `SELECT * FROM (SELECT 1) filter(1)`,
+      `SELECT * FROM (SELECT 1) AS x, LATERAL (SELECT 2) filter(3)`,
+      `WITH q AS (SELECT 1) SELECT * FROM q filter(1)`,
+    ];
+    for (const sql of shapes) {
+      const gateAllows = findDisallowedFunction(sql) === null;
+      if (!gateAllows) continue; // Refused outright: nothing more to prove.
+      // The gate allowed it, so PostgreSQL must reject it. Anything else would
+      // mean a real call slipped past the contextual rule.
+      const outcome = await pool
+        .query(sql)
+        .then(() => "accepted", (error: unknown) => `rejected: ${(error as Error).message.slice(0, 40)}`);
+      expect(
+        outcome,
+        `the gate allowed ${sql}, so PostgreSQL must treat it as a syntax error`,
+      ).toStartWith("rejected");
+    }
+    expect(await advisoryLocks()).toBe(0);
+    await pool.close();
+  });
+
   it("does not let `ORDER BY` hide a call to `by()`", async () => {
     // The context rule keys on the token *before* the candidate: `ORDER BY by()`
     // tokenises as `order by by (`, so the second `by` is not preceded by
