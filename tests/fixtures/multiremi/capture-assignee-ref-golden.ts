@@ -4,10 +4,19 @@
  *
  * Run this on the commit whose behaviour is the contract — the harness is
  * implementation-agnostic, so running it here and on the fixed resolver records
- * whatever the checked-out code actually does:
+ * whatever the checked-out code actually does.
  *
- *   bun run tests/fixtures/multiremi/capture-assignee-ref-golden.ts        # current tree
- *   git worktree … 593ff2ba && bun run tests/fixtures/multiremi/capture-assignee-ref-golden.ts --out <path>
+ * To reproduce the checked-in `assignee-ref-golden.json` byte for byte, run the
+ * following on `593ff2ba` (the pre-MUL-473 implementation) after copying this
+ * script and `assignee-ref-fixture.ts` there unchanged:
+ *
+ *   bun run tests/fixtures/multiremi/capture-assignee-ref-golden.ts \
+ *     --baseline --out tests/fixtures/multiremi/assignee-ref-golden.json
+ *
+ * `--baseline` writes the `pre-MUL-473 implementation (593ff2ba)` source label
+ * the checked-in file carries, so no post-processing is needed. Use
+ * `--source <label>` instead when capturing some other tree, so the golden
+ * always names the implementation its values came from.
  *
  * Each case records the store-level answer (or the error message) *and* the
  * HTTP-level `GET /api/issues?assignee_id=…` answer, because the route's `total`
@@ -99,10 +108,13 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const outIndex = args.indexOf("--out");
   const outPath = outIndex >= 0 ? args[outIndex + 1]! : DEFAULT_OUT;
+  const sourceIndex = args.indexOf("--source");
+  const explicitSource = sourceIndex >= 0 ? args[sourceIndex + 1] : undefined;
   const golden = await captureAssigneeRefGolden(
-    args.includes("--baseline")
-      ? "pre-optimization implementation (593ff2ba)"
-      : "current implementation",
+    explicitSource
+      ?? (args.includes("--baseline")
+        ? "pre-MUL-473 implementation (593ff2ba)"
+        : "current implementation"),
   );
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(golden, null, 2)}\n`);

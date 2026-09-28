@@ -272,6 +272,18 @@
       }
     },
     {
+      "label": "collision: two members share a user id, one named like it",
+      "ref": "usr_assignee_dupe_shared",
+      "store": {
+        "error": "Assignee not found: usr_assignee_dupe_shared"
+      },
+      "http": {
+        "status": 200,
+        "total": 0,
+        "issueIds": []
+      }
+    },
+    {
       "label": "collision: two agents share an alias",
       "ref": "Shared alias",
       "store": {
@@ -1604,8 +1616,9 @@
       },
       "http": {
         "status": 200,
-        "total": 9,
+        "total": 10,
         "issueIds": [
+          "iss_assignee_duplicate_user_id",
           "iss_assignee_other_member",
           "iss_assignee_shared_user_id_squad",
           "iss_assignee_usr_shaped_squad",

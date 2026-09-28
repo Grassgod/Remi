@@ -3,10 +3,23 @@
  * MUL-473: capture the first-screen hotspot response golden.
  *
  * Run this on the commit whose responses are the contract — the harness is
- * implementation-agnostic, so running it here and on the optimized route
- * produces the same bytes whenever the response shape did not drift:
+ * implementation-agnostic, so running it here on the optimized route produces
+ * the same bytes whenever the response shape did not drift.
  *
- *   bun run tests/fixtures/multiremi/capture-first-screen-hotspots-golden.ts [--out <path>]
+ * Reproduce the checked-in `first-screen-hotspots-golden.json` byte for byte by
+ * running this on the merge state (`620fc94f`) or anywhere later on this branch,
+ * with the fixture and `first-screen-hotspots-normalize.ts` from the same
+ * revision:
+ *
+ *   bun run tests/fixtures/multiremi/capture-first-screen-hotspots-golden.ts \
+ *     --baseline --out tests/fixtures/multiremi/first-screen-hotspots-golden.json
+ *
+ * The response bodies are the contract of the pre-optimization implementation,
+ * but they are recorded *after* merging main, so each issue carries the
+ * `parent_done_grant_at/by/agent_id` fields MUL-457 added to the response. The
+ * capture therefore has to happen on the merge state, not on the pre-MUL-473
+ * commit on its own: that commit's responses predate those three fields.
+ * `--source <label>` overrides the header label when capturing anywhere else.
  *
  * The golden records only the routes PR1 touches. `GET /api/inbox/summary` and
  * `GET /api/attachments/:id/content` are captured by their own PR2 files.
@@ -24,6 +37,16 @@ import { seedFirstScreenHotspotsFixture, type FirstScreenHotspotsFixture } from 
 
 const DEFAULT_OUT = join(import.meta.dir, "first-screen-hotspots-golden.json");
 const AUTH_TOKEN = "mul473-hotspot-token";
+
+/**
+ * The response contract this file records predates the optimization, so the
+ * label names that implementation rather than a capture date or a commit of the
+ * branch being reviewed. Re-running the capture on any later main yields the
+ * same bytes, because the routes' response shape did not drift.
+ */
+const FIRST_SCREEN_GOLDEN_SOURCE =
+  "pre-optimization implementation (593ff2ba) re-captured after merging origin/main d6714966 "
+  + "(MUL-457 added the parent_done_grant_* fields)";
 
 export interface FirstScreenHotspotGolden {
   name: string;
@@ -108,10 +131,11 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const outIndex = args.indexOf("--out");
   const outPath = outIndex >= 0 ? args[outIndex + 1]! : DEFAULT_OUT;
+  const sourceIndex = args.indexOf("--source");
+  const explicitSource = sourceIndex >= 0 ? args[sourceIndex + 1] : undefined;
   const golden = await captureFirstScreenHotspotGolden(
-    args.includes("--baseline")
-      ? "pre-optimization implementation (parent commit of agent/MUL-473)"
-      : "current implementation",
+    explicitSource
+      ?? (args.includes("--baseline") ? FIRST_SCREEN_GOLDEN_SOURCE : "current implementation"),
   );
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(golden, null, 2)}\n`);

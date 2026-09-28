@@ -94,6 +94,8 @@
 1. **`pendingTasks()` 语义沿用**：单 SQL 用 `ROW_NUMBER() OVER (PARTITION BY task.chat_session_id ORDER BY CASE WHEN task.status = 'queued' THEN 1 ELSE 0 END, task.priority DESC, task.chat_queue_order ASC, task.created_at ASC, task.id ASC)`，与 `chat-repo.ts` 里 `pendingTasks()` 的 `ORDER BY` 逐项一致；只 join `multiremi_chat_sessions`，不碰 `multiremi_chat_messages`（避开 MUL-402 B1）。
 2. **`resolveAssigneeRef` 恢复历史搜索顺序**（返工内容）：`inferAssigneeTypeFromRef` 只保留 main 上原有的 `agt_`/`mem_`/`sqd_` 三个前缀；`usr_` 不再作为锁定前缀。无类型 ref 一律按 Agent → Member → Squad 三档，每档用一次 `listX` + `uniqueRefMatch` 层级匹配。Member 档额外保留 main 上的三条既有规则：精确行 id 优先、`user_id` 精确命中优先于别名层级、多个 `user_id` 命中即拒绝该档。Agent 档读 lite 投影（不读 skill / skill 文件）。
 
+   **读法（重要）**：Agent → Member → Squad 只是**查询执行顺序**，不是碰撞时的裁决顺序。三档各自把匹配到的候选收集起来，最后对合起来的集合**统一判歧义**：只有一个候选才返回，两个及以上一律抛 `Ambiguous assignee reference`。所以「同一个字符串既是某 member 的 user id、又是某个 agent 的名字」在旧实现里是歧义（`Ambiguous`，HTTP total=0），**不是**「先查 Agent 所以 Agent 赢」。Member 档内部还有一条更强的规则：同一 `user_id` 命中多行时该档直接拒绝，不会继续落到别名档。
+
 ## 复现命令
 
 ```bash
@@ -111,6 +113,40 @@ cd /tmp/mul473-before && bun run tests/manual/bench-first-screen-hotspots.ts --o
 # 真实 PostgreSQL（用完即删库；不要指向生产库）
 MULTIREMI_TEST_POSTGRES_URL=postgres://… bun run tests/manual/bench-first-screen-hotspots.ts --out /tmp/after-pg.json
 ```
+
+## 两份 golden 的逐字节复现
+
+两份 golden 都能用各自脚本里写明的**同一条命令**逐字节重放，`cmp` 退出码 0、SHA-256 相同。`source` 字段是脚本默认写出的标签，不是事后手改的。
+
+### assignee-ref golden（124 条，期望值取自 `593ff2ba`）
+
+在 `593ff2ba` 的独立 worktree 里，放入本分支的 `capture-assignee-ref-golden.ts` 与 `assignee-ref-fixture.ts`（业务代码保持 `593ff2ba` 原样），执行：
+
+```bash
+bun run tests/fixtures/multiremi/capture-assignee-ref-golden.ts \
+  --baseline --out tests/fixtures/multiremi/assignee-ref-golden.json
+```
+
+- `cmp` 退出码 **0**
+- SHA-256（两处相同）：`69eece781bdf1e09062703cc521066fcf69bfe07762cb8b58510a7dfc77edc06`
+- `--baseline` 默认写出的 `source` 就是文件里的 `pre-MUL-473 implementation (593ff2ba)`；`--source <label>` 可覆盖。
+
+本轮相对上轮新增第 124 条：`collision: two members share a user id, one named like it`（两个 member 共用同一 `user_id`，其中一个的 name 也命中该 ref）。旧实现该条为 `Assignee not found: usr_assignee_dupe_shared`、HTTP total=0——即 Member 档拒绝重复 `user_id` 后**不再**回落到别名档。
+
+### first-screen golden
+
+在合并提交 `620fc94f`（或本分支其后任意提交）执行：
+
+```bash
+bun run tests/fixtures/multiremi/capture-first-screen-hotspots-golden.ts \
+  --baseline --out tests/fixtures/multiremi/first-screen-hotspots-golden.json
+```
+
+- `cmp` 退出码 **0**
+- SHA-256（两处相同）：`199fe5e995a6c8e03319a94ee8f267746924eb7a8fd5eb14f08d695f335cfbee`
+- label 是脚本里的常量，与文件一致；`--source <label>` 可覆盖。
+
+**口径修正**：本文件与 `0b2c6e81` 版相比，整份 JSON 共有 **100 处**差异 = **99 个新增响应字段**（33 个 issue × `parent_done_grant_at`/`_by`/`_agent_id`，全为 `null`）+ **1 处 `$.source` 元数据**。上轮交付与报告只写了「只有 99 处」，把 `source` 这处漏在口径之外；现按 100 处如实记录。响应体本身除那 99 个 null 字段外**无任何**差异（无删除、无改名、无值变化、无顺序与计数变化），这一点由 QA 第 6 项递归 diff 独立确认。
 
 ## 与上一版（`0b2c6e81`）数字的差异
 

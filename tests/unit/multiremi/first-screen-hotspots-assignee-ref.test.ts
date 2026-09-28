@@ -4,12 +4,28 @@
 // the untyped search to the member table. A legal Agent named `usr_alias` — QA's
 // counterexample — had resolved as that Agent before, and started throwing
 // `Member not found`. This file pins the behaviour to the pre-PR implementation
-// instead of to a restatement of the new rules:
+// instead of to a restatement of the new rules.
 //
-//   1. `tests/fixtures/multiremi/capture-assignee-ref-golden.ts` was run on
-//      `593ff2ba` (the parent of this branch) and its output is checked in as
-//      `assignee-ref-golden.json`. Expected values below are read from that
-//      file, never hand-written.
+// Read the search order for what it is: Agent, Member, Squad is only the order in
+// which the three kinds are *queried*. Every kind that matches contributes a
+// candidate, and ambiguity is decided once, over the collected set — a reference
+// that matches two kinds is refused, it is not awarded to whichever kind was
+// queried first. In particular, a member `user_id` that is also an Agent name is
+// `Ambiguous assignee reference`, not "the Agent wins".
+//
+//   1. `tests/fixtures/multiremi/capture-assignee-ref-golden.ts` was run on the
+//      pre-PR implementation `593ff2ba` (the parent of this branch), with this
+//      branch's copy of that script and `assignee-ref-fixture.ts` placed in that
+//      checkout, and its output is checked in as `assignee-ref-golden.json`. In
+//      a `593ff2ba` worktree that already has those two files:
+//
+//        bun run tests/fixtures/multiremi/capture-assignee-ref-golden.ts \
+//          --baseline --out tests/fixtures/multiremi/assignee-ref-golden.json
+//
+//      That command reproduces the checked-in file byte for byte — `--baseline`
+//      writes the `pre-MUL-473 implementation (593ff2ba)` source label the file
+//      carries, so no post-processing is needed. Expected values below are read
+//      from it, never hand-written.
 //   2. The store-level answer (`{assigneeType, assigneeId}` or the exact error
 //      message) and the HTTP-level answer (`GET /api/issues?assignee_id=…`'s
 //      status, `total` and id list) are both compared, because the route's total
@@ -153,6 +169,7 @@ describe("MUL-473 assignee reference equivalence (golden from 593ff2ba)", () => 
       "collision: member user id + agent name",
       "collision: two agents share an alias",
       "member user id with no collision",
+      "collision: two members share a user id, one named like it",
       // Archived rows and the derived case/prefix/punctuation variants.
       "archived agent row id",
       "archived member row id",
@@ -248,6 +265,27 @@ describe("MUL-473 assignee reference equivalence (golden from 593ff2ba)", () => 
       assigneeType: "member",
       assigneeId: fixture.members.cleanMemberId,
     });
+  });
+
+  it("still refuses a doubled member user id instead of falling through to the name alias", async () => {
+    const harness = await createHarness();
+    const { fixture } = harness;
+    const { duplicateUserId } = fixture.members;
+    // The member tier refuses the kind outright when two rows carry the same
+    // `user_id`. It must NOT continue to the alias tiers, where the first row
+    // would match by name and answer `member:…dupe_shared_a` instead.
+    expect(() => harness.store.resolveAssigneeRef(null, duplicateUserId, fixture.workspaceId))
+      .toThrow(`Assignee not found: ${duplicateUserId}`);
+    // The route is where the difference is visible: a wrong answer turns this
+    // filter from an empty page into one issue.
+    const response = await harness.app.request(
+      `/api/issues?assignee_id=${encodeURIComponent(duplicateUserId)}&limit=50`,
+      { headers: harness.headers },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as { total: number; issues: Array<{ id: string }> };
+    expect(body.total).toBe(0);
+    expect(body.issues.map((issue) => issue.id)).toEqual([]);
   });
 
   it("still refuses an ambiguous member/agent collision the way the old code did", async () => {

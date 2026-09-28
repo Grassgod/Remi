@@ -56,6 +56,15 @@ export interface AssigneeRefFixture {
     /** A member whose user id nothing else in the fixture uses. */
     cleanMemberId: string;
     cleanMemberUserId: string;
+    /**
+     * Two members share one `user_id`, and the first of them is also *named*
+     * that same string. The member tier refuses a doubled `user_id` outright —
+     * it does not fall through to the alias tiers — so this reference resolves
+     * to nothing rather than to the member whose name matches.
+     */
+    duplicateUserId: string;
+    duplicateUserIdMemberId: string;
+    duplicateUserIdOtherMemberId: string;
   };
   squads: {
     plainSquadId: string;
@@ -250,6 +259,32 @@ export function seedAssigneeRefFixture(store: MultiremiStore): AssigneeRefFixtur
   agent("agt_assignee_live_twin", "Archived agent");
   squad("sqd_assignee_live_twin", "Archived squad");
 
+  // Two members sharing one user id, the first of them named after it. The
+  // member tier returns nothing when more than one row carries the same
+  // `user_id` (it refuses the kind instead of picking a winner), so the name
+  // alias on the first row must never decide this reference.
+  const duplicateUserId = "usr_assignee_dupe_shared";
+  const duplicateUserIdMemberId = `mem_${WORKSPACE_ID}_dupe_shared_a`;
+  const duplicateUserIdOtherMemberId = `mem_${WORKSPACE_ID}_dupe_shared_b`;
+  store.createWorkspaceMember({
+    id: duplicateUserIdMemberId,
+    workspaceId: WORKSPACE_ID,
+    userId: duplicateUserId,
+    // The name hits the same reference through the compact/punctuation tier
+    // rather than by exact equality. Spelling it with the same separators as the
+    // reference would also make the bare `_` and `usr_` probes fuzzy-match this
+    // row, silently turning two "no match" cases into hits.
+    name: "Usr Assignee Dupe Shared",
+    role: "member",
+  });
+  store.createWorkspaceMember({
+    id: duplicateUserIdOtherMemberId,
+    workspaceId: WORKSPACE_ID,
+    userId: duplicateUserId,
+    name: "Dupe member, other row",
+    role: "member",
+  });
+
   // Issues so the HTTP layer has something to filter. One per assignee shape, so
   // a filter that resolves to the wrong row is visible as a wrong total and a
   // wrong id list rather than an empty one.
@@ -275,6 +310,10 @@ export function seedAssigneeRefFixture(store: MultiremiStore): AssigneeRefFixtur
   addIssue("iss_assignee_usr_shaped_squad", "squad", "sqd_assignee_usr_shaped");
   addIssue("iss_assignee_shared_user_id_squad", "squad", "sqd_assignee_shares_user_id");
   addIssue("iss_assignee_other_member", "member", `mem_${WORKSPACE_ID}_${otherMember.id}`);
+  // Assigned to the member whose *name* is the doubled user id, so the HTTP
+  // layer distinguishes "refused the doubled user_id" (total 0) from "resolved
+  // that member through its alias" (total 1).
+  addIssue("iss_assignee_duplicate_user_id", "member", duplicateUserIdMemberId);
 
   return {
     workspaceId: WORKSPACE_ID,
@@ -305,6 +344,9 @@ export function seedAssigneeRefFixture(store: MultiremiStore): AssigneeRefFixtur
       readerUserId: reader.id,
       cleanMemberId: `mem_${WORKSPACE_ID}_${cleanMember.id}`,
       cleanMemberUserId: cleanMember.id,
+      duplicateUserId,
+      duplicateUserIdMemberId,
+      duplicateUserIdOtherMemberId,
     },
     squads: {
       plainSquadId: "sqd_assignee_plain",
@@ -395,6 +437,11 @@ export function assigneeRefCases(fixture: AssigneeRefFixture): Array<{ label: st
     { label: "collision: member user id + agent name", ref: fixture.agents.collidingWithOtherUserIdName },
     // A member user id nothing else claims.
     { label: "member user id with no collision", ref: fixture.members.cleanMemberUserId },
+    // Two members share one user id and one of them is named after it: the
+    // member tier refuses the doubled `user_id` and does not fall through to the
+    // name alias, so nothing resolves. Deleting that refusal is the mutation
+    // this case exists to catch.
+    { label: "collision: two members share a user id, one named like it", ref: fixture.members.duplicateUserId },
     // Two Agents share an alias and no id matches: the old alias tier refuses it.
     { label: "collision: two agents share an alias", ref: fixture.agents.ambiguousAgentName },
     // Prefix of a real agent id — the id-prefix tier in `uniqueRefMatch`.
