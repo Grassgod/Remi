@@ -519,8 +519,9 @@ export interface TasksSurface {
    * Internal primitive for a caller that already owns a database transaction.
    * `childStatusChanges` collects the Issue transitions this write produces; the
    * caller replays them through {@link runCollectedChildStatusChanges} after its
-   * COMMIT. It is required on purpose: a nested `transaction()` would commit the
-   * caller's transaction early on Postgres, which has no savepoints.
+   * COMMIT. It is required on purpose: a nested `transaction()` is only a
+   * SAVEPOINT (B1, MUL-426), so a wrapper that replays after its own transaction
+   * would do so before the caller's COMMIT.
    */
   createTaskWithinTransaction(
     input: CreateTaskInput,

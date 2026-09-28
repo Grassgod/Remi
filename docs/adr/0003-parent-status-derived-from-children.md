@@ -118,13 +118,18 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
 
-8. **Every guarded path runs at transaction depth 1.** `PostgresSyncDatabase.transaction()`
-   is a bare `BEGIN`/`COMMIT` with no savepoint support, so a nested
-   `transaction()` inside an open one commits the outer transaction early,
-   releases its row locks, and turns the outer `ROLLBACK` into a no-op. The
-   store therefore keeps its `...WithinTransaction` convention: the outermost
-   caller owns the only transaction, and everything under it calls the variant
-   that assumes an open transaction.
+8. **Every guarded path runs at transaction depth 1.** When this was decided,
+   `PostgresSyncDatabase.transaction()` was a bare `BEGIN`/`COMMIT`, so a nested
+   `transaction()` inside an open one committed the outer transaction early,
+   released its row locks, and turned the outer `ROLLBACK` into a no-op. Since
+   B1 (MUL-426, cmt_ces3m03jimtd) a nested `transaction()` is a `SAVEPOINT`
+   inside the outer unit on both backends, and `maxTransactionDepth` counts only
+   the outer `BEGIN` (MUL-402 rulings cmt_78bx01xhb75x, cmt_gestk2r6imjh). The
+   store keeps its `...WithinTransaction` convention: the outermost caller owns
+   the only `BEGIN`/`COMMIT`, and everything under it calls the variant that
+   assumes an open transaction. A standalone wrapper publishes its events and
+   replays child-status changes right after its own `transaction()` returns,
+   which for a nested `SAVEPOINT` is still before the owner's `COMMIT`.
    - **The collector and the commit-event queue are required parameters, not
      options.** Every `...WithinTransaction` variant that can move an Issue (the
      Issue-status sync reached from `createTaskWithinTransaction`,
@@ -214,11 +219,16 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      failure) rather than a synchronous best-effort call. Tracked as a
      follow-up candidate; the current behaviour is what the round-2/3 QA rounds
      measured, and it is unchanged from the previous commit.
-   - `PostgresSyncDatabase.transaction()` is deliberately left alone. Teaching it
-     savepoints is a platform-level change with its own blast radius (every
+   - This issue left `PostgresSyncDatabase.transaction()` alone. Teaching it
+     savepoints was a platform-level change with its own blast radius (every
      caller, the worker bridge, and the SQLite backend's differing semantics),
-     well outside this issue. The constraint is instead held by the call-site
-     convention above and by the depth-counter regression tests.
+     and it landed later in B1 (MUL-426, cmt_ces3m03jimtd): a nested
+     `transaction()` now sends `SAVEPOINT` / `RELEASE SAVEPOINT` /
+     `ROLLBACK TO SAVEPOINT` inside the outer unit. The constraint is still held
+     by the call-site convention above and by the depth-counter regression
+     tests, which count only the outer `BEGIN`; the Postgres ones also record
+     that no second `BEGIN` or early `COMMIT` is sent (MUL-402 rulings
+     cmt_78bx01xhb75x, cmt_gestk2r6imjh).
    - Two nesting sites remain, both pre-existing on `main` and out of this
      issue's scope: `FeishuBotRepo.submitMessage`'s steer path
      (`feishu-bot-repo.ts`) and `MultiremiStore.updateAgent`'s role-change token

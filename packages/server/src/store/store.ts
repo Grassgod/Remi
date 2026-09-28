@@ -5213,8 +5213,9 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
-        // its COMMIT would end this one early on Postgres (no savepoints).
+        // Caller-owned transaction: inside it `cancelTask`'s own transaction is
+        // only a SAVEPOINT (B1, MUL-426), so its child-status replay and events
+        // would run before this COMMIT.
         cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = cancelledResult.task;
       } else if (input.action === "redispatch") {

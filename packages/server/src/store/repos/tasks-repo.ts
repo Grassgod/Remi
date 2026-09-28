@@ -546,10 +546,11 @@ export interface ChildStatusChange {
  *
  * It is a required parameter on every `...WithinTransaction` variant. The type
  * is deliberately not optional and not nullable: the alternative — running the
- * E1/E2 hook inline — opens a second `BEGIN` inside the caller's transaction,
- * and `PostgresSyncDatabase` has no savepoints, so that inner `COMMIT` would
- * commit the caller's work early and release its locks. Requiring the collector
- * makes the compiler ask every call site which transaction owns the write.
+ * E1/E2 hook inline — would run the hook's own transaction as a SAVEPOINT
+ * inside the caller's (B1, MUL-426), so the hook would publish its events
+ * before the caller's work commits and a hook failure would roll that work
+ * back. Requiring the collector makes the compiler ask every call site which
+ * transaction owns the write.
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
 
@@ -6163,8 +6164,9 @@ ${placementAfter.sql}
        * Caller-owned collector: the E1/E2 hook must run after the caller's
        * transaction commits, so the transition is recorded here and replayed by
        * {@link runChildStatusChanges}. Required — there is no inline path,
-       * because running the hook here would open a second `BEGIN` inside the
-       * caller's transaction and Postgres has no savepoints.
+       * because running the hook here would make its transaction a SAVEPOINT
+       * inside the caller's (B1, MUL-426) and publish its events before the
+       * caller commits.
        */
       collectChildStatusChanges: ChildStatusChangeCollector;
       /** Skip guard B for a transition the guard deliberately exempts. */
@@ -6228,9 +6230,9 @@ ${placementAfter.sql}
       // MUL-400 E1/E2: the task path is the second writer that must re-derive
       // the parent and report child endings, so it enters the same hook as the
       // direct Issue update path — but only AFTER this transaction commits. The
-      // hook writes comments, session events and tasks of its own, and
-      // PostgresSyncDatabase has no savepoints, so running it in here would both
-      // roll the status back on failure and emit a nested BEGIN on Postgres.
+      // hook writes comments, session events and tasks of its own, so running it
+      // in here would roll the status back on failure, and its transaction would
+      // only be a SAVEPOINT (B1, MUL-426) that publishes before this COMMIT.
       childStatusChanges.push({
         previous: issue,
         issue: updatedIssue,

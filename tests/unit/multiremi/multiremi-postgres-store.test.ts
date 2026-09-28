@@ -3259,10 +3259,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   /**
    * MUL-409 fix round, blocking 2: issue creation is one transaction on this
-   * bridge. Postgres has no savepoint here, so a nested `BEGIN` would commit the
-   * issue row early and let it survive the rollback — exactly the orphan the QA
-   * pass found. The depth counter is asserted alongside the data, so a future
-   * refactor that reintroduces nesting fails here rather than in production.
+   * bridge. When the QA pass found the orphan, a nested `transaction()` here was
+   * a bare `BEGIN` that committed the issue row early and let it survive the
+   * rollback. Since B1 (MUL-426) a nested `transaction()` is a SAVEPOINT inside
+   * the outer unit, and `maxTransactionDepth` counts only the outer `BEGIN`
+   * (② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh); the data assertions below pin
+   * the rollback itself.
    */
   it("rolls a rejected blocked_by creation back and stays a single transaction (PG)", () => {
     const parent = store.createIssue({ title: "PG rollback parent", status: "in_progress" });
@@ -3300,12 +3302,14 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   /**
-   * MUL-409 fix round 2, blocking 4: the automatic-start chain must not nest a
-   * transaction on this bridge. `transaction()` is a bare BEGIN/COMMIT with no
-   * savepoint, so a nested BEGIN lets the inner COMMIT end the outer unit and a
-   * later ROLLBACK cannot undo it. S1 moved the E1/E2 hook post-commit; these
-   * three scenarios pin that the S2 dependency logic (auto-start on `done`, the
-   * two-prerequisite case, and the member forced start) now runs at depth 1.
+   * MUL-409 fix round 2, blocking 4: the automatic-start chain must stay one
+   * top-level transaction on this bridge. When this was written `transaction()`
+   * was a bare BEGIN/COMMIT, so a nested BEGIN let the inner COMMIT end the
+   * outer unit and a later ROLLBACK could not undo it; since B1 (MUL-426) a
+   * nested `transaction()` is a SAVEPOINT inside the outer unit. S1 moved the
+   * E1/E2 hook post-commit; these three scenarios pin that the S2 dependency
+   * logic (auto-start on `done`, the two-prerequisite case, and the member
+   * forced start) runs at depth 1 and sends no second BEGIN or early COMMIT.
    */
   it("keeps the automatic-start chain at one transaction (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_dep_depth", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
@@ -3680,8 +3684,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    *
    * The automatic start is one transaction: the claim, the status write, the
    * round and both activities commit together or not at all. These cases assert
-   * that on the real bridge, where a nested BEGIN would silently end the outer
-   * transaction early.
+   * that on the real bridge, where a nested `transaction()` is a SAVEPOINT
+   * inside the outer unit since B1 (MUL-426); before that, a nested BEGIN
+   * silently ended the outer transaction early.
    */
   it("rolls the whole automatic start back when a step fails (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });

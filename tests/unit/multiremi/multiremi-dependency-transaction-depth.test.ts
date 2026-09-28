@@ -2,9 +2,12 @@
  * MUL-400 E3 blocking 4 (MUL-409 fix round 2): the automatic-start chain must
  * stay a single transaction on the Postgres bridge.
  *
- * `PostgresSyncDatabase.transaction()` is a bare BEGIN/COMMIT pair with no
- * savepoint, so a nested BEGIN lets the inner COMMIT end the outer unit early
- * and a later ROLLBACK cannot undo it. The depth counter is asserted for the
+ * When this was written `PostgresSyncDatabase.transaction()` was a bare
+ * BEGIN/COMMIT pair, so a nested BEGIN let the inner COMMIT end the outer unit
+ * early and a later ROLLBACK could not undo it. Since B1 (MUL-426) a nested
+ * `transaction()` is a SAVEPOINT inside the outer unit, and
+ * `maxTransactionDepth` counts only the outer BEGIN (MUL-402 rulings
+ * cmt_78bx01xhb75x, cmt_gestk2r6imjh). The depth counter is asserted for the
  * three scenarios the fix round names: auto-start after a prerequisite is done,
  * two prerequisites finishing, and the member forced start.
  */

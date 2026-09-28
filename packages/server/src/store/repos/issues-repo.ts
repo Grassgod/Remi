@@ -403,9 +403,9 @@ type CreateIssueCommentOptions =
     deferAgentMentionDispatch?: boolean;
     /**
      * The caller already owns a database transaction (the organizer action
-     * facade). Every write inside must use the `WithinTransaction` flavour,
-     * because PostgresSyncDatabase has no savepoints and a nested BEGIN would
-     * end the caller's transaction at its COMMIT.
+     * facade). Every write inside must use the `WithinTransaction` flavour:
+     * a nested `transaction()` is only a SAVEPOINT (B1, MUL-426), so a
+     * standalone wrapper would publish and dispatch before the caller's COMMIT.
      */
     withinTransaction: true;
     /**
@@ -449,8 +449,9 @@ export class IssuesRepo {
    * number. Dispatch is the caller's business and happens after this commits.
    *
    * The body runs through {@link createIssueWithinTransaction}; the wrapper only
-   * decides whether it owns the transaction, because Postgres has no savepoints
-   * here and callers such as Feishu ingestion and autopilots already hold one.
+   * decides whether it owns the transaction, because callers such as Feishu
+   * ingestion and autopilots already hold one, and nested its `transaction()`
+   * would only be a SAVEPOINT (B1, MUL-426) that publishes before their COMMIT.
    */
   createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
@@ -2284,9 +2285,10 @@ export class IssuesRepo {
    *
    * The row update, `issue_updated`, `issue_status_forced` and
    * `parent_done_grant_used` commit together, so an exception after any of them
-   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: Postgres
-   * has no savepoints, so this method never opens a transaction and never emits
-   * a workspace event directly. The caller must run
+   * leaves nothing behind. `collector`/`deferredEvents` are mandatory: only the
+   * caller's COMMIT makes the write durable (a nested `transaction()` is a
+   * SAVEPOINT since B1, MUL-426), so this method never opens a transaction and
+   * never emits a workspace event directly. The caller must run
    * {@link runIssueUpdatePostCommit} after its COMMIT.
    */
   updateIssueWithinTransaction(
@@ -2575,7 +2577,8 @@ export class IssuesRepo {
    * Publishes the audit events the committed write queued, then runs the E1/E2
    * child-status hook, replays the transitions that hook itself produced and
    * flushes the hook's own events. The write must already be durable — the hook
-   * opens its own transaction and Postgres has no savepoints.
+   * opens its own transaction and publishes after it, and inside the caller's
+   * transaction that would only be a SAVEPOINT (B1, MUL-426).
    */
   runIssueUpdatePostCommit(
     result: {
@@ -2892,8 +2895,9 @@ export class IssuesRepo {
     // the "your prerequisite failed" lines, and it is independent of whether
     // this issue has a parent at all. The automatic start opens a transaction of
     // its own (see `autoStartDependent`) and runs to completion here, at depth
-    // 0 — before the report transaction below opens, because Postgres has no
-    // savepoints on this bridge.
+    // 0 — before the report transaction below opens, so it commits on its own
+    // and publishes after that COMMIT; inside the report transaction it would
+    // only be a SAVEPOINT (B1, MUL-426).
     const readinessLines: string[] = [];
     const dependencyNested: ChildStatusChangeCollector = [];
     const dependencyEvents = createCommitEventQueue();
@@ -2931,8 +2935,9 @@ export class IssuesRepo {
     // Depth-1 contract for anything added to this hook (S2's dependency gate):
     // this transaction is the only one open here, so a step that starts a
     // transaction of its own — `assignIssue`, `createTask`, `db.transaction` —
-    // must run BEFORE it (and commit separately), not inside it. Postgres has no
-    // savepoints: an inner COMMIT would end this transaction early.
+    // must run BEFORE it (and commit separately), not inside it. Inside it that
+    // transaction would only be a SAVEPOINT (B1, MUL-426), and the step's
+    // post-transaction notifications and events would run before this COMMIT.
     const enqueued: MultiremiTask[] = [];
     const comments: MultiremiIssueComment[] = [];
     // The round this report queues is created through the one task-creation
@@ -3884,9 +3889,10 @@ export class IssuesRepo {
 
   /**
    * Caller already owns a transaction (the E2 hook runs inside the round's
-   * transaction). The Session event must use the `WithinTransaction` append or
-   * Postgres would see a nested BEGIN, whose COMMIT would end the caller's
-   * transaction early.
+   * transaction). The comment, its Session event and its activity commit with
+   * the caller's transaction: the Session event uses the `WithinTransaction`
+   * append (the standalone one would only add a SAVEPOINT since B1, MUL-426),
+   * and the activity's realtime push waits on the caller's queue.
    */
   private createSystemIssueCommentWithinTransaction(
     issueId: string,
@@ -3994,9 +4000,9 @@ export class IssuesRepo {
     deferredEvents: CommitEventQueue,
   ): MultiremiTask[] {
     // The caller (notifyChildStatusChange) owns the only transaction, so every
-    // write here is the `WithinTransaction` flavour: `createTask` would open a
-    // second BEGIN and its COMMIT would end the caller's transaction early on
-    // Postgres, which has no savepoints.
+    // write here is the `WithinTransaction` flavour: `createTask` would run its
+    // transaction as a SAVEPOINT here (B1, MUL-426) and send its enqueue
+    // notification, child-status replay and events before the caller's COMMIT.
     return (() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       const issueSessionId = this.childDoneReturnSessionId(parent.id, parentTaskId);
