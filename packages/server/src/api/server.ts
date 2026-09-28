@@ -68,6 +68,17 @@ import {
 } from "../config/startup-env.js";
 import { CLI_SHARE_HEADER, registerCliRoutes } from "./routers/cli.js";
 import { registerCliLatestVersionRoutes } from "./routers/cli-latest-version.js";
+import {
+  createHub,
+  type HubImpl,
+  type HubSnapshot,
+  type ObservableLiveHub,
+} from "./hub/hub-core.js";
+import { resolveHubRole, type HubRole } from "./hub/hub-role-guard.js";
+import type { HubRingLimits } from "./hub/ring-buffer.js";
+import type { LiveHub } from "./hub/live-hub.js";
+import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
   createProjectKnowledgeServiceFromEnv,
@@ -243,6 +254,26 @@ export interface MultiremiApiOptions {
   verifyScmConnection?: ScmConnectionVerifier;
   /** Per-request performance metrics (MUL-367). Undefined reads the env config. */
   requestMetrics?: RequestMetricsOptions;
+  /**
+   * MUL-403 C1: the Live Hub this app serves subscriptions from.
+   *
+   * Undefined builds the real one (`HubImpl` over the local transport) so every
+   * entry point — `startMultiremiServer`, the snapshot harness, tests — gets a hub
+   * without a second wiring path. Pass a prepared hub to share one instance, or
+   * `null` to leave the app without one (the health routes then omit the `hub.*`
+   * fields rather than reporting zeros for something that does not exist).
+   */
+  hub?: LiveHub | ObservableLiveHub | null;
+  /** Frames the hub may hold before evicting an idle stream; tests inject smaller budgets. */
+  hubRingLimits?: Partial<HubRingLimits>;
+  /**
+   * MUL-403 C1: the API process role this app reports.
+   *
+   * Undefined reads `MULTIREMI_API_ROLE` (MUL-461's knob; until that module lands,
+   * {@link resolveHubRole} parses it). The *lock* is not taken here — see
+   * `startHubRoleGuard`, which the CLI's `serve` awaits before this function runs.
+   */
+  role?: HubRole;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -270,6 +301,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       ? process.env.MULTIREMI_DAEMON_DIRECT_BASE_URL
       : options.daemonDirectBaseUrl,
   );
+  // MUL-403 C1: one hub per API process. `options.hub === null` means "this app has
+  // no hub" (the health routes then omit `hub.*` instead of reporting zeros), and
+  // an explicitly injected hub is shared rather than rebuilt.
+  const hub: LiveHub | ObservableLiveHub | null = options.hub === undefined
+    ? createHub({
+        transport: createLocalHubTransport(),
+        role: options.role ?? resolveHubRole(process.env.MULTIREMI_API_ROLE),
+        ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
+      })
+    : options.hub;
+
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
     store,
@@ -492,8 +534,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ error: err.message }, 500);
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
-  app.get("/readyz", (c) => c.json({ ok: true }));
+  app.get("/health", (c) => c.json({ ok: true, ...hubHealthPayload(hub) }));
+  app.get("/readyz", (c) => c.json({ ok: true, ...hubReadyzPayload(hub) }));
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/api/config", (c) => c.json({
     ...(daemonDirectBaseUrl ? { daemon_server_url: daemonDirectBaseUrl } : {}),
@@ -703,6 +745,12 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const store = options.store ?? new MultiremiStore();
   const backgroundJobs = options.backgroundJobs
     ?? envEnabled(process.env.MULTIREMI_BACKGROUND_JOBS);
+  // MUL-403 C1: which role this process plays. The advisory lock that makes the
+  // role exclusive is taken by the process entry point (`serve` in the CLI), which
+  // is the only place allowed to await a 30s retry before `Bun.serve` starts; this
+  // function stays synchronous so every existing caller keeps working. The value is
+  // read here as well because `/health` and `/readyz` report it.
+  const apiRole = options.role ?? resolveHubRole(process.env.MULTIREMI_API_ROLE);
   const scheduler = backgroundJobs
     ? (options.scheduler === undefined ? new MultiremiScheduler({ store }) : options.scheduler)
     : null;
@@ -758,6 +806,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const app = createMultiremiApp({
     ...options,
     store,
+    role: apiRole,
     scheduler,
     realtimeState,
     sessionArchives,

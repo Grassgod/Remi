@@ -78,10 +78,55 @@ import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-c
 
 const log = createLogger("read-pool");
 
+/**
+ * Connections in the read pool, and the queue behind them, **per API role**.
+ *
+ * MUL-403 C1 item 8 (plan 2/6 §1, plan 7/6 §2). The two processes have different
+ * read pressure and different connection budgets:
+ *
+ * | role | connections | queue |
+ * |---|---|---|
+ * | `ui` / `all` | 4 | 64 |
+ * | `runtime` | 2 | 16 |
+ *
+ * `runtime` gets less because it is the process that also holds the daemon sockets
+ * and the trace fan-out: nothing there should be able to queue a burst of reads
+ * that competes with the socket work, and its own read paths (hub fill, warm-up)
+ * are small and sparse. `all` keeps the ui numbers because it *is* the ui process
+ * in every deployment that still runs one.
+ *
+ * The numbers are exported as a table rather than as four constants so a deployment
+ * can be read at a glance against its connection budget: two processes at these
+ * sizes plus the two advisory-lock connections and two sync bridges still sit far
+ * under the production server's `max_connections` (100).
+ */
+export interface ReadPoolCapacity {
+  maxConnections: number;
+  queueLimit: number;
+}
+
+export const READ_POOL_CAPACITY_BY_ROLE: Readonly<Record<"all" | "ui" | "runtime", ReadPoolCapacity>> = {
+  all: { maxConnections: 4, queueLimit: 64 },
+  ui: { maxConnections: 4, queueLimit: 64 },
+  runtime: { maxConnections: 2, queueLimit: 16 },
+};
+
 /** Connections in the read pool. Small on purpose: reads must not crowd out writes. */
-export const READ_POOL_MAX_CONNECTIONS = 4;
+export const READ_POOL_MAX_CONNECTIONS = READ_POOL_CAPACITY_BY_ROLE.all.maxConnections;
 /** Callers allowed to wait for a connection at once; the next one is rejected. */
-export const READ_POOL_QUEUE_LIMIT = 64;
+export const READ_POOL_QUEUE_LIMIT = READ_POOL_CAPACITY_BY_ROLE.all.queueLimit;
+
+/**
+ * The capacity for a role name.
+ *
+ * An unrecognized name answers the `all` row, matching `resolveApiRole`'s rule that
+ * a typo degrades to main's behaviour instead of silently shrinking a pool.
+ */
+export function readPoolCapacityForRole(role: string | null | undefined): ReadPoolCapacity {
+  const raw = (role ?? "").trim().toLowerCase();
+  if (raw === "ui" || raw === "runtime") return READ_POOL_CAPACITY_BY_ROLE[raw];
+  return READ_POOL_CAPACITY_BY_ROLE.all;
+}
 /** Server-side `statement_timeout`, in milliseconds. */
 export const READ_POOL_STATEMENT_TIMEOUT_MS = 2_000;
 /** Client-side abort, in milliseconds. Stays above the server-side timeout. */
@@ -516,14 +561,17 @@ interface QueuedWaiter {
  */
 export class PostgresReadPool implements ReadPool {
   readonly postgres = true;
+  /** The bounds this instance enforces; see {@link READ_POOL_CAPACITY_BY_ROLE}. */
+  readonly capacity: ReadPoolCapacity;
   private readonly sql: Bun.SQL;
   private running = 0;
   private readonly waiting: QueuedWaiter[] = [];
   private closed = false;
 
-  constructor(url: string) {
+  constructor(url: string, capacity: ReadPoolCapacity = READ_POOL_CAPACITY_BY_ROLE.all) {
+    this.capacity = capacity;
     this.sql = new Bun.SQL(url, {
-      max: READ_POOL_MAX_CONNECTIONS,
+      max: capacity.maxConnections,
       // Session defaults reach every pooled connection as startup parameters.
       // They are the second layer, not the first: each statement also runs in
       // its own `BEGIN READ ONLY` with a transaction-scoped timeout (see
@@ -672,11 +720,11 @@ export class PostgresReadPool implements ReadPool {
    * than adding to a backlog nobody is draining.
    */
   private acquire(): Promise<void> {
-    if (this.running < READ_POOL_MAX_CONNECTIONS) {
+    if (this.running < this.capacity.maxConnections) {
       this.running += 1;
       return Promise.resolve();
     }
-    if (this.waiting.length >= READ_POOL_QUEUE_LIMIT) {
+    if (this.waiting.length >= this.capacity.queueLimit) {
       return Promise.reject(new ReadPoolSaturatedError());
     }
     return new Promise<void>((resolve, reject) => {
@@ -740,9 +788,17 @@ export class SqliteReadPool implements ReadPool {
 export function createReadPool(options: {
   databaseUrl?: string | null;
   sqliteDb?: SqlDatabase | null;
+  /**
+   * The API process role (MUL-403 C1 item 8). Undefined reads
+   * `MULTIREMI_API_ROLE`, so a caller that forgets it still gets the right
+   * capacity in a role-split deployment, and a caller that passes it explicitly
+   * (tests, tools) does not have to touch the environment.
+   */
+  role?: string | null;
 } = {}): ReadPool {
   const url = (options.databaseUrl ?? process.env.MULTIREMI_DATABASE_URL ?? "").trim();
-  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url);
+  const role = options.role ?? process.env.MULTIREMI_API_ROLE;
+  if (/^postgres(ql)?:\/\//i.test(url)) return new PostgresReadPool(url, readPoolCapacityForRole(role));
   if (!options.sqliteDb) {
     throw new Error("createReadPool needs a sqlite database when no Postgres URL is configured");
   }
