@@ -33,7 +33,7 @@
  * acceptance case.
  */
 
-import type { HubFrame, HubStreamKey, HubStreamName, LiveHub } from "./live-hub.js";
+import type { HubFrame, HubStreamKey, HubStreamName, HubSubscription, LiveHub } from "./live-hub.js";
 import { hubLogStreamKey, hubTraceStreamKey } from "@multiremi/contracts/live-hub.js";
 import type { MultiremiWebSocketClient } from "../helpers/realtime-types.js";
 import {
@@ -178,39 +178,58 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
         sendError(client, parsed.stream, parsed.id, "wrong_endpoint");
         return;
       }
-      const authorized = await authorize(client, parsed.stream, parsed.id);
+      let authorized: { ok: true } | { ok: false; code: string };
+      try {
+        authorized = await authorize(client, parsed.stream, parsed.id);
+      } catch {
+        // The reader is the only async step and reports its own failures as
+        // `unavailable`; anything that escapes it is still a refusal. "Never
+        // throws on bad input" has to hold for surprises in a dependency too,
+        // because this runs inside the socket's message handler.
+        authorized = { ok: false, code: "unavailable" };
+      }
       if (!authorized.ok) {
         sendError(client, parsed.stream, parsed.id, authorized.code);
         return;
       }
 
       // One stream, one subscription: a repeat `stream.subscribe` for a stream
-      // this socket already holds replaces it (that is the reassign-on-resubscribe
-      // case, and the client uses it to resume from a new `from_seq`).
+      // this socket already holds replaces it — that is the reassign case, and
+      // the client uses it to resume a stream from a new `from_seq`.
       const active = subscriptionsOf(client);
       const key = subscriptionKey(parsed.stream, parsed.id);
       active.get(key)?.unsubscribe();
 
       // Ordering: the ack is what tells the client which sequences the hub can
-      // serve (and where the gap is), so a replay batch that arrives before the
-      // ack is held and flushed right after it. A hub that never calls the
-      // listener during `subscribe` — C0's empty one, and the contract's reading
-      // of `first_seq`/`head` — takes the second branch and the buffer stays
-      // empty.
+      // serve (and where the gap is), so a replay batch handed back during
+      // `subscribe` is held and flushed right after it. A hub that never calls
+      // the listener during `subscribe` — C0's empty one — leaves the buffer
+      // empty and takes the same path.
       let ackSent = false;
       let buffered: readonly HubFrame[] = [];
-      const subscription = deps.hub.subscribe(streamKey(parsed.stream, parsed.id), parsed.fromSeq, (_key, batch) => {
-        if (batch.length === 0) return;
-        if (!ackSent) {
-          buffered = [...buffered, ...batch];
-          return;
-        }
-        sendFrame(client, "stream.data", {
-          stream: parsed.stream,
-          id: parsed.id,
-          frames: batch,
+      // The keyed overload is the one this call resolves to: the listener is a
+      // `HubFrameListener`, and `LiveHub`'s declaration order is what makes that
+      // pick unambiguous (C0 pins it in its contract test).
+      let subscription: HubSubscription;
+      try {
+        subscription = deps.hub.subscribe(streamKey(parsed.stream, parsed.id), parsed.fromSeq, (_key, batch) => {
+          if (batch.length === 0) return;
+          if (!ackSent) {
+            buffered = [...buffered, ...batch];
+            return;
+          }
+          sendFrame(client, "stream.data", {
+            stream: parsed.stream,
+            id: parsed.id,
+            frames: batch,
+          });
         });
-      });
+      } catch {
+        // A hub that refuses the key (an unknown kind, a closed hub) is reported
+        // to the client rather than thrown at the message handler.
+        sendError(client, parsed.stream, parsed.id, "unavailable");
+        return;
+      }
       active.set(key, {
         stream: parsed.stream,
         id: parsed.id,

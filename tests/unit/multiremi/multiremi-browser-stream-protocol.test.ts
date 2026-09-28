@@ -441,6 +441,44 @@ describe("MUL-438 browser stream protocol — frames", () => {
   });
 });
 
+describe("MUL-438 browser stream protocol — a failing dependency is a refusal, not a crash", () => {
+  it("answers unavailable when the hub refuses the subscription", async () => {
+    const world = seedWorld(createStore());
+    const hub = new FakeHub();
+    hub.subscribe = () => { throw new Error("hub is closed"); };
+    const { handler } = await logHandler(world, hub);
+    const client = fakeClient(world.workspaceId, world.creatorUserId);
+
+    await handler.handleSubscribe(client as any, subscribeFrame("log", world.issueSessionId));
+
+    expect(client.frames).toEqual([
+      { type: "stream.error", payload: { stream: "log", id: world.issueSessionId, code: "unavailable" } },
+    ]);
+  });
+
+  it("answers unavailable when the authorization reader throws", async () => {
+    const world = seedWorld(createStore());
+    const { createBrowserStreamHandler } = await import("../../../packages/server/src/api/hub/browser-stream.js");
+    const handler = createBrowserStreamHandler({
+      hub: new FakeHub(),
+      auth: {
+        backend: "sqlite",
+        async logFacts() { throw new Error("reader exploded"); },
+        async traceFacts() { throw new Error("reader exploded"); },
+      },
+      endpoint: "log",
+    });
+    const client = fakeClient(world.workspaceId, world.creatorUserId);
+
+    await handler.handleSubscribe(client as any, subscribeFrame("log", world.issueSessionId));
+
+    expect(client.frames).toEqual([
+      { type: "stream.error", payload: { stream: "log", id: world.issueSessionId, code: "unavailable" } },
+    ]);
+    expect(handler.subscriptionCount(client as any)).toBe(0);
+  });
+});
+
 describe("MUL-438 browser stream protocol — one stream per endpoint", () => {
   it("answers a trace subscribe on /ws with wrong_endpoint", async () => {
     const world = seedWorld(createStore());
