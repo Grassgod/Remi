@@ -261,8 +261,15 @@ const READ_HEADS = new Set(["SELECT", "VALUES", "TABLE", "WITH", "EXPLAIN", "SHO
  *
  * The list is grouped by purpose and is intentionally small: the pool serves
  * the conversation-log window, the SSR first paint and the Live Hub warm-up,
- * not arbitrary analytics. It currently holds 189 names; the parity test pins
- * the size so the documented number cannot drift from the code.
+ * not arbitrary analytics. The unit test pins the size so the documented number
+ * cannot drift from the code.
+ *
+ * Removed after review (MUL-439 `cmt_0f5ulv021ijn`): `random`. It advances the
+ * session's PRNG state, which is a (mild) mutation, and no caller in
+ * `packages/server/src` uses it — the two `random()` hits in the tree are
+ * JavaScript `Math.random` and the unrelated `worker` helpers, not SQL. If a
+ * read ever needs it, the argument for re-adding it is about reproducibility
+ * rather than purity, and the note here should be updated with that reason.
  */
 export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
   // ── aggregates ──
@@ -343,6 +350,10 @@ export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
   "strpos",
   "position",
   "starts_with",
+  // `left` and `right` are `T`-catcode keywords (reserved, but allowed as a
+  // function name) and also genuine string functions. Because they are
+  // callable, they belong here rather than in the keyword skip; both are pure:
+  // they take a string and a count and return a substring.
   "left",
   "right",
   "initcap",
@@ -378,7 +389,6 @@ export const READ_FUNCTION_WHITELIST: ReadonlySet<string> = new Set<string>([
   "greatest",
   "least",
   "width_bucket",
-  "random",
   // ── date and time (all read the clock or convert; none set it) ──
   "now",
   "clock_timestamp",
@@ -503,6 +513,32 @@ export function findDisallowedFunction(sql: string): string | null {
 }
 
 /**
+ * A locking clause. Read-only transactions reject these too, but naming them
+ * here gives the caller a clear `read_pool_not_select` at the gate rather than
+ * a server error after the round trip.
+ *
+ * `FOR SHARE`, `FOR KEY SHARE` and `FOR NO KEY UPDATE` are included alongside
+ * `FOR UPDATE`: all four take row locks, and `FOR NO KEY UPDATE` is a write
+ * lock even though it changes no column.
+ */
+const LOCKING_CLAUSE_RE = /\bFOR\s+(?:UPDATE|SHARE|KEY\s+SHARE|NO\s+KEY\s+UPDATE)\b/i;
+
+/**
+ * A `;` that separates two statements, as opposed to one trailing `;`.
+ *
+ * The masked text has literals and comments blanked out, so a `;` here is real
+ * SQL. `SELECT 1;` is one statement with a terminator and is allowed;
+ * `SELECT 1; SELECT 2` is two, and the pool does not accept a batch — the
+ * second statement would otherwise reach the server without passing the gate's
+ * view of it.
+ */
+function hasStatementSeparator(masked: string): boolean {
+  // Exactly one trailing terminator is allowed, with whitespace either side.
+  const withoutTerminator = masked.replace(/\s*;\s*$/u, "");
+  return withoutTerminator.includes(";");
+}
+
+/**
  * The leading keyword of a statement, or null when it is not a read.
  *
  * Runs on {@link maskSqlLiterals}, the same view of the statement the function
@@ -510,6 +546,13 @@ export function findDisallowedFunction(sql: string): string | null {
  * a comment is, or a statement could be a read to one and a write to the other.
  * With the mask applied, a keyword inside a literal is blanked out and a
  * commented-out keyword cannot hide one.
+ *
+ * Rejected here, beyond "not a read":
+ *
+ * - a statement batch (`SELECT 1; SELECT 2`), because only the first statement
+ *   would be the one this classifier looked at;
+ * - a locking clause (`FOR UPDATE` and its three siblings), which is a write
+ *   intent even when the statement is otherwise a read.
  *
  * `EXPLAIN` is allowed because a planner check is a read; `EXPLAIN ANALYZE`
  * executes the statement, and the `ANALYZE` deny below turns that away.
@@ -529,9 +572,11 @@ function classifyReadStatement(sql: string): string | null {
     stripped = next.trim();
   }
   if (!stripped) return null;
+  if (hasStatementSeparator(stripped)) return null;
   const head = /^[A-Za-z]+/.exec(stripped)?.[0]?.toUpperCase();
   if (!head || !READ_HEADS.has(head)) return null;
   if (WRITE_KEYWORD_RE.test(stripped)) return null;
+  if (LOCKING_CLAUSE_RE.test(stripped)) return null;
   return head;
 }
 
