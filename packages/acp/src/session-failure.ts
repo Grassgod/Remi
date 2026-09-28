@@ -97,7 +97,12 @@ function sensitiveValueEnd(text: string, start: number, level: number): number {
   if (first === "{" || first === "[") return containerEnd(text, index, level);
   const bare = /(?:[^\s"'`,;&{}[\]\\]|\\+(?![\\"']))+/y;
   bare.lastIndex = start;
-  return bare.test(text) ? bare.lastIndex : -1;
+  if (!bare.test(text)) return -1;
+  // After a space a lone HTTP status is the next word of an empty field, and the failure classifier needs it.
+  // Spaces survive the JSON escaping of RPC details, so the daemon's second pass agrees with the first.
+  const status = /[45][0-9]{2}[.:]?/y;
+  status.lastIndex = start;
+  return text[start - 1] === " " && status.test(text) && status.lastIndex === bare.lastIndex ? -1 : bare.lastIndex;
 }
 
 // A quote escaped `level` times closes when its backslash run is level mod 2 * (level + 1).

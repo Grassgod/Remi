@@ -244,6 +244,44 @@ describe("provider error privacy", () => {
     }
   }
 
+  const emptyFieldStatuses = (status: number) => [
+    `api_key= ${status}`,
+    `unexpected error: x-api-key:  ${status}: upstream unavailable`,
+    `token= ${status}. retry later`,
+    JSON.stringify({ error: { message: `password= ${status}` } }),
+  ];
+  for (const entry of ["generic", "codex", "claude"] as const) {
+    it(`keeps a lone HTTP status after an empty sensitive field for ${entry} classification`, () => {
+      const classify = entry === "generic" ? classifyTaskFailure : (value: string) => classifyDaemonTaskFailure(entry, value);
+      for (const status of [401, 403, 404, 429, 500, 503]) {
+        for (const text of emptyFieldStatuses(status)) {
+          const rpc = new AcpRpcError(-32603, "Internal error", { details: text }).message;
+          expect(classify(text) === TaskFailureReason.AgentUnknown).toBe(false);
+          expect(redactProviderErrorText(text) === text).toBe(true);
+          expect(rpc === `RPC error -32603: Internal error: ${JSON.stringify({ details: text })}`).toBe(true);
+          // The daemon redacts the RPC message again before classifying it.
+          expect(classify(redactProviderErrorText(rpc))).toBe(classify(rpc));
+        }
+      }
+    });
+  }
+
+  it.each<[string, (value: string) => string, string]>([
+    ["an adjacent status", () => "api_key=503", "api_key=[REDACTED]"],
+    ["a quoted status", () => 'api_key: "503"', "api_key: [REDACTED]"],
+    ["a status after a tab", () => "api_key=\t503", "api_key=\t[REDACTED]"],
+    ["a non-error status", () => "api_key= 200", "api_key= [REDACTED]"],
+    ["a longer number", () => "api_key= 5031", "api_key= [REDACTED]"],
+    ["a status joined to a value", (value) => `api_key= 503${value}`, "api_key= [REDACTED]"],
+    ["a status and punctuation joined to a value", (value) => `api_key= 503:${value} status 503`, "api_key= [REDACTED] status 503"],
+    ["a later field after a kept status", (value) => `api_key= 503 client_secret: ${value}`, "api_key= 503 client_secret: [REDACTED]"],
+  ])("still redacts %s", (_label, format, expected) => {
+    const text = format(marker());
+    expect(redactProviderErrorText(text) === expected).toBe(true);
+    expect(new AcpRpcError(-32603, "Internal error", { details: text }).message
+      === `RPC error -32603: Internal error: ${JSON.stringify({ details: expected })}`).toBe(true);
+  });
+
   it("preserves diagnostic text including status, request ID, model and URL hostname", () => {
     const text = "unexpected status 503 Service Unavailable; request id: req-512e; model: gpt-6; url: https://gateway.example/v1/responses";
     const error = new AcpSessionFailureError(failure(text));
