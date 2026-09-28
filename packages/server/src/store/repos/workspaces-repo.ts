@@ -82,6 +82,14 @@ export interface GatewayModelReasoningDecl {
   updatedAt: string;
 }
 
+/** Presence means 1M enabled; disabling deletes the declaration. */
+export interface GatewayModelContextDecl {
+  modelId: string;
+  contextWindow: "1m";
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
 export class WorkspaceDaemonRetirementRequiredError extends Error {
   readonly code = "daemon_retirement_required";
 
@@ -988,6 +996,56 @@ export class WorkspacesRepo {
       [workspaceId, engine, modelId],
     );
     return true;
+  }
+
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_gateway_model_context WHERE workspace_id = ? AND engine = ? ORDER BY model_id",
+    ).all(workspaceId, engine) as Row[];
+    return rows.map(row => this.gatewayModelContextFromRow(row));
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_gateway_model_context WHERE workspace_id = ? AND engine = ? AND model_id = ?",
+    ).get(workspaceId, engine, modelId) as Row | null;
+    return row ? this.gatewayModelContextFromRow(row) : null;
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string,
+    engine: RelayEngine,
+    input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    if (engine !== "claude") throw new Error("1M context is only supported for Claude");
+    const modelId = input.modelId.trim();
+    if (!modelId) throw new Error("model id is required");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_gateway_model_context (workspace_id, engine, model_id, context_window, updated_by, updated_at)
+       VALUES (?, ?, ?, '1m', ?, ?)
+       ON CONFLICT(workspace_id, engine, model_id) DO UPDATE SET
+         context_window = excluded.context_window,
+         updated_by = excluded.updated_by,
+         updated_at = excluded.updated_at`,
+      [workspaceId, engine, modelId, input.updatedBy ?? null, nowIso()],
+    );
+    return this.getGatewayModelContext(workspaceId, engine, modelId)!;
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    if (!this.getGatewayModelContext(workspaceId, engine, modelId)) return false;
+    this.ctx.db.run(
+      "DELETE FROM multiremi_gateway_model_context WHERE workspace_id = ? AND engine = ? AND model_id = ?",
+      [workspaceId, engine, modelId],
+    );
+    return true;
+  }
+
+  private gatewayModelContextFromRow(row: Row): GatewayModelContextDecl {
+    return {
+      modelId: String(row.model_id), contextWindow: "1m",
+      updatedBy: nullableString(row.updated_by), updatedAt: String(row.updated_at),
+    };
   }
 
   private gatewayModelReasoningFromRow(row: Row): GatewayModelReasoningDecl {

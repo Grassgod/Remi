@@ -106,6 +106,8 @@ export interface PeerSummary {
 export interface MinuteSummary {
   event: "api_minute_summary";
   ts: string;
+  /** Emitted by the process that produced the window; two containers share one log. */
+  pid: number;
   window_ms: number;
   requests: number;
   status_5xx: number;
@@ -1055,6 +1057,7 @@ export function summarizeWindow(input: WindowSummaryInput): MinuteSummary {
   return {
     event: "api_minute_summary",
     ts: (input.now ?? new Date()).toISOString(),
+    pid: process.pid,
     window_ms: Math.round(windowMs),
     requests: input.samples.length,
     status_5xx: status5xx,
@@ -1255,6 +1258,7 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
           emitSlowRequest({
             event: "api_slow_request",
             ts: new Date().toISOString(),
+            pid: process.pid,
             role: options.role,
             method,
             route,

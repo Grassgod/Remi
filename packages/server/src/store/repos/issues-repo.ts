@@ -29,6 +29,8 @@ import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspac
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -450,8 +452,14 @@ export class IssuesRepo {
    * number. Dispatch is the caller's business and happens after this commits.
    *
    * The body runs through {@link createIssueWithinTransaction}; the wrapper only
-   * decides whether it owns the transaction, because Postgres has no savepoints
-   * here and callers such as Feishu ingestion and autopilots already hold one.
+   * decides whether it owns the transaction, because callers such as Feishu
+   * ingestion and autopilots already hold one.
+   *
+   * MUL-405: the body also allocates `issue_number` under the per-workspace
+   * number advisory lock (W -> N -> D, see `store/advisory-locks.ts`), so a peer
+   * blocks instead of reading a maximum this transaction is about to consume.
+   * The `(workspace_id, issue_number)` unique index is the second line of
+   * defense, not the mechanism.
    */
   createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
@@ -834,9 +842,17 @@ export class IssuesRepo {
   ): MultiremiIssue {
     assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
+
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Global lock order (MUL-405, see store/advisory-locks.ts): W then N, before
+    // any domain row lock. Callers that already took them (Feishu ingest,
+    // messaging outcomes, Autopilot create_issue) re-take the same locks for
+    // free inside their transaction; callers that did not (the plain API path)
+    // get them here. N is taken before the MAX(issue_number) read below.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
     // Child membership and guarded parent decisions serialize on the parent row.
     if (parentIssueId && !lockIssueRowWithinTransaction(this.ctx.db, parentIssueId)) {
       throw new Error(`Parent issue not found: ${parentIssueId}`);
@@ -946,8 +962,10 @@ export class IssuesRepo {
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
       if (parent) {
-        // This method owns no transaction of its own; the caller's queue is the
-        // one that is (or will be) drained after the insert commits.
+        // The hops this produces are replayed by the owner of the transaction
+        // after it commits (see `createIssue`); running them here would open a
+        // nested transaction whose work a rollback could still erase.
+
         this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
@@ -2909,7 +2927,11 @@ export class IssuesRepo {
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) {
         const closedQueue = createCommitEventQueue();
-        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue))();
+        this.ctx.db.transaction(() => {
+          // MUL-405: W before the audit activity/comment this branch writes.
+          this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+          this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue);
+        })();
         this.ctx.emitCommitEvents(closedQueue);
       }
       return;
@@ -2935,6 +2957,12 @@ export class IssuesRepo {
     const staged: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W comes before this hook's first domain
+      // write. `notifyParentOfChildOutcome` writes the parent's notification
+      // comment before `enqueueChildDoneParentTask` takes W, which classified as
+      // D -> W; taking W here covers both branches (comment-only, queued round)
+      // and is free for the branches that take it again.
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       if (outcome) {
         // MUL-400 E3 readiness lines for dependents that share this parent ride
         // along in this one report so the parent owner reads a single round.

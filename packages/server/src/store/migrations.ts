@@ -11,7 +11,8 @@ import {
 } from "@multiremi/session-archive/retry-policy.js";
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
-import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
+import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
+import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -40,7 +41,9 @@ const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
+const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
+const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
@@ -49,7 +52,12 @@ const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_ur
 const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
 export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseDialect } = {}): void {
-  runMigrationsForDialect(db, resolveSqlDialect(db, options.dialect));
+  // MUL-405: the lock spans the entire run, so a second process either waits for
+  // a finished migration or proceeds exactly as before (SQLite, where the lock
+  // is a no-op). It releases on throw as well as on return, so a failed
+  // migration cannot strand it.
+  advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () =>
+    runMigrationsForDialect(db, resolveSqlDialect(db, options.dialect)));
 }
 
 /**
@@ -3335,9 +3343,101 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       );
     `);
   });
+  runMigrationOnce(db, GATEWAY_MODEL_CONTEXT_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_context (
+        workspace_id TEXT NOT NULL,
+        engine TEXT NOT NULL CHECK(engine = 'claude'),
+        model_id TEXT NOT NULL,
+        context_window TEXT NOT NULL CHECK(context_window = '1m'),
+        updated_by TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, engine, model_id)
+      );
+    `);
+  });
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
+  ensureIssueNumberUniqueness(db, legacyGithubTables);
+}
+
+/**
+ * Second line of defense for issue numbering (MUL-405): the transaction lock in
+ * `IssuesRepo.createIssue` is what allocates numbers, and this index is what
+ * makes a duplicate number impossible even if a future caller forgets it.
+ *
+ * It MUST NOT be able to fail a startup. The daily release updates the platform
+ * container unattended at 07:00 Beijing time, and the updater rolls back when the
+ * new container does not come up — a failed `CREATE UNIQUE INDEX` on existing
+ * duplicate data would take the whole release down over a defense that no read
+ * path depends on. So the run degrades instead: duplicates or any other failure
+ * log one grep-able `api_startup_warning` line and leave the index absent, and
+ * the next startup retries, which is why this does not go through
+ * `runMigrationOnce`.
+ */
+function ensureIssueNumberUniqueness(db: SqlDatabase, objects: Set<string>): void {
+  if (objects.has(ISSUE_NUMBER_UNIQUE_INDEX)) return;
+  // `issue_number = 0` is the "not allocated yet" placeholder, not a number: the
+  // column defaults to 0 and `backfillIssueKeys` hands those rows real numbers on
+  // every startup. Rows written by an out-of-band writer (a fixture, a script, a
+  // pre-upgrade client) all sit at 0, so enforcing uniqueness over the whole
+  // column would make the index reject them and it would be the index, not the
+  // allocator, that broke them. The predicate therefore covers exactly the rows
+  // an allocator produced, which is where a duplicate number can come from.
+  const allocatedOnly = "issue_number > 0";
+  let duplicates: Array<{ workspace_id?: unknown; issue_number?: unknown; count?: unknown }> = [];
+  try {
+    duplicates = db.query(
+      `SELECT workspace_id, issue_number, COUNT(*) AS count
+         FROM multiremi_issues
+        WHERE ${allocatedOnly}
+        GROUP BY workspace_id, issue_number
+       HAVING COUNT(*) > 1
+        LIMIT 1`,
+    ).all() as Array<{ workspace_id?: unknown; issue_number?: unknown; count?: unknown }>;
+  } catch (err) {
+    logStartupWarning("duplicate check failed", err, {});
+    return;
+  }
+  if (duplicates.length) {
+    const row = duplicates[0]!;
+    logStartupWarning("duplicate issue numbers found, unique index skipped", null, {
+      workspace_id: row.workspace_id ?? null,
+      issue_number: row.issue_number ?? null,
+      duplicate_rows: row.count ?? null,
+    });
+    return;
+  }
+  try {
+    db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${ISSUE_NUMBER_UNIQUE_INDEX}
+         ON multiremi_issues(workspace_id, issue_number)
+       WHERE ${allocatedOnly}`,
+    );
+  } catch (err) {
+    logStartupWarning("unique index creation failed", err, {});
+  }
+}
+
+/**
+ * One JSON line per degraded startup step, on stdout next to the other
+ * machine-read startup lines (`api_minute_summary`, `api_slow_request`).
+ * `createLogger` cannot be used here: WARN goes to stderr and stops being a
+ * parseable record of what the process decided at boot.
+ */
+function logStartupWarning(message: string, error: unknown, fields: Record<string, unknown>): void {
+  try {
+    console.log(JSON.stringify({
+      event: "api_startup_warning",
+      ts: new Date().toISOString(),
+      message,
+      ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+      ...fields,
+    }));
+  } catch {
+    // A hostile console is not worth failing a migration over.
+  }
 }
 
 function ensureFeishuBotAgentRoutesSchema(db: SqlDatabase): void {
