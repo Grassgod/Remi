@@ -127,9 +127,10 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    and reopening a `done`/`cancelled` child lock that same parent before writing.
    This also covers Agent assignment's direct terminal-to-`todo` write, whose
    locks and assignment update commit before task creation opens its transaction.
-   Lock order is workspace lifecycle (when required), then every Issue row the
-   transaction writes or whose relation it changes, taken **once in ascending id
-   order** (`lockIssueRowsWithinTransaction`), then no further Issue row and no
+   Lock order is workspace lifecycle (when required) and, for creation, the
+   issue-number lock (MUL-405's W -> N -> D, `store/advisory-locks.ts`), then
+   every Issue row the transaction writes or whose relation it changes, taken
+   **once in ascending id order** (`lockIssueRowsWithinTransaction`), then no further Issue row and no
    workspace lock. The set is computed before locking from the input plus one
    unlocked read of the written Issue's own `parent_issue_id` and `status`;
    every guarded value is re-read after the locks. A child that is reopened

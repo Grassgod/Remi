@@ -41,7 +41,7 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 批量在写入前预检全部 Issue，发现关系冲突则整批拒绝并返回 `issue_ids`。逐行写入仍各自提交；预检后并发新增关系可能使后续行拒绝，先前行不会回滚。该并发边界不允许形成跨工作区关系，也不代表批量具备整批事务原子性。
 
-创建子单、改父单、添加依赖、移动、把已结束子单改回未结束以及派给 Agent 重开已结束子单，都在一个事务内经 [issue-row-lock](../../packages/server/src/store/issue-row-lock.ts) 一次性按 ID 升序锁完所需的现有 Issue 行，锁后重读再校验；创建时父单与所有 `blocked_by` 端点一起加锁，改回未结束与 Agent 派单把当前父单一起入集。锁集由输入加一次不加锁的本单读取决定；锁后重读发现还需要一行没锁到的 Issue（等锁期间父单或结束状态变了），由事务所有者回滚重来一次，再过期或事务由调用方持有时返回 `409 issue_relation_changed`，任何情况下都不在持有行锁后补锁。沿用已有工作区锁且先于 Issue 行锁，不新增工作区锁，不在获得 Issue 行锁后再拿工作区锁，不改为 `REPEATABLE READ`。删除依赖、清父关系不增加关系行锁。任务创建在工作区锁之后先锁所属 Issue 行，再校验 Issue 与 Agent 同工作区，所以与移动互斥：移动先提交则建任务报 `Issue workspace does not match agent workspace`，任务先提交则移动返回 `409`。派给 Agent 或成员时，锁后重读若发现 Issue 已移到别的工作区，就在新工作区重新解析经办人，报与先移动后派单相同的错误（如 `Agent not found`）且不写入。派单写经办人与建任务仍是两个事务，两者之间插入的移动会留下陈旧经办人但没有任务，归 MUL-480。完整顺序见 [ADR 0003](../adr/0003-parent-status-derived-from-children.md) 第 8 条。
+创建子单、改父单、添加依赖、移动、把已结束子单改回未结束以及派给 Agent 重开已结束子单，都在一个事务内经 [issue-row-lock](../../packages/server/src/store/issue-row-lock.ts) 一次性按 ID 升序锁完所需的现有 Issue 行，锁后重读再校验；创建时父单与所有 `blocked_by` 端点一起加锁，改回未结束与 Agent 派单把当前父单一起入集。锁集由输入加一次不加锁的本单读取决定；锁后重读发现还需要一行没锁到的 Issue（等锁期间父单或结束状态变了），由事务所有者回滚重来一次，再过期或事务由调用方持有时返回 `409 issue_relation_changed`，任何情况下都不在持有行锁后补锁。沿用已有工作区锁且先于 Issue 行锁（创建时 MUL-405 的编号锁也在 Issue 行锁之前，即 W → N → D），不新增工作区锁，不在获得 Issue 行锁后再拿工作区锁，不改为 `REPEATABLE READ`。删除依赖、清父关系不增加关系行锁。任务创建在工作区锁之后先锁所属 Issue 行，再校验 Issue 与 Agent 同工作区，所以与移动互斥：移动先提交则建任务报 `Issue workspace does not match agent workspace`，任务先提交则移动返回 `409`。派给 Agent 或成员时，锁后重读若发现 Issue 已移到别的工作区，就在新工作区重新解析经办人，报与先移动后派单相同的错误（如 `Agent not found`）且不写入。派单写经办人与建任务仍是两个事务，两者之间插入的移动会留下陈旧经办人但没有任务，归 MUL-480。完整顺序见 [ADR 0003](../adr/0003-parent-status-derived-from-children.md) 第 8 条。
 
 ## 启动条件
 

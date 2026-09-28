@@ -128,7 +128,7 @@
   "fallback": {
     "model_label": "备用模型",
     "thinking_label": "备用模型思考等级",
-    "description": "仅在主模型网关资源不可用时自动接管当前任务。",
+    "description": "主模型或网关不可用时，自动接管当前任务。",
     "unconfigured": "未配置",
     "same_as_primary": "备用模型不能与主模型相同",
     "clear": "清除备用模型",
@@ -137,6 +137,9 @@
     "switch_count": "切换 {{count}} 次",
     "reason_gateway": "网关资源不可用",
     "reason_no_account": "网关无可用账号",
+    "reason_model_unavailable": "主模型不可用",
+    "reason_server": "供应商服务错误",
+    "reason_queued": "候选 Runtime 均不支持主模型",
     "reason_unknown": "资源不可用"
   },
   "inspector": {

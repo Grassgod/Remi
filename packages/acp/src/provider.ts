@@ -17,6 +17,7 @@ import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { AcpClient } from "./client.js";
+import { AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
@@ -455,6 +456,7 @@ export class AcpProvider implements Provider {
   private _elicitationHandlers = new Map<string, ElicitationHandler>();
   private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
+  private _typedSessionFailures: boolean | undefined;
   /** Active-stream wakeups keyed by chatId, fired when the entry's ACP process dies. */
   private _deathListeners = new Map<string, (reason: string) => void>();
 
@@ -466,6 +468,10 @@ export class AcpProvider implements Provider {
 
   get adapter(): AgentAdapter {
     return this._adapter;
+  }
+
+  get typedSessionFailures(): boolean | undefined {
+    return this._typedSessionFailures;
   }
 
   /** Register external handler for permission requests (AskUserQuestion, ExitPlanMode, tool approval). */
@@ -582,8 +588,12 @@ export class AcpProvider implements Provider {
   }
 
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
+    const credentials = [this._options.apiKey, ...Object.entries(this._options.env ?? {})
+      .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+      .map(([, value]) => value)].filter((value): value is string => Boolean(value));
     const chatId = options?.chatId ?? "__default__";
     const entry = await abortableEnsureSession(this._ensureSession(chatId, options), options?.signal);
+    this._typedSessionFailures = entry.client.typedSessionFailures ?? false;
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
@@ -593,6 +603,9 @@ export class AcpProvider implements Provider {
     const eventQueue: ProviderEvent[] = [];
     let promptDone = false;
     let promptError: Error | null = null;
+    const failureState: { failure: AcpSessionFailure | null; compaction: AcpSessionFailure | null } = { failure: null, compaction: null };
+    const turnFailure = () => failureState.failure?.severity === "error"
+      ? failureState.failure : failureState.compaction ?? failureState.failure;
     let resolveWaiting: (() => void) | null = null;
 
     const pushEvent = (evt: ProviderEvent) => {
@@ -613,14 +626,23 @@ export class AcpProvider implements Provider {
     // bookkeeping this guarantees the stream still terminates.
     this._deathListeners.set(chatId, (reason) => {
       promptDone = true;
-      promptError ??= new Error(`ACP agent died unexpectedly (${reason})`);
+      promptError ??= new Error(redactProviderErrorText(`ACP agent died unexpectedly (${reason})`, credentials));
       resolveWaiting?.();
     });
 
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
-      const update = notification.update;
+      let update = notification.update;
+      if (update.sessionUpdate === "session_info_update") {
+        const failure = readSessionFailure(update._meta, credentials);
+        if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
+        if (failure) update = {
+          ...update, _meta: { ...update._meta, jetbrains: {
+            ...record(record(update._meta)?.jetbrains), air: { ...airMetadata(update._meta), sessionFailure: failure },
+          } },
+        };
+      }
       if (update.sessionUpdate === "config_option_update" && update.configOptions) {
         entry.configOptions = update.configOptions;
       } else if (update.sessionUpdate === "config_option_update" && update.id === "model" && typeof update.value === "string") {
@@ -637,10 +659,30 @@ export class AcpProvider implements Provider {
       }
       if (update.sessionUpdate === "agent_message_chunk") {
         const text = extractChunkText((update as Record<string, any>).content);
-        if (!isCompactionChunk(text)) entry.promptState.text += text;
+        if (!isCompactionChunk(text)) {
+          entry.promptState.text += text;
+          if (text.trim() && failureState.compaction) {
+            failureState.compaction = null;
+            console.warn("[AcpProvider] Assistant continued after a context compaction failure");
+          }
+        }
       }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
+        const compaction = record(record(update._meta)?.contextCompaction);
+        // Claude /compact can resolve end_turn after this failed tool, without
+        // an AIR failure. Only later assistant output in this prompt recovers it.
+        if (status === "failed" && compaction) {
+          const details = redactProviderErrorText(typeof compaction.error === "string" ? compaction.error : "Compacting failed", credentials);
+          failureState.compaction = {
+            id: update.toolCallId, revision: 1, category: "unknown", severity: "error",
+            title: "Context compaction failed",
+            details,
+          };
+          // This failed tool's text also becomes task messages, not just Error.message.
+          update = JSON.parse(JSON.stringify(update, (_key, value) =>
+            typeof value === "string" ? redactProviderErrorText(value, credentials) : value));
+        }
         if (status === "completed" || status === "failed") {
           entry.promptState.completedToolCount++;
         }
@@ -653,16 +695,18 @@ export class AcpProvider implements Provider {
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
         promptDone = true;
-        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope);
+        const failure = readSessionFailure(result._meta, credentials);
+        if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
+        this._lastResponse = buildAgentResponse(entry, result, this._adapter.promptUsageSettleScope, turnFailure());
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
           promptError = new Error("Cancelled");
         }
         resolveWaiting?.();
       })
-      .catch((err: Error) => {
+      .catch((err: unknown) => {
         promptDone = true;
-        promptError = err;
-        console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${err.message}`);
+        promptError = redactProviderError(err, credentials);
+        console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${promptError.message}`);
         resolveWaiting?.();
       });
 
@@ -693,6 +737,8 @@ export class AcpProvider implements Provider {
       entry.lastUsed = Date.now();
     }
 
+    const failure = turnFailure();
+    if (failure?.severity === "error") throw new AcpSessionFailureError(failure, promptError ?? undefined, credentials);
     if (promptError) throw promptError;
   }
 
@@ -1388,7 +1434,7 @@ function nonNegativeFinite(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope): AgentResponse {
+function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope: PromptUsageSettleScope, sessionFailure?: AcpSessionFailure | null): AgentResponse {
   const { usage, text, promptStartTime, completedToolCount, contextUsage } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
 
@@ -1413,6 +1459,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult, settleScope:
     metadata: {
       stopReason: result.stopReason,
       provider: "acp",
+      ...(sessionFailure ? { sessionFailure } : {}),
       ...(contextUsage ? { contextUsage } : {}),
     },
   });

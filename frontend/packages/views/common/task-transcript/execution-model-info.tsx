@@ -22,8 +22,16 @@ export function ExecutionModelInfo({ task, agentModel, agentThinkingLevel, usage
     inheritedThinking]
     .find((value) => typeof value === "string" && value.trim())?.trim();
   const reason = task.switchReason ?? task.switch_reason;
+  const reasonCode = typeof reason === "string" && reason.startsWith("gateway_resource:")
+    ? reason.slice("gateway_resource:".length).split(";")[0] : null;
   const reasonLabel = typeof reason === "string" && reason.startsWith("gateway_resource:")
-    ? reason.includes("provider_no_available_account")
+    ? reasonCode === "agent_error.model_not_found_or_unavailable"
+      ? t(($) => $.fallback.reason_model_unavailable)
+      : reasonCode === "agent_error.provider_server_error"
+      ? t(($) => $.fallback.reason_server)
+      : reasonCode === "queued_model_unavailable"
+      ? t(($) => $.fallback.reason_queued)
+      : reasonCode === "agent_error.provider_no_available_account"
       ? t(($) => $.fallback.reason_no_account)
       : t(($) => $.fallback.reason_gateway)
     : t(($) => $.fallback.reason_unknown);

@@ -1,4 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  lockOrderSentinelNoteNumberLock,
+  lockOrderSentinelNoteStatement,
+  lockOrderSentinelTransactionBegin,
+  lockOrderSentinelTransactionEnd,
+} from "@multiremi/store/lock-order-sentinel.js";
 
 /**
  * Per-request memoization of short-lived, read-mostly rows.
@@ -158,6 +164,15 @@ function writtenTable(sql: string): string | null {
  * lock before its first read.
  */
 export function invalidatingDatabase<T extends object>(database: T): T {
+  /**
+   * One frame per transaction, innermost last (MUL-405). Callbacks queued via
+   * the `afterCommit` key above run only once the outermost frame commits;
+   * an inner frame that rolls back drops its own callbacks. Mirrors the native
+   * implementation on `PostgresSyncDatabase`.
+   */
+  const afterCommitFrames: Array<Array<() => void>> = [];
+  /** Depth of `transaction()` calls here; only the outermost opens a sentinel frame. */
+  let sentinelTransactionDepth = 0;
   const interceptStatement = (statement: unknown, sql: string): unknown => {
     if (READ_ONLY_STATEMENT.test(sql)) return statement;
     const table = writtenTable(sql);
@@ -166,6 +181,10 @@ export function invalidatingDatabase<T extends object>(database: T): T {
         const value = Reflect.get(target, key, target);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) => {
+          // MUL-405 whole-suite sentinel: classify when the statement actually
+          // runs. `query(sql).run()` is a real write; preparing it is not, and a
+          // prepared statement can be executed inside a later transaction.
+          lockOrderSentinelNoteStatement(sql);
           invalidateTable(table);
           return value.apply(target, args);
         };
@@ -181,14 +200,58 @@ export function invalidatingDatabase<T extends object>(database: T): T {
       }
       if ((key === "run" || key === "exec") && typeof value === "function") {
         return (sql: string, ...args: unknown[]) => {
+          lockOrderSentinelNoteStatement(String(sql));
           if (!READ_ONLY_STATEMENT.test(String(sql))) invalidateTable(writtenTable(String(sql)));
           return value.apply(target, [sql, ...args]);
+        };
+      }
+      if (key === "advisoryXactLock") {
+        // N: the number-allocation lock. Recorded here because the lock is taken
+        // by a call, not by a statement the classifier can parse.
+        return (lockKey: string) => {
+          lockOrderSentinelNoteNumberLock(lockKey);
+          if (typeof value === "function") value.call(target, lockKey);
         };
       }
       if (key === "transaction" && typeof value === "function") {
         return (fn: (...args: unknown[]) => unknown) => {
           const runTransaction = value.apply(target, [fn]) as (...args: unknown[]) => unknown;
-          return (...args: unknown[]) => withinTransaction(() => runTransaction(...args));
+          return (...args: unknown[]) => withinTransaction(() => {
+            const outermost = sentinelTransactionDepth === 0;
+            sentinelTransactionDepth += 1;
+            if (outermost) lockOrderSentinelTransactionBegin();
+            afterCommitFrames.push([]);
+            let committed = false;
+            try {
+              const result = runTransaction(...args);
+              committed = true;
+              // The real transaction committed (for SQLite there is no nesting:
+              // bun:sqlite joins the open transaction). Publish only here, so a
+              // throwing callback cannot be reported as a committed write.
+              return result;
+            } finally {
+              const frame = afterCommitFrames.pop()!;
+              if (committed) {
+                if (afterCommitFrames.length === 0) {
+                  for (const callback of frame) {
+                    try { callback(); } catch { /* best-effort realtime */ }
+                  }
+                } else {
+                  afterCommitFrames[afterCommitFrames.length - 1]!.push(...frame);
+                }
+              }
+              sentinelTransactionDepth -= 1;
+              if (outermost) lockOrderSentinelTransactionEnd();
+            }
+          });
+        };
+      }
+      if (key === "afterCommit" && value === undefined) {
+        // bun:sqlite has no queue of its own; the wrapper provides the same
+        // contract the Postgres handle implements natively.
+        return (fn: () => void) => {
+          if (afterCommitFrames.length === 0) fn();
+          else afterCommitFrames[afterCommitFrames.length - 1]!.push(fn);
         };
       }
       return typeof value === "function" ? value.bind(target) : value;
