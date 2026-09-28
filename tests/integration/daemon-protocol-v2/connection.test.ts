@@ -30,6 +30,7 @@ describe("daemon protocol v2 real connection", () => {
       expect(h.layer.registry.size).toBe(1);
       for (let round = 0; round < 3; round++) {
         h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+        await waitFor(() => h.ledger.filter(entry => entry.type === "hb").length === round + 2, "heartbeat ingress");
         await h.settleHeartbeat();
       }
       expect(h.ledger.filter(entry => entry.type === "hb")).toHaveLength(4);

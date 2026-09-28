@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { startMultiremiServer } from "../../fixtures/daemon-protocol.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION, MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -68,7 +69,6 @@ describe("A-4 configuration snapshots", () => {
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 52).toString("base64");
     store.registerRuntime({ id: rt, name: rt, provider: config.provider ?? "claude", workspaceId: "local",
       daemonId: "dmn_config_push", ownerId: "local", metadata: { codex_profiles: 1, claude_profiles: 1, agent_plugin_protocol: 1 } });
-    store.heartbeatRuntime(rt, { supportsFeishuBotConfig: true, claimPending: false });
     store.recordSshMeshHeartbeat(rt, 1, { status: "disabled" });
     let layer!: DaemonProtocolLayer;
     const server = startMultiremiServer({ store, authToken: "config-push-test", hostname: "127.0.0.1", port: 0,
@@ -84,7 +84,9 @@ describe("A-4 configuration snapshots", () => {
         socket.addEventListener("error", () => reject(new Error("Config socket failed")), { once: true }); });
       socket.send(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "dmn_config_push",
         cli_version: DAEMON_MIN_CLI_VERSION, caps: [], runtimes: [{ runtime_id: rt,
-          provider: config.provider ?? "claude", max_concurrency: 1, active_task_ids: [] }] } }));
+          provider: config.provider ?? "claude", max_concurrency: 1, active_task_ids: [],
+          capabilities: { agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+            feishu_concierge_protocol: FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION } }] } }));
       await waitFor(() => frames.some(frame => frame.t === "welcome")); await layer.drain();
       return { socket, frames };
     };

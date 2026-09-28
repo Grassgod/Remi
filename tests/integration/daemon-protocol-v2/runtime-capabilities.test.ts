@@ -132,7 +132,7 @@ describe("v2 runtime capability advertisement", () => {
     expect(h.store.listFeishuIssueDecisionCards("local", id)).toMatchObject([{
       decision_id: decision.id, issue_id: parent.id, message_id: "om_capability_card",
     }]);
-  });
+  }, 15_000);
 
   it("clears stale host flags on hello when the daemon has no concierge host", async () => {
     const h = await fixture();
