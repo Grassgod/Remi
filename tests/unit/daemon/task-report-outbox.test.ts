@@ -419,6 +419,49 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(delivered).toEqual(["ok", "rt:runtime"]);
   });
 
+  it("accounts for legacy wire adaptation before applying the in-flight byte window", async () => {
+    let ready = false;
+    let bytes = 0;
+    let peak = 0;
+    const delivered: number[] = [];
+    const gates: Array<ReturnType<typeof deferred<void>>> = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", canSend: () => ready,
+      prepareDelivery: record => ({ ...record, payload: { ...record.payload, output: "x".repeat(600 * 1024) } }),
+      deliver: async record => {
+        delivered.push(record.id);
+        expect(record.payload.output).toHaveLength(600 * 1024);
+        bytes += outboxRecordBytes(record); peak = Math.max(peak, bytes);
+        const gate = deferred<void>(); gates.push(gate);
+        await gate.promise; bytes -= outboxRecordBytes(record);
+      } }));
+    outbox.enqueue("first", "complete", {});
+    outbox.enqueue("second", "complete", {});
+    ready = true; outbox.pumpAll();
+    await until(() => delivered.length === 1);
+    await Bun.sleep(10);
+    expect(delivered).toEqual([1]);
+    gates[0]!.resolve();
+    await until(() => delivered.length === 2);
+    gates[1]!.resolve();
+    await outbox.flushAll();
+    expect(peak).toBeLessThanOrEqual(1024 * 1024);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
+  });
+
+  it("blocks a row that exceeds the frame limit after legacy wire adaptation", async () => {
+    const delivered: string[] = [];
+    const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:",
+      prepareDelivery: record => record.taskId === "large"
+        ? { ...record, payload: { output: "x".repeat(1024 * 1024) } } : record,
+      deliver: async record => { delivered.push(record.taskId); } }));
+    outbox.enqueue("large", "complete", {});
+    outbox.enqueue("ok", "progress", {});
+    await outbox.flushAll();
+    expect(await outbox.waitForTaskDrain("large")).toBe("blocked");
+    expect(delivered).toEqual(["ok"]);
+    expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
+  });
+
   it("purges a deleted task's entire partition instead of blocking or replaying it", async () => {
     const delivered: string[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {

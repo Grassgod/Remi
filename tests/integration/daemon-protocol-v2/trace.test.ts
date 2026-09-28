@@ -3,6 +3,8 @@ import { DaemonProtocolHarness, waitFor } from "./harness.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
+import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { join } from "node:path";
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });
@@ -55,6 +57,37 @@ describe("memory trace over the real protocol", () => {
       expect(h.errors).toEqual([]);
     }, 40_000);
   }
+
+  it("migrates both providers' legacy messages and completes their owned traces", async () => {
+    const tasks: string[] = [];
+    const providers = ["claude", "codex"];
+    const runtimes = ["legacy-claude", "legacy-codex"];
+    const h = await fixture({ providers, runtimeIds: runtimes, async beforeStart(h) {
+      for (let i = 0; i < providers.length; i++) {
+        h.store.registerRuntime({ id: runtimes[i]!, name: providers[i]!, provider: providers[i]!,
+          workspaceId: "local", daemonId: "dmn_fixture" });
+        const agent = h.store.createAgent({ name: providers[i]!, provider: providers[i]! });
+        const t = h.store.createTask({ agentId: agent.id, prompt: "legacy" });
+        expect(h.store.claimTask(runtimes[i]!)?.id).toBe(t.id);
+        h.store.startTask(t.id); tasks.push(t.id);
+        const old = new MultiremiTaskReportOutbox({ path: join(h.root, `${providers[i]}-outbox.db`),
+          canSend: () => false, deliver: async () => {} });
+        try {
+          old.enqueue(t.id, "messages", { messages: [{ seq: 42, type: "text", content: providers[i] }] });
+          old.enqueue(t.id, "complete", { output: providers[i] });
+        } finally { await old.close(); }
+      }
+    } });
+    await waitFor(() => tasks.every(id => h.store.getTask(id)?.status === "completed")
+      && (h.daemon as any).ensureOutbox().stats().pending === 0, "legacy completions");
+    await waitFor(() => tasks.every(id => daemonTraceService(h.layer).sink.head(id) === 1), "both legacy trace owners");
+    for (let i = 0; i < tasks.length; i++) {
+      expect(snapshot(h, tasks[i]!)).toMatchObject({ head: 1, first_seq: 1, closed: true });
+      expect(await daemonTraceService(h.layer).reader.read({ runtimeId: runtimes[i]!, taskId: tasks[i]! }))
+        .toMatchObject({ ok: true, head: 1, closed: true, events: [{ seq: 1, content: providers[i] }] });
+    }
+    expect(h.errors).toEqual([]);
+  });
 
   it("records first_seq for a cold tail and backfills a subscription through reverse RPC", async () => {
     const h = await fixture(); const t = task(h);

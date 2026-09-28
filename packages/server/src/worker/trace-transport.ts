@@ -84,10 +84,13 @@ export class DaemonTraceTransport {
 }
 
 const shared = new WeakMap<DaemonProtocolClient, { transport: DaemonTraceTransport; owners: number }>();
-export function daemonTraceStore(protocol: DaemonProtocolClient): TraceStore {
+export function daemonTraceTransport(protocol: DaemonProtocolClient): DaemonTraceTransport {
   const entry = shared.get(protocol);
   if (!entry) throw new Error("daemon trace transport is not initialized");
-  return entry.transport.store;
+  return entry.transport;
+}
+export function daemonTraceStore(protocol: DaemonProtocolClient): TraceStore {
+  return daemonTraceTransport(protocol).store;
 }
 export function acquireDaemonTrace(protocol: DaemonProtocolClient, store: TraceStore | undefined,
   reportsHavePriority: () => boolean, onError: (error: unknown) => void): DaemonTraceTransport {

@@ -66,6 +66,8 @@ export interface MultiremiTaskReportOutboxOptions {
   /** Sends one reliable frame and waits for its individual res. */
   deliver: (record: MultiremiOutboxRecord) => Promise<void | Record<string, unknown>>;
   canSend?: () => boolean;
+  /** Legacy wire adaptation runs before frame/window byte accounting. */
+  prepareDelivery?: (record: MultiremiOutboxRecord) => MultiremiOutboxRecord;
   /** Bounded exponential backoff schedule; the last entry repeats. */
   backoffScheduleMs?: number[];
   /** Soft cap for the on-disk queue; oldest NON-terminal rows are dropped over it. */
@@ -96,6 +98,7 @@ export class MultiremiTaskReportOutbox {
   private readonly deliveryBatchSize: number;
   private readonly inFlight = new Map<string, { bytes: number; done: Promise<void> }>();
   private readonly canSend: () => boolean;
+  private readonly prepareDelivery: NonNullable<MultiremiTaskReportOutboxOptions["prepareDelivery"]>;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private scheduled = false;
   private readonly drainWaiters = new Map<string, Array<(result: MultiremiOutboxDrainResult) => void>>();
@@ -144,6 +147,7 @@ export class MultiremiTaskReportOutbox {
     `);
     this.deliver = options.deliver;
     this.canSend = options.canSend ?? (() => true);
+    this.prepareDelivery = options.prepareDelivery ?? (record => record);
     this.backoff = options.backoffScheduleMs?.length ? options.backoffScheduleMs : DEFAULT_BACKOFF_MS;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.onTaskBlocked = options.onTaskBlocked ?? null;
@@ -416,6 +420,7 @@ export class MultiremiTaskReportOutbox {
       const retry = this.db.query("SELECT next_attempt_at FROM outbox_events WHERE id = ?").get(delivery.record.id) as { next_attempt_at: number | null };
       const delay = Number(retry.next_attempt_at ?? 0) - Date.now();
       if (delay > 0) { nextWake = Math.min(nextWake, delay); continue; }
+      delivery.record = this.prepareDelivery(delivery.record);
       const frameBytes = outboxRecordBytes(delivery.record);
       if (frameBytes > DAEMON_FRAME_MAX_BYTES) {
         this.blockPartition(taskId, "protocol_violation: persisted report exceeds 1 MiB");
@@ -562,7 +567,7 @@ export class MultiremiTaskReportOutbox {
     return {
       record: {
         ...first,
-        payload: { messages: coalesceTaskMessages(messages) },
+        payload: { ...first.payload, messages: coalesceTaskMessages(messages) },
       },
       recordIds: records.map((record) => record.id),
       blocked: false,

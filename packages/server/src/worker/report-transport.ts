@@ -2,6 +2,7 @@ import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-
 import { MultiremiTaskReportOutbox, type MultiremiOutboxKind, type MultiremiTaskReportOutboxOptions } from "./outbox.js";
 import { outboxRecordFrame } from "./report-frames.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import { daemonTraceTransport } from "./trace-transport.js";
 
 export interface DaemonReportTransport {
   report(type: string, partition: string, payload: Record<string, unknown>, wait?: boolean | { timeoutMs: number }): Promise<Record<string, unknown>>;
@@ -17,8 +18,23 @@ export function acquireDaemonOutbox(protocol: DaemonProtocolClient, options: Mul
   if (!entry) {
     const outbox = new MultiremiTaskReportOutbox({ ...options,
       canSend: () => protocol.connectionState() === "connected" && !protocol.uplinkPaused(),
-      deliver: record => record.kind === "messages" ? options.deliver(record)
-        : protocol.event(outboxRecordFrame(record) as ReturnType<typeof outboxRecordFrame> & { seq: number }),
+      prepareDelivery: record => {
+        // v1 terminal rows predate trace pointers, but their preceding messages
+        // have already been migrated locally in the same partition.
+        if (!record.terminal || record.payload.trace) return record;
+        const trace = daemonTraceTransport(protocol);
+        if (typeof record.payload.runtime_id === "string") trace.track(record.taskId, record.payload.runtime_id);
+        return { ...record, payload: { ...record.payload, ...trace.completion(record.taskId) } };
+      },
+      deliver: async record => {
+        if (record.kind === "messages") return options.deliver(record);
+        const reply = await protocol.event(outboxRecordFrame(record) as ReturnType<typeof outboxRecordFrame> & { seq: number });
+        if (record.terminal) {
+          const trace = daemonTraceTransport(protocol);
+          if (trace.store.head(record.taskId)) trace.close(record.taskId, record.kind === "complete" ? "completed" : "failed");
+        }
+        return reply;
+      },
     });
     entry = { outbox, owners: 0, unsubscribe: protocol.onWelcome(() => outbox.pumpAll()) };
     shared.set(protocol, entry);
