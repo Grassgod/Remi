@@ -1,18 +1,15 @@
 /**
- * MUL-400 S1: every path the parent-status work touches must reach the database
- * with a transaction depth of at most 1.
+ * MUL-400 S1: every parent-status entry point owns at most one outer transaction.
  *
- * `PostgresSyncDatabase.transaction()` is a bare BEGIN/COMMIT with no savepoint
- * support, so a nested `transaction()` commits the outer one early, releases its
- * locks, and makes the outer ROLLBACK a no-op. The store's convention is that
- * the outermost caller owns the only transaction and everything inside it uses a
- * `...WithinTransaction` variant. This file wraps `db.transaction` in a depth
- * counter and asserts that ceiling for each entry point, plus the atomicity of
- * the E2 hook itself.
+ * Since B1 (MUL-426), PostgreSQL nested `transaction()` calls use SAVEPOINT.
+ * Per MUL-402 cmt_78bx01xhb75x section 2, count BEGIN ownership separately from
+ * savepoint nesting. The real PG suite records transaction control statements
+ * for every entry point: one outer BEGIN/COMMIT, no early COMMIT, and only
+ * SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT inside the outer one.
+ * Hook post-commit ordering, atomicity and rollback/event assertions stay intact.
  *
- * The counters run on both backends: SQLite here, and the same assertions run
- * against real Postgres when `MULTIREMI_TEST_POSTGRES_URL` points at one (the
- * PG suite imports this file's helpers, see `multiremi-postgres-tx-depth`).
+ * This file runs the counter on SQLite; multiremi-parent-status-pg-depth.test.ts
+ * runs it and the SQL control assertions on real PostgreSQL.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
@@ -23,28 +20,35 @@ afterEach(resetMultiremiTestEnv);
 type Store = ReturnType<typeof createStore>;
 
 /**
- * Count nested `transaction()` calls on a database handle. The store's own
+ * Count outer transactions separately from nested savepoints. The store's own
  * database is a write-invalidating proxy whose `transaction` forwards to the
  * target on every read, so wrapping the target observes every call the store
  * makes, including the ones that start from a repo.
  */
-export function transactionDepthCounter(database: unknown): { max: number; reset(): void } {
-  const target = database as { transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown };
+export function transactionDepthCounter(database: unknown): { maxTopLevel: number; maxNested: number; reset(): void } {
+  const target = database as {
+    readonly inTransaction?: boolean;
+    transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown;
+  };
   const original = target.transaction;
   const counter = {
-    max: 0,
-    reset() { counter.max = 0; },
+    maxTopLevel: 0,
+    maxNested: 0,
+    reset() { counter.maxTopLevel = 0; counter.maxNested = 0; },
   };
-  let depth = 0;
+  let topLevelDepth = 0;
+  let nestedDepth = 0;
   target.transaction = (fn: (...args: never[]) => unknown) => {
     const run = original.call(target, fn);
     return (...args: unknown[]) => {
-      depth += 1;
-      counter.max = Math.max(counter.max, depth);
+      const nested = target.inTransaction === true;
+      if (nested) counter.maxNested = Math.max(counter.maxNested, ++nestedDepth);
+      else counter.maxTopLevel = Math.max(counter.maxTopLevel, ++topLevelDepth);
       try {
         return run(...args);
       } finally {
-        depth -= 1;
+        if (nested) nestedDepth -= 1;
+        else topLevelDepth -= 1;
       }
     };
   };
@@ -57,7 +61,7 @@ export function transactionDepthCounter(database: unknown): { max: number; reset
  * the tests count the target sqlite handle the helper created instead — same
  * call tree one `transaction()` layer down.
  */
-function wrapStore(store: Store): { max: number; reset(): void } {
+function wrapStore(store: Store): { maxTopLevel: number; maxNested: number; reset(): void } {
   return transactionDepthCounter(db);
 }
 
@@ -107,7 +111,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
-      expect(counter.max).toBe(1);
+      expect(counter.maxTopLevel).toBe(1);
       // The report still landed as exactly one queued round.
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
@@ -119,7 +123,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
-      expect(counter.max).toBe(1);
+      expect(counter.maxTopLevel).toBe(1);
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
     });
   }
@@ -130,7 +134,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
     const counter = wrapStore(store);
     counter.reset();
     store.createIssue({ title: "New child", parentIssueId: parent.id, status: "todo" });
-    expect(counter.max).toBeLessThanOrEqual(1);
+    expect(counter.maxTopLevel).toBeLessThanOrEqual(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "parent_status_derived"))
       .toHaveLength(1);
@@ -146,7 +150,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
     // its own; the ceiling is what matters here.
     counter.reset();
     const child = store.createIssue({ title: "Late child", parentIssueId: parent.id, status: "in_progress" });
-    expect(counter.max, "createIssue").toBeLessThanOrEqual(1);
+    expect(counter.maxTopLevel, "createIssue").toBeLessThanOrEqual(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
 
     // Another child stays behind, so the parent still has open work. Put it back
@@ -163,7 +167,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
     const second = store.createIssue({ title: "Second parent", status: "in_review" });
     counter.reset();
     store.updateIssue(child.id, { parentIssueId: second.id });
-    expect(counter.max, "re-parent").toBe(1);
+    expect(counter.maxTopLevel, "re-parent").toBe(1);
     expect(store.getIssue(parent.id)?.status, "old parent").toBe("in_progress");
     expect(store.getIssue(second.id)?.status, "new parent").toBe("in_progress");
     expect(store.getIssue(stayBehind.id)?.parentIssueId).toBe(parent.id);
@@ -192,7 +196,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     runTask(store, runtime.id, completing.id);
     counter.reset();
     store.completeTask(completing.id, { output: "finished" });
-    expect(counter.max, "completeTask").toBe(1);
+    expect(counter.maxTopLevel, "completeTask").toBe(1);
 
     const failingChild = store.createIssue({
       title: "Failing child",
@@ -205,7 +209,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     runTask(store, runtime.id, failing.id);
     counter.reset();
     store.failTask(failing.id, { error: "boom" });
-    expect(counter.max, "failTask").toBe(1);
+    expect(counter.maxTopLevel, "failTask").toBe(1);
     // A task failure ends the child on `blocked`, so the E2 hook really ran.
     expect(store.getIssue(failingChild.id)?.status).toBe("blocked");
 
@@ -219,7 +223,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     const cancelling = store.createTask({ agentId: agent.id, issueId: cancellingChild.id, prompt: "cancel me" });
     counter.reset();
     store.cancelTask(cancelling.id);
-    expect(counter.max, "cancelTask").toBe(1);
+    expect(counter.maxTopLevel, "cancelTask").toBe(1);
   });
 
   it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask", () => {
@@ -244,19 +248,19 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     // both used to run the E1/E2 hook inline inside their own transaction.
     counter.reset();
     const task = store.createTask({ agentId: agent.id, issueId: child.id, prompt: "lifecycle" });
-    expect(counter.max, "createTask").toBe(1);
+    expect(counter.maxTopLevel, "createTask").toBe(1);
     expect(store.getIssue(child.id)?.status).toBe("todo");
 
     let claimed = store.claimTask(runtime.id);
     while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime.id);
     counter.reset();
     store.startTask(task.id);
-    expect(counter.max, "startTask").toBe(1);
+    expect(counter.maxTopLevel, "startTask").toBe(1);
     expect(store.getIssue(child.id)?.status).toBe("in_progress");
 
     counter.reset();
     store.completeTask(task.id, { output: "lifecycle done" });
-    expect(counter.max, "completeTask").toBe(1);
+    expect(counter.maxTopLevel, "completeTask").toBe(1);
   });
 
   it("keeps the remaining task-lifecycle writers at depth 1", () => {
@@ -285,16 +289,16 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
       kind: "question",
       payload: { question: "which one?" },
     });
-    expect(counter.max, "createTaskHumanRequest").toBe(1);
+    expect(counter.maxTopLevel, "createTaskHumanRequest").toBe(1);
     expect(store.getIssue(askChild.id)?.status).toBe("in_review");
 
     counter.reset();
     store.respondTaskHumanRequest(request.id, { response: { answer: "that one" } });
-    expect(counter.max, "respondTaskHumanRequest").toBe(1);
+    expect(counter.maxTopLevel, "respondTaskHumanRequest").toBe(1);
 
     counter.reset();
     store.expireTaskHumanRequest(request.id, "timeout");
-    expect(counter.max, "expireTaskHumanRequest").toBeLessThanOrEqual(1);
+    expect(counter.maxTopLevel, "expireTaskHumanRequest").toBeLessThanOrEqual(1);
 
     // A comment mention dispatches through the same creation entry point.
     const dispatchParent = store.createIssue({
@@ -316,7 +320,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
       authorId: "local",
       body: `[@${agent.id}](mention://agent/${agent.id}) please continue`,
     });
-    expect(counter.max, "comment dispatch").toBe(1);
+    expect(counter.maxTopLevel, "comment dispatch").toBe(1);
   });
 
   it("keeps cancelTasksByTriggerComments and recoverOrphans at depth 1", () => {
@@ -346,14 +350,14 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
 
     counter.reset();
     store.cancelTasksByTriggerComments("local", [comment.id]);
-    expect(counter.max, "cancelTasksByTriggerComments").toBe(1);
+    expect(counter.maxTopLevel, "cancelTasksByTriggerComments").toBe(1);
     expect(store.getTask(triggered.id)?.status).toBe("cancelled");
 
     const orphan = store.createTask({ agentId: agent.id, issueId: child.id, runtimeId: runtime.id, prompt: "orphan" });
     store.claimTask(runtime.id);
     counter.reset();
     store.recoverOrphans(runtime.id);
-    expect(counter.max, "recoverOrphans").toBe(1);
+    expect(counter.maxTopLevel, "recoverOrphans").toBe(1);
     expect(store.getTask(orphan.id)?.status).toBe("failed");
   });
 });
@@ -426,7 +430,7 @@ describe("MUL-400 S1 transaction depth — organizer actions", () => {
       action: "cancel",
       reason: "depth probe",
     });
-    expect(counter.max, "organizer cancel").toBe(1);
+    expect(counter.maxTopLevel, "organizer cancel").toBe(1);
 
     const secondTarget = store.createTask({
       agentId: worker.id,
@@ -443,7 +447,7 @@ describe("MUL-400 S1 transaction depth — organizer actions", () => {
       action: "redispatch",
       reason: "depth probe",
     });
-    expect(counter.max, "organizer redispatch").toBe(1);
+    expect(counter.maxTopLevel, "organizer redispatch").toBe(1);
   });
 });
 
@@ -517,7 +521,7 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     const counter = wrapStore(store);
     counter.reset();
     recordMerge(store, connection.id, "change.merged:42:depth-held");
-    expect(counter.max, "held merge").toBe(1);
+    expect(counter.maxTopLevel, "held merge").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "parent_status_held"))
       .toHaveLength(1);
@@ -538,7 +542,7 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     const counter = wrapStore(store);
     counter.reset();
     recordMerge(store, connection.id, "change.merged:42:depth-done");
-    expect(counter.max, "closed merge").toBe(1);
+    expect(counter.maxTopLevel, "closed merge").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "issue_status_forced"))
       .toHaveLength(0);
@@ -602,7 +606,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     const counter = wrapStore(store);
     counter.reset();
     store.updateIssue(chain.child.id, { status: "done" });
-    expect(counter.max, "updateIssue chain depth").toBe(1);
+    expect(counter.maxTopLevel, "updateIssue chain depth").toBe(1);
     assertChainWalked(store, chain);
   });
 
@@ -614,7 +618,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     const counter = wrapStore(store);
     counter.reset();
     store.completeTask(task.id, { output: "child slice finished" });
-    expect(counter.max, "completeTask chain depth").toBe(1);
+    expect(counter.maxTopLevel, "completeTask chain depth").toBe(1);
     assertChainWalked(store, chain);
   });
 
@@ -671,7 +675,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
       payload: { id: "provider-change-77", number: 77, branch: "main", mergeSha: "def" },
       evidence: { source: "poll", dedupeKey: "poll:change.merged:77", providerEventId: null },
     });
-    expect(counter.max, "scm merge chain depth").toBe(1);
+    expect(counter.maxTopLevel, "scm merge chain depth").toBe(1);
     expect(store.getIssue(chain.child.id)?.status).toBe("done");
     assertChainWalked(store, chain);
   });
@@ -727,7 +731,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     } finally {
       unsubscribe();
     }
-    expect(counter.max, "four-level chain depth").toBe(1);
+    expect(counter.maxTopLevel, "four-level chain depth").toBe(1);
     // Each of the three ancestors derived, so the replay is not capped at one
     // extra hop. Only the leaf's own ending is an E2 report; the intermediate
     // hops moved in_review -> in_progress, which is a derivation, not a child
