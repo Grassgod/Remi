@@ -119,13 +119,13 @@ vi.mock("./inbox-list-item", () => ({
     item: { id: string };
     groupedItems?: Array<{ id: string }>;
     onClick: () => void;
-    onArchive: () => void;
+    onArchive: (items: Array<{ id: string }>) => void;
   }) => (
     <div>
       <button type="button" data-testid="inbox-row" onClick={onClick}>
         {item.id}{groupedItems && groupedItems.length > 1 ? ` (${groupedItems.length})` : ""}
       </button>
-      <button type="button" aria-label={`Archive ${item.id}`} onClick={onArchive}>Archive</button>
+      <button type="button" aria-label={`Archive ${item.id}`} onClick={() => onArchive(groupedItems ?? [item])}>Archive</button>
     </div>
   ),
   useTimeAgo: () => () => "just now",

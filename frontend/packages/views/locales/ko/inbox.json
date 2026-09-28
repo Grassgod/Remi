@@ -30,6 +30,8 @@
     "mark_group_read": "그룹을 읽음으로 표시",
     "mark_done_tooltip": "완료로 표시",
     "archive_tooltip": "보관",
+    "expand_group": "알림 펼치기",
+    "collapse_group": "알림 접기",
     "feishu_source": "Feishu 메시지",
     "time": {
       "just_now": "방금 전",
@@ -73,7 +75,9 @@
     "feishu_message_notification": "Feishu 메시지",
     "feishu_reply_draft": "Feishu 답장 초안",
     "feishu_issue_proposal": "Feishu 이슈 제안",
-    "feishu_ingest_connection_alert": "Feishu 수집 경고"
+    "feishu_ingest_connection_alert": "Feishu 수집 경고",
+    "child_issue_terminal": "하위 이슈 업데이트",
+    "decision_requested": "결정 요청"
   },
   "labels": {
     "set_status_to": "상태 변경:",

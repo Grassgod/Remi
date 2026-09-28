@@ -361,4 +361,100 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(summaryResponse.status).toBe(200);
     expect(await summaryResponse.json()).toEqual({ unread: 3, attention: 0 });
   });
+
+  it("does not project or count a parent moved outside the notification workspace", async () => {
+    const store = createStore();
+    const workspaceA = store.createWorkspace({ id: "ws_parent_scope_a", name: "Parent Scope A", slug: "parent-scope-a" });
+    const workspaceB = store.createWorkspace({ id: "ws_parent_scope_b", name: "Parent Scope B", slug: "parent-scope-b" });
+    const reviewer = store.createWorkspaceMember({
+      id: "mem_parent_scope_reviewer",
+      workspaceId: workspaceA.id,
+      userId: "usr_parent_scope_reviewer",
+      name: "Parent scope reviewer",
+      role: "owner",
+    });
+    const author = store.createWorkspaceMember({
+      id: "mem_parent_scope_author",
+      workspaceId: workspaceA.id,
+      userId: "usr_parent_scope_author",
+      name: "Parent scope author",
+      role: "member",
+    });
+    const parent = store.createIssue({ title: "Private parent in B", workspaceId: workspaceA.id });
+    const child = store.createIssue({
+      title: "Child staying in A",
+      workspaceId: workspaceA.id,
+      parentIssueId: parent.id,
+      createdBy: reviewer.id,
+      status: "todo",
+    });
+    store.createIssueComment(child.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify the reviewer before the parent moves",
+    });
+    const credential = await store.createAccessToken({
+      workspaceId: workspaceA.id,
+      userId: "usr_parent_scope_reviewer",
+      name: "Parent scope PAT",
+      type: "pat",
+      purpose: "session",
+    });
+    const headers = {
+      Authorization: `Bearer ${credential.token}`,
+      "Content-Type": "application/json",
+    };
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const moved = await app.request(`/api/issues/${parent.id}?workspace_id=${workspaceA.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ workspace_id: workspaceB.id }),
+    });
+    expect(moved.status).toBe(200);
+    expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceB.id);
+    expect(store.getIssue(child.id)?.workspaceId).toBe(workspaceA.id);
+
+    const inboxResponse = await app.request(`/api/inbox/page?workspace_id=${workspaceA.id}`, { headers });
+    expect(inboxResponse.status).toBe(200);
+    const inbox = await inboxResponse.json();
+    const notification = inbox.items.find((item: any) => item.issue_id === child.id);
+    expect(notification).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+
+    const directParent = await app.request(`/api/issues/${parent.id}?workspace_id=${workspaceB.id}`, { headers });
+    expect(directParent.status).toBe(404);
+    expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 0, active: 0 });
+    expect(store.listChildIssueProgress(workspaceA.id).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listChildIssueProgress(workspaceB.id).some((progress) => progress.parentIssueId === parent.id)).toBe(false);
+    expect(store.listIssues({ workspaceId: workspaceA.id, topLevelOnly: true }).map((issue) => issue.id)).toContain(child.id);
+    expect(store.listIssues({ workspaceId: workspaceA.id, parentId: parent.id })).toHaveLength(0);
+  });
+
+  it("clears every projected parent field after the parent is deleted", async () => {
+    const store = createStore();
+    const reviewer = store.createWorkspaceMember({ name: "Deleted parent reviewer", userId: "usr_deleted_parent" });
+    const author = store.createWorkspaceMember({ name: "Deleted parent author", userId: "usr_deleted_parent_author" });
+    const parent = store.createIssue({ title: "Parent to delete" });
+    const child = store.createIssue({ title: "Orphaned child", parentIssueId: parent.id, createdBy: reviewer.id });
+    store.createIssueComment(child.id, {
+      authorType: "member",
+      authorId: author.id,
+      body: "Notify before deletion",
+    });
+    expect(store.deleteIssue(parent.id)).toBe(true);
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/inbox/page?member_id=${encodeURIComponent(reviewer.id)}`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.items.find((item: any) => item.issue_id === child.id)).toMatchObject({
+      issue_parent_id: null,
+      issue_parent_key: null,
+      issue_parent_title: null,
+    });
+  });
 });

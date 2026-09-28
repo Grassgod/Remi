@@ -1180,8 +1180,16 @@ export class StoreContext {
     if (session?.withCode && session.codeRuntimeId) {
       return this.runtimes().getRuntime(session.codeRuntimeId)?.daemonId ?? session.codeRuntimeId;
     }
+    // A Project directory is only assigned to tasks that hold an Issue
+    // workspace — see the creation predicate in `tasks-repo.ts`:
+    // `holdsWorkspace && directoryProjectId && issue?.issueKind !== "intake"`.
+    // A discussion/side Task (holds_workspace = 0) deliberately does not
+    // inherit the directory, so treating it as a directory pin here would
+    // strand it on a machine Project device routing can refuse (MUL-449).
+    if (Number(taskRow.holds_workspace ?? 1) !== 1) return null;
     const issueId = cleanOptionalString(taskRow.issue_id);
     const issue = issueId ? this.issues().getIssue(issueId) : null;
+    if (issue?.issueKind === "intake") return null;
     const chatId = cleanOptionalString(taskRow.chat_session_id);
     const chat = chatId ? this.chat().getChatSession(chatId) : null;
     const projectId = issue?.projectId ?? chat?.projectId;
@@ -1401,7 +1409,11 @@ function notificationGroupForInboxType(type: string): MultiremiNotificationGroup
   return "updates";
 }
 
-export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiInboxItem {
+export function toInboxItem(
+  row: Row,
+  issue: MultiremiIssue | null,
+  parent: Pick<MultiremiIssue, "id" | "key" | "title"> | null = null,
+): MultiremiInboxItem {
   const workspaceId = String(row.workspace_id ?? "local");
   const issueId = nullableString(row.issue_id);
   const memberId = String(row.member_id);
@@ -1416,6 +1428,9 @@ export function toInboxItem(row: Row, issue: MultiremiIssue | null): MultiremiIn
     workspace_id: workspaceId,
     issueId,
     issue_id: issueId,
+    issue_parent_id: parent?.id ?? null,
+    issue_parent_key: parent?.key ?? null,
+    issue_parent_title: parent?.title ?? null,
     memberId,
     member_id: memberId,
     recipientType,
