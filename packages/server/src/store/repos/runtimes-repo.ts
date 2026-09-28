@@ -38,7 +38,8 @@ import {
   resolveOptionalStringField,
   toJson,
 } from "@multiremi/store/helpers.js";
-import { type StoreContext } from "@multiremi/store/context.js";
+import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import type { CancelTaskResult, ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import { activeRequestReadCache, cacheKey, writeThroughRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
@@ -859,7 +860,6 @@ export class RuntimesRepo {
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) return { status: "not_found" as const };
       const activeAgents = this.ctx.agents().listActiveAgentsByRuntime(id);
@@ -879,6 +879,7 @@ export class RuntimesRepo {
       if (this.isLastManagedDaemonRuntime(current)) {
         return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
       }
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       this.pauseAutopilotsByAgentIds(archivedAgentIds);
       clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
       const deleted = this.deleteRuntimeWithinTransaction(id, options);
@@ -897,11 +898,13 @@ export class RuntimesRepo {
     const initial = this.getRuntime(id);
     if (!initial) throw new Error(`Runtime not found: ${id}`);
     const expected = new Set(expectedActiveAgentIds);
+    const cancelled: CancelTaskResult[] = [];
+    const childStatusChanges: ChildStatusChangeCollector = [];
+    const deferredEvents = createCommitEventQueue();
     let clearedProjects: Array<{ id: string; workspaceId: string; updatedAt: string }> = [];
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) throw new Error(`Runtime not found: ${id}`);
       const activeAgents = this.ctx.agents().listActiveAgentsByRuntime(id);
@@ -915,6 +918,7 @@ export class RuntimesRepo {
       if (this.isLastManagedDaemonRuntime(current)) {
         return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
       }
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
 
       const activeAgentIds = activeAgents.map((agent) => agent.id);
       const now = nowIso();
@@ -927,15 +931,18 @@ export class RuntimesRepo {
         );
       }
 
-      const tasksCancelled = this.cancelActiveTasksByRuntimeOrAgentIds(id, activeAgentIds);
+      this.cancelActiveTasksByRuntimeOrAgentIds(id, activeAgentIds, cancelled, childStatusChanges, deferredEvents);
       this.pauseAutopilotsByAgentIds([...activeAgentIds, ...this.listArchivedAgentIdsByRuntime(id)]);
       const agentsArchived = activeAgentIds.length;
       clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
       const deleted = this.deleteRuntimeWithinTransaction(id, options);
       if (!deleted) throw new Error(`Runtime not found: ${id}`);
-      return { status: "ok" as const, agentsArchived, tasksCancelled,
+      return { status: "ok" as const, agentsArchived, tasksCancelled: cancelled.length,
         issueWorkspacesAbandoned: options.abandonIssueWorkspaces ? issues.length : 0 };
     })();
+    for (const terminal of cancelled) this.ctx.tasks().notifyCancelledTask(terminal);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents(deferredEvents);
     this.publishClearedProjectDefaults(clearedProjects);
     return result;
   }
@@ -962,7 +969,13 @@ export class RuntimesRepo {
     return result.changes;
   }
 
-  private cancelActiveTasksByRuntimeOrAgentIds(runtimeId: string, agentIds: string[]): number {
+  private cancelActiveTasksByRuntimeOrAgentIds(
+    runtimeId: string,
+    agentIds: string[],
+    cancelled: CancelTaskResult[],
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
     // MUL-386 C.1: this ran inside runtime deletion and used to read every task
     // row (`prompt` + `result`) just to find the ids to cancel. The guard columns
     // are all it needs, and both predicates are pushed into SQL.
@@ -970,16 +983,12 @@ export class RuntimesRepo {
       this.ctx.tasks().listTaskRefs({ statuses: ACTIVE_TASK_STATUSES, runtimeId, agentIds })
         .map((task) => task.id),
     )];
-    let cancelled = 0;
     for (const taskId of taskIds) {
-      try {
-        this.ctx.tasks().cancelTask(taskId);
-        cancelled += 1;
-      } catch {
-        // Task may have reached a terminal state between the snapshot and cancel.
-      }
+      const task = this.ctx.tasks().getTask(taskId);
+      if (!task) throw new Error(`Task not found: ${taskId}`);
+      if (!isActiveTaskStatus(task.status)) continue;
+      cancelled.push(this.ctx.tasks().cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents));
     }
-    return cancelled;
   }
 
   private hasInFlightTasksForRuntime(runtimeId: string): boolean {

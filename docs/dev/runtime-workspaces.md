@@ -84,6 +84,10 @@ Project 设备绑定（含独享设备）是放置约束，任何亲和都不能
 已清理的记录只解除 Runtime 引用。自动删除默认拦截；Runtime 迁移先转移记录，
 保留未清理状态与目录信息。活跃任务检查和 daemon 最后一个 Runtime 的退役要求仍然生效。
 
+级联删除在同一个外层事务中取消任务、归档 Agent 和放弃工作区；取消失败或删除失败
+会回滚全部写入。任务通知、子单状态处理、活动与项目更新事件在外层提交后执行，
+事务内不调用独立开事务的公开取消接口。
+
 对应命令是 `remi runtime delete <runtime> --abandon-issue-workspaces --yes`，
 或 `remi runtime archive-agents-and-delete <runtime> --file <plan.json> --abandon-issue-workspaces --yes`。
 前端删除弹窗展示受影响 Issue，并要求确认放弃工作区；级联删除另外确认归档 Agent。
@@ -99,6 +103,8 @@ Project 设备绑定（含独享设备）是放置约束，任何亲和都不能
 
 验证入口：`tests/unit/multiremi/runtime-issue-workspace-deletion.test.ts` 同时覆盖 SQLite
 与 `MULTIREMI_TEST_POSTGRES_URL` 指向的真实 PostgreSQL；显式配置 PG 连接失败会报错。
+`runtime-deletion-transaction.test.ts` 覆盖三条 API 路径的事务深度、提交后通知与晚期
+故障回滚；PG 用独立连接读回所有 Multiremi 表。
 调度不变式保留在 `multiremi-store-task-routing.test.ts` 中。
 
 ## 任务私有 /tmp
