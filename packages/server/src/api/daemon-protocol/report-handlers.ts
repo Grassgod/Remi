@@ -11,7 +11,7 @@ import { isFeishuOpenId } from "@shared/feishu-mention.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
-import type { DaemonGcErrorReply, DaemonFeishuOutboundOkReply } from "@multiremi/contracts/daemon-protocol.js";
+import type { DaemonGcErrorReply, DaemonFeishuOutboundOkReply, DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import { createLogger } from "@shared/logger.js";
 import { daemonTaskUsageEntries, daemonLocalSkillListReportBody, daemonLocalSkillImportReportBody } from "../helpers.js";
 import { daemonAgentPluginStateResponse } from "../wire/index.js";
@@ -40,6 +40,32 @@ const string = (value: unknown): string => typeof value === "string" ? value : "
 const nullable = (value: unknown): string | null => string(value).trim() || null;
 const terminal = (status: string): boolean => ["completed", "failed", "cancelled"].includes(status);
 
+function completionFields(p: Record<string, unknown>, taskId: string): DaemonTaskCompletionFields | null {
+  const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
+  if (p.trace !== undefined) {
+    if (!p.trace || typeof p.trace !== "object" || Array.isArray(p.trace)) reject();
+    const trace = p.trace as Record<string, unknown>;
+    if (!count(trace.head) || !count(trace.event_count) || trace.closed !== true || !count(trace.tool_call_count)
+      || !Array.isArray(trace.type_histogram) || !trace.type_histogram.every((bucket: unknown) => {
+        if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) return false;
+        const b = bucket as Record<string, unknown>;
+        return typeof b.type === "string" && (b.tool === null || typeof b.tool === "string") && count(b.count);
+      })) reject();
+  }
+  if (p.final_reply_md !== undefined && p.final_reply_md !== null && typeof p.final_reply_md !== "string") reject();
+  if (p.model !== undefined && p.model !== null) {
+    if (typeof p.model !== "object" || Array.isArray(p.model)
+      || typeof (p.model as Record<string, unknown>).provider !== "string"
+      || typeof (p.model as Record<string, unknown>).model !== "string") reject();
+  }
+  // Old terminal rows may lack card fields. Keep §5.4b's blank-card fallback, never read trace here.
+  if (p.trace === undefined || p.final_reply_md === undefined || p.model === undefined) {
+    log.warn("Terminal report is missing round-card fields", { taskId });
+    return null;
+  }
+  return { trace: p.trace, final_reply_md: p.final_reply_md, model: p.model } as DaemonTaskCompletionFields;
+}
+
 export function authorizeReportRuntime(store: MultiremiStore, session: DaemonProtocolSession, runtimeId: string): void {
   const runtime = store.getRuntimeLite(runtimeId);
   const token = session.ownerAccessToken;
@@ -61,7 +87,8 @@ export function authorizeReportTask(store: MultiremiStore, session: DaemonProtoc
 
 /** Domain handlers are independent of the socket and of removed HTTP routes. */
 export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: MultiremiStore,
-  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void): void {
+  onTraceClosed?: (taskId: string, head: number, runtimeId: string) => void,
+  onRoundCard: (taskId: string, fields: DaemonTaskCompletionFields | null) => void = () => {}): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -69,6 +96,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
         const taskId = string(p.task_id);
         if (!taskId) reject();
         const task = authorizeReportTask(store, session, taskId, frame.rt);
+        const isCompletion = frame.type === "task.complete" || frame.type === "task.fail";
+        const fields = isCompletion ? completionFields(p, taskId) : null;
         switch (frame.type) {
           case "task.start":
             if (task.status !== "dispatched" && task.status !== "waiting_local_directory") return { ok: true, code: "start_replayed" };
@@ -136,7 +165,11 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             break;
           default: reject();
         }
-        if ((frame.type === "task.complete" || frame.type === "task.fail") && p.trace) {
+        if (isCompletion) {
+          // MUL-402: 写轮次卡
+          onRoundCard(taskId, fields);
+        }
+        if (isCompletion && p.trace) {
           const trace = p.trace as { head?: unknown; closed?: unknown };
           if (trace.closed === true && Number.isSafeInteger(trace.head) && (trace.head as number) >= 0) onTraceClosed?.(taskId, trace.head as number, task.runtimeId!);
         }

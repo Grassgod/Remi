@@ -3,6 +3,9 @@ import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_ERROR_CODES, DAEMON_RETRYABLE_ERROR_CODES, DAEMON_TERMINAL_ERROR_CODES } from "@multiremi/contracts/daemon-protocol.js";
 import { reportFrame } from "../../fixtures/report-session.js";
+import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
+import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 
 const databases: Database[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
@@ -19,6 +22,60 @@ function fixture() {
 }
 
 describe("v2 reports", () => {
+  for (const type of ["task.complete", "task.fail"]) {
+    it(`delivers all daemon-derived completion fields to the round-card hook for ${type}`, async () => {
+      const { store, task, runtime } = fixture();
+      store.startTask(task.id);
+      const peer = { onWelcome: () => () => {}, onFrame: () => () => {}, connectionState: () => "disconnected" };
+      const trace = new DaemonTraceTransport(peer as unknown as DaemonProtocolClient);
+      const received: Array<{ taskId: string; fields: DaemonTaskCompletionFields | null }> = [];
+      try {
+        trace.append(task.id, runtime.id, [
+          { type: "execution", meta: { provider: "claude", model: "fixture-model" } },
+          { type: "tool_use", tool: "Read" },
+          { type: "text", content: "final **answer**", meta: { phase: "final" } },
+        ]);
+        const fields = trace.completion(task.id);
+        expect(await reportFrame(store, type, { task_id: task.id, output: "answer", error: "failure", ...fields }, {
+          runtimeId: runtime.id, onRoundCard: (taskId, fields) => received.push({ taskId, fields }),
+        })).toEqual({ ok: true });
+        expect(received).toEqual([{ taskId: task.id, fields: {
+          trace: { head: 3, event_count: 3, closed: true, tool_call_count: 1,
+            type_histogram: [{ type: "execution", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }, { type: "text", tool: null, count: 1 }] },
+          final_reply_md: "final **answer**", model: { provider: "claude", model: "fixture-model" },
+        } }]);
+      } finally { await trace.stop(); }
+    });
+  }
+
+  it("validates card fields before terminal effects, preserving sparse historical trace heads", async () => {
+    const { store, task, runtime } = fixture();
+    store.startTask(task.id);
+    const fields = { trace: { head: 9, event_count: 2, closed: true, tool_call_count: 1,
+      type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
+      final_reply_md: null, model: null };
+    const received: unknown[] = [];
+    for (const patch of [
+      { trace: { ...fields.trace, head: -1 } },
+      { trace: { ...fields.trace, event_count: 1.5 } },
+      { trace: { ...fields.trace, closed: false } },
+      { trace: { ...fields.trace, tool_call_count: "1" } },
+      { trace: { ...fields.trace, type_histogram: [{ type: "text", tool: null, count: -1 }] } },
+      { trace: { ...fields.trace, type_histogram: [{ type: "text", tool: 1, count: 1 }] } },
+      { final_reply_md: 3 }, { model: { provider: "claude" } },
+    ]) {
+      expect(await reportFrame(store, "task.complete", { task_id: task.id, ...fields, ...patch }, {
+        runtimeId: runtime.id, onRoundCard: (_taskId, value) => received.push(value),
+      })).toEqual({ ok: false, code: "invalid_report", retryable: false });
+      expect(store.getTask(task.id)?.status).toBe("running");
+      expect(received).toEqual([]);
+    }
+    expect(await reportFrame(store, "task.complete", { task_id: task.id, ...fields }, {
+      runtimeId: runtime.id, onRoundCard: (_taskId, value) => received.push(value),
+    })).toEqual({ ok: true });
+    expect(received).toEqual([fields]);
+  });
+
   it("reuses the task write methods, preserves usage and prompt idempotency, and absorbs terminal replays", async () => {
     const { store, task, report } = fixture();
     expect(await report("task.start")).toEqual({ ok: true });

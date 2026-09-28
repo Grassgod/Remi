@@ -50,7 +50,8 @@ export function captureReports(client: MultiremiDaemonClient, reply: (type: stri
 export async function reportFrame(
   store: MultiremiStore, type: string, payload: Record<string, unknown> = {},
   options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
-    headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void } = {},
+    headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void;
+    onRoundCard?: Parameters<typeof registerDaemonReportHandlers>[3] } = {},
 ): Promise<Record<string, any>> {
   const layer = new DaemonProtocolLayer({ store });
   let identity = { accessToken: options.token ?? null, masterToken: !options.token };
@@ -67,7 +68,7 @@ export async function reportFrame(
   const runtime = runtimeId ? store.getRuntimeLite(runtimeId) : null;
   const daemonId = token?.daemonId ?? runtime?.daemonId ?? "fixture-reports";
   const trace = registerDaemonTraceHandlers(layer, store, reportTraceSink(store));
-  registerDaemonReportHandlers(layer, store, (taskId, head, rt) => trace.close(taskId, head, rt));
+  registerDaemonReportHandlers(layer, store, (taskId, head, rt) => trace.close(taskId, head, rt), options.onRoundCard);
   registerDaemonMaintenanceHandlers(layer, store, options.archives ?? new SessionArchiveService(store));
   const frames: Array<Record<string, any>> = [];
   let closed: number | undefined;
