@@ -1,0 +1,1037 @@
+{
+  "source": "pre-PR2 main 58bf5cc0",
+  "fixture": {
+    "sessions": 50,
+    "agents": 20,
+    "inboxRows": 306
+  },
+  "inbox": [
+    {
+      "status": 200,
+      "body": "{\"unread\":79,\"attention\":76}"
+    },
+    {
+      "status": 200,
+      "body": "{\"unread\":78,\"attention\":76}"
+    },
+    {
+      "status": 200,
+      "body": "{\"unread\":79,\"attention\":76}"
+    },
+    {
+      "status": 200,
+      "body": "{\"unread\":79,\"attention\":76}"
+    }
+  ],
+  "attachment": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/octet-stream",
+      "content-length": "2048",
+      "content-disposition": "attachment; filename=\"hotspot.bin\"; filename*=UTF-8''hotspot.bin",
+      "x-content-type-options": "nosniff"
+    },
+    "body": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+  },
+  "denied": {
+    "status": 403,
+    "body": "{\"error\":\"not your chat session\"}"
+  },
+  "unauthorized": {
+    "status": 401,
+    "body": "{\"error\":\"unauthorized\"}"
+  },
+  "runtimes": {
+    "status": 200,
+    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_hotspot\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Hotspot runtime\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_4fb6f999001326b25cc75490cf5daa2a\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":null,\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
+  },
+  "owned": {
+    "status": 200,
+    "body": "[{\"id\":\"rt_pr2_19\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 19\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0d2689e1c72860bb7c42c93dcd23fc2b\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_18\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 18\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8e335287f0649384c98529ecb03ee41\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_17\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 17\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0f9d80786366be34768e14caa77bf5\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_16\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 16\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_dc0552868c94faa061536597a9619b95\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_15\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 15\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_ddebe97e01cbc46ebb50594ec37dd91d\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_14\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 14\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_9865a9e6d4ea91dde43babd1948d72a4\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_13\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 13\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_1278291d50249be170fe18455515e525\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_12\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 12\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_f8a03f77ab2afc61bbfa0c86aa4c3375\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_11\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 11\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7a22b280c0abdd2faf83f80f889c286f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_10\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 10\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_0ba822d3239440a2c19670dfff3971c6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_9\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 9\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b17a5c2b60681f63ffdb7fc7e81e2eb9\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_8\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 8\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_aeb6d94b999bcb520118cc07a3a29454\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_7\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 7\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_49b1c1eb4ab8e299a8b157277cb1322e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_6\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 6\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_a9b82b58ffd1842fce276d583ce0a94c\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_5\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 5\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_b8c0ecffce727bcb0f80f366f4c673a6\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_4\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 4\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_31e0d71d671a0654cf83279618058a61\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_3\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 3\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_7976d05077f4bc862847816a81ee4495\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_2\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 2\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_2d26f796f541c42489b05e4008cbc47e\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"},{\"id\":\"rt_pr2_1\",\"workspace_id\":\"local\",\"daemon_id\":null,\"daemon_display_name\":null,\"name\":\"Runtime 1\",\"runtime_mode\":\"local\",\"provider\":\"codex\",\"execution_group_id\":null,\"execution_group_ids\":[\"eg_c8a1c055c58eeb97dd1ea6dda0634b3f\"],\"launch_header\":\"codex app-server\",\"status\":\"online\",\"device_info\":\"\",\"metadata\":{},\"owner_id\":\"usr_pughmr0aj2qa\",\"visibility\":\"private\",\"last_seen_at\":\"<timestamp>\",\"created_at\":\"<timestamp>\",\"updated_at\":\"<timestamp>\"}]"
+  },
+  "hydrated": [
+    {
+      "id": "rt_hotspot",
+      "name": "Hotspot runtime",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": null,
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 8,
+      "taskCount": 38,
+      "activeTaskCount": 1,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_4fb6f999001326b25cc75490cf5daa2a"
+      ]
+    },
+    {
+      "id": "rt_pr2_1",
+      "name": "Runtime 1",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 1,
+      "outputTokens": 2,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_c8a1c055c58eeb97dd1ea6dda0634b3f"
+      ]
+    },
+    {
+      "id": "rt_pr2_2",
+      "name": "Runtime 2",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 2,
+      "outputTokens": 4,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_2d26f796f541c42489b05e4008cbc47e"
+      ]
+    },
+    {
+      "id": "rt_pr2_3",
+      "name": "Runtime 3",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 3,
+      "outputTokens": 6,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_7976d05077f4bc862847816a81ee4495"
+      ]
+    },
+    {
+      "id": "rt_pr2_4",
+      "name": "Runtime 4",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 4,
+      "outputTokens": 8,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_31e0d71d671a0654cf83279618058a61"
+      ]
+    },
+    {
+      "id": "rt_pr2_5",
+      "name": "Runtime 5",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 5,
+      "outputTokens": 10,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_b8c0ecffce727bcb0f80f366f4c673a6"
+      ]
+    },
+    {
+      "id": "rt_pr2_6",
+      "name": "Runtime 6",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 6,
+      "outputTokens": 12,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_a9b82b58ffd1842fce276d583ce0a94c"
+      ]
+    },
+    {
+      "id": "rt_pr2_7",
+      "name": "Runtime 7",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 7,
+      "outputTokens": 14,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_49b1c1eb4ab8e299a8b157277cb1322e"
+      ]
+    },
+    {
+      "id": "rt_pr2_8",
+      "name": "Runtime 8",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 8,
+      "outputTokens": 16,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_aeb6d94b999bcb520118cc07a3a29454"
+      ]
+    },
+    {
+      "id": "rt_pr2_9",
+      "name": "Runtime 9",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 9,
+      "outputTokens": 18,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_b17a5c2b60681f63ffdb7fc7e81e2eb9"
+      ]
+    },
+    {
+      "id": "rt_pr2_10",
+      "name": "Runtime 10",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 10,
+      "outputTokens": 20,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_0ba822d3239440a2c19670dfff3971c6"
+      ]
+    },
+    {
+      "id": "rt_pr2_11",
+      "name": "Runtime 11",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 11,
+      "outputTokens": 22,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_7a22b280c0abdd2faf83f80f889c286f"
+      ]
+    },
+    {
+      "id": "rt_pr2_12",
+      "name": "Runtime 12",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 12,
+      "outputTokens": 24,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_f8a03f77ab2afc61bbfa0c86aa4c3375"
+      ]
+    },
+    {
+      "id": "rt_pr2_13",
+      "name": "Runtime 13",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 13,
+      "outputTokens": 26,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_1278291d50249be170fe18455515e525"
+      ]
+    },
+    {
+      "id": "rt_pr2_14",
+      "name": "Runtime 14",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 14,
+      "outputTokens": 28,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_9865a9e6d4ea91dde43babd1948d72a4"
+      ]
+    },
+    {
+      "id": "rt_pr2_15",
+      "name": "Runtime 15",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 15,
+      "outputTokens": 30,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_ddebe97e01cbc46ebb50594ec37dd91d"
+      ]
+    },
+    {
+      "id": "rt_pr2_16",
+      "name": "Runtime 16",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 16,
+      "outputTokens": 32,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_dc0552868c94faa061536597a9619b95"
+      ]
+    },
+    {
+      "id": "rt_pr2_17",
+      "name": "Runtime 17",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 17,
+      "outputTokens": 34,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_dc0f9d80786366be34768e14caa77bf5"
+      ]
+    },
+    {
+      "id": "rt_pr2_18",
+      "name": "Runtime 18",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 18,
+      "outputTokens": 36,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_b8e335287f0649384c98529ecb03ee41"
+      ]
+    },
+    {
+      "id": "rt_pr2_19",
+      "name": "Runtime 19",
+      "provider": "codex",
+      "daemonId": null,
+      "legacyDaemonId": null,
+      "daemonDisplayName": null,
+      "executionGroupId": null,
+      "execution_group_id": null,
+      "runtimeMode": "local",
+      "deviceInfo": "",
+      "metadata": {},
+      "workspaceId": "local",
+      "ownerId": "usr_pughmr0aj2qa",
+      "visibility": "private",
+      "status": "online",
+      "maxConcurrency": 1,
+      "taskCount": 1,
+      "activeTaskCount": 0,
+      "completedTaskCount": 0,
+      "failedTaskCount": 0,
+      "inputTokens": 19,
+      "outputTokens": 38,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "models": [
+        {
+          "id": "model-default",
+          "label": "Default model",
+          "provider": "codex",
+          "default": true,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        },
+        {
+          "id": "model-extra",
+          "label": "Extra model",
+          "provider": "codex",
+          "default": false,
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      ],
+      "lastHeartbeatAt": "<timestamp>",
+      "createdAt": "<timestamp>",
+      "updatedAt": "<timestamp>",
+      "executionGroupIds": [
+        "eg_0d2689e1c72860bb7c42c93dcd23fc2b"
+      ]
+    }
+  ]
+}
