@@ -295,6 +295,9 @@ async function main(): Promise<void> {
       { key: "qa-true-offline", opfs: "on" },
       { key: "qa-true-offline-memory", opfs: "off" },
     ];
+    for (const key of ["qa-multi-gap", "qa-multi-gap-memory"]) {
+      if (options.only.includes(key)) scopes.push({ key, opfs: key.endsWith("memory") ? "off" : "on" });
+    }
     for (const scope of scopes) {
       if (options.only.length > 0 && !options.only.includes(scope.key)) continue;
       console.log(`── ${scope.key} (opfs ${scope.opfs}) ${"─".repeat(40)}`);
@@ -444,6 +447,19 @@ async function runScope(
       const addedSubs=server.hub.subscribes.slice(subscribes),addedReads=server.hub.logReads.slice(reads);
       check(`${key}: reconnect starts at local head plus 1`,addedSubs.length>0&&addedSubs.every(s=>s.fromSeq===head+1),`subscribes ${addedSubs.map(s=>s.fromSeq).join(",")}, previous head ${head}`);
       check(`${key}: no full log read`,addedReads.every(r=>r.from>1),`ranges ${JSON.stringify(addedReads)}`);
+      return;
+    }
+
+    if (key === "qa-multi-gap" || key === "qa-multi-gap-memory") {
+      const head = server.hub.head, readsBefore = server.hub.logReads.length;
+      server.appendSilently(5);
+      server.broadcast(server.hub.rows.filter(row => [head + 1, head + 3, head + 5].includes(row.seq)).map(frameFor));
+      const caught = await waitFor(async () => (await states()).every(state => state?.head === server.hub.head && state.fresh), 4000).catch(() => false);
+      const reads = server.hub.logReads.slice(readsBefore);
+      const expected = [{ from: head + 2, to: head + 2 }, { from: head + 4, to: head + 4 }];
+      check(`${key}: both holes are fetched`, expected.every(range => reads.some(read => read.from === range.from && read.to === range.to)), `reads ${JSON.stringify(reads)}`);
+      const all = await states();
+      check(`${key}: all pages reach a fresh continuous head`, caught !== false && (opfs === "off" || all[leaderIndex]?.storage === "opfs"), `heads ${all.map(state => state?.head)}, storages ${all.map(state => state?.storage)}`);
       return;
     }
 

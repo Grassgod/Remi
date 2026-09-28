@@ -53,7 +53,7 @@ export interface ReplicaWorkerOptions {
   /**
    * Override the database filename. The default is the plan's path,
    * `/<user>/<workspace>.sqlite3`, so one `(user, workspace)` has one file even
-   * though every pair shares the pool.
+   * with its own identity-partitioned pool.
    */
   databaseName?: string;
 }

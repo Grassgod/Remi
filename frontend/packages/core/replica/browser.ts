@@ -249,7 +249,7 @@ class ReplicaFacade implements BrowserReplica {
    * One request, no probe: `navigator.locks.request` keeps the promise pending
    * until the lock is free, so the same call both wins an uncontended lock
    * immediately and becomes the takeover path when the holder's tab dies. The
-   * callback never returns while the tab lives, which is what holds the lock.
+   * callback waits for dispose or tab destruction to release the lock.
    */
   start(): void {
     const locks = this.env.locks ?? (globalThis.navigator as Navigator | undefined)?.locks;
@@ -431,15 +431,7 @@ interface LeaderSession {
   degraded: boolean;
 }
 
-/**
- * Try to take the lock.
- *
- * A tab that does not get it resolves to null immediately: the winner holds the
- * lock for its whole life, so there is no later moment at which the loser could
- * win it. Web Locks queues the next waiter when the holder goes away, which is
- * how a *different* invocation of this function — the takeover tab — becomes the
- * leader on the next render.
- */
+/** Start a Worker behind the held lock; storage metadata changes on ready. */
 async function startLeader(
   options: BrowserReplicaOptions,
   env: BrowserReplicaEnv,

@@ -457,17 +457,17 @@ async function runScope(
     // than only the leader's own window.
     const leaderIndex = (await waitForLeader(pages)).index;
     const page = pages.find((_, index) => index !== leaderIndex) ?? pages[0]!;
-    const leaderPage = pages[leaderIndex]!;
     const initial = await readState(page);
     const readsBefore = server.hub.logReads.length;
     const serverHeadBefore = server.hub.head;
-    // Drop the leader's socket — the only one there is — append 50 rows the tabs
-    // cannot see, then let it reconnect. The replica has to come back from its
-    // stored head rather than re-reading the log.
-    await leaderPage.evaluate(() => (window as unknown as { __replica: { kickSocket(): void } }).__replica.kickSocket());
-    await waitFor(() => Promise.resolve(false), 300).catch(() => {});
+    const subscribesBefore = server.hub.subscribes.length;
+    await context.setOffline(true);
+    await Promise.all(pages.map(page => page.evaluate(() =>
+      (window as unknown as { __replica: { kickSocket(): void } }).__replica.kickSocket())));
+    await waitFor(() => server.activeSubscriptions() === 0, 4_000);
     server.append(50);
     const appendAt = Date.now();
+    await context.setOffline(false);
     const resumedAt = await waitFor(async () => {
       const state = await readState(page);
       return state.head === server.hub.head && state.fresh;
@@ -488,10 +488,10 @@ async function runScope(
       full.length === 0,
       `${reads.length} reads, ranges ${reads.map((read) => `${read.from}..${read.to}`).join(", ") || "none"}`,
     );
-    const subscribeAfter = server.hub.subscribes.filter((subscribe) => subscribe.at >= readsBefore);
+    const subscribeAfter = server.hub.subscribes.slice(subscribesBefore);
     check(
       `offline-catch-up: the resume cursor is the stored head + 1`,
-      subscribeAfter.some((subscribe) => subscribe.fromSeq === initial.head! + 1),
+      subscribeAfter.length > 0 && subscribeAfter.every((subscribe) => subscribe.fromSeq === initial.head! + 1),
       `subscribe from_seq values ${subscribeAfter.map((subscribe) => subscribe.fromSeq).join(", ")} (local head was ${initial.head}, server head ${serverHeadBefore} -> ${server.hub.head})`,
     );
     if (key === "opfs-off") {

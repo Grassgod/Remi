@@ -133,9 +133,8 @@ export class SqlReplicaStorage implements ReplicaStorage {
   }
 
   /**
-   * Empty every table. The caller drops `meta` separately when the reason is a
-   * user mismatch or a schema upgrade, because `meta` is what records the new
-   * owner; a logout leaves it empty on purpose so the next user starts clean.
+   * Empty every table including the previous identity. The engine writes the
+   * schema version, and the next open binds the current user and workspace.
    */
   clearDatabase(): void {
     this.statement(SQL.deleteAllMeta).run([]);
