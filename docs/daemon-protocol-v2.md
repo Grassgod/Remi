@@ -33,12 +33,45 @@ daemon 以 Bearer daemon token 连接 `GET /api/daemon/ws`，**每个 daemon 进
 由 `hello` 帧列出本进程的全部 runtime。服务端按 runtime 逐个复核归属、workspace 与成员资格，
 与今天的 `authorizeDaemonWebSocketRequest` 同一套判定。
 
+**URL 形状：v2 客户端必须带 `?protocol=2`。**
+
+```
+GET /api/daemon/ws?protocol=2
+Authorization: Bearer <daemon token>
+```
+
+v1 客户端把 runtime 写在查询串里（`?runtime_ids=<id>`），v2 客户端一条 socket 承载全部 runtime，
+所以两者靠 URL 形状区分，判定规则是：
+
+| 请求 | 判定 |
+|---|---|
+| 带 `runtime_id` / `runtime_ids` / `runtimeId` | v1，走既有路径（本单不改它的行为） |
+| 不带上述参数、带 `?protocol=2` | v2 |
+| 不带上述参数、带 daemon token 或部署 master 凭据，且无标记 | v2（本单过渡期兼容，见下） |
+| 都不带 | 400 `runtime_ids required`（与今天一致） |
+
+`?protocol=2` 是**规范要求的形状**，A-2 的客户端按它实现；不带标记的那一行只是 A-1 与 v1 并存
+期间的过渡兼容，A-2 删除 v1 路径时，连同 `hasRuntimeParameters` / `requestsDaemonProtocolV2` /
+`isV2Upgrade` 这三个判定函数一起删除，此后只有 `?protocol=2` 一条路。
+
 选单 socket 而不是每 runtime 一条，因为升级、drain 与 CLI 更新锁（`MultiremiCliUpdateCoordinator`）
 都是进程级动作：两条 socket 会让同一台机器的两个 lane 看到顺序不一致的指令，也会让 `seq`
 需要两个作用域。
 
 服务端注册表以 daemon 为单位（`Map<daemonId, DaemonSession>`），并维护 `runtimeId → daemonId`
-索引供 `trace.read` 定位。同一 runtime 出现两条连接时，新连接生效，旧连接以 4001 关闭。
+索引供 `trace.read` 定位。
+
+**替换规则按 daemon 看，不按 runtime 看：**
+
+| 情况 | 处理 |
+|---|---|
+| 同一个 daemon 建了新连接 | 旧连接以 4001 关闭（它属于同一台机器，新连接就是它的替代品） |
+| 另一个 daemon 的在线会话已持有某个 runtime | 新连接**不驱逐**对方：把这个 runtime 归入自己的 unavailable，首个 `hb` 报 `runtime_gone`（§4） |
+
+第二条是必须的：一条 socket 承载整台机器的全部 runtime，为其中一个 runtime 的归属冲突关掉对方的
+整条连接，会把对方那些**完全正常**的 runtime 一起断供。归属检查在握手时先做一遍（runtime 行上的
+`daemonId` 与 `hello` 的 `daemon_id` 不一致即按 `runtime_gone` 处理），注册表这一步是兜底，
+覆盖 runtime 行上没有 `daemonId` 的历史数据。
 
 ### 1.2 帧封装
 
@@ -67,7 +100,7 @@ JSON 文本帧，不用二进制：
 | 类别 | 帧 | 可靠性与重放 |
 |---|---|---|
 | `handshake` | `hello` / `welcome` / `reject` | 每连接一次 |
-| `best_effort` | `hb`、`runtime.ready`、`concierge.status` | 不带 `seq`，不重放 |
+| `best_effort` | `hb`、`runtime.ready`、`concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
 | `event` | 见下 §1.4 | 带 `seq`，未确认前重放 |
 | `rpc` | 见下 §1.5 | 按 `id`/`re` 配对，由调用方重试 |
 | `reply` | `res` | 答复某个 rpc |
@@ -115,11 +148,15 @@ RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 
 ### 1.6 错误码与 close code
 
-错误码共 17 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分四组：握手 2 个、上报 4 个、
-offer 与派活 5 个、trace 与传输 6 个。
+错误码共 18 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 4 个、
+offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_error`）。
 
-`DAEMON_RETRYABLE_ERROR_CODES` 只有 `daemon_busy` 与 `daemon_timeout`；其余都是确定性结果，
-重发无益。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
+`DAEMON_RETRYABLE_ERROR_CODES` 有 `daemon_busy`、`daemon_timeout` 与 `server_error`；其余都是
+确定性结果，重发无益。
+
+`server_error` 是服务端自己处理某一帧时抛异常时给出的答复（可重试）：它表示「这一次是我的问题，
+你按退避重发就好」，而不是「你的帧不对」。这类异常同时会往 stdout 写一条 warn，只带帧类型、方向、
+会话 id 与异常的类名，不带异常内容和 payload。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
 `invalid_report`）会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
 （`isTerminalDaemonAuthorityError` 的 401/403/410）。
 
@@ -136,9 +173,10 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 
 | code | 含义 | 是否重连 |
 |---|---|---|
-| 4401 | 凭证被吊销 | **否**，终态 |
-| 4403 | token 缺少该 socket 的权限 | **否**，终态 |
-| 4410 | daemon 已退役 | **否**，终态 |
+| 4401 | 凭证被吊销，或 owner 已不是成员 | **否**，终态（daemon 级） |
+| 4403 | 凭证的 daemon 身份与 `hello` 不符，或凭证不是 daemon token | **否**，终态（daemon 级） |
+| 4410 | daemon 已退役 | **否**，终态（daemon 级） |
+| 4002 | `protocol_violation`：对端违反了无法用 `res` 答复的协议 | 是，走退避 |
 | 4426 | 需要协议 v2 | **否**（进 `upgrade_wait`，改走升级通道） |
 | 4000 | `ack_timeout`：15 s 内未确认 | 是，走退避 |
 | 4001 | 服务端正常关闭（发布、重启） | 是，走退避 |
@@ -147,10 +185,51 @@ close code。协议**只显式列出四个终态码**，其余一律默认重连
 | 1011 / 1012 / 1013 | 服务端错误 / 重启 / 稍后重试 | 是，走退避 |
 | 其他未知码 | — | 是，走退避 |
 
+**未知类型的帧。** 服务端不认识的 `t` 按「能答复就答复、答复不了就忽略」处理，规则与超限帧同源：
+`re` 要指向发送方需要处置的那一行，所以取址顺序是 `seq` 优先、`id` 其次。
+
+| 未知类型的帧 | 处理 |
+|---|---|
+| 带 `seq`（可靠事件） | 回 `res{re: seq, ok:false, code:"unknown_frame", retryable:false}`，连接保持 |
+| 只带 `id`（RPC） | 回 `res{re: id}`，其余同上 |
+| 两个都没有 | 不回 `res`，只记帧指标，连接保持。新版 daemon 可能发来旧服务端不认识的通知类帧，忽略它比关连接更利于前向兼容 |
+
+`unknown_frame` 是传输层的答复码，**不是**业务错误码：它不在 `DAEMON_PROTOCOL_ERROR_CODES` 里，
+没有重试策略应该把它读成业务结果。
+
+**升级阶段的 HTTP 拒绝 → 等价关闭码。** 同样的 daemon 级事实在升级握手时表现为 HTTP 状态码
+（那时还没有 socket 可关）。A-2 的客户端必须把它映射成同一个动作，两张表是一份判定：
+
+| 升级阶段答复 | 等价关闭码 | 客户端动作 |
+|---|---|---|
+| 401 `unauthorized`，或 403 `daemon_owner_membership_required` | 4401 | 停止重连 |
+| 403 `daemon_token_required` / `daemon_identity_forbidden` | 4403 | 停止重连 |
+| 410 `daemon_retired` | 4410 | 停止重连 |
+| 其他（网络错误、5xx） | — | 走退避重连 |
+
 **默认是「重连」，只有上面那四个是终态**（`DAEMON_TERMINAL_CLOSE_CODES`，
 判定函数 `daemonCloseCodeIsRetryable`）。这个方向是刻意的：断网与被杀时 daemon 实际拿到的就是
 **1006**（异常关闭，由客户端栈产生，对端根本不会发这个码），如果写成「默认终态、只列出可重连」，
 A-2 照字面实现就会永不重连，那台机器只能靠 SSH 救回来。默认重连的代价只是某个没预料到的码多退避几次。
+
+**只有 daemon 级的事实才用 close code；runtime 级的事实不关连接。** 这条是 1.1 的直接后果：
+一条 socket 承载这台 daemon 的全部 runtime，所以
+
+| 事实 | 级别 | 处理 |
+|---|---|---|
+| daemon 已退役 | daemon | close 4410 |
+| 凭证无效、owner 已不是成员 | daemon | close 4401 |
+| `hello` 的 `daemon_id` 与凭证不符、凭证不是 daemon token | daemon | close 4403 |
+| 握手时 `hello` 报的 runtime 行不存在 | runtime | 照常 `welcome`，该 runtime 不进注册索引，不派活；第一次 `hb` 回复里报 `runtime_gone` |
+| runtime 属于别的 daemon | runtime | 同上。沿用 v1 的 `hideForbiddenAsNotFound`：把「无权访问」当作「不存在」，返回 `runtime_gone`，且**不刷新**对方那一行 |
+| runtime 在别的 workspace | runtime | 同上。daemon 进程只有一个 workspace、一个 token，这最可能是 token 换了 workspace 而本地还记着旧 runtime；它需要的是重新注册，不是永久停机 |
+| runtime 已被另一个 daemon 的在线会话持有 | runtime | 同上，且**不驱逐**对方（见 §1.1） |
+| 连接后某个 runtime 行被删 | runtime | `hb` 回复里报 `runtime_gone`，socket 保持打开 |
+
+把 runtime 级事实当 daemon 级处理是不行的：4403/4410 是终态，会让同一台机器上其它正常 runtime
+一起永久断供；换成 4001 则 daemon 退避重连后又遇到同一个 runtime，形成循环。daemon 收到
+`runtime_gone` 后按既有路径重新注册（`worker/daemon.ts` 的 `handleHeartbeatAck` 分支），
+再回收孤儿任务；怎么接上归 A-2，A-1 只负责把这个信号原样送到。
 
 4426 虽然也在终态列表里，但它不是死路：`daemonCloseCodeRequiresUpgrade(code)` 单独把它标出来，
 A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外三个终态码没有这样的后续动作。
@@ -269,6 +348,38 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 服务端只做两件事：更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS` 5 分钟的规则不动，
 platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbeatRuntime` 里 7 类待办的
 合并轮询（MUL-389）在 v2 服务端不再由心跳触发。
+
+**`hb` 的回复按 runtime 逐条给出，且不关连接。** 服务端用 `res` 回
+`{ runtime_acks: [MultiremiDaemonHeartbeatAck, ...] }`，顺序与 `hello` 报的 runtime 一致，
+结构就是 v1 HTTP 心跳返回的那一个（`contracts/types.ts` 的 `MultiremiDaemonHeartbeatAck`）。
+
+这一条是**必须的，不是可选的**：一条 socket 承载这台 daemon 的全部 runtime，所以「某个 runtime
+的行没了」只关系到那个 runtime。运行时行不存在时返回 `status: "runtime_gone"` /
+`runtime_gone: true`，socket 保持打开、daemon 的其它 runtime 照常收派活与 ack，daemon 按既有
+恢复路径（重新注册 + 回收孤儿任务）自行处理。
+
+**握手阶段适用同一条规则。** `hello` 里某个 runtime 的行不存在，或那个 runtime 属于别的 daemon，
+服务端都照常回 `welcome`、保持 socket、把该 runtime 排除在注册索引之外（不派活、不打心跳），
+并在第一次 `hb` 的 `runtime_acks` 里把它报成 `runtime_gone`。即使 `hello` 报的**全部** runtime
+都是这种情况也不关连接——daemon 需要这条连接才能听到「你的 runtime 没了」并重新注册。
+
+「属于别的 daemon」按 v1 WS 升级的 `hideForbiddenAsNotFound` 口径报成 `runtime_gone` 而不是
+403：既让 daemon 得到它需要的同一个答案，也不泄漏别的机器上有哪些 runtime id。这类 runtime 的
+行**绝不写**，否则会替对方 daemon 把那一行刷成在线。
+
+只有 daemon 级事实才用终态码关连接，边界见 §1.6。
+
+不能用 close code 代替，三种都不行：
+
+- 4410 是「daemon 已退役」的终态，同一 daemon 上其它正常 runtime 会被永久断供；
+- 4001 会让 daemon 退避重连，重连后又遇到同一个 runtime，形成循环；
+- 映射成 `authority_revoked` 会让该分区停摆，daemon 就不再重新注册了。
+
+只有两种情况才关 socket：daemon 本身被退役或 token 被吊销（4410 / 4401），以及整条连接出错
+（4000 / 4001）。
+
+被 drain 清理掉的 runtime 不在 `runtime_acks` 里出现：那次关停已经直接说过，daemon 不能把
+「运维把它删了」当成「重新注册我」。
 
 008 的 `rt_fkmqtl` 被分配为飞书 concierge，今天心跳 3 s；出站改推送后这个 3 s 节奏不再需要。
 
@@ -637,6 +748,33 @@ v2 显式设置：
 | `closeOnBackpressureLimit` | false | 背压时暂停，不断连 |
 | `idleTimeout` | 120 s | 保持现状 |
 | `perMessageDeflate` | 不开 | 内网单跳，nginx 的 gzip_types 也是注释状态，压缩换不到收益；要开另开单测 |
+
+**上行超限帧怎么处理（不能只关连接）。** `maxPayloadLength` 取 4 MiB 的意义就是让超过协议上限
+（1 MiB）的帧**完整到达**，能回一个 `protocol_violation` 而不是被截断。关连接在这里是错的：daemon
+重连后会重放同一条未确认的 outbox 行，同一条超限帧再被断开，形成无限循环。规则是：
+
+| 超限帧 | 处理 |
+|---|---|
+| 可靠事件，信封里能读出 `seq` | 回 `res{re: seq, ok:false, code:"protocol_violation", retryable:false}`，不处理内容，连接保持。daemon 据此隔离/blocked 那一行 |
+| RPC，信封里能读出 `id` | 回 `res{re: id}`，其余同上 |
+| 两个都没有 | close **4002** |
+| 整帧解析不出信封 | close **4002**。这种帧引用不到 outbox 行，只能由客户端在入 outbox 前挡住（归 A-5） |
+
+`res` / `ack` 与 `hb` 的答复不受下行窗口限制。`violations` 计数照旧。
+
+**下行窗口要真正执行。** `welcome` 里的 `window_frames: 64` / `window_bytes: 1 MiB` 不只是宣告：
+`sendEvent` 在发送前按未确认帧数与字节数记账，窗口满时**拒绝发送且不占用 seq**（与暂停同一个规则）。
+返回值区分**四种**拒绝，调用方的下一步动作各不相同：
+
+| 拒发原因 | 含义 | 调用方动作 |
+|---|---|---|
+| `window_full` | 未确认帧数或字节数已到窗口上限 | 等 ack 腾出空间，从 DB 重新推导后重推 |
+| `paused` | socket 处于背压暂停 | 等 drain 后重推 |
+| `too_large` | 单帧编码后超过 `frame_bytes`（1 MiB） | **不要重试**：ack 不能让它变小。置任务失败或丢弃该实体，不能无限等 ack |
+| `closed` | 连接已关闭或 socket 丢弃了帧 | 放弃这条连接，等重连后重建 |
+
+`too_large` 是服务端内部类型（`DaemonSessionSendRefusal`），不是协议契约的一部分。ack 腾出空间后
+由回调通知重推，**不建内存队列**：§2.1 已经规定 DB 就是下行队列，推送方从 DB 重新推导。
 
 发送侧：服务端读 `ws.send` 返回值，`-1` 表示已排队但有背压 → 暂停 offer 与非关键推送，等恢复；
 `0` 表示连接已坏 → 注销连接。`res` / `ack` 不受暂停影响。daemon 侧 `bufferedAmount > 2 MiB`

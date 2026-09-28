@@ -17,8 +17,11 @@ const REPO_ROOT = join(import.meta.dir, "../..");
 
 /** Every module A-0 adds, and whether it may be imported by runtime code yet. */
 const A0_MODULES = [
-  // Imported by nothing outside tests until A-1/A-2/A-5/A-6 wire them up.
-  { specifier: "@multiremi/contracts/daemon-protocol", wired: false },
+  // A-1 wired the frame vocabulary: `api/daemon-protocol/` reads the frame
+  // names, categories, limits, close codes and version checks from it, and
+  // `api/server.ts` reads the socket payload ceiling. The rest is untouched.
+  { specifier: "@multiremi/contracts/daemon-protocol", wired: true },
+  // Imported by nothing outside tests until A-2/A-5/A-6 wire them up.
   { specifier: "@multiremi/contracts/trace", wired: false },
   { specifier: "@multiremi/worker/trace-store", wired: false },
   { specifier: "@multiremi/api/trace/trace-sink", wired: false },

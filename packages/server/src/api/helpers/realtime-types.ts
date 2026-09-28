@@ -1,6 +1,7 @@
 // WebSocket payload and registry types shared by api/server.ts, api/realtime.ts and the routers
 // that publish to live clients. Types only — the registries themselves live in api/realtime.ts.
 import type { MultiremiAccessToken } from "@multiremi/contracts/types.js";
+import type { DaemonProtocolSession } from "../daemon-protocol/session.js";
 
 export interface MultiremiRealtimeState {
   enabled: boolean;
@@ -16,6 +17,24 @@ export type DaemonWebSocketData = {
   canReportAgentPluginProtocol: boolean;
 }
 
+/**
+ * A daemon socket speaking protocol v2 (MUL-417).
+ *
+ * Kept a separate `kind` from the v1 socket on purpose: the two carry unrelated
+ * frame vocabularies, and a shared kind would mean every existing handler grew a
+ * protocol switch. A-2 deletes the v1 variant once the client is v2-only.
+ */
+export type DaemonProtocolWebSocketData = {
+  kind: "daemon-protocol";
+  connectedAt: string;
+  /** Credential the upgrade authenticated with, re-checked on every heartbeat. */
+  accessToken: MultiremiAccessToken | null;
+  /** True when the upgrade presented the deployment master daemon credential. */
+  masterToken: boolean;
+  /** The session, once the socket is open. Assigned by the `open` handler. */
+  session: DaemonProtocolSession | null;
+}
+
 export type BrowserWebSocketData = {
   kind: "browser";
   connectedAt: string;
@@ -26,7 +45,7 @@ export type BrowserWebSocketData = {
   scopeSubscriptions: string[];
 }
 
-export type MultiremiWebSocketData = DaemonWebSocketData | BrowserWebSocketData;
+export type MultiremiWebSocketData = DaemonWebSocketData | DaemonProtocolWebSocketData | BrowserWebSocketData;
 
 export type MultiremiWebSocketClient = {
   data: MultiremiWebSocketData;
