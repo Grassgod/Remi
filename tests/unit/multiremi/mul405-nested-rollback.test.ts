@@ -23,6 +23,7 @@ import { Database } from "bun:sqlite";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import { createCommitEventQueue } from "@multiremi/store/context.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -166,6 +167,15 @@ interface Wrapped {
  * exact same method — so an injection here exercises the production nesting
  * rather than a re-implementation of it.
  */
+/** The store's private context, for the two calls a caller-owned drain needs. */
+function storeContext(store: MultiremiStore): {
+  emitCommitEvents: (queue: ReturnType<typeof createCommitEventQueue>) => void;
+} {
+  return (store as unknown as {
+    ctx: { emitCommitEvents: (queue: ReturnType<typeof createCommitEventQueue>) => void };
+  }).ctx;
+}
+
 function injectFailures(): Wrapped {
   let failInner = false;
   let failPattern: RegExp | null = null;
@@ -486,12 +496,19 @@ describe("MUL-405 nested transaction rollback", () => {
 
         try {
           // Outer transaction -> createIssue (a nested transaction) -> still
-          // inside the outer one. The activity push must not have happened yet:
+          // inside the outer one. MUL-409 makes the caller the owner of the
+          // commit-event queue, and MUL-405 hangs that owner's drain on the
+          // OUTERMOST commit, so the activity push must not have happened yet:
           // on Postgres the inner call only released a SAVEPOINT.
+          const owner = { childStatusChanges: [], deferredEvents: createCommitEventQueue() };
           db.transaction(() => {
-            store.createIssue({ title: "Nested before commit", workspaceId });
+            store.createIssue({ title: "Nested before commit", workspaceId }, owner);
             expect(seen).toHaveLength(0);
           })();
+          // The owner of the transaction is the owner of the queue (MUL-409),
+          // and MUL-405 hangs that drain on the outermost commit. Drain it the
+          // way a caller does — through the context — and only now.
+          storeContext(store).emitCommitEvents(owner.deferredEvents);
         } finally {
           unsubscribe();
         }
@@ -515,7 +532,9 @@ describe("MUL-405 nested transaction rollback", () => {
         });
 
         expect(() => db.transaction(() => {
-          store.createIssue({ title: "Nested then rollback", workspaceId });
+          store.createIssue({ title: "Nested then rollback", workspaceId }, {
+            childStatusChanges: [], deferredEvents: createCommitEventQueue(),
+          });
           expect(seen).toHaveLength(0);
           throw new Error("outer rollback");
         })()).toThrow("outer rollback");
@@ -553,7 +572,9 @@ describe("MUL-405 nested transaction rollback", () => {
           }
           injection.disarm();
           expect(innerFailed).toBe(true);
-          return store.createIssue({ title: "Committed after inner failure", workspaceId });
+          return store.createIssue({ title: "Committed after inner failure", workspaceId }, {
+            childStatusChanges: [], deferredEvents: createCommitEventQueue(),
+          });
         })();
 
         expect(result.title).toBe("Committed after inner failure");

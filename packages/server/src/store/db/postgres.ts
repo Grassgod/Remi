@@ -55,8 +55,6 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
-  /** True while a `transaction()` callback is running. SQLite and Postgres both expose this. */
-  readonly inTransaction?: boolean;
   /**
    * Cross-process mutex keyed by `key`, held for the duration of `fn` and
    * released on every exit path, including a thrown callback.
@@ -103,6 +101,19 @@ export interface SqlDatabase {
    * running the callback immediately.
    */
   afterCommit?(fn: () => void): void;
+  /**
+   * True while a `transaction()` callback is open. `BEGIN` cannot nest on
+   * either backend, so a helper that may run inside or outside a transaction
+   * checks this instead of guessing from its call site.
+   */
+  readonly inTransaction?: boolean;
+  /**
+   * Deepest `transaction()` nesting seen by this handle. Postgres has no
+   * savepoints here, so an inner `COMMIT` commits the outer unit's writes
+   * early; a path whose contract is "one atomic unit" asserts this is 1.
+   */
+  readonly maxTransactionDepth?: number;
+
   close(): void;
 }
 
@@ -488,6 +499,8 @@ export class PostgresSyncDatabase implements SqlDatabase {
    * outermost frame, after a real COMMIT, runs the merged queue.
    */
   private afterCommitFrames: Array<Array<() => void>> = [];
+  private peakTransactionDepth = 0;
+
   constructor(url: string) {
     this.bridge = new PgBridge(url);
   }
@@ -520,6 +533,20 @@ export class PostgresSyncDatabase implements SqlDatabase {
         // The connection is gone, which already released the lock with it.
       }
     }
+  }
+  /**
+   * Deepest nesting reached so far. A caller that must stay a single atomic
+   * unit (issue creation, for example) opens its transaction only when it does
+   * not already own one and then checks this is 1. MUL-405 added SAVEPOINTs for
+   * nested `transaction()` calls, so a nested frame is now independently
+   * rollback-able; this counter still reports the deepest nesting observed.
+   */
+  get maxTransactionDepth(): number {
+    return this.peakTransactionDepth;
+  }
+  /** Drop the observed peak, e.g. before asserting on one operation. */
+  resetTransactionDepthStats(): void {
+    this.peakTransactionDepth = this.transactionDepth;
   }
   query(sql: string): SqlStatement {
     // MUL-405 whole-suite sentinel: a statement runs later, so classify at each
@@ -566,6 +593,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
       if (outermost) lockOrderSentinelTransactionBegin();
       this.afterCommitFrames.push([]);
       let committed = false;
+      this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
       try {
         const result = fn(...args);
         if (outermost) this.bridge.exec("COMMIT", []);

@@ -21,6 +21,7 @@ import type {
   CreateChatSessionInput,
   CreateAttachmentInput,
   CreateIssueCommentInput,
+  CreateIssueDependencyInput,
   CreateIssueInput,
   CreateIssueSessionInput,
   CreateSkillInput,
@@ -48,8 +49,10 @@ import type {
   MultiremiInboxItem,
   MultiremiIssueComment,
   MultiremiIssue,
+  MultiremiIssueDependencyView,
   MultiremiKnowledgeSubmission,
   MultiremiIssueSession,
+  MultiremiIssueWaitingOn,
   MultiremiMetricCounter,
   MultiremiNotificationGroupKey,
   MultiremiNotificationChannel,
@@ -179,10 +182,11 @@ const KNOWN_AUTOPILOT_TRIGGERS = new Set(["schedule", "webhook", "system_event",
 export interface CommitEventQueue {
   workspace: WorkspaceEvent[];
   enqueuedTasks: MultiremiTask[];
+  issueActivities: Array<{ issueId: string; type: string; body: string; data: unknown }>;
 }
 
 export function createCommitEventQueue(): CommitEventQueue {
-  return { workspace: [], enqueuedTasks: [] };
+  return { workspace: [], enqueuedTasks: [], issueActivities: [] };
 }
 
 /**
@@ -214,8 +218,20 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
-  createIssue(input: CreateIssueInput): MultiremiIssue;
-  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue;
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: CommitEventQueue;
+  }): MultiremiIssue;
+  /**
+   * MUL-400 E3: creation for a caller that already holds a transaction. The
+   * child-status collector and the commit-event queue are both required, with no
+   * defaults, so nothing this creation derives or queues can be dropped.
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue;
   createIssueComment(
     issueId: string,
     input: CreateIssueCommentInput,
@@ -250,10 +266,20 @@ export interface IssuesSurface {
     options: UpdateIssueOptions,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
-  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number };
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  };
   /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
   runIssueUpdatePostCommit(
-    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
@@ -284,6 +310,17 @@ export interface IssuesSurface {
     requested: string,
     options: { exempt?: boolean; deferredEvents: CommitEventQueue },
   ): string;
+  /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
+  listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
+  /** MUL-400 E3: page data for the detail surface. */
+  getIssueWaitingOn(issueId: string): MultiremiIssueWaitingOn;
+  /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: CreateIssueDependencyInput,
+    activity: import("./repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssueDependencyView;
   /** MUL-400 E1/E2 post-commit hook shared by both Issue write paths. */
   /**
    * Post-commit E1/E2 hook. Every Issue transition the hook's own writes produce
@@ -815,7 +852,7 @@ export class StoreContext {
    * existed. With no transaction open the hook runs the publish immediately, so
    * autocommit callers behave exactly as before.
    */
-  emitWorkspaceEvent(event: Parameters<WorkspaceEventListener>[0]): void {
+  emitWorkspaceEvent(event: WorkspaceEvent): void {
     afterCommit(this.db, () => {
       for (const listener of [...this.workspaceEventListeners]) {
         try {
@@ -823,6 +860,7 @@ export class StoreContext {
         } catch {
           // Realtime listeners are best-effort and must not roll back mutations.
         }
+
       }
     });
   }
@@ -843,8 +881,28 @@ export class StoreContext {
    * the hook runs callbacks in the order they were queued.
    */
   emitCommitEvents(queue: CommitEventQueue): void {
-    if (queue.workspace.length === 0 && queue.enqueuedTasks.length === 0) return;
+    if (
+      queue.workspace.length === 0
+      && queue.enqueuedTasks.length === 0
+      && queue.issueActivities.length === 0
+    ) return;
     afterCommit(this.db, () => {
+      // MUL-409's post-COMMIT activity writer and MUL-405's realtime pushes both
+      // ride the outermost commit: the queue is drained by the database's
+      // after-commit hook, so a nested caller's rollback drops the whole set.
+      for (const activity of queue.issueActivities) {
+        try {
+          this.appendIssueActivity(activity.issueId, {
+            actorType: "system",
+            actorId: null,
+            type: activity.type,
+            body: activity.body,
+            data: activity.data,
+          });
+        } catch (error) {
+          log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       for (const event of queue.workspace) this.emitWorkspaceEvent(event);
       for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
     });
