@@ -41,15 +41,15 @@ are outside this setting's scope.
 
 ## Session Selection
 
-For a new Claude session with a requested model, Remi sets `ANTHROPIC_MODEL`
+For new and restored Claude sessions with a requested model, Remi sets `ANTHROPIC_MODEL`
 on the bridge process to that same original model, after merging relay/profile
 environment values. The bridge reads its process environment when reporting
 the current model and deriving effort options; it does not read the startup
 model in `_meta` for that purpose. The correct current value lets Remi skip a
-redundant ordinary-model selection. Processes created for `session/resume` do
-not receive this additional variable, preserving their archived-model behavior.
-Existing Runtime profile environment values remain unchanged on resume; their
-configured model is also the task's requested model.
+redundant ordinary-model selection. On resume/load the bridge reasserts this
+model internally; a failed reassertion is logged and falls back to the archived
+model instead of rejecting the restore. Runtime profile models also equal the
+task's requested model, so this injection preserves their selection.
 
 For a declared model, new and resumed sessions start with the original model
 in `_meta.claudeCode.options.model`. The session's CLI environment receives
@@ -78,10 +78,10 @@ a different session applies the declaration once again. Model selection can
 reset effort; Remi reads the current effort before applying the requested level.
 
 Every pool entry has its own bridge process. The custom option and the
-new-session `startupModel` participate in its staleness check: changing the
+`startupModel` participate in its staleness check: changing the
 declaration, or changing a model pinned at process creation, recreates the
-process with the correct environment. A process created for resume has no new
-startup pin and retains the existing model-switch behavior.
+process with the correct environment, including processes created for resume.
+Codex model changes retain their existing in-process switching behavior.
 
 An Agent model explicitly ending in `[1m]` is passed through unchanged,
 including aliases such as `opus[1m]`. It stays strict: rejection or a non-1M
@@ -108,19 +108,22 @@ confirmed that Fable's `set_model` path performs a one-token API validation with
 an approximately five-second deadline. Ordinary Fable selection can trigger
 the same check: without the process model variable, the pinned bridge reported
 `opus[1m]` from settings after Fable startup, requiring a redundant selection.
-Setting the new-session bridge environment fixes both its current-model and
+Since `98c31674`, the daemon seeds the host's `settings.model` into the isolated
+home. Without the process variable, settings override the archived model on
+restore as well, requiring the same ordinary Fable selection on each resume.
+Setting the bridge environment for both new and restored sessions fixes its current-model and
 effort state and removes that Remi selection RPC. Historical timing alone does
 not prove the cause of every earlier failure.
 
-On a warm load into a model-pinned process, the bridge can internally reassert
-that process model; Fable confirmation may still take 1-5 seconds, but the
+On resume or warm load, the bridge internally reasserts the process model.
+Each Fable restore adds approximately 1-5 seconds of confirmation latency; the
 pinned bridge logs reassertion failures without rejecting the restore. Remi
 does not add a redundant ordinary-model selection when the reported value
 matches. A declaration may still require selection of the custom 1M row.
-Another residual path is resuming after an Agent's model was changed to Fable:
-when the archive's model differs, Remi must select the requested model and that
-confirmation can still fail. This is existing main behavior, not eliminated by
-the new-session fix.
+The remaining failure path requires both a different archived model and a
+failed bridge reassertion: Remi then selects the requested model, and a failed
+confirmation still propagates unchanged. The provider does not silently accept
+a different model or weaken ordinary-model errors.
 
 The new provider was also smoke-tested with these pinned versions, without
 sending prompts: Opus 5.5 enabled selected `claude-opus-5-5[1m]`, disabled
@@ -139,10 +142,14 @@ selection, not the >200k acceptance criterion.
 4. Observe Fable on its undeclared standard model for 24 hours and record any
    `-32603` failures. This is post-release confirmation, not a merge gate.
 
-The Fable new-session regression gate is 20/20 session-only checks with the
+The Fable new-session and cold-resume regression gates each require 20/20 session-only checks with the
 exact requested current model, zero model-selection RPCs from Remi and zero
 failures, plus unit and mutation coverage of process-env injection and
 model-change pool invalidation. These checks do not replace capacity testing.
+Resume checks retain `settings.model=opus[1m]`; internal bridge reassertion
+errors are counted but are not gate failures when the archived Fable model is
+reported successfully. Declared 1M restores must still select the custom row
+once; that necessary `[1m]` RPC is not a redundant ordinary-model selection.
 
 The task card uses SDK `usage_update.used` and `usage_update.size`; there is no
 display override. Existing cards are unchanged. Billing is determined by the

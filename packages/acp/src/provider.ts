@@ -247,7 +247,7 @@ interface PoolEntry {
   codexHome: string | null;
   /** Session env is fixed at creation; a changed declaration requires a new process. */
   customModelOption: string | null;
-  /** New-session model pinned in the bridge process env; resumed processes keep null. */
+  /** Claude model pinned in the bridge process env, including resumed sessions. */
   startupModel: string | null;
   /** Values currently in force, so a re-apply is only sent when they change. */
   appliedModel: string | null;
@@ -757,6 +757,7 @@ export class AcpProvider implements Provider {
     const mcpServers = this._options.getMcpServers?.() ?? [];
     const mcpServersKey = JSON.stringify(mcpServers);
     const model = options?.model ?? this._options.model ?? null;
+    const startupModel = this._adapter.agentType === "claude" ? model : null;
     const customModelOption = this._adapter.agentType === "claude"
       ? resolveClaudeContextSelection(model, this._options.claudeOneMillionModels).customModelOption
       : null;
@@ -793,7 +794,7 @@ export class AcpProvider implements Provider {
         existing.pluginFingerprint !== pluginFingerprint ||
         existing.codexHome !== codexHome ||
         existing.customModelOption !== customModelOption ||
-        (existing.startupModel !== null && existing.startupModel !== model);
+        existing.startupModel !== startupModel;
       if (stale && existing.client.alive) {
         const reason = existing.cwd !== cwd
           ? `cwd ${existing.cwd} -> ${cwd}`
@@ -803,7 +804,7 @@ export class AcpProvider implements Provider {
               ? "Agent Plugins changed"
               : existing.customModelOption !== customModelOption
                 ? "Claude context declaration changed"
-                : existing.startupModel !== null && existing.startupModel !== model
+                : existing.startupModel !== startupModel
                   ? `startup model ${existing.startupModel} -> ${model}`
                   : "CODEX_HOME changed";
         console.warn(
@@ -849,7 +850,6 @@ export class AcpProvider implements Provider {
       if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
     }
     if (this._options.env) Object.assign(env, this._options.env);
-    const startupModel = this._adapter.agentType === "claude" && model && !options?.sessionId ? model : null;
     // The bridge's current-model/effort state reads its process env, not startup metadata.
     if (startupModel) env.ANTHROPIC_MODEL = startupModel;
     if (codexHome) env.CODEX_HOME = codexHome;
