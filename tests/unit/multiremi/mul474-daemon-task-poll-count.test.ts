@@ -22,7 +22,7 @@
 // to build its response body.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -78,8 +78,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return {
-    dialect: "sqlite" as const,
+  return markSqliteDialect<SqlDatabase>({
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
     run(sql, ...params) {
@@ -90,7 +89,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     exec: (sql) => { raw.exec(sql); },
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
-  };
+  });
 }
 
 interface Scaffold {
