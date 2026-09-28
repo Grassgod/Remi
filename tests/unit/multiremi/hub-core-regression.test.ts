@@ -118,3 +118,31 @@ describe("MUL-436 regression 2: edits while lagging", () => {
     expect(out.order).toEqual(["data:1,2,3", "gap:1,3", "data:4"]);
   });
 });
+
+describe("MUL-436 regression 3: edits outside retention", () => {
+  it("delivers an edit after its base leaves the ring, and gaps a consumer without that base", () => {
+    const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
+    const current = new RecordingSink();
+    hub.subscribeWithSink("log:s", 0, current);
+    for (let seq = 1; seq <= 5; seq++) { row(hub, seq); hub.flushNow(); }
+    const late = new RecordingSink();
+    hub.subscribeWithSink("log:s", 5, late);
+    patch(hub, 1); hub.flushNow();
+    expect(current.frames.at(-1)).toMatchObject({ seq: 1, kind: "patch" });
+    expect(current.gaps).toEqual([]);
+    expect(late.frames).toEqual([]);
+    expect(late.gaps).toEqual([{ from: 1, to: 1 }]);
+    expect(hub.snapshot().frames).toBe(3);
+  });
+
+  it("keeps an out-of-ring edit visible to a lagging consumer after drain", () => {
+    const hub = make({ limits: { laggingBytes: 10, ring: { streamMaxFrames: 3 } } });
+    const out = new RecordingSink();
+    const sub = hub.subscribeWithSink("log:s", 0, out);
+    for (let seq = 1; seq <= 5; seq++) { row(hub, seq); hub.flushNow(); }
+    out.buffered = 11; row(hub, 6); hub.flushNow();
+    patch(hub, 1); hub.flushNow();
+    out.buffered = 0; sub.notifyDrain(); hub.flushNow();
+    expect(out.gaps).toEqual([{ from: 1, to: 1 }]);
+  });
+});

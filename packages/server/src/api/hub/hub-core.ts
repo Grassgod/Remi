@@ -662,12 +662,11 @@ export class HubImpl implements ObservableLiveHub {
         // the window keeps its entry and the sequence is flagged stale — a live
         // subscriber that holds the row gets the patch, and one that replays that
         // position is told a `gap` instead of being served a fragment.
-        if (this.ring.markStale(stream, frame.seq)) {
-          this.queueLiveChange(key, frame);
-          // A live change is delivered by the flush, so the stream has to be in the
-          // dirty set even though no new sequence entered the window.
-          dirty = true;
-        }
+        this.ring.markStale(stream, frame.seq);
+        this.queueLiveChange(key, frame);
+        // Retention only controls replay. Active subscribers may hold a base
+        // long after it left the ring, so every edit must reach the flush.
+        dirty = true;
         if (origin === "local" && stream.kind === "log") this.transport.publish({ key, frames: [frame] });
         continue;
       }
