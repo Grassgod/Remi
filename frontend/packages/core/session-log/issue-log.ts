@@ -106,12 +106,14 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   private async persist(window: SessionLogWindow): Promise<void> {
-    if (!this.browser || !window.entries.length) return;
+    const browser = this.browser;
+    if (!browser || !window.entries.length) return;
     if (this.headRow) {
       this.knownWindows.push({ range: { from: 0, to: 0 }, entries: [this.headRow] });
-      await this.browser.loadWindow(this.sessionId, { from: 0, to: 0 });
+      await browser.loadWindow(this.sessionId, { from: 0, to: 0 });
     }
-    await this.browser.loadWindow(this.sessionId, { from: window.entries[0]!.seq, to: window.entries.at(-1)!.seq });
+    if (this.disconnected) return;
+    await browser.loadWindow(this.sessionId, { from: window.entries[0]!.seq, to: window.entries.at(-1)!.seq });
   }
 
   private async readRange(sessionId: string, range: HubSeqRange): Promise<SessionLogEntry[]> {

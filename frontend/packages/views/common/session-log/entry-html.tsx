@@ -95,6 +95,7 @@ export function EntryHtml({
 }: EntryHtmlProps): React.ReactElement {
   const { t } = useT("chat");
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const enhancedHtml = useRef<string | null | undefined>(undefined);
   const [slots, setSlots] = useState<readonly EntryPreviewSlot[]>([]);
   const degraded = !html;
 
@@ -107,11 +108,13 @@ export function EntryHtml({
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    host.replaceChildren();
     setSlots([]);
     if (degraded) return;
 
-    host.innerHTML = html ?? "";
+    // Hydration already has the server's markup. Replacing it would restart
+    // image loads and change the row height between the first two frames.
+    if (enhancedHtml.current !== undefined && enhancedHtml.current !== html) host.innerHTML = html ?? "";
+    enhancedHtml.current = html;
     const enhanced: EnhancedEntryHtml = enhanceEntryHtml(host, {
       markdown,
       copyLabel,
@@ -121,7 +124,6 @@ export function EntryHtml({
 
     return () => {
       enhanced.dispose();
-      host.replaceChildren();
       setSlots([]);
     };
   }, [html, markdown, copyLabel, copiedLabel, degraded]);

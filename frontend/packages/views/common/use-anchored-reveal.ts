@@ -190,6 +190,7 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
     dataReadyAtRef.current = null;
 
     if (initialPositioned && initialKeyRef.current === resetKey && dataReady) {
+      if (scrollEl && scrollEl.dataset.ssrPositioned !== "1") return;
       if (scrollEl && contentEl) scrollEl.scrollTop = targetScrollTop(scrollEl, resolveAnchor());
       stateRef.current = "ready";
       setState("ready");
@@ -235,8 +236,9 @@ export function useAnchoredReveal(options: UseAnchoredRevealOptions): UseAnchore
   // stale while still hidden says so before it ever reveals.
   useEffect(() => {
     if (!enabled || !scrollEl) return;
+    if (initialPositioned && scrollEl.dataset.ssrPositioned !== "1") return;
     writeState(state);
-  }, [enabled, scrollEl, state, writeState]);
+  }, [enabled, scrollEl, state, writeState, initialPositioned]);
 
   useEffect(() => {
     // Gate (i) is what starts the rAF loop; with the data not there yet there is

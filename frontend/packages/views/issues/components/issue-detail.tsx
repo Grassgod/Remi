@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
+import { defaultStorage } from "@multiremi/core/platform";
 import { ChevronLeft } from "lucide-react";
 import { useNavigation } from "../../navigation";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -105,6 +106,7 @@ export function IssueDetail({
   const { getActorName } = useActorName();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
+    storage: defaultStorage,
   });
   const sidebarRef = usePanelRef();
   const isMobile = useIsMobile();

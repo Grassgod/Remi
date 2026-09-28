@@ -222,6 +222,8 @@ const mockApiObj = vi.hoisted(() => ({
   createIssueSession: vi.fn(),
   addSessionParticipant: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
+  getSessionLog: vi.fn(),
+  locateSessionLogEntry: vi.fn(),
   listTimelinePage: vi.fn(async (
     issueId: string,
     params: { issueSessionId?: string; before?: string | null; limit?: number },
@@ -641,6 +643,27 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueSessionResults.mockResolvedValue([]);
     // /timeline returns the entries flat in chronological order (oldest first).
     mockApiObj.listTimeline.mockResolvedValue(mockTimeline);
+    mockApiObj.getSessionLog.mockImplementation(async (sessionId: string, params: { anchor?: number; before?: number; after?: number } = {}) => {
+      const issue = await mockApiObj.getIssue();
+      const timeline = params.anchor !== undefined && params.anchor > 0 && timelinePageControl.olderEntries.length
+        ? timelinePageControl.olderEntries : await mockApiObj.listTimeline("issue-1", sessionId);
+      const rows = (timeline as TimelineEntry[]).map((item, index) => ({
+        session_id: sessionId, id: item.id, seq: index + 1, kind: item.type === "comment" ? "message" : item.type,
+        revision: 1, visibility: "shown", author_type: item.actor_type ?? "system", author_id: item.actor_id ?? null,
+        task_id: item.task_id ?? null, parent_id: item.parent_id ?? null, body_md: item.content ?? "", body_html: null,
+        render_version: null, metadata: { attachments: item.attachments ?? [], reactions: item.reactions ?? [] },
+        resolved_at: item.resolved_at ?? null, resolved_by_type: item.resolved_by_type ?? null,
+        resolved_by_id: item.resolved_by_id ?? null, created_at: item.created_at ?? "", updated_at: item.updated_at ?? "",
+        deleted_at: null,
+      }));
+      const head = { session_id: sessionId, id: `head-${sessionId}`, seq: 0, kind: "head", revision: 1,
+        visibility: "shown", author_type: "system", author_id: null, task_id: null, parent_id: null,
+        body_md: issue.description ?? "", body_html: null, render_version: null, metadata: {},
+        resolved_at: null, resolved_by_type: null, resolved_by_id: null, created_at: "", updated_at: "", deleted_at: null };
+      return { entries: params.anchor === 0 ? [head] : rows,
+        head_seq: rows.length, log_version: 1, has_more_before: timelinePageControl.hasMore,
+        has_more_after: false };
+    });
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
     mockApiObj.listChildIssues.mockResolvedValue({ issues: [] });
