@@ -703,7 +703,21 @@ function chatCommandSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "DELETE", `/api/chat/sessions/${encodePath(String(chat.id))}`);
     }),
     nativeSpec("chat.message.list", ["chat", "message", "list"], "List chat messages", "read", HUMAN, [refPositional("chat")], [], async (invocation) => {
-      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], queryOptions(invocation, { limit: integerOption(invocation, "limit") }));
+      const rawCursor = stringOption(invocation, "cursor");
+      let cursor: { created_at: string; id: string } | null = null;
+      if (rawCursor) {
+        try {
+          const parsed: unknown = JSON.parse(rawCursor);
+          if (isRecord(parsed) && typeof parsed.created_at === "string" && typeof parsed.id === "string"
+            && parsed.created_at && parsed.id) cursor = { created_at: parsed.created_at, id: parsed.id };
+        } catch { /* Report the same usage error as a malformed cursor object. */ }
+        if (!cursor) throw new CliError("usage", "--cursor must be the previous page's next_cursor JSON object");
+      }
+      await getAndRender(invocation, `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages/page`, ["messages"], {
+        limit: integerOption(invocation, "limit"),
+        before_created_at: cursor?.created_at,
+        before_id: cursor?.id,
+      });
     }),
     nativeSpec("chat.message.create", ["chat", "message", "create"], "Send a chat message", "write", HUMAN, [refPositional("chat")], [...INPUT_OPTIONS, ...COMMENT_BODY_OPTIONS], async (invocation) => {
       await mutateAndRender(invocation, "POST", `/api/chat/sessions/${encodePath(positional(invocation, 0, "chat"))}/messages`, await requestBody(invocation, { content: await contentOption(invocation) }));
