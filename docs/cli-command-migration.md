@@ -43,12 +43,18 @@ Like the existing list, ordering is `updated_at DESC`; `sort_by`, `sort_order`,
 
 `remi issue children <key-or-id>` accepts either reference. Both children batch
 routes resolve `parent_ids` to parent IDs and deduplicate those IDs before
-listing children. Compatibility requests use `workspace_id`; native requests
-also accept `workspaceId`, which takes precedence. Without a workspace query,
-references use the existing unscoped resolver. Unknown or unresolved ambiguous
-references and inaccessible parents are skipped; children must also pass the
-existing workspace access check. Compatibility responses retain snake_case
-Issue fields, while native responses retain camelCase.
+listing children. Explicit workspace selectors take precedence in this order:
+query `workspace_id` (native requests first check `workspaceId`, then
+`workspace_id`), `X-Workspace-ID`, then `X-Workspace-Slug` resolved to a workspace
+ID. An unknown explicit slug returns a successful empty batch. With no explicit
+selector, resolution remains unscoped and does not infer token or member defaults.
+Both batch routes follow `getIssueByRef`, like `/api/issues/:id/children`:
+an exact ID wins; otherwise a unique match wins, or, without a workspace selector,
+the unique local row takes precedence among multiple matches. An explicit
+workspace restricts resolution to that workspace's row. Unknown or still
+unresolved references and inaccessible parents are skipped; children must also
+pass the existing workspace access check. Compatibility responses retain
+snake_case Issue fields, while native responses retain camelCase.
 
 `include_archived_total=true` (CLI `--include-archived-total`) adds the
 workspace-wide archived count, independent of other list filters. Omission
