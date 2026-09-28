@@ -4726,8 +4726,10 @@ runMigrations(this.db);
   }
 
   /** MUL-474: identity/status columns only, request-scoped. */
-  getTaskIdentity(id: string): MultiremiTaskIdentity | null {
-    return this.tasks.getTaskIdentity(id);
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): import("@multiremi/store/context.js").TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout") {
+    return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
   }
 
   /** MUL-474: the `status` route's projection, without the prompt column. */
@@ -5010,8 +5012,12 @@ runMigrations(this.db);
     return this.tasks.appendTaskMessages(taskId, messages);
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
-    return this.tasks.listTaskMessages(taskId, sinceSeq);
+  getTaskMessagePageRows(): number {
+    return this.tasks.getTaskMessagePageRows();
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
+    return this.tasks.listTaskMessages(taskId, sinceSeq, throughSeq, limit);
   }
 
   recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {

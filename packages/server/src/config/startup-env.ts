@@ -1,4 +1,4 @@
-import { resolveApiRole, type ApiRole } from "./api-role.js";
+import { resolveApiRole, isApiRoleConfigured, type ApiRole, type ApiRoleConfiguration } from "./api-role.js";
 
 export type StartupEnvironment = Record<string, string | undefined>;
 
@@ -18,6 +18,7 @@ export interface StartupEffectiveConfig {
   daemonDirectBaseUrl: string | null;
   /** MUL-461: the process role this API serves, after env resolution. */
   apiRole: ApiRole;
+  apiRoleConfigured: boolean;
 }
 
 export interface StartupEnvResult {
@@ -55,10 +56,16 @@ export const API_ROLE_SQLITE_DEGRADATION_MESSAGE =
   "MULTIREMI_API_ROLE is set to a split role while SQLite is the store; "
   + "split roles require MULTIREMI_DATABASE_URL so both processes share one database";
 
-export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
+/** Sole production role-resolution entry, shared by server startup and standalone apps. */
+export function resolveStartupApiRole(env: StartupEnvironment, override?: ApiRole): ApiRoleConfiguration {
+  const role = resolveApiRole(env);
+  return { role: override ?? role, configured: override !== undefined || isApiRoleConfigured(env) };
+}
+
+export function evaluateStartupEnv(env: StartupEnvironment, apiRole?: ApiRoleConfiguration): StartupEnvResult {
   const production = isProductionEnvironment(env);
   const daemonDirectBaseUrl = normalizeDaemonDirectBaseUrl(env.MULTIREMI_DAEMON_DIRECT_BASE_URL);
-  const apiRole = resolveApiRole(env);
+  const resolvedApiRole = apiRole ?? resolveStartupApiRole(env);
   const missingRequired = production
     ? PRODUCTION_REQUIRED.filter((key) => !clean(env[key]))
     : [];
@@ -70,11 +77,11 @@ export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
         effectiveValue: null,
         message: SESSION_ARCHIVE_DEGRADATION_MESSAGE,
       }];
-  if (apiRole !== "all" && !isPostgresDatabaseUrl(env.MULTIREMI_DATABASE_URL)) {
+  if (resolvedApiRole.role !== "all" && !isPostgresDatabaseUrl(env.MULTIREMI_DATABASE_URL)) {
     degradations.push({
       id: "api_role_split_store",
       status: "disabled",
-      effectiveValue: apiRole,
+      effectiveValue: resolvedApiRole.role,
       message: API_ROLE_SQLITE_DEGRADATION_MESSAGE,
     });
   }
@@ -89,7 +96,8 @@ export function evaluateStartupEnv(env: StartupEnvironment): StartupEnvResult {
       multiremiToken: redactSecret(env.MULTIREMI_TOKEN),
       jwtSecret: redactSecret(env.JWT_SECRET),
       daemonDirectBaseUrl,
-      apiRole,
+      apiRole: resolvedApiRole.role,
+      apiRoleConfigured: resolvedApiRole.configured,
     },
   };
 }

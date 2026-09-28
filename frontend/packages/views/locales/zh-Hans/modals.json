@@ -114,6 +114,10 @@
     "toast_failed": "创建项目失败"
   },
   "create_issue": {
+    "add_prerequisite": "前置单",
+    "prerequisite_chip": "前置 {{identifier}}",
+    "remove_prerequisite": "移除前置单 {{identifier}}",
+    "prerequisite_picker_description": "搜索并添加前置单",
     "sr_manual": "新建 issue",
     "sr_agent": "快速创建 issue",
     "manual_breadcrumb": "手动创建",

@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { createLogger } from "../../logger";
 import { getCurrentWsId } from "../../platform/workspace-storage";
 import { chatKeys } from "../../chat/queries";
+import { issueKeys } from "../../issues/queries";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "../../chat/session-cache";
 import { useChatStore } from "../../chat";
 import type {
@@ -105,6 +106,12 @@ function patchLatestChatMessagePage(
  * messages + pending-task so the DB remains authoritative.
  */
 export function createChatHandlers({ qc }: SyncContext): SyncModule {
+  const invalidateIssueDecisionSurfaces = () => {
+    const wsId = getCurrentWsId();
+    if (!wsId) return;
+    void qc.invalidateQueries({ queryKey: issueKeys.detailAll(wsId) });
+    void qc.invalidateQueries({ queryKey: issueKeys.decisionsAll(wsId) });
+  };
   // Helpers reused by chat lifecycle handlers.
   const invalidatePendingAggregate = () => {
     const id = getCurrentWsId();
@@ -220,6 +227,11 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // would stay parked even after the daemon resumed work.
       "task:running": (p) => {
         const payload = p as TaskRunningPayload;
+        // A subtree human request resolving also changes its parent Issue's
+        // pending_decision_count. The task event only identifies the source
+        // Issue, so invalidate active detail/decision surfaces in this
+        // workspace and let their authoritative endpoints resolve ancestry.
+        invalidateIssueDecisionSurfaces();
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
@@ -268,6 +280,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       "task:awaiting_human": (p) => {
         const payload = p as TaskAwaitingHumanPayload;
         void qc.invalidateQueries({ queryKey: chatKeys.humanRequests(payload.task_id) });
+        invalidateIssueDecisionSurfaces();
         if (!payload.chat_session_id) return;
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),

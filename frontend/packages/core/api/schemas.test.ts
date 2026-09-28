@@ -23,6 +23,10 @@ import {
   EMPTY_TIMELINE_PAGE,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  IssueDecisionListSchema,
+  IssueDecisionMutationResponseSchema,
+  IssueDetailSchema,
+  IssueParentDoneGrantMutationResponseSchema,
   IssueRetitleResponseSchema,
   ListLarkInstallationsResponseSchema,
   ListProjectDocsResponseSchema,
@@ -112,6 +116,131 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("preserves the raw parent-done grant columns carried by list rows", () => {
+    const parsed = ListIssuesResponseSchema.parse({
+      issues: [{
+        ...baseIssue,
+        parent_done_grant_at: "2026-09-28T08:00:00.000Z",
+        parent_done_grant_by: "member-1",
+        parent_done_grant_agent_id: "agent-1",
+      }],
+      total: 1,
+    });
+    expect(parsed.issues[0]).toMatchObject({
+      parent_done_grant_at: "2026-09-28T08:00:00.000Z",
+      parent_done_grant_by: "member-1",
+      parent_done_grant_agent_id: "agent-1",
+    });
+  });
+});
+
+describe("Issue decision and parent-done grant schemas", () => {
+  const answer = {
+    answererType: "agent",
+    answererId: "agent-1",
+    answer: "Merge",
+    reason: "All checks passed",
+    overturn: "Revert the merge",
+    answeredAt: "2026-09-28T08:00:00.000Z",
+  };
+  const entry = {
+    id: "decision-1",
+    bucket: "answered",
+    type: "decision",
+    kind: "merge",
+    title: "Merge the change",
+    body: "Checks passed.",
+    status: "answered",
+    issueId: "issue-1",
+    sourceIssueId: "issue-child",
+    sourceTaskId: "task-1",
+    options: ["Merge", "Wait"],
+    answer,
+    history: [answer],
+    createdAt: "2026-09-28T07:00:00.000Z",
+    updatedAt: "2026-09-28T08:00:00.000Z",
+  };
+  const decision = {
+    id: entry.id,
+    workspaceId: "ws-1",
+    issueId: entry.issueId,
+    sourceIssueId: entry.sourceIssueId,
+    sourceTaskId: entry.sourceTaskId,
+    kind: entry.kind,
+    title: entry.title,
+    body: entry.body,
+    options: entry.options,
+    status: entry.status,
+    answer,
+    answeredByMemberId: null,
+    answeredAt: answer.answeredAt,
+    history: [answer],
+    ownerAgentId: "agent-1",
+    createdByAgentId: "agent-child",
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+  const grant = {
+    granted_at: "2026-09-28T08:00:00.000Z",
+    granted_by: "member-1",
+    agent_id: "agent-1",
+    effective: false,
+    ineffective_reason: "assignee_changed",
+  };
+
+  it("parses the detail-only count and derived grant", () => {
+    expect(IssueDetailSchema.parse({
+      ...baseIssue,
+      pending_decision_count: 2,
+      parent_done_grant: grant,
+    })).toMatchObject({
+      pending_decision_count: 2,
+      parent_done_grant: grant,
+    });
+  });
+
+  it("parses decision history and a human request without history", () => {
+    const { history: _history, ...entryWithoutHistory } = entry;
+    const humanRequest = {
+      ...entryWithoutHistory,
+      id: "request-1",
+      bucket: "waiting_on_human",
+      type: "human_request",
+      kind: "question",
+      status: "pending",
+      answer: null,
+      options: null,
+      payload: { message: "Choose a region" },
+    };
+    const parsed = IssueDecisionListSchema.parse({
+      waiting_on_human: [humanRequest],
+      owner_and_answered: { pending: [], answered: [entry] },
+      count: 1,
+    });
+
+    expect(parsed.waiting_on_human[0]).not.toHaveProperty("history");
+    expect(parsed.owner_and_answered.answered[0]?.history).toEqual([answer]);
+    expect(IssueDecisionMutationResponseSchema.parse({ decision }).decision).toEqual(decision);
+  });
+
+  it("accepts grant and revoke mutation bodies but rejects impossible detail reasons", () => {
+    expect(IssueParentDoneGrantMutationResponseSchema.parse({
+      issue: {},
+      parent_done_grant: grant,
+    }).parent_done_grant).toEqual(grant);
+    expect(IssueParentDoneGrantMutationResponseSchema.parse({
+      issue: {},
+      parent_done_grant: null,
+    }).parent_done_grant).toBeNull();
+    expect(IssueParentDoneGrantMutationResponseSchema.safeParse({
+      parent_done_grant: grant,
+    }).success).toBe(false);
+    expect(IssueParentDoneGrantMutationResponseSchema.safeParse({
+      issue: {},
+      parent_done_grant: { ...grant, ineffective_reason: "grant_missing" },
+    }).success).toBe(false);
   });
 });
 
