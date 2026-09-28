@@ -454,6 +454,8 @@
     "dispatch_skipped": "created but not dispatched — no agent will pick this issue up",
     "dispatch_skipped_reason": "created but not dispatched: {{reason}}",
     "dispatch_skipped_no_runnable_agent": "created but not dispatched: no runnable agent for the assignee",
+    "dispatch_skipped_member_assignee": "status changed without dispatch: the assignee is a member",
+    "dispatch_skipped_no_assignee": "status changed without dispatch: the issue has no assignee",
     "squad_leader_evaluated": "evaluated the squad trigger",
     "squad_leader_action": "evaluated and took action",
     "squad_leader_action_reason": "evaluated and took action: {{reason}}",

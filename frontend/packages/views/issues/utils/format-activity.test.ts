@@ -272,6 +272,18 @@ describe("formatActivity", () => {
     ).toBe("activity.dispatch_skipped_no_runnable_agent");
     expect(
       formatActivity(
+        activity("dispatch_skipped", { details: { reason: "member_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_member_assignee");
+    expect(
+      formatActivity(
+        activity("dispatch_skipped", { details: { reason: "no_assignee" } }),
+        t,
+      ),
+    ).toBe("activity.dispatch_skipped_no_assignee");
+    expect(
+      formatActivity(
         activity("dispatch_skipped", { details: { reason: "assign_failed", error: "Squad is archived: sqd_1" } }),
         t,
       ),

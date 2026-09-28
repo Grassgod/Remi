@@ -3361,12 +3361,22 @@ runMigrations(this.db);
     options: UpdateIssueOptions,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,
-  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
 
   runIssueUpdatePostCommit(
-    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,

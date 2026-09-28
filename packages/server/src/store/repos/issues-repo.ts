@@ -316,7 +316,7 @@ type IssueDeletionBlockedResult = Extract<BeginIssueDeletionResult, { ok: false 
  * `skipped` is set when the owner cannot run the work (no owner, a member
  * owner, an archived assignee, a squad with no runnable agent). The status
  * change still commits — the member asked for it — and the reason is recorded
- * after the COMMIT as a `dispatch_skipped` activity.
+ * in the same transaction as a `dispatch_skipped` activity.
  */
 interface ForcedStartOutcome {
   skipped: { reason: string; error: string } | null;
@@ -2181,7 +2181,6 @@ export class IssuesRepo {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
-    forcedStartSkipped: { reason: string; error: string } | null;
   } {
     let cancelledTasks = 0;
     // Every `force` that tries to leave `backlog`, whether or not the gate was
@@ -2312,7 +2311,6 @@ export class IssuesRepo {
         previous: current,
         cancelledTasks: 0,
         handledForcedStart: false,
-        forcedStartSkipped: null,
       };
     }
     this.ctx.db.run(
@@ -2395,6 +2393,9 @@ export class IssuesRepo {
       body: null,
       data: input,
     }, deferredEvents);
+    if (dispatchOutcome?.skipped) {
+      this.recordForcedStartSkipped(next, dispatchOutcome.skipped, input, deferredEvents);
+    }
     // MUL-400 E1: a member override has to be auditable next to the write it
     // allowed, including the child count it overrode at the time.
     if (
@@ -2442,7 +2443,6 @@ export class IssuesRepo {
       previous: current,
       cancelledTasks,
       handledForcedStart: forceStartAttempt,
-      forcedStartSkipped: dispatchOutcome?.skipped ?? null,
     };
   }
 
@@ -2459,7 +2459,7 @@ export class IssuesRepo {
       issue: MultiremiIssue;
       previous: MultiremiIssue;
       cancelledTasks: number;
-      forcedStartSkipped?: { reason: string; error: string } | null;
+      handledForcedStart: boolean;
     },
     input: UpdateIssueInput,
     collector: ChildStatusChangeCollector,
@@ -2472,9 +2472,6 @@ export class IssuesRepo {
     // The hook gets its OWN queue, so a hook failure cannot retroactively
     // publish events for rows its rolled-back transaction just erased.
     this.ctx.emitCommitEvents(deferredEvents);
-    if (result.forcedStartSkipped) {
-      this.recordForcedStartSkipped(updated, result.forcedStartSkipped, input);
-    }
     if (updated === previous) return;
     const hookEvents = createCommitEventQueue();
     // The write above is committed; the hook runs after it on purpose (ADR
@@ -2556,9 +2553,22 @@ export class IssuesRepo {
     // `updateIssueWithOutcome`), so `createTaskWithinTransaction` can take it
     // again inside this transaction without inverting the order.
 
-    // A member owner, or none at all, has no agent to run: the status change is
-    // the whole outcome, exactly as before.
-    if (!ownerType || !ownerId || ownerType === "member") return { skipped: null };
+    if (!ownerType || !ownerId) {
+      return {
+        skipped: {
+          reason: "no_assignee",
+          error: "Issue has no assignee",
+        },
+      };
+    }
+    if (ownerType === "member") {
+      return {
+        skipped: {
+          reason: "member_assignee",
+          error: "Member assignees do not run tasks",
+        },
+      };
+    }
 
     const taskAgent = this.ctx.resolveRunnableAgentForAssignee(ownerType, ownerId);
     if (!taskAgent) {
@@ -2567,7 +2577,7 @@ export class IssuesRepo {
       log.warn(`dependency force-start dispatch skipped for ${current.id}: no runnable agent for ${ownerType}:${ownerId}`);
       return {
         skipped: {
-          reason: "force_start_dispatch_failed",
+          reason: "no_runnable_agent",
           error: `No runnable agent for ${ownerType}: ${ownerId}`,
         },
       };
@@ -2608,15 +2618,14 @@ export class IssuesRepo {
   }
 
   /**
-   * The `dispatch_skipped` row for a forced start that could not run. Written
-   * after the transaction committed, because the status change it explains is
-   * kept: the member asked for the transition and gets it, with the reason
-   * recorded next to it, exactly like assign-on-update.
+   * The `dispatch_skipped` row for a forced start that could not run. The owner
+   * calls this before COMMIT so the status change and the reason cannot split.
    */
   private recordForcedStartSkipped(
     issue: MultiremiIssue,
     skipped: { reason: string; error: string },
     input: UpdateIssueInput,
+    deferredEvents: CommitEventQueue,
   ): void {
     this.ctx.appendIssueActivity(issue.id, {
       actorType: "system",
@@ -2632,7 +2641,7 @@ export class IssuesRepo {
         assignee_id: issue.assigneeId,
         ...sourceTaskActivityData(input.parentTaskId ?? input.parent_task_id ?? null),
       },
-    });
+    }, deferredEvents);
   }
 
   restoreIssue(id: string): MultiremiIssue {
@@ -4137,10 +4146,9 @@ export class IssuesRepo {
     const unmet = this.listUnmetPrerequisites(id);
     if (!unmet.length) return;
     if (input.force === true) {
-      // The override is auditable, and the work really starts: the caller
-      // dispatches through `assignIssue` once the status write commits (see
-      // `dispatchForcedStart`), so a forced issue is never left as a `todo`
-      // with nothing queued.
+      // The override and its dispatch decision are part of the caller's owner
+      // transaction. Runnable agent/squad owners get a round; member, missing,
+      // or unavailable owners get `dispatch_skipped` with the requested status.
       this.ctx.appendIssueActivity(id, {
         actorType: input.actorType ?? "member",
         actorId: input.actorId ?? null,

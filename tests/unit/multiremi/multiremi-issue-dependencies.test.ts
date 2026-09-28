@@ -1873,10 +1873,14 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
         tasks: allTaskRows(store, dependent.id),
         force: allActivityRows(store, dependent.id, "dependency_force_started").length,
       }).toEqual({ kind, status: "todo", tasks: [], force: 1 });
-      if (kind === "archived") {
-        expect(allActivityRows(store, dependent.id, "dispatch_skipped").at(-1)!.data)
-          .toMatchObject({ reason: "force_start_dispatch_failed" });
-      }
+      const expectedReason = kind === "member"
+        ? "member_assignee"
+        : kind === "none"
+          ? "no_assignee"
+          : "no_runnable_agent";
+      expect(allActivityRows(store, dependent.id, "dispatch_skipped")).toHaveLength(1);
+      expect(allActivityRows(store, dependent.id, "dispatch_skipped")[0]!.data)
+        .toMatchObject({ reason: expectedReason });
     }
   });
 
