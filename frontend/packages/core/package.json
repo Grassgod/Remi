@@ -104,6 +104,7 @@
     "./feedback": "./feedback/index.ts",
     "./feedback/mutations": "./feedback/mutations.ts",
     "./realtime": "./realtime/index.ts",
+    "./replica": "./replica/index.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",
     "./onboarding": "./onboarding/index.ts",
@@ -134,8 +135,9 @@
     "./skills/frontmatter": "./skills/frontmatter.ts"
   },
   "dependencies": {
-    "@multiremi/contracts": "workspace:*",
     "@formatjs/intl-localematcher": "catalog:",
+    "@multiremi/contracts": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-query-devtools": "^5.96.2",
     "i18next": "catalog:",
