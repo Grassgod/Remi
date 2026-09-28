@@ -11572,6 +11572,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",

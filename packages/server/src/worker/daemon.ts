@@ -1126,7 +1126,7 @@ export class MultiremiDaemon {
   answerFeishuIssueDecision(
     issueId: string,
     decisionId: string,
-    input: { answer: string; operatorOpenId: string },
+    input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
     return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
   }
@@ -1135,12 +1135,17 @@ export class MultiremiDaemon {
     return this.client.getTaskHumanRequest(taskId, requestId);
   }
 
+  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+    return this.client.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
+  }
+
   respondFeishuBotHumanRequest(
     taskId: string,
     requestId: string,
     response: Record<string, unknown>,
+    credential?: { token: string; operatorOpenId: string },
   ): Promise<MultiremiTaskHumanRequest> {
-    return this.client.respondTaskHumanRequest(taskId, requestId, response);
+    return this.client.respondTaskHumanRequest(taskId, requestId, response, credential);
   }
 
   resetFeishuBotSession(revision: number, externalSessionKey: string): Promise<boolean> {
