@@ -5,10 +5,11 @@
 //
 // The mapping is the production one from the MUL-402 ruling: the eleven
 // `session_events` kinds plus `head`, with `task_assigned` renamed to `turn` and
-// everything else under its existing name. Issue sessions keep
-// `session_events.seq` as their log seq, which is what lets lane cursors,
-// `inherit_cutoff_seq`, `follow_frozen_seq` and stored `requiredEventSeq` values
-// stay valid without remapping.
+// everything else under its existing name. `delegation_report` (ADR 0005, merged
+// from main) joined as a twelfth hidden kind so its seq is not a hole in the log.
+// Issue sessions keep `session_events.seq` as their log seq, which is what lets
+// lane cursors, `inherit_cutoff_seq`, `follow_frozen_seq` and stored
+// `requiredEventSeq` values stay valid without remapping.
 import type {
   ConversationLogEntryMetadata,
   ConversationLogKind,
@@ -56,6 +57,10 @@ export interface MirrorSessionEvent {
  * Kinds the log stores, keyed by the `session_events.kind` that produces them.
  * `thread_resolved` / `thread_unresolved` are deliberately absent: the legacy
  * table keeps those markers until B2/B9, while the log updates its comment row.
+ * `follow_frozen` (MUL-324) is absent here too, so on this branch it still
+ * leaves a seq hole; ruling cmt_u7m8e7yitmai maps all three in MUL-427. The
+ * kind-coverage test in `conversation-log-delegation-report.test.ts` pins the
+ * set that is still unmapped.
  */
 const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   message: "message",
@@ -69,6 +74,7 @@ const SESSION_EVENT_KIND_MAP: Record<string, ConversationLogKind> = {
   task_steer: "task_steer",
   message_edited: "message_edited",
   message_deleted: "message_deleted",
+  delegation_report: "delegation_report",
 };
 
 /** The log kind a `session_events` row maps to, or null when it is not mirrored. */

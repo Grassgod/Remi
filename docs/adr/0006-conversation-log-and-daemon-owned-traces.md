@@ -89,7 +89,10 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    `visibility = 'hidden'` rows with a `target_seq`: `task_completed`,
    `task_failed`, `task_cancelled`, `session_created`, `task_steer`,
    `message_edited` and `message_deleted` — the kinds production actually
-   writes, under their existing names. In-place updates of shown rows bump
+   writes, under their existing names. `delegation_report` (ADR 0005) is
+   hidden too, under its own name: it lands in the delegator's session with the
+   delegated child's `task_id`, which has no `turn` row there, so like
+   `session_created` it has no `target_seq`. In-place updates of shown rows bump
    `revision`. The hidden markers are also the change feed for the Live Hub and
    the browser replica. A row with `kind = 'head'` is not an event: every
    seq-range read (wake-up, projection, delegation drain) excludes it, and

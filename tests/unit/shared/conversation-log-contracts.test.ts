@@ -136,7 +136,7 @@ describe("conversation log contract", () => {
     expect(card.status).toBe("completed");
   });
 
-  it("carries the eleven production kinds plus head", () => {
+  it("carries the twelve production kinds plus head", () => {
     expect([...CONVERSATION_LOG_KINDS]).toEqual([
       "head",
       "message",
@@ -150,8 +150,9 @@ describe("conversation log contract", () => {
       "task_steer",
       "message_edited",
       "message_deleted",
+      "delegation_report",
     ]);
-    expect(CONVERSATION_LOG_KINDS).toHaveLength(12);
+    expect(CONVERSATION_LOG_KINDS).toHaveLength(13);
   });
 
   it("never names a kind that has no producer", () => {
