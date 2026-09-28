@@ -7,10 +7,10 @@
  * `Worker`: its own `PostgresSyncDatabase`, its own connection, and a file
  * barrier so both sides issue their write at the same moment.
  *
- * Role `force` sends `{status: todo, force: true}` through the store; role `auto`
- * marks the prerequisite done, which is what triggers the automatic start. Both
- * arbitrate on the same conditional `backlog -> todo` claim, so exactly one may
- * queue a round and exactly one may write its start activity.
+ * Role `force` sends `{status: todo, force: true}`; `comment` and `rerun` drive
+ * MUL-458's real HTTP entry points; role `auto` marks the prerequisite done.
+ * Every worker owns its own bridge and connection and reports its maximum
+ * transaction depth to the parent.
  */
 import { existsSync } from "node:fs";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -21,15 +21,17 @@ interface RaceInput {
   databaseUrl: string;
   issueId: string;
   prerequisiteId: string;
+  agentId?: string;
   barrierPath: string;
-  role: "force" | "auto";
+  role: "force" | "comment" | "rerun" | "auto";
 }
 
 self.onmessage = async (message: MessageEvent<RaceInput>) => {
-  const { databaseUrl, issueId, prerequisiteId, barrierPath, role } = message.data;
+  const { databaseUrl, issueId, prerequisiteId, agentId, barrierPath, role } = message.data;
   const db = new PostgresSyncDatabase(databaseUrl);
   const store = new MultiremiStore(db);
   try {
+    db.resetTransactionDepthStats();
     self.postMessage({ phase: "ready" });
     // Wait for the parent to release both workers in the same tick.
     const deadline = Date.now() + 30_000;
@@ -37,6 +39,7 @@ self.onmessage = async (message: MessageEvent<RaceInput>) => {
       if (Date.now() > deadline) throw new Error("barrier timeout");
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+    let responseStatus: number | null = null;
     if (role === "force") {
       // The PRODUCT entry point: member PATCH through the real route, which is
       // the only place `force` is accepted from outside. Calling the store
@@ -48,17 +51,39 @@ self.onmessage = async (message: MessageEvent<RaceInput>) => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "todo", force: true }),
       });
+      responseStatus = response.status;
       if (response.status !== 200 && response.status !== 409) {
         throw new Error(`unexpected force response ${response.status}`);
       }
+    } else if (role === "comment") {
+      const app = createMultiremiApp({ store });
+      const response = await app.request(`/api/issues/${issueId}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body: "Concurrent human comment", author_type: "member", author_id: "local" }),
+      });
+      responseStatus = response.status;
+      if (response.status !== 201) throw new Error(`unexpected comment response ${response.status}`);
+    } else if (role === "rerun") {
+      if (!agentId) throw new Error("rerun role requires agentId");
+      const app = createMultiremiApp({ store });
+      const response = await app.request(`/api/issues/${issueId}/rerun`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId }),
+      });
+      responseStatus = response.status;
+      if (response.status !== 202) throw new Error(`unexpected rerun response ${response.status}`);
     } else {
       try {
         store.updateIssue(prerequisiteId, { status: "done" });
+        responseStatus = 200;
       } catch {
         // Same: a refusal is a valid outcome for the arbitration loser.
+        responseStatus = 409;
       }
     }
-    self.postMessage({ phase: "done" });
+    self.postMessage({ phase: "done", role, responseStatus, maxTransactionDepth: db.maxTransactionDepth });
   } catch (error) {
     self.postMessage({ phase: "error", error: String(error) });
   } finally {
