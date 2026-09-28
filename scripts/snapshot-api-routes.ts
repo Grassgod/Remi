@@ -1175,7 +1175,7 @@ export const buildSnapshotApp = buildApp;
 // families
 // ---------------------------------------------------------------------------
 
-type Flow = (rec: Recorder, refs: SeedRefs) => Promise<void>;
+type Flow = (rec: Recorder, refs: SeedRefs, store: MultiremiStore) => Promise<void>;
 
 const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 
@@ -1817,6 +1817,18 @@ flow("feishu-bot", async (rec, refs) => {
 });
 
 // -- settings / misc --------------------------------------------------------
+flow("issue-topics-invalid-stored", async (rec, refs, store) => {
+  const workspace = store.getWorkspace(refs.workspaceId)!;
+  store.updateWorkspace(refs.workspaceId, { settings: { ...workspace.settings, issueTopics: {
+    enabled: true, chatId: "oc_snapshot_topics", notifyMode: "person",
+  } } });
+  const path = `/api/workspaces/${refs.workspaceId}/issue-topics`;
+  await rec.call("GET", path);
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics" });
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics", notify_mode: "none" });
+  await rec.call("GET", path);
+});
+
 flow("settings-misc", async (rec, refs) => {
   await rec.json("PUT", "/api/notification-preferences", { email_enabled: false });
   await rec.json("PUT", "/api/multiremi/notification-preferences", { emailEnabled: true });
@@ -1923,7 +1935,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
       resetDeterministicState();
       const boot = await buildApp();
       const recorder = new Recorder(boot.app, routes, name);
-      await run(recorder, boot.refs);
+      await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);
       boot.db.close();

@@ -298,10 +298,11 @@ const TASK_ROUTING_PROJECT_SQL = `CASE WHEN t.runtime_workspace_id IS NOT NULL T
 
 /**
  * Device routing (Project bindings + dedicated devices) for one Project
- * expression. Placeholder order is `daemonId, dedicated, daemonId`; the
- * expression itself must not introduce bound parameters.
+ * expression and explicit Runtime workspace in tenant `t.workspace_id`.
+ * Placeholder order is `daemonId, dedicated, daemonId, daemonId`; the
+ * expressions themselves must not introduce bound parameters.
  */
-const projectDeviceRoutingEligibilitySql = (projectExpression: string) => `(
+const projectDeviceRoutingEligibilitySql = (projectExpression: string, runtimeWorkspaceExpression: string) => `(
   (
     ${projectExpression} IS NULL
     OR NOT EXISTS (
@@ -324,25 +325,35 @@ const projectDeviceRoutingEligibilitySql = (projectExpression: string) => `(
           AND project_device.daemon_id = ?
       )
     )
+    OR EXISTS (
+      SELECT 1 FROM multiremi_runtime_workspaces rw
+      WHERE rw.id = ${runtimeWorkspaceExpression} AND rw.workspace_id = t.workspace_id
+        AND rw.daemon_id = ? AND rw.archived_at IS NULL
+    )
   )
 )`;
 
-const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySql(TASK_ROUTING_PROJECT_SQL);
+const PROJECT_DEVICE_ROUTING_ELIGIBILITY_SQL = projectDeviceRoutingEligibilitySql(TASK_ROUTING_PROJECT_SQL, "t.runtime_workspace_id");
 
 const DEVICE_ROUTING_STATE_SQL = `${TASK_ROUTING_PROJECT_SQL} AS routing_project_id,
        EXISTS (SELECT 1 FROM multiremi_project_devices device
                WHERE device.project_id = ${TASK_ROUTING_PROJECT_SQL}) AS project_has_devices,
        EXISTS (SELECT 1 FROM multiremi_project_devices device
                WHERE device.project_id = ${TASK_ROUTING_PROJECT_SQL}
-                 AND device.daemon_id = ?) AS machine_bound`;
+                 AND device.daemon_id = ?) AS machine_bound,
+       EXISTS (SELECT 1 FROM multiremi_runtime_workspaces rw
+               WHERE rw.id = t.runtime_workspace_id AND rw.workspace_id = t.workspace_id
+                 AND rw.daemon_id = ? AND rw.archived_at IS NULL) AS runtime_workspace_on_machine`;
 
 function deviceRoutingStateFromRow(row: {
   routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown;
+  runtime_workspace_on_machine?: unknown;
 }, dedicated: boolean): DeviceRoutingState {
   return {
     projectId: nullableString(row.routing_project_id),
     projectHasDevices: Number(row.project_has_devices ?? 0) === 1,
     machineBound: Number(row.machine_bound ?? 0) === 1,
+    runtimeWorkspaceOnMachine: Number(row.runtime_workspace_on_machine ?? 0) === 1,
     dedicated,
   };
 }
@@ -438,7 +449,7 @@ function deviceRoutingSql(ctx: StoreContext, runtime: MultiremiRuntime): SqlFrag
 }
 
 /**
- * `(daemonId, dedicated, daemonId)` for the routing predicate. Pure — reads a
+ * `(daemonId, dedicated, daemonId, daemonId)` for the routing predicate. Pure — reads a
  * profile row through the context but never writes — so the read-only
  * placement probe can reuse it.
  */
@@ -450,7 +461,7 @@ function runtimeDeviceRoutingParams(ctx: StoreContext, runtime: MultiremiRuntime
        WHERE workspace_id = ? AND daemon_id = ?`,
     ).get(runtime.workspaceId ?? "local", daemonId) as { dedicated?: unknown } | null
     : null;
-  return [daemonId, Number(profile?.dedicated ?? 0) === 1 ? 1 : 0, daemonId];
+  return [daemonId, Number(profile?.dedicated ?? 0) === 1 ? 1 : 0, daemonId, daemonId];
 }
 
 /** Everything that must hold AFTER the device-routing predicate. */
@@ -1611,7 +1622,7 @@ export class TasksRepo {
       );
       const laneRoutingAllowed = Boolean(issueSession?.withCode)
         || laneRuntime == null
-        || this.projectPassesProjectDeviceRouting(laneRuntime, routingProjectId);
+        || this.projectPassesProjectDeviceRouting(laneRuntime, routingProjectId, runtimeWorkspaceId);
       const laneRuntimeCompatible = laneRuntime != null
         && (!runtimeWorkspace || laneRuntime.daemonId === runtimeWorkspace.daemonId)
         && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
@@ -2074,7 +2085,7 @@ export class TasksRepo {
         // machine the Project does not allow would queue forever once the claim
         // predicate applies routing to every task (MUL-449).
         if (runtime && this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)
-          && this.projectPassesProjectDeviceRouting(runtime, deviceRoutingProjectId)) {
+          && this.projectPassesProjectDeviceRouting(runtime, deviceRoutingProjectId, runtimeWorkspaceId)) {
           return { runtimeId: runtime.id, inheritChatSession: true };
         }
       }
@@ -2091,7 +2102,7 @@ export class TasksRepo {
         ? this.ctx.runtimes().getRuntime(chatSession.sessionRuntimeId)
         : null;
       if (directoryRuntime && this.ctx.runtimes().runtimeCanRunAgent(directoryRuntime, agent)
-        && this.projectPassesProjectDeviceRouting(directoryRuntime, deviceRoutingProjectId)) {
+        && this.projectPassesProjectDeviceRouting(directoryRuntime, deviceRoutingProjectId, runtimeWorkspaceId)) {
         return { runtimeId: directoryRuntime.id, inheritChatSession: true };
       }
       return { runtimeId: null, inheritChatSession: false };
@@ -3102,7 +3113,7 @@ export class TasksRepo {
   private runtimeDeviceRoutingContext(runtime: MultiremiRuntime): {
     daemonId: string;
     dedicated: boolean;
-    params: [string, number, string];
+    params: [string, number, string, string];
   } {
     const daemonId = runtime.daemonId?.trim() ?? "";
     const profile = daemonId
@@ -3112,23 +3123,26 @@ export class TasksRepo {
       ).get(runtime.workspaceId ?? "local", daemonId) as { dedicated?: unknown } | null
       : null;
     const dedicated = Number(profile?.dedicated ?? 0) === 1;
-    return { daemonId, dedicated, params: [daemonId, dedicated ? 1 : 0, daemonId] };
+    return { daemonId, dedicated, params: [daemonId, dedicated ? 1 : 0, daemonId, daemonId] };
   }
 
   /**
    * The same Project device-routing contract as the claim predicate, evaluated
    * for a concrete Project instead of a task row. Chat affinity needs this
    * because the task it places may not exist yet, or may carry no issue_id.
-   * `null` is the Project-less case: only non-dedicated devices may run it.
-   * The Project is bound through the trailing FROM subquery, so the eligibility
-   * template keeps binding only daemonId/dedicated/daemonId.
+   * A Project-less task on a dedicated device needs an active explicit Runtime
+   * workspace on that machine. Bind both ids and the tenant through the FROM
+   * subquery so the eligibility template keeps the same placeholder order.
    */
-  private projectPassesProjectDeviceRouting(runtime: MultiremiRuntime, projectId: string | null): boolean {
+  private projectPassesProjectDeviceRouting(
+    runtime: MultiremiRuntime, projectId: string | null, runtimeWorkspaceId: string | null | undefined,
+  ): boolean {
     const routing = this.runtimeDeviceRoutingContext(runtime);
     const row = this.ctx.db.query(
-      `SELECT CASE WHEN ${projectDeviceRoutingEligibilitySql("project_scope.project_id")} THEN 1 ELSE 0 END AS eligible
-       FROM (SELECT CAST(? AS TEXT) AS project_id) project_scope`,
-    ).get(...routing.params, projectId) as { eligible?: unknown } | null;
+      `SELECT CASE WHEN ${projectDeviceRoutingEligibilitySql("t.project_id", "t.runtime_workspace_id")} THEN 1 ELSE 0 END AS eligible
+       FROM (SELECT CAST(? AS TEXT) AS project_id, CAST(? AS TEXT) AS runtime_workspace_id,
+                    CAST(? AS TEXT) AS workspace_id) t`,
+    ).get(...routing.params, projectId, runtimeWorkspaceId ?? null, runtime.workspaceId ?? "local") as { eligible?: unknown } | null;
     return Number(row?.eligible ?? 0) === 1;
   }
 
@@ -3173,8 +3187,9 @@ export class TasksRepo {
               ${DEVICE_ROUTING_STATE_SQL}
        ${TASK_CLAIM_FROM_SQL}
        WHERE t.id = ?`,
-    ).get(daemonId, dedicated ? 1 : 0, daemonId, daemonId, String(row.id)) as
-      ({ eligible?: unknown; routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown }) | null;
+    ).get(daemonId, dedicated ? 1 : 0, daemonId, daemonId, daemonId, daemonId, String(row.id)) as
+      ({ eligible?: unknown; routing_project_id?: unknown; project_has_devices?: unknown;
+        machine_bound?: unknown; runtime_workspace_on_machine?: unknown }) | null;
     return {
       placementOk: false,
       routingOk: Number(rowQuery?.eligible ?? 0) === 1,
@@ -3231,9 +3246,11 @@ ${routing.sql}
        ${DEVICE_ROUTING_STATE_SQL}
        ${TASK_CLAIM_FROM_SQL}
        WHERE t.id IN (${placeholders})`,
-    ).all(...before.params, ...after.params, ...routing.params, runtime.daemonId?.trim() ?? "", ...taskIds) as
+    ).all(...before.params, ...after.params, ...routing.params,
+      runtime.daemonId?.trim() ?? "", runtime.daemonId?.trim() ?? "", ...taskIds) as
       Array<{ id: string; placement_ok?: unknown; routing_ok?: unknown;
-        routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown }>;
+        routing_project_id?: unknown; project_has_devices?: unknown; machine_bound?: unknown;
+        runtime_workspace_on_machine?: unknown }>;
     for (const row of rows) verdicts.set(row.id, {
       placementOk: Number(row.placement_ok ?? 0) === 1,
       routingOk: Number(row.routing_ok ?? 0) === 1,
@@ -3595,7 +3612,7 @@ ${routing.sql}
       // is a routing decision, while a Runtime that cannot run this Agent (or
       // is gone) matches the Chat refresh's capability drift.
       const routingRefused = runtime != null
-        && !this.projectPassesProjectDeviceRouting(runtime, routingProjectId);
+        && !this.projectPassesProjectDeviceRouting(runtime, routingProjectId, task.runtimeWorkspaceId);
       const runtimeUnusable = runtime == null
         || !this.ctx.runtimes().runtimeCanRunAgent(runtime, agent);
       if (!workspaceConflict && !routingRefused && !runtimeUnusable) continue;

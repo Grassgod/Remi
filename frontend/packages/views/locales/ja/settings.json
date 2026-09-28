@@ -1027,6 +1027,7 @@
       "notify_none": "メンションなし",
       "notify_open_id": "通知先 open_id（Bot アプリ）",
       "notify_invalid": "ou_ で始まる有効な open_id を入力してください。",
+      "config_invalid": "保存された設定が検証に失敗しました。以下の理由を確認し、設定を修正して再度保存してください。",
       "title": "Issue トピック同期",
       "description": "新しい Issue ごとに Feishu グループのトピックを作成し、以降の進捗と返信を同じスレッドに保持します。",
       "enabled": "新しい Issue のトピックを作成",
