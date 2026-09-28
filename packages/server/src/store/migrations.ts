@@ -42,6 +42,7 @@ const CHAT_ISSUE_DECOUPLING_MIGRATION = "20260916_chat_issue_decoupling";
 const AGENT_PAGE_QUERY_INDEXES_MIGRATION = "20260910_agent_page_query_indexes";
 const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
+const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
 const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
 const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
@@ -3352,6 +3353,21 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
         model_id TEXT NOT NULL,
         levels TEXT NOT NULL DEFAULT '[]',
         default_level TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, engine, model_id)
+      );
+    `);
+  });
+  // MUL-479: administrator-declared Claude context windows are stored
+  // separately from discovery snapshots and reasoning declarations.
+  runMigrationOnce(db, GATEWAY_MODEL_CONTEXT_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_context (
+        workspace_id TEXT NOT NULL,
+        engine TEXT NOT NULL CHECK(engine = 'claude'),
+        model_id TEXT NOT NULL,
+        context_window TEXT NOT NULL CHECK(context_window = '1m'),
         updated_by TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY(workspace_id, engine, model_id)

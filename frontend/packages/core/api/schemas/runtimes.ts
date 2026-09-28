@@ -354,6 +354,11 @@ export const RelayReasoningLevelEffectiveSchema = z.object({
 const RelayReasoningLevelModelSchema = z.object({
   model_id: z.string(),
   label: z.string().default(""),
+  context_window: z.object({
+    one_million: z.literal(true),
+    updated_by: z.string().nullable(),
+    updated_at: z.string(),
+  }).nullable().default(null),
   manual: RelayReasoningLevelManualSchema.nullable().default(null),
   effective: RelayReasoningLevelEffectiveSchema.nullable().default(null),
 }).loose();
@@ -377,6 +382,10 @@ export const RelayReasoningLevelSaveResultSchema = z.object({
 }).loose();
 
 export type RelayReasoningLevelManual = z.infer<typeof RelayReasoningLevelManualSchema>;
+export const RelayContextWindowSaveResultSchema = RelayReasoningLevelsResponseSchema.extend({
+  deleted: z.boolean(),
+});
+export type RelayContextWindowSaveResult = z.infer<typeof RelayContextWindowSaveResultSchema>;
 export type RelayReasoningLevelManualState = z.infer<typeof RelayReasoningLevelManualStateSchema>;
 export type RelayReasoningLevelManualStateCode = z.infer<typeof RelayReasoningLevelManualStateCodeSchema>;
 export type RelayReasoningLevelEffective = z.infer<typeof RelayReasoningLevelEffectiveSchema>;

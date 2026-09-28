@@ -25,6 +25,7 @@ const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockProbeRelay = vi.hoisted(() => vi.fn());
 const mockGetReasoningLevels = vi.hoisted(() => vi.fn());
 const mockPutReasoningLevel = vi.hoisted(() => vi.fn());
+const mockPutContextWindow = vi.hoisted(() => vi.fn());
 const mockRefetchReasoning = vi.hoisted(() => vi.fn());
 const reasoningRef = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
@@ -92,6 +93,7 @@ vi.mock("@multiremi/core/api", () => ({
     probeRelayEngine: mockProbeRelay,
     getRelayReasoningLevels: mockGetReasoningLevels,
     putRelayReasoningLevel: mockPutReasoningLevel,
+    putRelayContextWindow: mockPutContextWindow,
     revealRelayToken: vi.fn(() => Promise.resolve("sk-revealed")),
     updateWorkspace: mockUpdateWorkspace,
   },
@@ -124,6 +126,7 @@ describe("ModelGatewayTab", () => {
     reasoningRef.pending = false;
     reasoningRef.error = null;
     mockPutReasoningLevel.mockReset();
+    mockPutContextWindow.mockReset().mockResolvedValue({ deleted: false });
     workspaceRef.current.settings = {};
     mockUpdateWorkspace.mockImplementation(async (_id: string, input: { settings: Record<string, unknown> }) => ({
       ...workspaceRef.current,
@@ -334,6 +337,44 @@ describe("ModelGatewayTab", () => {
     for (const button of screen.getAllByRole("button", { name: "Probe now" })) {
       expect(button).toBeDisabled();
     }
+  });
+
+  it.each([false, true])("shows only Claude context switches and saves the new state (enabled=%s)", async enabled => {
+    for (const engine of ["claude", "codex"]) {
+      reasoningRef.current[engine] = {
+        engine, allowed_levels: ["high"], models: [{
+          model_id: engine + "-model", label: engine + " model", manual: null, effective: null,
+          context_window: enabled ? { one_million: true, updated_by: "owner", updated_at: "2026-09-28" } : null,
+        }],
+      };
+    }
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const control = screen.getByRole("switch", { name: "1M context for claude-model" });
+    expect(control).toHaveAttribute("aria-checked", String(enabled));
+    expect(screen.queryByRole("switch", { name: "1M context for codex-model" })).toBeNull();
+    expect(screen.getByText(enSettings.modelGateway.context_warning)).toBeInTheDocument();
+    if (enabled) expect(screen.getByText("1M")).toBeInTheDocument();
+    await userEvent.click(control);
+    await waitFor(() => expect(mockPutContextWindow).toHaveBeenCalledWith("workspace-1", "claude", {
+      model: "claude-model", one_million: !enabled,
+    }));
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ["relay-reasoning-levels", "workspace-1", "claude"] });
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ["runtimes", "models", "fleet", "workspace-1"] });
+  });
+
+  it("keeps the stored switch state and shows a failed context save", async () => {
+    reasoningRef.current.claude = {
+      engine: "claude", allowed_levels: [], models: [{
+        model_id: "old-model", label: "Old model", manual: null, effective: null, context_window: null,
+      }],
+    };
+    mockPutContextWindow.mockRejectedValue(new Error("save denied"));
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const control = screen.getByRole("switch", { name: "1M context for old-model" });
+    await userEvent.click(control);
+    expect(await screen.findByRole("alert")).toHaveTextContent("save denied");
+    expect(control).toHaveAttribute("aria-checked", "false");
+    expect(control).not.toBeDisabled();
   });
 
   it("saves manual reasoning levels and the default level for a gateway model", async () => {
