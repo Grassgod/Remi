@@ -134,6 +134,23 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     if (issueId) expect(issues[0]!.id).toBe(issueId);
   }
 
+  function messagingCreationRows(
+    title: string,
+    ref: { connectionId: string; externalMessageId: string },
+  ): { issues: number; activities: number; outcomes: number } {
+    const issues = db.query("SELECT id FROM multiremi_issues WHERE title = ?").all(title) as Array<{ id: string }>;
+    const activities = db.query(
+      `SELECT a.id FROM multiremi_issue_activity a
+       JOIN multiremi_issues i ON i.id = a.issue_id
+       WHERE i.title = ? AND a.type = 'issue_created'`,
+    ).all(title) as Array<{ id: string }>;
+    const outcomes = db.query(
+      `SELECT id FROM multiremi_message_outcomes
+       WHERE connection_id = ? AND external_message_id = ? AND outcome_kind = 'issue_created'`,
+    ).all(ref.connectionId, ref.externalMessageId) as Array<{ id: string }>;
+    return { issues: issues.length, activities: activities.length, outcomes: outcomes.length };
+  }
+
   it.each([false, true] as const)("Autopilot create_issue (rollback=%s)", (rollback) => {
     counter += 1;
     const title = `Probe autopilot ${counter}`;
@@ -232,6 +249,9 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     observe(title, () => {
       store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title, createdBy: memberId });
     }, rollback);
+    expect(messagingCreationRows(title, ref)).toEqual(rollback
+      ? { issues: 0, activities: 0, outcomes: 0 }
+      : { issues: 1, activities: 1, outcomes: 1 });
   });
 
   it.each([false, true] as const)("Messaging approved proposal (rollback=%s)", (rollback) => {
@@ -244,6 +264,98 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     observe(title, () => {
       store.messagingOutcomes.approveProposal(proposal.outcome.id, { workspaceId: "local", approvedBy: memberId });
     }, rollback);
+    expect(messagingCreationRows(title, ref)).toEqual(rollback
+      ? { issues: 0, activities: 0, outcomes: 0 }
+      : { issues: 1, activities: 1, outcomes: 1 });
+    if (rollback) expect(store.messaging.getOutcome(proposal.outcome.id)?.proposalStatus).toBe("pending");
+  });
+
+  it("Messaging direct rolls back after the outcome write", () => {
+    counter += 1;
+    const title = `Probe messaging direct late rollback ${counter}`;
+    const ref = seedMessage(`probe_direct_late_${counter}`);
+    const emitted: boolean[] = [];
+    const stop = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created"
+        && (event.payload.entry as { action?: string })?.action === "issue_created") {
+        emitted.push(db.inTransaction);
+      }
+    });
+    const original = store.messaging.recordOutcomeWithinTransaction;
+    let outcomeWasWritten = false;
+    store.messaging.recordOutcomeWithinTransaction = (input) => {
+      const outcome = original.call(store.messaging, input);
+      if (input.outcomeKind === "issue_created") {
+        outcomeWasWritten = true;
+        throw new Error("PG messaging outcome rollback injection");
+      }
+      return outcome;
+    };
+    try {
+      expect(() => store.messagingOutcomes.createIssue(ref, {
+        workspaceId: "local", title, createdBy: memberId,
+      })).toThrow("PG messaging outcome rollback injection");
+    } finally {
+      store.messaging.recordOutcomeWithinTransaction = original;
+      stop();
+    }
+    expect(outcomeWasWritten).toBe(true);
+    expect(messagingCreationRows(title, ref)).toEqual({ issues: 0, activities: 0, outcomes: 0 });
+    expect(emitted).toEqual([]);
+  });
+
+  it("Messaging approval rolls back after proposal resolution", () => {
+    counter += 1;
+    const title = `Probe messaging approval late rollback ${counter}`;
+    const ref = seedMessage(`probe_approval_late_${counter}`);
+    const proposal = store.messagingOutcomes.proposeIssue(ref, {
+      workspaceId: "local", title, recipientId: memberId, actorType: "member", actorId: memberId,
+    });
+    const emitted: boolean[] = [];
+    const stop = store.onWorkspaceEvent((event) => {
+      if (event.type === "activity:created"
+        && (event.payload.entry as { action?: string })?.action === "issue_created") {
+        emitted.push(db.inTransaction);
+      }
+    });
+    const original = store.messaging.resolveProposal;
+    let proposalWasResolved = false;
+    store.messaging.resolveProposal = (input) => {
+      const resolved = original.call(store.messaging, input);
+      if (input.id === proposal.outcome.id && input.status === "approved") {
+        proposalWasResolved = resolved?.proposalStatus === "approved";
+        throw new Error("PG messaging proposal resolution rollback injection");
+      }
+      return resolved;
+    };
+    try {
+      expect(() => store.messagingOutcomes.approveProposal(proposal.outcome.id, {
+        workspaceId: "local", approvedBy: memberId,
+      })).toThrow("PG messaging proposal resolution rollback injection");
+    } finally {
+      store.messaging.resolveProposal = original;
+      stop();
+    }
+    expect(proposalWasResolved).toBe(true);
+    expect(messagingCreationRows(title, ref)).toEqual({ issues: 0, activities: 0, outcomes: 0 });
+    expect(store.messaging.getOutcome(proposal.outcome.id)?.proposalStatus).toBe("pending");
+    expect(emitted).toEqual([]);
+  });
+
+  it("MessagingRepo recordOutcome remains a standalone transaction", () => {
+    counter += 1;
+    const ref = seedMessage(`probe_standalone_outcome_${counter}`);
+    db.resetTransactionDepthStats();
+    const outcome = store.messaging.recordOutcome({
+      workspaceId: "local",
+      connectionId: ref.connectionId,
+      externalMessageId: ref.externalMessageId,
+      outcomeKind: "ignored",
+      reason: "standalone probe",
+    });
+    expect(outcome).toMatchObject({ outcomeKind: "ignored", reason: "standalone probe" });
+    expect(store.messaging.listOutcomes(ref.connectionId, ref.externalMessageId)).toHaveLength(1);
+    expect(db.maxTransactionDepth).toBe(1);
   });
 
   it.each([false, true] as const)("claim lane reset (rollback=%s)", (rollback) => {
