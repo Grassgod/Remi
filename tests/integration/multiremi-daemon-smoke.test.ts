@@ -2830,16 +2830,16 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
+    let daemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeId,
         runtimeName: "model-probe-failure-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
         inProcessRuntimeModelDiscoveryEnabled: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
@@ -2854,7 +2854,8 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // MUL-419: 换回真实 v2 下发
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
-      await daemon.start();
+      void daemon.start();
+      await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
         status: "failed",
@@ -2862,6 +2863,7 @@ describe("Bun Multiremi daemon smoke", () => {
       });
       expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
+      await daemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
@@ -2895,16 +2897,16 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
     let providerFactoryCalls = 0;
+    let daemon: MultiremiDaemon | null = null;
 
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeId,
         runtimeName: "model-probe-disabled-request-runtime",
         provider: "claude",
         workspaceId: "local",
-        once: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: () => {
@@ -2923,7 +2925,8 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // MUL-419: 换回真实 v2 下发
       await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
-      await daemon.start();
+      void daemon.start();
+      await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
       expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
         status: "failed",
@@ -2933,6 +2936,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(providerFactoryCalls).toBe(0);
       expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
+      await daemon?.stopAndDrainTestWork();
       server.stop(true);
     }
   });
