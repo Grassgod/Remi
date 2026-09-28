@@ -192,8 +192,23 @@ and `thread_unresolved` markers with the target comment's seq in the log.
 Explicitly created Issue
 sessions append `session_created`. The implicit default Issue session gets its
 seq-0 head without a creation marker, preserving the existing first event seq
-and stored follow/delegation cursors. Older rows without a log mirror retain
-their legacy read path until B7 backfills them.
+and stored follow/delegation cursors. MUL-427 / B7 backfills older rows in the
+startup transaction before readers switch to the log. The legacy `/events`
+adapter excludes head, includes hidden markers, renames assignment wire kind to
+`turn`, and adds marker `target_seq`; the agent projection keeps its existing
+`task_assigned` wire and immutable event bodies.
+
+The B7 migration runs after `backfillDefaultIssueSessions`, copies every source
+seq, skips existing rows, and only fills a NULL comment task association without
+changing its revision or update time (ruling (f)). Chat-owned topic transport
+tasks retain NULL Issue sessions and no Issue log rows (ruling (s)); their Chat
+message associations are reconciled separately. The read-only
+[reconciliation command](../../scripts/reconcile-conversation-log.ts) reports
+counts and per-session digests without constructing a Store. The
+[synthetic benchmark](../../scripts/benchmark-conversation-log.ts) exercises
+SQLite and local PostgreSQL at the specified historical scale. Only JSON and
+Markdown evidence is committed under `reports/migrations/`; the self-contained
+HTML preview is a delivery-comment attachment.
 
 Issue comment log rows take `task_id` from the comment, including system
 comments; the legacy mirror event keeps its NULL task association. Deletion
