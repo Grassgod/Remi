@@ -102,9 +102,9 @@ describe("conversation log contract", () => {
       [comment.resolvedByType, comment.resolvedByType],
       [comment.resolvedById, comment.resolvedById],
     ]);
-    // Resolution is an in-place update on the row: no marker kind exists for it.
-    expect(CONVERSATION_LOG_KINDS).not.toContain("thread_resolved" as never);
-    expect(CONVERSATION_LOG_KINDS).not.toContain("thread_unresolved" as never);
+    // Resolution updates the row in place and appends a hidden history marker.
+    expect(CONVERSATION_LOG_KINDS).toContain("thread_resolved");
+    expect(CONVERSATION_LOG_KINDS).toContain("thread_unresolved");
 
     const unresolved: ConversationLogEntry = {
       ...entry,
@@ -136,13 +136,14 @@ describe("conversation log contract", () => {
     expect(card.status).toBe("completed");
   });
 
-  it("carries the eleven production kinds plus head", () => {
+  it("carries every kind main has a producer for plus head", () => {
     expect([...CONVERSATION_LOG_KINDS]).toEqual([
       "head",
       "message",
       "system",
       "turn",
       "result_published",
+      "follow_frozen",
       "task_completed",
       "task_failed",
       "task_cancelled",
@@ -150,17 +151,16 @@ describe("conversation log contract", () => {
       "task_steer",
       "message_edited",
       "message_deleted",
+      "thread_resolved",
+      "thread_unresolved",
     ]);
-    expect(CONVERSATION_LOG_KINDS).toHaveLength(12);
+    expect(CONVERSATION_LOG_KINDS).toHaveLength(15);
   });
 
   it("never names a kind that has no producer", () => {
     for (const invented of [
       "turn_finished",
       "steer",
-      "thread_resolved",
-      "thread_unresolved",
-      "follow_frozen",
       "result",
       "task_assigned",
     ]) {

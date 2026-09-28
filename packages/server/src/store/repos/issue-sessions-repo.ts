@@ -433,8 +433,8 @@ export class IssueSessionsRepo {
    * Copy one freshly written `session_events` row into the conversation log at
    * the same seq (MUL-426 B1). The user-facing reads move to the log now; the
    * wake-up and projection readers stay on the legacy table until B2, so both
-   * are written from this one transaction. `thread_resolved` /
-   * `thread_unresolved` have no log kind: the v2 resolve is an in-place update.
+   * are written from this one transaction. Resolve and unresolve update the
+   * comment row in place and also append hidden markers on this same seq axis.
    */
   private mirrorSessionEventWithinTransaction(eventId: string): void {
     const row = this.ctx.db.query(
@@ -445,7 +445,8 @@ export class IssueSessionsRepo {
     if (!mapped) return;
     // A marker points at the row it describes: resolve the target's seq on the
     // same axis, which is what W4's coverage check reads.
-    if (mapped.kind === "message_edited" || mapped.kind === "message_deleted") {
+    if (mapped.kind === "message_edited" || mapped.kind === "message_deleted"
+      || mapped.kind === "thread_resolved" || mapped.kind === "thread_unresolved") {
       const target = targetSeqForMarker(
         (commentId) => {
           const found = this.ctx.db.query(

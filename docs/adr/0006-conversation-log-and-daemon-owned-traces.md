@@ -88,8 +88,9 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    projections and the wake-up rules depend on today are appended as
    `visibility = 'hidden'` rows with a `target_seq`: `task_completed`,
    `task_failed`, `task_cancelled`, `session_created`, `task_steer`,
-   `message_edited` and `message_deleted` — the kinds production actually
-   writes, under their existing names. In-place updates of shown rows bump
+   `message_edited`, `message_deleted`, `thread_resolved` and `thread_unresolved`.
+   Shown rows also include `follow_frozen`. Together they cover every kind main
+   has a producer for, under their existing names. In-place updates of shown rows bump
    `revision`. The hidden markers are also the change feed for the Live Hub and
    the browser replica. A row with `kind = 'head'` is not an event: every
    seq-range read (wake-up, projection, delegation drain) excludes it, and
@@ -185,10 +186,10 @@ exclude hidden markers and deleted rows, and cap the older visible count at
 1,000. The existing Chat `/messages/page` route pages by log seq while keeping
 its timestamp-and-id cursor wire.
 
-Legacy writers remain active until B2 ports internal readers. In particular,
-resolve and unresolve still append legacy `thread_resolved` and
-`thread_unresolved` events, but update only the comment row in the new log; no
-resolution marker exists in `conversation_log`. Explicitly created Issue
+Legacy writers remain active until MUL-432 removes the old tables. Resolve and
+unresolve update the comment row in place and append hidden `thread_resolved`
+and `thread_unresolved` markers with the target comment's seq in the log.
+Explicitly created Issue
 sessions append `session_created`. The implicit default Issue session gets its
 seq-0 head without a creation marker, preserving the existing first event seq
 and stored follow/delegation cursors. Older rows without a log mirror retain
