@@ -171,6 +171,7 @@ import {
   type CommitEventQueue,
   type TaskEnqueuedListener,
   type TaskEventListener,
+  type HumanRequestListener,
   type TaskMessagesListener,
   type WorkspaceEventListener,
 } from "@multiremi/store/context.js";
@@ -596,6 +597,20 @@ export class MultiremiStore {
     this.ctx.taskEventListeners.add(listener);
     return () => {
       this.ctx.taskEventListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to human-request transitions (MUL-403 §2 item 4).
+   *
+   * `humanRequestListeners` lives on the context beside the other realtime
+   * listener sets, so the hub's feed attaches and detaches exactly like the
+   * task/workspace listeners do.
+   */
+  onHumanRequest(listener: HumanRequestListener): () => void {
+    this.ctx.humanRequestListeners.add(listener);
+    return () => {
+      this.ctx.humanRequestListeners.delete(listener);
     };
   }
 
@@ -4756,6 +4771,7 @@ runMigrations(this.db);
     const request = this.tasks.createTaskHumanRequest(input);
     const wakeTask = this.feishuBot.prepareHumanRequestPush(request);
     if (wakeTask) this.ctx.notifyTaskEnqueued(wakeTask);
+    this.notifyHumanRequest("created", request);
     return request;
   }
 
@@ -4773,13 +4789,35 @@ runMigrations(this.db);
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    if (request) this.notifyHumanRequest("responded", request);
     return request;
   }
 
   expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
     const request = this.tasks.expireTaskHumanRequest(requestId, status);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    // The store's terminal statuses are `timeout` and `cancelled`; the hub's event
+    // names are `expired` and `cancelled`. The mapping lives here rather than in the
+    // feed so a consumer never has to know the store's spelling.
+    if (request) this.notifyHumanRequest(status === "timeout" ? "expired" : "cancelled", request);
     return request;
+  }
+
+  /**
+   * Publish one human-request transition, resolving the owning task's workspace.
+   *
+   * The workspace is looked up here because the request row is keyed by task only,
+   * and a consumer (the hub's feed) would otherwise need a second read on the write
+   * path. A task that cannot be resolved simply publishes nothing: a transition
+   * without a workspace cannot be routed.
+   */
+  private notifyHumanRequest(
+    type: "created" | "responded" | "expired" | "cancelled",
+    request: MultiremiTaskHumanRequest,
+  ): void {
+    const task = this.tasks.getTask(request.taskId);
+    if (!task) return;
+    this.ctx.notifyHumanRequest({ type, request, workspaceId: task.workspaceId });
   }
 
   createTaskSteerMessage(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {

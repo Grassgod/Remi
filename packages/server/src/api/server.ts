@@ -78,6 +78,7 @@ import { resolveHubRole, type HubRole } from "./hub/hub-role-guard.js";
 import type { HubRingLimits } from "./hub/ring-buffer.js";
 import type { LiveHub } from "./hub/live-hub.js";
 import { createLocalHubTransport } from "./hub/hub-transport.js";
+import { attachHumanRequestFeed } from "./hub/human-request-feed.js";
 import { hubHealthPayload, hubReadyzPayload } from "./hub/hub-health.js";
 import type { RouterDeps } from "./routers/deps.js";
 import {
@@ -311,6 +312,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         ...(options.hubRingLimits ? { limits: { ring: options.hubRingLimits } } : {}),
       })
     : options.hub;
+
+  // MUL-403 §2 item 4: the human-request feed. `attachHumanRequestFeed` returns a
+  // detach handle, but an app has no shutdown hook — the listener lives exactly as
+  // long as the store and the hub it points at, which is the app's own lifetime.
+  // A process without `MULTIREMI_BACKGROUND_JOBS` attaches nothing, so a ui process
+  // is not a consumer (see `consumesHumanRequestFeed`).
+  if (hub) attachHumanRequestFeed({ store, hub });
 
   // What the route handlers used to close over; domain routers take it explicitly.
   const deps: RouterDeps = {
