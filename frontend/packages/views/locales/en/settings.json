@@ -1029,6 +1029,7 @@
       "notify_none": "No mention",
       "notify_open_id": "Recipient open_id (bot application)",
       "notify_invalid": "Enter a valid open_id beginning with ou_.",
+      "config_invalid": "The saved configuration failed validation. Check the reason below, correct the settings, and save again.",
       "title": "Issue topics",
       "description": "Create one Feishu group topic for each new Issue and keep later work updates and replies in that thread.",
       "enabled": "Create topics for new Issues",
