@@ -5061,6 +5061,7 @@ export interface UpdateChatSessionInput {
 export interface SendChatMessageInput {
   body?: string | null;
   content?: string | null;
+  client_id?: string;
   attachmentIds?: string[];
   attachment_ids?: string[];
   /** Server-internal creator lineage. */

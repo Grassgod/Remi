@@ -170,10 +170,10 @@ describe("CLI capabilities manifest", () => {
     // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
     // machine-to-server protocol, so they raise the exempt count with the total.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 675,
+      mapped: 677,
       exempt: 106,
       missing: 0,
-      total: 781,
+      total: 783,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });

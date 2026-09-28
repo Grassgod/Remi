@@ -44,6 +44,7 @@ export interface SqlDatabase {
    * backend rather than probing.
    */
   readonly dialect?: SqlDatabaseDialect;
+  readonly inTransaction?: boolean;
   query(sql: string): SqlStatement;
   prepare(sql: string): SqlStatement;
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
@@ -202,6 +203,12 @@ export class PostgresReplyTooLargeError extends Error {
   }
 }
 
+class PgBridgeFailure extends Error {
+  constructor(message: string, readonly abortsTransaction: boolean) {
+    super(message);
+  }
+}
+
 /**
  * Resolved lazily and cached: the check runs on every SQL round trip, and
  * `process.env` lookups are not free on that path. Tests that change the limit
@@ -221,19 +228,25 @@ export function resetDbReplyLimitForTest(): void {
 
 class PgBridge {
   private readonly control = new SharedArrayBuffer(16);
-  private readonly data = new SharedArrayBuffer(RESULT_BUFFER_BYTES);
+  private readonly data: SharedArrayBuffer;
   private readonly ctl = new Int32Array(this.control);
-  private readonly buf = new Uint8Array(this.data);
+  private readonly buf: Uint8Array;
   private readonly worker: Worker;
 
-  constructor(url: string) {
+  constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
+    this.data = new SharedArrayBuffer(resultBufferBytes);
+    this.buf = new Uint8Array(this.data);
     this.worker = new Worker(new URL("./pg-worker.ts", import.meta.url).href);
     this.request({ init: url });
   }
 
   private request(msg: { init?: string; sql?: string; params?: unknown[] }): any {
     Atomics.store(this.ctl, 0, STATUS_PENDING);
-    this.worker.postMessage({ control: this.control, data: this.data, ...msg });
+    try {
+      this.worker.postMessage({ control: this.control, data: this.data, ...msg });
+    } catch (error) {
+      throw new PgBridgeFailure(`postgres bridge send failed: ${String(error)}`, false);
+    }
     // MUL-367: measure only real SQL. `init` opens the connection, so counting it
     // would invent one query per process and inflate the first request's numbers.
     const measured = msg.sql !== undefined;
@@ -264,8 +277,15 @@ class PgBridge {
       }
       const parseStartedAt = performance.now();
       try {
-        const obj = JSON.parse(new TextDecoder().decode(this.buf.slice(0, len)));
-        if (status === STATUS_ERROR || obj.error) throw new Error(`postgres: ${obj.error}`);
+        let obj: { error?: string; source?: string; rows?: any[]; count?: number; command?: string };
+        try {
+          obj = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(this.buf.slice(0, len)));
+        } catch (error) {
+          throw new PgBridgeFailure(`postgres bridge reply decode failed: ${String(error)}`, false);
+        }
+        if (status === STATUS_ERROR || obj.error) {
+          throw new PgBridgeFailure(`postgres: ${obj.error}`, obj.source !== "reply");
+        }
         return obj;
       } finally {
         // Main-thread decode + parse is a separate cost from waiting on Postgres;
@@ -280,15 +300,18 @@ class PgBridge {
     }
   }
 
-  exec(sql: string, params: unknown[]): { rows: any[]; count: number } {
+  exec(sql: string, params: unknown[]): { rows: any[]; count: number; command?: string } {
     try {
       const r = this.request({ sql, params });
-      return { rows: r.rows ?? [], count: r.count ?? 0 };
+      return { rows: r.rows ?? [], count: r.count ?? 0, command: r.command };
     } catch (err) {
       // The size guardrail's message is user-facing: route handlers answer with
       // `c.json({ error: message })`, so appending SQL here would leak schema
       // details into an HTTP response body.
       if (err instanceof PostgresReplyTooLargeError) throw err;
+      if (err instanceof PgBridgeFailure) {
+        throw new PgBridgeFailure(`${err.message}\n  SQL: ${sql.slice(0, 400)}`, err.abortsTransaction);
+      }
       throw new Error(`${(err as Error).message}\n  SQL: ${sql.slice(0, 400)}`);
     }
   }
@@ -299,18 +322,21 @@ class PgBridge {
 }
 
 class PgStatement implements SqlStatement {
-  constructor(private readonly bridge: PgBridge, private readonly sql: string) {}
+  constructor(
+    private readonly execute: (sql: string, params: unknown[]) => { rows: any[]; count: number },
+    private readonly sql: string,
+  ) {}
   get(...params: unknown[]): any {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows[0] ?? null;
+    return this.execute(this.sql, normalizeParams(params)).rows[0] ?? null;
   }
   all(...params: unknown[]): any[] {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows;
+    return this.execute(this.sql, normalizeParams(params)).rows;
   }
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
-    return { changes: this.bridge.exec(this.sql, normalizeParams(params)).count, lastInsertRowid: 0 };
+    return { changes: this.execute(this.sql, normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   values(...params: unknown[]): any[][] {
-    return this.bridge.exec(this.sql, normalizeParams(params)).rows.map((r) => Object.values(r));
+    return this.execute(this.sql, normalizeParams(params)).rows.map((r) => Object.values(r));
   }
 }
 
@@ -324,45 +350,89 @@ export class PostgresSyncDatabase implements SqlDatabase {
   readonly dialect = "postgres" as const;
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
-  constructor(url: string) {
-    this.bridge = new PgBridge(url);
+  private failedAtDepth: number | null = null;
+  constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
+    this.bridge = new PgBridge(url, resultBufferBytes);
   }
   /** True while a `transaction()` callback runs; its writes are not committed yet. */
   get inTransaction(): boolean {
     return this.transactionDepth > 0;
   }
+  private execute(sql: string, params: unknown[]): { rows: any[]; count: number; command?: string } {
+    try {
+      return this.bridge.exec(sql, params);
+    } catch (error) {
+      if (this.inTransaction && !(error instanceof PostgresReplyTooLargeError)
+        && !(error instanceof PgBridgeFailure && !error.abortsTransaction)) {
+        this.failedAtDepth = this.failedAtDepth == null
+          ? this.transactionDepth
+          : Math.min(this.failedAtDepth, this.transactionDepth);
+      }
+      throw error;
+    }
+  }
   query(sql: string): SqlStatement {
-    return new PgStatement(this.bridge, translateSqliteToPg(sql));
+    return new PgStatement((statement, params) => this.execute(statement, params), translateSqliteToPg(sql));
   }
   prepare(sql: string): SqlStatement {
     return this.query(sql);
   }
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
-    return { changes: this.bridge.exec(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
+    return { changes: this.execute(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   exec(sql: string): void {
     for (const stmt of splitStatements(sql)) {
       const translated = translateSqliteToPg(stmt);
-      if (translated.trim()) this.bridge.exec(translated, []);
+      if (translated.trim()) this.execute(translated, []);
     }
   }
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
-      this.bridge.exec("BEGIN", []);
+      if (this.inTransaction) {
+        const savepointDepth = this.transactionDepth;
+        const savepoint = `sp_${savepointDepth}`;
+        this.execute(`SAVEPOINT ${savepoint}`, []);
+        this.transactionDepth += 1;
+        try {
+          const result = fn(...args);
+          this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+          return result;
+        } catch (err) {
+          try {
+            this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
+            if (this.failedAtDepth != null && this.failedAtDepth > savepointDepth) this.failedAtDepth = null;
+            this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+          } catch {
+            // The outer transaction sees the remaining failure flag.
+          }
+          throw err;
+        } finally {
+          this.transactionDepth -= 1;
+        }
+      }
+      this.execute("BEGIN", []);
       this.transactionDepth += 1;
+      this.failedAtDepth = null;
       try {
         const result = fn(...args);
-        this.bridge.exec("COMMIT", []);
+        if (this.failedAtDepth != null) {
+          throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
+        }
+        const committed = this.execute("COMMIT", []);
+        if (committed.command?.toUpperCase() === "ROLLBACK") {
+          throw new Error("Postgres rolled back an aborted transaction at COMMIT");
+        }
         return result;
       } catch (err) {
         try {
-          this.bridge.exec("ROLLBACK", []);
+          this.execute("ROLLBACK", []);
         } catch {
           // connection already aborted the transaction
         }
         throw err;
       } finally {
         this.transactionDepth -= 1;
+        this.failedAtDepth = null;
       }
     };
   }
