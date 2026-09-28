@@ -317,6 +317,17 @@ function log(line: string): void {
   process.stdout.write(`${line}\n`);
 }
 
+/** Current HEAD, or null outside a git checkout (the report just omits it). */
+function readHeadCommit(): string | null {
+  try {
+    const result = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: REPO_ROOT });
+    const value = result.stdout.toString().trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Compile the application's own stylesheet.
  *
@@ -787,7 +798,9 @@ async function main(): Promise<void> {
     kind: "mul443-session-log-zero-jump",
     startedAt,
     finishedAt: new Date().toISOString(),
-    commit: process.env.MUL443_COMMIT ?? null,
+    // The tree the numbers came from, read from git rather than passed in, so a
+    // report cannot name a different commit than the one it ran on.
+    commit: readHeadCommit(),
     fixture: { initialRows: 60, repetitions: REPETITIONS, controlScrollPx: CONTROL_SCROLL_PX },
     rounds,
     verdict: {
