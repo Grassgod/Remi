@@ -1,4 +1,4 @@
-# ADR 0010: Unified inbox on the conversation log, one pending turn per lane, wakes commit with state
+# ADR 0012: Unified inbox on the conversation log, one pending turn per lane, wakes commit with state
 
 - Status: accepted (MUL-404, 2026-09-28; supersedes the per-path coalescing in ADR 0005 decisions 3–6 and amends ADR 0003 decision 8)
 - Deciders: 贺华杰 (scope), Senior大哥 (design), 带头大哥 (split)
