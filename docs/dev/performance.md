@@ -87,15 +87,27 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 ```
 
 - 单次回包超过硬上限时在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出一行 `api_db_reply_rejected`（字段同上，另加 `max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。
-- **默认关闭**（MUL-386 裁决）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置、空串、非数字或负数都解析为 `0`，即不设上限；`8388608`（8 MiB）是 MUL-398 落地后的目标值，不是当前默认。现有兜底是桥自身的 64 MB 共享缓冲（`postgres.ts` 的 `RESULT_BUFFER_BYTES`，超限由 worker 直接回错）。
-- 测试套件反向配置：`bun test` 的 preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）在剥离宿主 `MULTIREMI_*` 之后固定设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`，让护栏在 CI 里继续抓无界读——它已经抓到过 `/tasks/pending` 读整张任务表。生产默认与测试默认是分开的两件事，改动其一时 [hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 的 `HERMETIC_ENV_DEFAULTS` 与架构守卫会一起失败。
+- **默认 8 MiB，已执行翻转**（MUL-398 C-1，依据 2026-09-28 贺华杰的授权）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置或为空时是 `8388608`；显式 `0` 是关闭可配置上限的应急开关。非整数、负数或不安全整数回落到默认值，并在缓存解析时输出一行告警；除 env 原值外不带可变信息。显式非负整数继续按字节解释。物理共享缓冲仍为 64 MiB，`0` 不扩大它。
+- `bun test` preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）剥离宿主 `MULTIREMI_*` 后仍设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`。生产默认与测试默认现在相等；[hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 和架构守卫断言相等，不能删除守卫。
+- 过渡例外集中在 [request-metrics.ts](../../packages/server/src/observability/request-metrics.ts) 的 `DB_REPLY_TRANSITION_EXCEPTIONS`，键为 `METHOD route-pattern`，与 `currentDbReplyOrigin()` 一致；命中时有效上限为 `postgres.ts` 的 `RESULT_BUFFER_BYTES`（64 MiB）。表外 HTTP 请求默认 8 MiB。`postgresReplyMaxBytes()` 和桥拒绝判断使用同一个有效值，MUL-462 分页也使用它；env 解析缓存不变，每次只增加一次上下文读取和一次 Set 查找。关闭 request metrics 仍保留路由上下文，不会把 HTTP 请求误当后台。
 - 两条日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
 - 硬上限的错误消息会向上冒泡，可能进入 HTTP 响应体，因此 `PgBridge.exec` 不为它拼接 SQL 片段（其它错误仍会追加 SQL 前 400 字符用于排查）。
-- 翻转默认的条件（MUL-398 验收）：A 类 repository-wikis 两条 `SELECT r.*` 改列投影、B 类 task messages 改有界读并各自发版后，观测一周 `api_large_db_reply` 中 `bytes > 8388608` 的路由集合为空，再把默认值改为 `8388608` 并同步本文与 env 示例。
+- 原来「等待 MUL-402 和一周观测后翻转」的条件已被上述授权替换，C-1 现在启用默认并保留过渡例外；C-2 负责逐条收回，D 的 Bun UA shim 不属于 C-1。
 
-**已知未修的大回包路径**（生产只读复核，MUL-386 评论 `cmt_cecxmzj19eea`），也是上面「默认关闭」的依据：`repositoryWikiObservability` 的 `SELECT r.* FROM multiremi_autopilot_runs`（单 workspace 约 12.2 MB）与 `listLatestRepositoryAutopilotRuns`（约 10.8 MB），都用于 `GET /api/workspaces/:id/repository-wikis`；不带 `since_seq` 的 task messages（单任务最大约 22.7 MB，28 个任务超过 8 MB），对应 `/api/tasks/:taskId/messages` 与 `/api/multiremi/tasks/:id/messages`。另有两条当前量级未触线但同为无 LIMIT 整读、长期需投影的路径：`ProjectsRepo.listProjectDocsForMigration` 与 `RepositoryWikiRepo.listWorkspace`。
+**例外来源与收回**：Explorer 的 MUL-398 `cmt_5ncm70lxe805` 确认 209 为 v0.2.83，没有单次回包埋点。零条事件不能作为安全证据。例外来源是 **18 条慢请求总 DB 字节 ≥6 MiB 的保守超集 ∪ 代码审计 ∪ `<background>` ∪ daemon POST messages**。慢请求只覆盖 >500ms，`db_bytes` 是所有 SQL 回包的总和，不能当作单次回包；快请求由审计兜住。
 
-**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 整体关闭，关闭后不加响应头也不写任何日志）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 0 = 关闭**；未设置/空串/非法值也视为关闭。设成 `8388608` 才启用 8 MiB 硬上限，MUL-398 落地后才是目标默认）。
+| 来源 | 例外 / 原因 | C-2 收回条件 |
+| --- | --- | --- |
+| 209 请求总量超集 | GET dashboard 的 usage/by-agent、agent-runtime、runtime/daily、usage/daily；GET knowledge/submissions、knowledge/runs；GET projects/:id/knowledge/recall、projects/:id/docs；GET workspaces/:id/repository-wikis；GET issues/:id、inbox、tasks/:id/inspection、tasks/:taskId/messages、multiremi/tasks；POST autopilots/:id/trigger、daemon/tasks/:taskId/fail、complete、daemon/runtimes/:runtimeId/tasks/claim。完整模式带 `/api/` 前缀，18 条全部保留 | 修复随同包或更早上线；有埋点的单次回包按路由 <6 MiB，至少三天并含一个工作日高峰；Explorer 只读复核，带头大哥派单逐条收回 |
+| 审计 | 全量 task/chat messages、inspection 别名、issue share、session events/results、comments/timeline、task 集合、run payload/result/schedule_prompt、SQL 文档与 revision 正文、迁移/发布、prompt 和相应 write 回读/actor scope。行数 LIMIT 或 TS 读后分页不等于字节有界；完整键及逐条依据见常量和本单报告 | 先做对应投影/有界读（messages 等待 MUL-402），再满足上行单次数据条件 |
+| C-1 续做裁定 | POST `/api/daemon/tasks/:taskId/messages`：保留 MUL-462 回读 8 行，避免每批多出的桥调用；审计同时纳入 POST `/internal/peer/events`，其同步消费会继承 HTTP 上下文 | MUL-402 / 有界回读完成，页大小、查询数和延迟满足约定，再按单次数据收回 |
+| C-1 后台裁定 | `<background> <background>` 为独立、可一行删除的例外。Scheduler.sync → advanceScheduledTargetRuns 仍无界读 queued run 的 schedule_prompt/payload/result；独立 peer 消费也保留 8 行 | queued run 读取有界之后，且 v0.2.84 之后的后台单次数据 <6 MiB，才收回；本 PR 不修改 autopilots-repo.ts |
+
+repository-wikis 的 A/A2（`d905961b`、`d6714966`）已在 main、晚于 v0.2.84，与 C-1 同包或更早上线；本轮保守保留其例外并复测 209 行数模型，未声称 A/A2 已在取证时的生产版本生效。旧 task messages 的 22.7MB / 28 个任务数据来自 MUL-386 `cmt_cecxmzj19eea` 的行 JSON 估算，与桥 bytes 不混用。dashboard 的 58.42 MiB 是请求总量；单次接近/超过 64 MiB 的情况应单列报告，本 PR 不修。
+
+回滚 C-1 合并用 `git revert -m 1 <merge>`；应急可设 `MULTIREMI_PG_REPLY_MAX_BYTES=0`，209 配置变更由贺华杰决定。
+
+**环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 关闭指标采集、指标日志和响应头；PG 回包护栏与其日志仍独立生效）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 8388608 = 8 MiB**；未设置/空串使用默认，非法值告警后回落；显式 `0` 关闭可配置上限，集中例外保留 64 MiB）。
 
 **观测与验证入口**：
 

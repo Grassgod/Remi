@@ -375,37 +375,188 @@ export function recordDbParse(parseMs: number): void {
 export const DB_REPLY_WARN_BYTES = 1_048_576;
 
 /**
- * Default value of the hard limit: 0, i.e. disabled.
- *
- * A size limit only forces pagination when every path that can trip it already
- * has a pagination or projection exit. Production still has paths whose single
- * reply exceeds 8 MB with no such exit (repository-wikis and un-bounded task
- * messages — MUL-398), so default-on would convert them from slow into failing
- * rather than into paginated. The bridge keeps its 64 MB `RESULT_BUFFER_BYTES`
- * ceiling, and the 1 MB warning line provides visibility in the meantime.
+ * Production and test default since MUL-398 C-1 (2026-09-28 authorization).
+ * Transition exceptions retain the existing 64-MiB buffer ceiling until C-2.
+ * An explicit environment override of 0 disables the configurable guard.
  */
-export const DEFAULT_DB_REPLY_MAX_BYTES = 0;
+export const DEFAULT_DB_REPLY_MAX_BYTES = 8_388_608;
 
 /**
- * The limit production moves to once MUL-398 lands and one week of
- * `api_large_db_reply` shows no route above it.
- *
- * The test suite enables this value (see `tests/setup/hermetic-env.ts`) so the
- * guardrail keeps catching unbounded reads in CI — it already caught
- * `/tasks/pending` reading the whole task table.
+ * Kept for callers and the hermetic preload: recommendation and default agree.
  */
-export const RECOMMENDED_DB_REPLY_MAX_BYTES = 8 * 1_048_576;
+export const RECOMMENDED_DB_REPLY_MAX_BYTES = DEFAULT_DB_REPLY_MAX_BYTES;
 
 /**
- * Resolve the hard limit. Unset, empty, non-numeric and negative all mean "off"
- * (0) rather than falling back to 8 MB: the disabled default is deliberate, and
- * a typo in the env var must not silently arm a limit in production.
+ * Exact currentDbReplyOrigin keys, never concrete paths or query strings.
+ * Sources: 209 v0.2.83 slow-request DB totals (not single replies), source audit,
+ * and the C-1 continuation ruling. C-2 removes HTTP entries individually after
+ * bounded reads/MUL-402 and three days of single-reply data below 6 MiB,
+ * including a working-day peak. See docs/dev/performance.md for the audit.
+ */
+export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
+  // 209 total >= 6 MiB; retain every one of the 18 conservative candidates.
+  "GET /api/dashboard/usage/by-agent", // Usage history; C-2 bounded reads/data.
+  "GET /api/dashboard/agent-runtime", // Runtime history; C-2 bounded reads/data.
+  "GET /api/dashboard/runtime/daily", // Runtime history; C-2 bounded reads/data.
+  "GET /api/dashboard/usage/daily", // Usage history; C-2 bounded reads/data.
+  "GET /api/knowledge/submissions", // Knowledge list; C-2 projection/data.
+  "GET /api/projects/:id/knowledge/recall", // Doc bodies; C-2 bounded reads/data.
+  "GET /api/projects/:id/docs", // Doc bodies; C-2 bounded reads/data.
+  "GET /api/workspaces/:id/repository-wikis", // A/A2 fixed; C-2 production data.
+  "GET /api/knowledge/runs", // Compilation outputs; C-2 projection/data.
+  "GET /api/issues/:id", // Issue bundle; C-2 bounded reads/data.
+  "POST /api/autopilots/:id/trigger", // Run payload/result; C-2 bounded reads/data.
+  "POST /api/daemon/tasks/:taskId/fail", // Task completion reads; C-2/data.
+  "POST /api/daemon/tasks/:taskId/complete", // Task completion reads; C-2/data.
+  "GET /api/inbox", // Issue/history reads; C-2 bounded reads/data.
+  "GET /api/tasks/:id/inspection", // Full messages; C-2/MUL-402/data.
+  "GET /api/tasks/:taskId/messages", // Full messages; C-2/MUL-402/data.
+  "POST /api/daemon/runtimes/:runtimeId/tasks/claim", // Session projection; C-2/data.
+  "GET /api/multiremi/tasks", // Hydrated task rows; C-2 bounded reads/data.
+
+  // Audit: full message/session/comment collections. C-2/MUL-402 + byte data.
+  "GET /api/multiremi/tasks/:id/messages",
+  "GET /api/daemon/tasks/:taskId/messages",
+  "GET /api/multiremi/tasks/:id/inspection",
+  "GET /api/shares/:token",
+  "GET /api/issues/:id/sessions/:sessionId/events",
+  "GET /api/issues/:id/comments",
+  "GET /api/multiremi/issues/:id/comments",
+  "GET /api/multiremi/issues/:id", // Legacy bundle also reads all comments/tasks.
+  "GET /api/issues/:id/timeline", // SQL pages still contain full comment bodies.
+  "GET /api/multiremi/issues/:id/timeline",
+  "GET /api/issues/:id/session-results", // Unbounded result content/metadata.
+  "GET /api/issues/:id/active-task", // Filters full task rows after the read.
+  "GET /api/issues/:id/task-runs",
+  "GET /api/issues/:id/sessions/:sessionId/tasks",
+  "GET /api/agents/:id/tasks", // Unbounded SELECT * task prompt/result rows.
+  "GET /api/multiremi/agents/:id/tasks",
+  "GET /api/multiremi/chats/:id", // Legacy bundle includes all chat bodies.
+  "GET /api/multiremi/chats/:id/messages",
+  "GET /api/chat/sessions/:sessionId/messages",
+  "GET /api/chat/sessions/:sessionId/messages/page", // Pagination is after SQL.
+  "POST /api/chat/sessions/:sessionId/messages", // Dispatch builds chat history.
+  "POST /api/multiremi/chats/:id/messages",
+  "GET /api/chat/sessions", // SELECT chat.* plus complete last-message body.
+  "GET /api/multiremi/chats",
+  "GET /api/chat/sessions/:sessionId",
+  "POST /api/chat/sessions", // Initial message/context readbacks.
+  "POST /api/multiremi/chats",
+  "GET /api/chat/sessions/:sessionId/pending-task", // Full queued task rows.
+  "GET /api/chat/pending-tasks", // Already projected; keep pending C-2 byte data.
+
+  // Audit: row LIMIT does not bound payload/result/schedule_prompt bytes.
+  // C-2 requires projections/bounded bodies and single-reply data below 6 MiB.
+  "GET /api/autopilots/:id/runs",
+  "GET /api/autopilots/:id/runs/:runId",
+  "GET /api/multiremi/autopilots/:id/runs",
+  "GET /api/multiremi/autopilots/:id",
+  "GET /api/daemon/autopilot-runs/:runId/gc-check",
+  "GET /api/cli/context", // Task scope resolves a full run and prompt context.
+  "GET /api/autopilots", // Autopilot prompt/compiled_prompt collection.
+  "GET /api/multiremi/autopilots",
+  "GET /api/multiremi/scheduler",
+  "POST /api/multiremi/autopilots/:id/run",
+  "POST /api/multiremi/autopilots/:id/run-scheduled",
+  "POST /api/multiremi/autopilots/:id/trigger",
+  "POST /api/multiremi/autopilots/:id/webhook",
+  "GET /api/autopilots/:id/deliveries", // Raw bodies are optionally projected in.
+  "GET /api/autopilots/:id/deliveries/:deliveryId",
+  "POST /api/autopilots/:id/deliveries/:deliveryId/replay",
+  "GET /api/multiremi/autopilots/:id/deliveries",
+  "GET /api/multiremi/autopilots/:id/deliveries/:deliveryId",
+  "POST /api/multiremi/autopilots/:id/deliveries/:deliveryId/replay",
+
+  // Audit: SQL storage can contain full document/revision bodies. C-2/data.
+  "GET /api/knowledge/submissions/:id",
+  "POST /api/knowledge/submissions", // Write actor can resolve a full run.
+  "GET /api/knowledge/runs/:id",
+  "GET /api/projects/:id/docs/:ref",
+  "GET /api/projects/:id/docs/:ref/revisions",
+  "GET /api/projects/:id/docs/:ref/backlinks",
+  "POST /api/projects/:id/docs",
+  "PUT /api/projects/:id/docs/:ref",
+  "DELETE /api/projects/:id/docs/:ref",
+  "GET /api/project-docs",
+  "GET /api/project-knowledge/migration",
+  "POST /api/project-knowledge/migration/backfill",
+  "POST /api/project-knowledge/migration/verify",
+  "POST /api/project-knowledge/migration/retry-failed",
+  "POST /api/knowledge/migrate-legacy",
+  "POST /api/knowledge/events/repository-merged", // Compilation/run readbacks.
+  "POST /api/projects/:id/knowledge/publish",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+  "GET /api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/batch",
+  "PUT /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "DELETE /api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/publish",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/move",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/merge",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/restore",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
+  "POST /api/workspaces/:id/repos/:repositoryId/wiki/build",
+
+  // Audit: even a capped 2-MiB prompt may expand beyond 8 MiB in JSON. C-2/data.
+  "GET /api/tasks/:taskId/prompt",
+  "POST /api/daemon/tasks/:taskId/prompt",
+  // Audit: full task getters/write readbacks can include prompt/result/error.
+  // C-2 requires narrow getters or byte bounds, then per-route evidence.
+  "GET /api/multiremi/tasks/:id",
+  "POST /api/multiremi/tasks",
+  "POST /api/multiremi/tasks/:id/cancel",
+  "POST /api/tasks/:id/cancel",
+  "POST /api/multiremi/tasks/:id/steer",
+  "POST /api/tasks/:id/steer",
+  "GET /api/multiremi/tasks/:id/steer",
+  "GET /api/tasks/:id/steer",
+  "POST /api/multiremi/tasks/:id/redispatch",
+  "POST /api/tasks/:id/redispatch",
+  "GET /api/multiremi/tasks/:id/human-requests",
+  "GET /api/tasks/:id/human-requests",
+  "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+  "POST /api/tasks/:id/human-requests/:requestId/respond",
+  "POST /api/daemon/tasks/:taskId/start",
+  "POST /api/daemon/tasks/:taskId/dispatch-lease",
+  "POST /api/daemon/tasks/:taskId/wait-local-directory",
+  "POST /api/daemon/tasks/:taskId/human-requests",
+  "POST /api/daemon/tasks/:taskId/progress",
+  "POST /api/daemon/tasks/:taskId/session",
+  "POST /api/daemon/tasks/:taskId/workspace",
+  "POST /api/daemon/tasks/:taskId/usage",
+  "GET /api/daemon/tasks/:taskId/gc-check",
+  "GET /api/daemon/tasks/:taskId/status", // Result/error remain in the projection.
+  "GET /api/daemon/tasks/:taskId/steer", // Pending steer text has no row LIMIT.
+  "POST /api/daemon/runtimes/:runtimeId/recover-orphans", // Full orphan task set.
+
+  // C-1 ruling: preserve MUL-462 readback page size, avoiding extra bridge calls.
+  // C-2/MUL-402 must retain the measured batch latency before removing this.
+  "POST /api/daemon/tasks/:taskId/messages",
+  // Audit: peer.receive calls the reference consumer in this HTTP context.
+  // C-2/MUL-402 must retain peer page size/latency before removing this.
+  "POST /internal/peer/events",
+  // C-1 ruling: queued reads must be bounded AND v0.2.84+ background replies
+  // observed below 6 MiB before C-2 removes this independent entry.
+  "<background> <background>",
+]);
+
+/**
+ * Unset/empty means 8 MiB; explicit 0 is the emergency disable switch.
+ * Invalid values warn once when the bridge caches this resolution, with only
+ * the raw override as variable information, and fall back to the default.
  */
 export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
   const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
   if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_DB_REPLY_MAX_BYTES;
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", env.MULTIREMI_PG_REPLY_MAX_BYTES);
+    return DEFAULT_DB_REPLY_MAX_BYTES;
+  }
   return parsed;
 }
 
@@ -776,8 +927,6 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
   const buffer = options.enabled ? ringFor(options.bufferCapacity) : null;
 
   return async (c, next) => {
-    if (!options.enabled) return next();
-
     // Hono has already matched the full handler chain by the time a middleware
     // runs, so the pattern is available here — before any handler queries the
     // database. `resolveRoutePattern` skips the `ALL` middleware entries, which
@@ -790,6 +939,8 @@ export function createRequestMetricsMiddleware(options: RequestMetricsOptions): 
       method: String(c.req.method ?? "GET").toUpperCase(),
       route: resolveRoutePattern(c),
     };
+    // Reply limits need the route even when collection and timing headers are off.
+    if (!options.enabled) return requestContext.run(state, () => next());
     const startedAt = performance.now();
     let thrown = false;
     try {

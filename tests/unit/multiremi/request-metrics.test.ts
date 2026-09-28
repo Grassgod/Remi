@@ -369,12 +369,12 @@ describe("MUL-367 request metrics — environment switches", () => {
  * PG-backed cases below assert the enabled behaviour explicitly.
  */
 describe("MUL-386 bridge reply limit — environment resolution", () => {
-  it("defaults to off and treats invalid overrides as off, not as 8 MB", () => {
-    expect(resolveDbReplyMaxBytes({})).toBe(0);
-    expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "" })).toBe(0);
-    expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "   " })).toBe(0);
+  it("defaults to 8 MiB and falls back to it for invalid overrides", () => {
+    expect(resolveDbReplyMaxBytes({})).toBe(8_388_608);
+    expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "" })).toBe(8_388_608);
+    expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "   " })).toBe(8_388_608);
     for (const invalid of ["abc", "-1", "-8388608", "8mb", "NaN", "Infinity", "1.5"]) {
-      expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: invalid }), invalid).toBe(0);
+      expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: invalid }), invalid).toBe(8_388_608);
     }
   });
 
@@ -384,10 +384,8 @@ describe("MUL-386 bridge reply limit — environment resolution", () => {
     expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: " 2097152 " })).toBe(2 * 1_048_576);
   });
 
-  it("ships production off while the suite preload arms the recommended value", () => {
-    // Two halves of the same ruling: the disabled default is what production
-    // gets, and the preload is what keeps CI catching unbounded reads.
-    expect(DEFAULT_DB_REPLY_MAX_BYTES).toBe(0);
+  it("keeps the production and hermetic defaults equal", () => {
+    expect(DEFAULT_DB_REPLY_MAX_BYTES).toBe(8_388_608);
     expect(PRELOAD_PG_REPLY_MAX_BYTES).toBe(String(RECOMMENDED_DB_REPLY_MAX_BYTES));
   });
 });
@@ -769,9 +767,18 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
     resetDbReplyLimitForTest();
     const database = new PostgresSyncDatabase(PG_URL);
     const payload = "y".repeat(4 * 1_048_576);
+    const app = new Hono();
+    let caught: unknown;
+    app.use("*", createRequestMetricsMiddleware(OPTIONS));
+    app.get("/api/guardrail-probe", (c) => {
+      database.query("SELECT ?::text AS payload").all(payload);
+      return c.json({ ok: true });
+    });
+    app.onError((error, c) => { caught = error; return c.json({ error: error.message }, 500); });
     try {
-      const first = await capture(() => database.query("SELECT ?::text AS payload").all(payload));
-      expect(first.error).toBeInstanceOf(PostgresReplyTooLargeError);
+      const first = await capture(() => app.request("/api/guardrail-probe"));
+      expect(first.result!.status).toBe(500);
+      expect(caught).toBeInstanceOf(PostgresReplyTooLargeError);
       const rejected = first.lines
         .map((line) => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } })
         .find((line) => line?.event === "api_db_reply_rejected");
@@ -780,10 +787,9 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
       expect(Object.keys(rejected!).sort()).toEqual(["bytes", "event", "max_bytes", "method", "route", "ts"]);
       expect(rejected!.bytes).toBeGreaterThan(2 * 1_048_576);
       expect(rejected!.max_bytes).toBe(2 * 1_048_576);
-      // No request context means the background label, seen from the bridge side.
-      expect(rejected!.route).toBe("<background>");
+      expect(rejected!.route).toBe("/api/guardrail-probe");
 
-      const message = (first.error as Error).message;
+      const message = (caught as Error).message;
       expect(message).toMatch(/postgres reply of \d+ bytes exceeds \d+ bytes bridge limit; paginate or project columns/);
       expect(message).not.toContain("SELECT");
       expect(message).not.toContain("y".repeat(16));
@@ -831,10 +837,8 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
     }
   });
 
-  it("does not reject when the env var is unset, and still logs the 1 MB warning", async () => {
-    // The production default (MUL-386 ruling): absent override means 0, so a
-    // 9 MB reply is decoded rather than refused, while `api_large_db_reply`
-    // keeps the size visible.
+  it("retains 64 MiB for the background transition exception when env is unset", async () => {
+    // C-1 defaults HTTP to 8 MiB while background retains the original ceiling.
     delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
     resetDbReplyLimitForTest();
     const database = new PostgresSyncDatabase(PG_URL);
@@ -856,7 +860,7 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
     }
   });
 
-  it("does not reject on an invalid override, and still logs the 1 MB warning", async () => {
+  it("retains the background exception after an invalid override falls back to 8 MiB", async () => {
     process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "not-a-number";
     resetDbReplyLimitForTest();
     const database = new PostgresSyncDatabase(PG_URL);

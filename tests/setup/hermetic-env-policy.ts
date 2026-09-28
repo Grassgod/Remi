@@ -71,8 +71,8 @@ export const SCRUBBED_ENV_KEYS = [
  * Repo-owned variables the preload *sets* after scrubbing, as opposed to leaving
  * empty.
  *
- * `MULTIREMI_PG_REPLY_MAX_BYTES` is here on purpose (MUL-386 ruling): production
- * ships the bridge hard limit disabled, but the suite must keep it armed so an
+ * `MULTIREMI_PG_REPLY_MAX_BYTES` is here on purpose (MUL-398 C-1): production
+ * and the suite both default to 8 MiB, keeping the guard armed so an
  * unbounded read fails in CI the way it failed for `/tasks/pending`. The value is
  * duplicated from the source constant rather than imported, so this preload stays
  * dependency-free; `tests/arch/hermetic-test-env.test.ts` asserts the two agree.

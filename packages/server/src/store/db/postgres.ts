@@ -11,6 +11,8 @@
  */
 import { getDb } from "@shared/db/index.js";
 import {
+  currentDbReplyOrigin,
+  DB_REPLY_TRANSITION_EXCEPTIONS,
   emitDbReplyRejected,
   emitLargeDbReply,
   recordDbParse,
@@ -229,6 +231,8 @@ function dbReplyMaxBytes(): number {
 /** The effective ceiling shared by the bridge and bounded-read callers. */
 export function postgresReplyMaxBytes(): number {
   const limit = dbReplyMaxBytes();
+  const { method, route } = currentDbReplyOrigin();
+  if (DB_REPLY_TRANSITION_EXCEPTIONS.has(`${method} ${route}`)) return RESULT_BUFFER_BYTES;
   return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
 }
 
@@ -273,8 +277,8 @@ class PgBridge {
       // TextDecoder + JSON.parse cost, and the warning line exists so the size is
       // visible in logs without turning the request into a failure.
       if (measured) {
-        const limit = dbReplyMaxBytes();
-        if (limit > 0 && len > limit) {
+        const limit = postgresReplyMaxBytes();
+        if (len > limit) {
           emitDbReplyRejected(len, limit);
           throw new PostgresReplyTooLargeError(len, limit);
         }

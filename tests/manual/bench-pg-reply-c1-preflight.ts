@@ -8,13 +8,16 @@ import {
   resetDbReplyLimitForTest,
 } from "../../packages/server/src/store/db/postgres.js";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
+import { prepareC1WorkerClock, runC1Worker } from "./bench-pg-reply-c1-worker.js";
 
 const samples = Number(process.env.MUL398_C1_SAMPLES ?? 31);
 const warmups = 3;
 const outIndex = process.argv.indexOf("--out");
 const out = outIndex < 0 ? undefined : process.argv[outIndex + 1];
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-if (!adminUrl || !out || !Number.isInteger(samples) || samples < 20) {
+const worker = process.argv.includes("--worker");
+const restoreClock = worker ? prepareC1WorkerClock() : () => {};
+if (!adminUrl || (!worker && !out) || !Number.isInteger(samples) || samples < 20) {
   throw new Error("A local PG target, --out, and at least 20 samples are required");
 }
 const url = new URL(adminUrl);
@@ -53,6 +56,9 @@ try {
       summaryTopRoutes: 10, bufferCapacity: 512, role: "all",
     },
   });
+  if (worker) {
+    await runC1Worker({ store, db, app, taskId: task.id, agentId: agent.id, token: access.token });
+  } else {
   const batches: unknown[] = [];
   for (const batchSize of [1, 10, 50]) {
     const times: Record<string, number[]> = { off: [], "8mb": [] };
@@ -126,7 +132,7 @@ try {
     fixture: { batchSizes: [1, 10, 50], contentBytes: 1024, scheduledRuns: 20, schedulePromptBytes: 512 * 1024 },
     batches, background,
   };
-  writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
+  writeFileSync(out!, `${JSON.stringify(result, null, 2)}\n`);
   console.log(JSON.stringify({
     batches: batches.map((batch) => {
       const { times, deltas, ...summary } = batch as Record<string, unknown>;
@@ -134,6 +140,7 @@ try {
     }),
     background,
   }));
+  }
 } finally {
   if (originalLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = originalLimit;
@@ -141,4 +148,5 @@ try {
   db.close();
   await admin.unsafe(`DROP DATABASE ${database} WITH (FORCE)`);
   await admin.end();
+  restoreClock();
 }

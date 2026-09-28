@@ -1,0 +1,5461 @@
+{
+  "baselineSha": "b95dd2fa",
+  "samples": 31,
+  "warmups": 3,
+  "fixture": {
+    "batchSizes": [
+      1,
+      10,
+      50
+    ],
+    "contentBytes": 1024,
+    "longMessageCount": 96,
+    "longMessageBytes": 262144,
+    "queuedRuns": 20,
+    "queuedPromptBytes": 524288
+  },
+  "measurements": [
+    {
+      "kind": "daemon",
+      "count": 1,
+      "before": {
+        "queries": [
+          10
+        ],
+        "pageRows": [],
+        "p50Ms": 10.601475000000391,
+        "p95Ms": 12.93223400000079
+      },
+      "after": {
+        "queries": [
+          10
+        ],
+        "pageRows": [],
+        "p50Ms": 8.702331999999842,
+        "p95Ms": 12.20639600000004
+      },
+      "pairedExtraP95Ms": 1.7634870000001683,
+      "pairs": [
+        {
+          "after": {
+            "ms": 11.605337999999847,
+            "queries": 10
+          },
+          "before": {
+            "ms": 12.321376999999302,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 14.259683999999652,
+            "queries": 10
+          },
+          "after": {
+            "ms": 12.20639600000004,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.110924000000068,
+            "queries": 10
+          },
+          "before": {
+            "ms": 11.58464400000048,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 11.490250999999262,
+            "queries": 10
+          },
+          "after": {
+            "ms": 10.817993000000115,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.510794999999689,
+            "queries": 10
+          },
+          "before": {
+            "ms": 9.68678700000055,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.939825999999812,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.461860999999772,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.56598699999995,
+            "queries": 10
+          },
+          "before": {
+            "ms": 12.93223400000079,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 11.125481999999465,
+            "queries": 10
+          },
+          "after": {
+            "ms": 12.435934999999972,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.013179000000036,
+            "queries": 10
+          },
+          "before": {
+            "ms": 10.604237999999896,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.369558000000325,
+            "queries": 10
+          },
+          "after": {
+            "ms": 9.124884000000293,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 6.0731949999999415,
+            "queries": 10
+          },
+          "before": {
+            "ms": 10.0306470000005,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 9.405107999999927,
+            "queries": 10
+          },
+          "after": {
+            "ms": 12.08968700000014,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.100487000000157,
+            "queries": 10
+          },
+          "before": {
+            "ms": 10.824106000000029,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 11.533652000000075,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.102646999999706,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.661580999999842,
+            "queries": 10
+          },
+          "before": {
+            "ms": 8.786129000000074,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 9.170560999999907,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.955492999999933,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.253650000000107,
+            "queries": 10
+          },
+          "before": {
+            "ms": 10.708613000000696,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.2275620000000345,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.991049000000203,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.926308999999947,
+            "queries": 10
+          },
+          "before": {
+            "ms": 12.421029999999519,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.873765999999705,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.702331999999842,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.909748000000036,
+            "queries": 10
+          },
+          "before": {
+            "ms": 12.351890999999341,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.590251000000535,
+            "queries": 10
+          },
+          "after": {
+            "ms": 9.837848000000122,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 6.252966000000015,
+            "queries": 10
+          },
+          "before": {
+            "ms": 12.712221000000682,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.284437999999682,
+            "queries": 10
+          },
+          "after": {
+            "ms": 9.012776999999915,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.123888000000079,
+            "queries": 10
+          },
+          "before": {
+            "ms": 10.158771999999772,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.601475000000391,
+            "queries": 10
+          },
+          "after": {
+            "ms": 10.48004899999978,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.90184999999974,
+            "queries": 10
+          },
+          "before": {
+            "ms": 7.538931000000048,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.214492000000064,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.64721899999995,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 6.323315000000093,
+            "queries": 10
+          },
+          "before": {
+            "ms": 9.798791000000165,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 12.641089000000648,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.947701999999936,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 10.2478729999998,
+            "queries": 10
+          },
+          "before": {
+            "ms": 9.801806000000397,
+            "queries": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "daemon",
+      "count": 10,
+      "before": {
+        "queries": [
+          20
+        ],
+        "pageRows": [],
+        "p50Ms": 19.15096100000028,
+        "p95Ms": 22.292930999999953
+      },
+      "after": {
+        "queries": [
+          20
+        ],
+        "pageRows": [],
+        "p50Ms": 17.57291299999997,
+        "p95Ms": 24.21828699999969
+      },
+      "pairedExtraP95Ms": 7.000412000000324,
+      "pairs": [
+        {
+          "after": {
+            "ms": 18.310230000000047,
+            "queries": 20
+          },
+          "before": {
+            "ms": 23.413720999999896,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 19.060069000000112,
+            "queries": 20
+          },
+          "after": {
+            "ms": 14.843916000000263,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 11.638981999999942,
+            "queries": 20
+          },
+          "before": {
+            "ms": 17.924127999999655,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 19.502016999999796,
+            "queries": 20
+          },
+          "after": {
+            "ms": 20.831383000000187,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 16.394988999999896,
+            "queries": 20
+          },
+          "before": {
+            "ms": 20.90541800000028,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 22.292930999999953,
+            "queries": 20
+          },
+          "after": {
+            "ms": 13.60166500000014,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 15.730021999999735,
+            "queries": 20
+          },
+          "before": {
+            "ms": 18.137595000000147,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 18.059660999999323,
+            "queries": 20
+          },
+          "after": {
+            "ms": 16.950139000000036,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 25.651936000000205,
+            "queries": 20
+          },
+          "before": {
+            "ms": 18.65152399999988,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 19.689903000000413,
+            "queries": 20
+          },
+          "after": {
+            "ms": 19.65706799999998,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 16.38509400000021,
+            "queries": 20
+          },
+          "before": {
+            "ms": 18.85943800000041,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 18.593576000000212,
+            "queries": 20
+          },
+          "after": {
+            "ms": 21.368313999999828,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 23.818614000000252,
+            "queries": 20
+          },
+          "before": {
+            "ms": 19.15096100000028,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 13.076484000000164,
+            "queries": 20
+          },
+          "after": {
+            "ms": 17.57291299999997,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 21.397857999999815,
+            "queries": 20
+          },
+          "before": {
+            "ms": 20.311569000000418,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 19.743085000000065,
+            "queries": 20
+          },
+          "after": {
+            "ms": 18.98208999999997,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 24.21828699999969,
+            "queries": 20
+          },
+          "before": {
+            "ms": 15.54287099999965,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 14.601908000000549,
+            "queries": 20
+          },
+          "after": {
+            "ms": 18.847416000000067,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 15.911129999999957,
+            "queries": 20
+          },
+          "before": {
+            "ms": 20.13946400000077,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 15.589561999999205,
+            "queries": 20
+          },
+          "after": {
+            "ms": 19.464038999999957,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 14.090611999999965,
+            "queries": 20
+          },
+          "before": {
+            "ms": 16.336239000000205,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 14.422017000000778,
+            "queries": 20
+          },
+          "after": {
+            "ms": 18.51856699999962,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 19.39530399999967,
+            "queries": 20
+          },
+          "before": {
+            "ms": 20.780947000000197,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 19.881745000000592,
+            "queries": 20
+          },
+          "after": {
+            "ms": 9.379143999999997,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 8.746474000000035,
+            "queries": 20
+          },
+          "before": {
+            "ms": 19.62876099999994,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 20.46023200000036,
+            "queries": 20
+          },
+          "after": {
+            "ms": 18.362977999999657,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 16.18719500000043,
+            "queries": 20
+          },
+          "before": {
+            "ms": 20.37485199999992,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 15.836822000000211,
+            "queries": 20
+          },
+          "after": {
+            "ms": 13.784662000000026,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 10.817007999999987,
+            "queries": 20
+          },
+          "before": {
+            "ms": 16.807740999999623,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 21.881014999999934,
+            "queries": 20
+          },
+          "after": {
+            "ms": 20.709829999999783,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 16.872392000000218,
+            "queries": 20
+          },
+          "before": {
+            "ms": 21.203623000000334,
+            "queries": 20
+          }
+        }
+      ]
+    },
+    {
+      "kind": "daemon",
+      "count": 50,
+      "before": {
+        "queries": [
+          65
+        ],
+        "pageRows": [],
+        "p50Ms": 51.343339000000924,
+        "p95Ms": 62.021795999999995
+      },
+      "after": {
+        "queries": [
+          65
+        ],
+        "pageRows": [],
+        "p50Ms": 41.53145600000062,
+        "p95Ms": 64.21779600000082
+      },
+      "pairedExtraP95Ms": 15.443444999999883,
+      "pairs": [
+        {
+          "after": {
+            "ms": 50.60908699999982,
+            "queries": 65
+          },
+          "before": {
+            "ms": 57.702838999999585,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 49.6689580000002,
+            "queries": 65
+          },
+          "after": {
+            "ms": 55.06716200000028,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 68.28534200000013,
+            "queries": 65
+          },
+          "before": {
+            "ms": 54.29679699999997,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 45.273551000000225,
+            "queries": 65
+          },
+          "after": {
+            "ms": 53.83111000000008,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 57.29525999999987,
+            "queries": 65
+          },
+          "before": {
+            "ms": 52.25221099999999,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 44.58885499999997,
+            "queries": 65
+          },
+          "after": {
+            "ms": 44.389618000000155,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 41.07300599999962,
+            "queries": 65
+          },
+          "before": {
+            "ms": 52.29760199999964,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 56.861792000000605,
+            "queries": 65
+          },
+          "after": {
+            "ms": 44.51969399999962,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 25.56675600000017,
+            "queries": 65
+          },
+          "before": {
+            "ms": 56.38589200000024,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 46.196507999999994,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.154853000000003,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 22.857396000000335,
+            "queries": 65
+          },
+          "before": {
+            "ms": 51.57311899999968,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 59.42298800000026,
+            "queries": 65
+          },
+          "after": {
+            "ms": 34.68141399999968,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 25.238588999999592,
+            "queries": 65
+          },
+          "before": {
+            "ms": 43.69168700000046,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 62.021795999999995,
+            "queries": 65
+          },
+          "after": {
+            "ms": 41.53145600000062,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 28.318420999999944,
+            "queries": 65
+          },
+          "before": {
+            "ms": 58.55581400000028,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 50.81679299999996,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.47921799999949,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 31.588412000000062,
+            "queries": 65
+          },
+          "before": {
+            "ms": 57.65624100000059,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 49.56721800000014,
+            "queries": 65
+          },
+          "after": {
+            "ms": 63.67929400000048,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 64.21779600000082,
+            "queries": 65
+          },
+          "before": {
+            "ms": 58.77363999999943,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 63.49621599999955,
+            "queries": 65
+          },
+          "after": {
+            "ms": 63.634494000000814,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 57.0494520000002,
+            "queries": 65
+          },
+          "before": {
+            "ms": 51.343339000000924,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 50.96730299999945,
+            "queries": 65
+          },
+          "after": {
+            "ms": 32.23649299999943,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 46.1868599999998,
+            "queries": 65
+          },
+          "before": {
+            "ms": 58.45492600000034,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 41.75530400000025,
+            "queries": 65
+          },
+          "after": {
+            "ms": 57.198749000000134,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 57.45118199999979,
+            "queries": 65
+          },
+          "before": {
+            "ms": 34.040305999998964,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 55.47923400000036,
+            "queries": 65
+          },
+          "after": {
+            "ms": 48.53546300000016,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 29.65857800000049,
+            "queries": 65
+          },
+          "before": {
+            "ms": 46.00943299999926,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 38.47496200000023,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.75914499999999,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 21.858251999999993,
+            "queries": 65
+          },
+          "before": {
+            "ms": 47.8546750000005,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 45.32407200000125,
+            "queries": 65
+          },
+          "after": {
+            "ms": 30.525125999999545,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 29.908134999999675,
+            "queries": 65
+          },
+          "before": {
+            "ms": 29.57744499999899,
+            "queries": 65
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 1,
+      "before": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 3.6621050000012474,
+        "p95Ms": 5.241113000000041
+      },
+      "after": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 4.0077779999992345,
+        "p95Ms": 5.751678000000538
+      },
+      "pairedExtraP95Ms": 4.225339999998141,
+      "pairs": [
+        {
+          "after": {
+            "ms": 4.027536000000509,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.5522520000013174,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.162137999999686,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.2424789999995483,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.048659000000043,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.097060999998575,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.357077999999092,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.7916750000003958,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 7.0993689999995695,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 2.4606910000002244,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 1.27346899999975,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.26448900000014,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.186265000000276,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.4640110000000277,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.241113000000041,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.3228500000004715,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.3307199999999284,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.6487319999996544,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 0.6323790000005829,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.8322109999999157,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.693798000000243,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.6621050000012474,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 1.896361999999499,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.033257000000049,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.165990999999849,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.4754310000007536,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.009600000001228,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.7490139999999883,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 1.5557959999996456,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.9045850000002247,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 2.2591649999994843,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.6701169999996637,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.3696579999996175,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.113020000000688,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.330431000000317,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.625995999999759,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.182549000000108,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.81630099999893,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 2.583511000000726,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.6094700000003286,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.4375219999992623,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.342748999999458,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.9301310000009835,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.4693859999997585,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.751678000000538,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.5838670000011916,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.159435999999914,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.123870000000352,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.7496289999999135,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.8416159999997035,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 6.014252000000852,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.5716489999995247,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.683954999999514,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.4586150000013731,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.569632000000638,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.7330059999994774,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.186547000000246,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 2.533322000001135,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.714861000000383,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.066547000000355,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.0077779999992345,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.138827999999194,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 10,
+      "before": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 5.660385999999562,
+        "p95Ms": 7.72889000000032
+      },
+      "after": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 6.811774999999216,
+        "p95Ms": 8.656941000000188
+      },
+      "pairedExtraP95Ms": 6.452676999999312,
+      "pairs": [
+        {
+          "after": {
+            "ms": 5.621063999999933,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.745198999999047,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.9006509999999253,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.6709460000001854,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.5603280000004816,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.884271999999328,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.509283999999752,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.518968000000314,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.95369699999992,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.550881999999547,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 3.6189890000005107,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.142437999999856,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 6.021907000000283,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.305564000000231,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.751791000000594,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.914238999999725,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.234753000000637,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 7.72889000000032,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 4.979708000000755,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 8.402434999999969,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.099697999999989,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.660385999999562,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 4.701811000000816,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 5.205146000000241,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.838941999999406,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.42411600000014,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.1914400000005116,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 8.656941000000188,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.0914309999998295,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.1731090000012045,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 4.749792000000525,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 8.033457000000453,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.193285999999716,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.755373999998483,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.071377000000211,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 6.811774999999216,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 3.5218830000003436,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.422957999999198,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.563193999998475,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 5.324242000000595,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.589903000000049,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.6978630000012345,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.765215999999782,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 8.58558500000072,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.109134999998787,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.944061000000147,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 3.6862380000002304,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 5.784526999999798,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.651163000000452,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.300930999999764,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.857132999999521,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.7143100000012055,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.070067000000563,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.692811000000802,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.7952499999992142,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 8.247926999998526,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.868526000000202,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.377900999999838,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 4.314057999999932,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.227270999999746,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.229049999999916,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 6.644533000000592,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 50,
+      "before": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 16.97932799999944,
+        "p95Ms": 24.29529999999977
+      },
+      "after": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 18.877542000000176,
+        "p95Ms": 21.20037599999887
+      },
+      "pairedExtraP95Ms": 10.310511000001497,
+      "pairs": [
+        {
+          "after": {
+            "ms": 14.070905000000494,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 24.29529999999977,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 18.496807999999874,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 17.66666400000031,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 12.135322000000087,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 25.31583099999989,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 22.639978999999585,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 13.777908000000025,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 19.690442999999505,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 16.705325000000812,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 14.874082000000271,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.877736999998888,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 12.20493499999975,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 20.67541500000152,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 12.743189000000712,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.50921599999856,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 20.030344000000696,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 13.304833000000144,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 5.324357999999847,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 19.77050799999961,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 20.78916599999866,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 19.46060899999975,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 14.845896000000721,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 17.980116000000635,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 12.962153999998918,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 16.97932799999944,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 15.019205000000511,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 21.94318100000055,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 19.902178000000276,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 19.60574000000088,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 16.66802000000098,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 18.877542000000176,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 21.01847000000089,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 10.833199000000604,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 19.00704399999995,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 18.86555600000065,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.690871000000698,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 16.02367100000083,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 15.309019000000262,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 18.24714799999856,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.45150399999875,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 19.08736499999941,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 17.61896700000034,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 19.979256000000532,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 21.20037599999887,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 14.6611240000002,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 9.504533999999694,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 19.81504500000119,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 11.926003000000492,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 17.318951999999626,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 9.627258999998958,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 19.65744199999972,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.600343000000066,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 16.830547999999908,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 20.4135210000004,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.674324999999953,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 16.761913000000277,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 18.11339499999849,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 18.97030099999938,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.43928699999924,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 14.037366999998994,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 20.304212999999436,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 1,
+      "before": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 3.3489040000004024,
+        "p95Ms": 6.3186640000003536
+      },
+      "after": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 2.7656090000000404,
+        "p95Ms": 4.699813000001086
+      },
+      "pairedExtraP95Ms": 2.0599569999994856,
+      "pairs": [
+        {
+          "after": {
+            "ms": 3.2995519999985845,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 0.9692699999995966,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.7135070000003907,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.303568000001178,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 0.47583599999961734,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.0824240000001737,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 1.9100459999990562,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.8674019999998563,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 1.0744470000008732,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.139314000000013,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 0.46514700000079756,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.525104000000283,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.329030999999304,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 2.1034450000006473,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 2.1953380000013567,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 0.6704470000004221,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 0.8404840000002878,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.256561000000147,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 1.8102670000007492,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.835624999999709,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 1.178780000000188,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 1.2664430000004359,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 1.7083499999989726,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.665790000000925,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.161497999999483,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.3882439999997587,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.3489040000004024,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.8853669999989506,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.171126999999615,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 2.450887999999395,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 6.672903000000588,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.195451999999932,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.973152000000482,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.308446000000913,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 6.3186640000003536,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.789136999999755,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.615106999999625,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.8703110000005836,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.406429999999091,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.906833999999435,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.699813000001086,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.1043140000001586,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.535455000001093,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.291101000000708,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.145510000000286,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.067122999998901,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.73122499999954,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.5850759999993898,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.643927999999505,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.9154839999991964,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.723871999998664,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.3811599999989994,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.7656090000000404,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.085763999999472,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.671147999999448,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.0890610000005836,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.5021560000004683,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.084259999999631,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.614443000000392,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 1.0240739999990183,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 2.655870999999024,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.4463770000002114,
+            "queries": 4,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 10,
+      "before": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 3.8340509999998176,
+        "p95Ms": 7.610113000000638
+      },
+      "after": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 4.018212000000858,
+        "p95Ms": 9.076814000000013
+      },
+      "pairedExtraP95Ms": 3.3970900000003894,
+      "pairs": [
+        {
+          "after": {
+            "ms": 2.4921850000009727,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.399790999999823,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.7961279999999533,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.211959999998726,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 3.6542219999992085,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 3.2394880000010744,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.957167999999001,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 3.6350259999999253,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.457373999999618,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 3.715362000000823,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.3160550000011426,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.373415000000023,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.3275290000001405,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 3.2696670000004815,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.7681850000008126,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.018212000000858,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.984617999998591,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.666995000001407,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.8740209999996296,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 5.164700999999695,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 6.129032000000734,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.89469199999985,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.995790000000852,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 9.39353999999912,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 3.1903889999994135,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.735909999999421,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.553823999998713,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 6.520426999999472,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 3.1527839999998832,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.0876530000005005,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 4.555683999999019,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 3.8038369999994757,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.619260999999824,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.077822000001106,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.615310999999565,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.209969999999885,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 1.825263000000632,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 2.94603399999869,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 1.5057309999992867,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 3.1357760000009876,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.1534260000007635,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 4.634876999998596,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 2.0321159999984957,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.467131999999765,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 3.7357520000005024,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 2.9564290000016626,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 3.8340509999998176,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 7.099838000000091,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 1.8291239999998652,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.37438099999963,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 3.4137360000004264,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 3.5318109999989247,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 1.271469999999681,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 3.618647000001147,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.124879000000874,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 4.527503000001161,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.076814000000013,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 5.679723999999624,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.008201000000554,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 6.869850999999471,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.1475460000001476,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 7.610113000000638,
+            "queries": 7,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 50,
+      "before": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 14.037129000000277,
+        "p95Ms": 20.91037200000028
+      },
+      "after": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 17.544713999999658,
+        "p95Ms": 27.691337000000203
+      },
+      "pairedExtraP95Ms": 15.469607999999425,
+      "pairs": [
+        {
+          "after": {
+            "ms": 15.826995999999781,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 13.108917999999903,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 11.519711000000825,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 21.861347000000023,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 13.014110000000073,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 8.611025999998674,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 6.224861999999121,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 6.414682999999059,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 8.33259899999939,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 9.187799000001178,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 17.60181299999931,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.023784999999407,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 15.919971999999689,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 25.756091999999626,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 20.91037200000028,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 16.35656999999992,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 18.42417100000057,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 17.741620999999213,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 8.096975999998904,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 11.84947700000157,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.997487999999066,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 18.17475099999865,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 11.757440999999744,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 28.414553000000524,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.1478189999998,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 15.845162999999957,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 8.74815899999885,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 13.433208999998897,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 7.871338999999352,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 8.897157999999763,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 6.896520000000237,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 12.240048999999999,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 21.378602999999202,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 16.06829199999993,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 14.642765000000509,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 21.096598999998605,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 19.790216999999757,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 17.61367699999937,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 13.876051999999618,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 17.80903600000056,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 24.60644500000126,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 18.113311999999496,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 7.799189999999726,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 23.26879799999915,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 13.859968000000663,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 19.994858000000022,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 17.792233000000124,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 18.43719300000157,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 17.544713999999658,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 14.037129000000277,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 10.85736899999938,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 20.612569999999323,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 27.691337000000203,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 13.19731800000045,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 12.053658000000723,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 9.546742999998969,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 14.633694999998625,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 19.745092999999542,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 14.080110000000786,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 19.206127999999808,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 16.55883300000096,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 15.303791000000274,
+            "queries": 22,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        }
+      ]
+    }
+  ],
+  "long": {
+    "before": {
+      "routes": [
+        {
+          "route": "GET /api/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25185688,
+          "sha256": "076b74e8a4645ab32e105ff5c4ed603f1f44435305060b8e9c0834c83004992d",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/multiremi/tasks/:id/messages",
+          "status": 200,
+          "bytes": 25185701,
+          "sha256": "47947f30825d963faa3cdcf2aaa95c8e699570336695e2336f17e3110e2fd42e",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/daemon/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25178488,
+          "sha256": "6ab5dfc7871caf759702bfbcd7430f5b684ea4dd6b2398c0980a2cf6c07dbb32",
+          "dbBytes": 25187343,
+          "queries": 4,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/shares/:token",
+          "status": 200,
+          "bytes": 25191557,
+          "sha256": "06a419dbbcb90cf0d4e8c83df85fd7e41f3a9c25c7bf8a6805ddf25da7724061",
+          "dbBytes": 25203186,
+          "queries": 37,
+          "maxSingleBytes": 25186092
+        }
+      ],
+      "messageContentBytes": 25165824
+    },
+    "after": {
+      "routes": [
+        {
+          "route": "GET /api/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25185688,
+          "sha256": "076b74e8a4645ab32e105ff5c4ed603f1f44435305060b8e9c0834c83004992d",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/multiremi/tasks/:id/messages",
+          "status": 200,
+          "bytes": 25185701,
+          "sha256": "47947f30825d963faa3cdcf2aaa95c8e699570336695e2336f17e3110e2fd42e",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/daemon/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25178488,
+          "sha256": "6ab5dfc7871caf759702bfbcd7430f5b684ea4dd6b2398c0980a2cf6c07dbb32",
+          "dbBytes": 25187343,
+          "queries": 4,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/shares/:token",
+          "status": 200,
+          "bytes": 25191557,
+          "sha256": "06a419dbbcb90cf0d4e8c83df85fd7e41f3a9c25c7bf8a6805ddf25da7724061",
+          "dbBytes": 25203186,
+          "queries": 37,
+          "maxSingleBytes": 25186092
+        }
+      ],
+      "messageContentBytes": 25165824
+    }
+  },
+  "reject": {
+    "before": {
+      "status": 200,
+      "dbBytes": 9437659,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "GET",
+          "route": "/api/c1/nonexception",
+          "bytes": 9437216
+        }
+      ]
+    },
+    "after": {
+      "status": 500,
+      "dbBytes": 9437659,
+      "events": [
+        {
+          "event": "api_db_reply_rejected",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "GET",
+          "route": "/api/c1/nonexception",
+          "bytes": 9437216,
+          "max_bytes": 8388608
+        }
+      ]
+    }
+  },
+  "queued": {
+    "before": {
+      "completed": true,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "<background>",
+          "route": "<background>",
+          "bytes": 10495571
+        }
+      ],
+      "rows": 8
+    },
+    "after": {
+      "completed": true,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "<background>",
+          "route": "<background>",
+          "bytes": 10495571
+        }
+      ],
+      "rows": 8
+    }
+  }
+}
