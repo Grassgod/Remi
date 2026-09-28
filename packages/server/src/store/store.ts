@@ -4976,8 +4976,12 @@ runMigrations(this.db);
     return this.tasks.appendTaskMessages(taskId, messages);
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number): MultiremiTaskMessage[] {
-    return this.tasks.listTaskMessages(taskId, sinceSeq, throughSeq);
+  getTaskMessagePageRows(): number {
+    return this.tasks.getTaskMessagePageRows();
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
+    return this.tasks.listTaskMessages(taskId, sinceSeq, throughSeq, limit);
   }
 
   recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {

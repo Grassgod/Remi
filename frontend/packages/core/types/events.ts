@@ -271,6 +271,17 @@ export interface TaskMessagePayload {
   created_at?: string;
 }
 
+/** Header-only task:message: the peer could not read a referenced seq range. */
+export interface TaskMessageRefetchPayload {
+  task_id: string;
+  issue_id: string | null;
+  chat_session_id?: string;
+  issue_session_id?: string;
+  degraded: true;
+  seq_start: number;
+  seq_end: number;
+}
+
 export interface TaskProgressPayload {
   task_id: string;
   chat_session_id?: string;
@@ -507,7 +518,7 @@ export interface WSEventPayloadMap {
   "task:awaiting_human": TaskAwaitingHumanPayload;
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
-  "task:message": TaskMessagePayload;
+  "task:message": TaskMessagePayload | TaskMessageRefetchPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": TaskProgressPayload;
   "inbox:new": InboxNewPayload;

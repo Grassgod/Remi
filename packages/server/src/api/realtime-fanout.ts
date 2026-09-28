@@ -28,8 +28,9 @@
  * A peer event may arrive degraded (the sender dropped the task body because it
  * did not fit one POST). Those carry a task id instead, and this process shares
  * the sender's database, so it re-reads the row and builds the same frame. A
- * degraded `task_messages` keeps its message and only re-reads the task header,
- * so the browser still sees one frame per message in `seq` order.
+ * Header-degraded `task_messages` keeps its message; persisted seq references
+ * instead page through current committed rows. Only browser frames consume the
+ * messages, and references need not preserve overwritten intermediate versions.
  */
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
@@ -50,6 +51,7 @@ import type {
 import {
   notifyBrowserTaskEvent,
   notifyBrowserTaskMessages,
+  notifyBrowserTaskMessageReadFailed,
   notifyBrowserWorkspaceEvent,
   notifyDaemonTaskAvailable,
   notifyDaemonTaskEvent,
@@ -158,13 +160,32 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
         return;
       }
       case "task_messages": {
+        if (!deliversToBrowser) return;
         const task = ("task" in envelope.payload ? envelope.payload.task : null)
           ?? store.getTaskIdentity(envelope.payload.task_id, "fanout");
         if (!task) return;
-        const messages = "seq_start" in envelope.payload
-          ? store.listTaskMessages(envelope.payload.task_id, envelope.payload.seq_start - 1, envelope.payload.seq_end)
-          : envelope.payload.messages;
-        deliverTaskMessages({ task, messages });
+        if (!("seq_start" in envelope.payload)) {
+          deliverTaskMessages({ task, messages: envelope.payload.messages });
+          return;
+        }
+        const pageRows = store.getTaskMessagePageRows();
+        let cursor = envelope.payload.seq_start - 1;
+        try {
+          while (cursor < envelope.payload.seq_end) {
+            const messages = store.listTaskMessages(envelope.payload.task_id, cursor, envelope.payload.seq_end, pageRows);
+            if (messages.length === 0) break;
+            deliverTaskMessages({ task, messages });
+            cursor = messages.at(-1)!.seq;
+            if (messages.length < pageRows) break;
+          }
+        } catch {
+          peer?.recordReferenceReadFailure();
+          console.warn("[realtime-fanout] reference read failed; requesting browser message refetch");
+          if (deliversToBrowser) notifyBrowserTaskMessageReadFailed(
+            store, registries.browser, registries.browserScope, task,
+            { seq_start: envelope.payload.seq_start, seq_end: envelope.payload.seq_end },
+          );
+        }
         return;
       }
       case "workspace_event":

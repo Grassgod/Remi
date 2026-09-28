@@ -20,7 +20,7 @@ import type {
   MultiremiTask,
   MultiremiTaskMessage,
 } from "./types.js";
-import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
+import type { TaskMessageFanoutSubject } from "./task-message-fanout.js";
 
 export const PEER_EVENT_PROTOCOL_VERSION = 1 as const;
 
@@ -95,7 +95,17 @@ export interface PeerTaskMessagesPayload {
   messages: MultiremiTaskMessage[];
 }
 
-/** Inclusive persisted message range; no task body or message content crosses the wire. */
+/**
+ * Inclusive persisted message range; no task body or content crosses the wire.
+ * The receiver pages through the current committed rows, not historical versions.
+ * An overwritten seq may skip intermediate versions. A reference can briefly
+ * deliver a newer row before a later full frame's older content; the ordered
+ * stream ultimately converges to the current rows rather than preserving every
+ * intermediate version. Append-only rows remain byte-identical to full frames.
+ * Each page is a bounded ASC task/seq query. On a read failure the browser gets a
+ * header-only `task:message` with task_id, degraded:true and this seq range, but
+ * no message seq/content; it invalidates history instead of caching a fake row.
+ */
 export interface PeerTaskMessagesReferencePayload {
   task_id: string;
   degraded: true;
@@ -218,6 +228,8 @@ export interface PeerHealth {
   queued_bytes?: number;
   /** Events in the active/frozen slot (0, or the size of one batch). */
   inflight?: number;
+  /** References whose paged read failed; a header-only browser refetch frame was sent. */
+  reference_read_failed?: number;
   /** Actual POST body bytes held by the active/frozen slot. */
   inflight_bytes?: number;
   rtt_p95_ms?: number;

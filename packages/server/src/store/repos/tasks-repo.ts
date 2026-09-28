@@ -23,6 +23,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import { taskMessagePageRows } from "@multiremi/store/task-message-pagination.js";
 import {
   MODEL_FALLBACK_FAILURE_REASONS,
   TRANSIENT_RETRY_FAILURE_REASONS,
@@ -3267,27 +3268,36 @@ export class TasksRepo {
     const changedSeqSet = new Set(changedSeqs);
     const minSeq = Math.min(...changedSeqs);
     const maxSeq = Math.max(...changedSeqs);
-    const changed = (this.ctx.db.query(
-      `SELECT * FROM multiremi_task_messages
-       WHERE task_id = ? AND seq >= ? AND seq <= ?
-       ORDER BY seq ASC`,
-    ).all(taskId, minSeq, maxSeq) as Row[])
-      .filter((row) => changedSeqSet.has(Number(row.seq)))
-      .map(toTaskMessage);
+    const changed: MultiremiTaskMessage[] = [];
+    const pageRows = this.getTaskMessagePageRows();
+    let cursor = minSeq - 1;
+    while (cursor < maxSeq) {
+      const page = this.listTaskMessages(taskId, cursor, maxSeq, pageRows);
+      if (page.length === 0) break;
+      changed.push(...page.filter((message) => changedSeqSet.has(message.seq)));
+      cursor = page.at(-1)!.seq;
+      if (page.length < pageRows) break;
+    }
     // Listeners see only rows that changed, using their persisted, sanitized values.
     this.ctx.notifyTaskMessages(this.getTaskIdentity(taskId) ?? task, changed);
     return changed;
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number): MultiremiTaskMessage[] {
+  getTaskMessagePageRows(): number {
+    return taskMessagePageRows(this.ctx.db);
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
     const since = sinceSeq == null ? null : Math.floor(Number(sinceSeq));
+    const rowLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit));
+    const limitSql = rowLimit === undefined ? "" : " LIMIT ?";
     const rows = since != null && Number.isFinite(since)
       ? this.ctx.db.query(
-        `SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ?${throughSeq === undefined ? "" : " AND seq <= ?"} ORDER BY seq ASC`,
-      ).all(...(throughSeq === undefined ? [taskId, since] : [taskId, since, throughSeq])) as Row[]
+        `SELECT * FROM multiremi_task_messages WHERE task_id = ? AND seq > ?${throughSeq === undefined ? "" : " AND seq <= ?"} ORDER BY seq ASC${limitSql}`,
+      ).all(...[taskId, since, ...(throughSeq === undefined ? [] : [throughSeq]), ...(rowLimit === undefined ? [] : [rowLimit])]) as Row[]
       : this.ctx.db.query(
-        "SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC",
-      ).all(taskId) as Row[];
+        `SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC${limitSql}`,
+      ).all(taskId, ...(rowLimit === undefined ? [] : [rowLimit])) as Row[];
     return rows.map(toTaskMessage);
   }
 

@@ -134,12 +134,16 @@ describe("peer real store serialized burst bound", () => {
         expect(stats.queued_bytes + stats.inflight_bytes).toBeLessThanOrEqual(BYTE_BOUND);
       };
       let largestPost = 0;
+      let receivingReference = false;
       const sender = createPeerChannel({ url: "http://fake-receiver", origin: "sender",
         fetchImpl: async (_url, init) => {
           sample();
           largestPost = Math.max(largestPost, Buffer.byteLength(String(init.body)));
           const batch = JSON.parse(String(init.body));
-          receiver.receive(batch.topic, batch.events, { epoch: batch.epoch, batchSeq: batch.batch_seq });
+          receivingReference = true;
+          try {
+            receiver.receive(batch.topic, batch.events, { epoch: batch.epoch, batchSeq: batch.batch_seq });
+          } finally { receivingReference = false; }
           sample();
           return new Response("{}");
         },
@@ -159,11 +163,12 @@ describe("peer real store serialized burst bound", () => {
       let messageReads = 0;
       const referenceSizes: number[] = [];
       db.query = ((sql: string) => {
-        if (/SELECT \* FROM multiremi_task_messages WHERE task_id =/i.test(sql)) {
+        if (receivingReference && /SELECT \* FROM multiremi_task_messages WHERE task_id =/i.test(sql)) {
           messageReads++;
           expect(sql).toContain("seq >");
           expect(sql).toContain("seq <=");
           expect(sql).toContain("ORDER BY seq ASC");
+          expect(sql).toContain("LIMIT ?");
         }
         return query(sql);
       }) as typeof db.query;
@@ -184,7 +189,7 @@ describe("peer real store serialized burst bound", () => {
         expect(sender.stats().oversize_dropped).toBe(0);
         expect(sender.stats().degraded).toBeGreaterThan(0);
         expect(receiver.stats().degraded_received).toBe(sender.stats().degraded);
-        expect(messageReads).toBe(referenceSizes.length);
+        expect(messageReads).toBe(referenceSizes.reduce((sum, rows) => sum + Math.ceil(rows / receiverStore.getTaskMessagePageRows()), 0));
         expect(largestPost).toBeLessThanOrEqual(1_048_576);
         console.log(`PEER_STORE_BOUND ${JSON.stringify({ escaped, peak, samples, frames: remote.frames.length, largestPost, messageReads, degraded: sender.stats().degraded })}`);
       } finally {

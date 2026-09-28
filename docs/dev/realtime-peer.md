@@ -40,11 +40,63 @@ a persisted message reference:
 
 The range is inclusive. Adjacent references from one produce call may merge
 only when they refer to the same task and consecutive sequences. A reference
-contains neither message content nor a task body. The receiver calls the existing
-`listTaskMessages(task_id, seq_start - 1, seq_end)` path once per reference,
-using the indexed `(task_id, seq)` range and ascending order. It uses the same
-browser serializer and authorization as full events: every persisted message
-still produces its own browser frame.
+contains neither message content nor a task body. The receiver pages through the
+existing indexed `(task_id, seq)` range in ascending order. Every returned message
+still produces its own frame using the full path's browser serializer and audience
+authorization. Runtime-only processes have no task-message consumer and do not
+read referenced message content.
+
+References read the **current committed version at each page read**, not the
+version at enqueue time. Store notifications occur after the append transaction
+commits and use post-upsert rows; the peer is queued from those notifications.
+No revision snapshots or old-version retention are added. An overwritten seq may
+skip intermediate versions. Within a burst a reference may briefly deliver a new
+version before a later queued full frame delivers an older intermediate version;
+subsequent committed update frames converge to the current rows. Browser
+[`mergeTaskMessages`](../../frontend/packages/core/chat/queries.ts) merges by seq
+with later sources winning. Append-only input retains per-frame byte equality.
+
+## Reference Pagination And Failure
+
+Each page is one ASC, indexed task/seq query with `seq > cursor`, inclusive
+`seq <= seq_end` and `LIMIT page_rows`; the cursor advances to its last returned
+seq. A short page or the inclusive end stops the loop, without an extra query for
+a full final page. For contiguous rows the query count is
+`ceil(range_rows / page_rows)`, separately asserted from the per-reference
+`degraded_received` counter. The producer's post-commit changed-row read uses the
+same paging policy so a legal 256-message append does not itself cross the bridge
+in one 64 MiB reply.
+
+[The page policy](../../packages/server/src/store/task-message-pagination.ts)
+caps a page at eight rows. Capped content/input/output/meta total 640 KiB per row,
+plus a 512 B tool name; JSON escaping costs at most 6x. A conservative 4 MiB row
+budget leaves over 250 KiB for normal IDs and row metadata. A further 64 KiB is
+reserved for the reply wrapper. The bridge's effective ceiling is the smaller of
+its configured positive limit and its 64 MiB shared buffer; an unset/off limit
+still has the 64 MiB ceiling. Rows per page are:
+
+```text
+max(1, min(8, floor((effective_ceiling - 64 KiB) / 4 MiB)))
+```
+
+With the 8 MiB test/guardrail setting this is one row; with the limit disabled it
+is eight rows, budgeted below 32 MiB + 64 KiB and hence below the shared buffer.
+For deliberately smaller limits, unusually large uncapped identifiers or legacy
+rows, even one row can exceed the ceiling. That is a read failure, not permission
+to bypass the bridge limit. The limit and page policy share the bridge's cached
+value; tests use `resetDbReplyLimitForTest` when changing it.
+
+A reference query failure emits a **header-only** `task:message` frame containing
+`task_id`, `issue_id`, optional Chat/issue-session IDs, `degraded:true`, and the
+inclusive `seq_start`/`seq_end`. It contains no message `seq` or content and must
+not be inserted as a transcript row. The browser handler clears that task's
+pending frame buffer and invalidates only its task-message history query. The
+header follows the same private-task and Chat audience checks as full messages.
+The transport acknowledges it without retrying a poisoned read forever, records
+`reference_read_failed` once per failed reference in peer health, and logs only a
+payload-free warning. `degraded_received` still counts the reference once, not
+once per page. Real-PG tests cover a 512 KiB bridge limit with successful pages
+and a 128 KiB limit that refuses one 256 KiB row and triggers this fallback.
 
 Task enqueued and task event envelopes retain their full-task contract and can
 degrade to task IDs. Workspace events and opaque topics that cannot fit one
@@ -85,6 +137,7 @@ reads or resolver calls.
 
 Validation lives in the
 [store-to-peer budget and golden tests](../../tests/unit/multiremi/peer-task-message-budget.test.ts),
+[committed-reference and real-PG tests](../../tests/unit/multiremi/peer-task-message-reference.test.ts),
 [protocol tests](../../tests/unit/multiremi/peer-channel.test.ts),
 [fanout tests](../../tests/unit/multiremi/realtime-fanout.test.ts) and
 [role architecture guard](../../tests/arch/api-role-resolution.test.ts).

@@ -142,6 +142,8 @@ export interface PeerChannelStats {
   duplicates: number;
   /** Inbound events that arrived as a degraded task reference. */
   degraded_received: number;
+  /** Inbound seq references that failed to read and requested browser refetch. */
+  reference_read_failed: number;
   /** Round-trip p95 of this process's successful POSTs, milliseconds. */
   rtt_p95_ms: number;
 }
@@ -179,6 +181,7 @@ export interface PeerChannel {
    */
   receive(topic: string, events: unknown[], dedupe?: { epoch: string; batchSeq: number }): PeerReceiveResult;
   stats(): PeerChannelStats;
+  recordReferenceReadFailure(): void;
   /** True while no flush attempt is failing and the channel is open. */
   healthy(): boolean;
   close(): void;
@@ -322,6 +325,7 @@ class HttpPeerChannel implements PeerChannel {
   private rejected = 0;
   private duplicates = 0;
   private degradedReceived = 0;
+  private referenceReadFailed = 0;
 
   constructor(options: PeerChannelOptions) {
     this.url = `${options.url ?? ""}`.trim().replace(/\/+$/, "");
@@ -586,12 +590,17 @@ class HttpPeerChannel implements PeerChannel {
       rejected: this.rejected,
       duplicates: this.duplicates,
       degraded_received: this.degradedReceived,
+      reference_read_failed: this.referenceReadFailed,
       rtt_p95_ms: Math.round(percentilesForPeerRtt(this.rttSamples) * 10) / 10,
     };
   }
 
   healthy(): boolean {
     return !this.closed && this.consecutiveFailures === 0;
+  }
+
+  recordReferenceReadFailure(): void {
+    this.referenceReadFailed += 1;
   }
 
   close(): void {
