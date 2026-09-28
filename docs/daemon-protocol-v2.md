@@ -267,6 +267,13 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 `outbox_events.task_id` 语义扩展为分区键：runtime 级记录写 `rt:<runtime_id>`。每分区内保序，
 分区间可并行。断线期间照常入库，重连后从最小未删 id 续发。
 
+**容量上限（默认 256 MiB）是软上限。** 超限时只允许删除同分区、同类型已有更新待发行覆盖的
+`task.progress`、`task.session_pin`、`task.workspace` 旧行；`progress(final:true)` 不删除。
+其余可靠行一律保留，包括 start、prompt、usage（合并计量）、messages、complete、fail、
+所有 runtime 结果、feishu.outbound_result 和 plugin.state。压缩后仍超限只记 warn，stats 的
+`overCapBytes` 暴露 SQLite 已分配文件大小超过上限的字节数（空闲页可能仍被保留），
+不阻塞调用方，也不向调用方报错。
+
 **下行可靠帧：`seq` 每连接从 1 起，只在内存。不建服务端持久队列——DB 就是队列。**
 
 | 帧 | 重连后从哪里重新推导 |

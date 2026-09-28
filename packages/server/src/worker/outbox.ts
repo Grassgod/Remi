@@ -56,6 +56,7 @@ export interface MultiremiOutboxStats {
   oldestPendingCreatedAt: string | null;
   droppedTotal: number;
   fileBytes: number;
+  overCapBytes: number;
 }
 
 export type MultiremiOutboxDrainResult = "delivered" | "blocked" | "aborted";
@@ -70,7 +71,7 @@ export interface MultiremiTaskReportOutboxOptions {
   prepareDelivery?: (record: MultiremiOutboxRecord) => MultiremiOutboxRecord;
   /** Bounded exponential backoff schedule; the last entry repeats. */
   backoffScheduleMs?: number[];
-  /** Soft cap for the on-disk queue; oldest NON-terminal rows are dropped over it. */
+  /** Soft cap: compact covered progress/session_pin/workspace rows, retaining all other reliable reports. */
   maxBytes?: number;
   /** Called once when a task's queue enters the blocked state. */
   onTaskBlocked?: (taskId: string, error: string) => void;
@@ -85,7 +86,7 @@ const DISCARDED_TASK_TTL_MS = 24 * 60 * 60 * 1_000;
 /**
  * One durable process-wide pump. Row ids are reliable WS seqs; each task or
  * rt: partition is ordered, while independent partitions share the bounded
- * frame/byte window. Terminal reports are never dropped by the soft size cap.
+ * frame/byte window. Only covered overwrite reports are compacted at the soft size cap.
  * Permanent errors block a partition; task_not_found discards it instead,
  * and steer_pending hands completion back to the executor or reports recovery.
  */
@@ -348,6 +349,7 @@ export class MultiremiTaskReportOutbox {
     ).get() as { at: string | null };
     const pages = this.db.query("PRAGMA page_count").get() as { page_count: number };
     const pageSize = this.db.query("PRAGMA page_size").get() as { page_size: number };
+    const fileBytes = Number(pages.page_count) * Number(pageSize.page_size);
     return {
       pending: Number(pending.n),
       pendingNonTerminal: Number(pending.n) - Number(pendingTerminal.n),
@@ -356,7 +358,8 @@ export class MultiremiTaskReportOutbox {
       pendingTasks: Number(pendingTasks.n),
       oldestPendingCreatedAt: oldest.at ?? null,
       droppedTotal: Number(this.readMeta("dropped_total") ?? 0),
-      fileBytes: Number(pages.page_count) * Number(pageSize.page_size),
+      fileBytes,
+      overCapBytes: Math.max(0, fileBytes - this.maxBytes),
     };
   }
 
@@ -583,31 +586,24 @@ export class MultiremiTaskReportOutbox {
     this.db.run(`DELETE FROM outbox_events WHERE id IN (${placeholders})`, recordIds);
   }
 
-  /**
-   * Drop the oldest NON-terminal pending rows when the file outgrows maxBytes.
-   * Terminal events are never dropped — losing one would strand the task in
-   * `running` forever, which is exactly what this queue exists to prevent.
-   */
+  /** Capacity pressure may compact only pending overwrite rows already covered by a newer row. */
   private enforceSizeCap(): void {
     const pages = this.db.query("PRAGMA page_count").get() as { page_count: number };
     const pageSize = this.db.query("PRAGMA page_size").get() as { page_size: number };
-    let bytes = Number(pages.page_count) * Number(pageSize.page_size);
+    const bytes = Number(pages.page_count) * Number(pageSize.page_size);
     if (bytes <= this.maxBytes) return;
-    let dropped = 0;
-    while (bytes > this.maxBytes) {
-      const victim = this.db.query(
-        "SELECT id, length(payload) AS bytes FROM outbox_events WHERE terminal = 0 ORDER BY id ASC LIMIT 1",
-      ).get() as { id: number; bytes: number } | null;
-      if (!victim) break;
-      this.db.run("DELETE FROM outbox_events WHERE id = ?", [victim.id]);
-      dropped += 1;
-      bytes -= Number(victim.bytes);
-    }
+    const dropped = Number(this.db.run(`DELETE FROM outbox_events AS old
+      WHERE old.status = 'pending' AND old.kind IN ('progress', 'session_pin', 'workspace')
+        AND NOT (old.kind = 'progress' AND COALESCE(json_extract(old.payload, '$.final'), 0) = 1)
+        AND EXISTS (SELECT 1 FROM outbox_events AS newer WHERE newer.task_id = old.task_id
+          AND newer.kind = old.kind AND newer.status = 'pending' AND newer.id > old.id)`).changes);
     if (dropped > 0) {
       const total = Number(this.readMeta("dropped_total") ?? 0) + dropped;
       this.writeMeta("dropped_total", String(total));
-      log.warn(`outbox exceeded ${this.maxBytes} bytes; dropped ${dropped} oldest non-terminal record(s) (total dropped: ${total})`);
+      log.warn(`outbox exceeded ${this.maxBytes} bytes; compacted ${dropped} covered overwrite record(s) (total dropped: ${total})`);
     }
+    // SQLite can retain allocated pages after compaction; never evict reliable rows to shrink the file.
+    log.warn(`outbox remains over its ${this.maxBytes} byte soft cap; retaining reliable reports`);
   }
 
   private readMeta(key: string): string | null {
