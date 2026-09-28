@@ -120,7 +120,10 @@ there too). Trace bytes across processes are zero by construction.
 
 **The cross-process channel is MUL-462's `publish(topic) / subscribe(topic)` peer channel**,
 topic `hub`; C1 adds the `HubTransport` peer adapter on top of it (topic `hub`,
-sending `{kind: "head"}`). There is no second peer link: 7/6's `/internal/hub`,
+sending `{kind: "head"}`). The roles on either side of that channel and the
+channel's own delivery rules are ADR 0009's subject (MUL-464, not yet in `main`);
+this ADR owns only what the hub puts on it and what the receiver does with a
+pointer. There is no second peer link: 7/6's `/internal/hub`,
 `X-Peer-Secret`, `api/role.ts` and `EventBridge` are superseded by MUL-461/462. The
 head pointer is the whole payload, so the channel's ≤200ms budget is comfortable.
 MUL-462's receiver-side 「可能漏了」 signal is what makes the hub **reconcile**: on
@@ -194,7 +197,7 @@ and keeps ADR 0008. This supersedes the plan's "both hooks are C's" wording, whi
 was written when MUL-390 had no branch and would have blocked every frontend
 sub-issue behind it.
 
-### 5. The adapter seam over MUL-462's peer channel
+### 5. The adapter seam over MUL-462's peer channel (roles: ADR 0009)
 
 `HubTransport` has one implementation today, `local`, which does nothing on
 publish because the hub already fanned the frame out in this process. C1 adds the
