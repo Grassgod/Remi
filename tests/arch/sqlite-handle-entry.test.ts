@@ -34,7 +34,8 @@ type Rule = "A" | "B" | "C";
 
 const hints: Record<Rule, string> = {
   A: "only the entry files may hold the bun:sqlite Database value; elsewhere use `import type` and create handles "
-    + "with openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js.",
+    + "with openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js. "
+    + "Passing a possible bun:sqlite specifier to any function is treated as loading it; use other text for labels.",
   B: "use openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js; "
     + "use markSqliteDialect() for existing handles and SQLite wrappers.",
   C: "never re-export bun:sqlite values (export type is fine); import the factory from @multiremi/store/db/sqlite.js instead.",
@@ -166,42 +167,91 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
   };
   const snippet = (node: ts.Node): string => node.getText(source).replace(/\s+/g, " ").slice(0, 80);
 
-  // Same-file string constants, so a specifier split into pieces or kept in a variable still resolves.
+  // Over-approximate same-file string bindings across scopes and assignments. This pruning is sound only
+  // for concatenation: every piece of a possible bun:sqlite specifier must be one of its substrings.
+  // Arrays, object properties, function returns, for-of values, join(), cross-file constants, and eval()
+  // remain outside this static scan; slice(), replace(), or other transforms would require a new analysis.
   const declarations: ts.VariableDeclaration[] = [];
-  const initializers = new Map<string, ts.Expression>();
+  const bindings = new Map<string, { expression: ts.Expression; append: boolean }[]>();
+  const addBinding = (name: string, expression: ts.Expression, append = false): void => {
+    const entries = bindings.get(name) ?? [];
+    entries.push({ expression, append });
+    bindings.set(name, entries);
+  };
   const gather = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node)) {
       declarations.push(node);
-      if (ts.isIdentifier(node.name) && node.initializer) initializers.set(node.name.text, node.initializer);
+      if (ts.isIdentifier(node.name) && node.initializer) addBinding(node.name.text, node.initializer);
+    } else if ((ts.isParameter(node) || ts.isBindingElement(node))
+      && ts.isIdentifier(node.name) && node.initializer) {
+      addBinding(node.name.text, node.initializer);
+    } else if (ts.isBinaryExpression(node) && ts.isIdentifier(node.left)) {
+      const operator = node.operatorToken.kind;
+      if (operator === ts.SyntaxKind.EqualsToken || operator === ts.SyntaxKind.BarBarEqualsToken
+        || operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken
+        || operator === ts.SyntaxKind.QuestionQuestionEqualsToken || operator === ts.SyntaxKind.PlusEqualsToken) {
+        addBinding(node.left.text, node.right, operator === ts.SyntaxKind.PlusEqualsToken);
+      }
     }
     ts.forEachChild(node, gather);
   };
   gather(source);
-  const constantString = (expression: ts.Expression, seen: ReadonlySet<string> = new Set()): string | undefined => {
+
+  type Values = Set<string>;
+  const empty = (): Values => new Set<string>();
+  const values = new Map<string, Values>();
+  const insert = (target: Values, value: string): void => {
+    if ("bun:sqlite".includes(value)) target.add(value);
+  };
+  const combine = (left: Values, right: Values): Values => {
+    const result = empty();
+    for (const a of left) for (const b of right) insert(result, a + b);
+    return result;
+  };
+  const constantStrings = (expression: ts.Expression): Values => {
     expression = unwrap(expression);
-    if (ts.isStringLiteralLike(expression)) return expression.text;
+    if (ts.isStringLiteralLike(expression)) {
+      const result = empty();
+      insert(result, expression.text);
+      return result;
+    }
+    if (ts.isIdentifier(expression)) return values.get(expression.text) ?? empty();
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const left = constantString(expression.left, seen);
-      const right = constantString(expression.right, seen);
-      return left === undefined || right === undefined ? undefined : left + right;
+      return combine(constantStrings(expression.left), constantStrings(expression.right));
     }
     if (ts.isTemplateExpression(expression)) {
-      let result = expression.head.text;
+      const head = empty();
+      insert(head, expression.head.text);
+      let result = head;
       for (const span of expression.templateSpans) {
-        const value = constantString(span.expression, seen);
-        if (value === undefined) return undefined;
-        result += value + span.literal.text;
+        const literal = empty();
+        insert(literal, span.literal.text);
+        result = combine(combine(result, constantStrings(span.expression)), literal);
       }
       return result;
     }
-    if (ts.isIdentifier(expression) && !seen.has(expression.text)) {
-      const initializer = initializers.get(expression.text);
-      if (initializer) return constantString(initializer, new Set([...seen, expression.text]));
-    }
-    return undefined;
+    return empty();
   };
+  let changed = true;
+  let rounds = 0;
+  while (changed) {
+    if (++rounds > bindings.size * 56 + 1) throw new Error("SQLite specifier analysis did not converge");
+    changed = false;
+    for (const [name, entries] of bindings) {
+      const current = values.get(name) ?? empty();
+      const next: Values = new Set(current);
+      for (const { expression, append } of entries) {
+        const candidate = append ? combine(current, constantStrings(expression)) : constantStrings(expression);
+        for (const value of candidate) insert(next, value);
+      }
+      if (next.size !== current.size) {
+        values.set(name, next);
+        changed = true;
+      }
+    }
+  }
   const isSpecifier = (expression: ts.Expression | undefined): boolean =>
-    expression !== undefined && constantString(expression) === "bun:sqlite";
+    expression !== undefined && [...constantStrings(expression)].some(value => value === "bun:sqlite");
 
   // A: every way of obtaining a bun:sqlite value. Entry files must use a named `Database` import so each use is checked.
   const databaseNames = new Set<string>();
@@ -231,7 +281,7 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
       && ts.isExternalModuleReference(node.moduleReference) && isSpecifier(node.moduleReference.expression)) {
       acquire(node, node.name.text, false);
     } else if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && node.arguments?.some(isSpecifier)) {
-      // import(), require(), module.require(), createRequire(...)(): any call handed the specifier loads the module.
+      // Any call handed a possible specifier counts as a loader; labels must use other text.
       acquire(node, undefined, false);
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && isSpecifier(node.moduleSpecifier) && !node.isTypeOnly
       && (!node.exportClause || ts.isNamespaceExport(node.exportClause)
@@ -319,7 +369,7 @@ function scanSqliteUse(text: string, filename: string, file = filename): Scan {
     references(source);
   }
 
-  // B: handle creation outside the factory files.
+  // B: handle creation outside the factory files. A already rejects variable-based module loading elsewhere.
   const constructions = constructionsIn(source);
   if (!constructionAllowed.includes(file)) {
     for (const construction of constructions) {
@@ -393,6 +443,31 @@ describe("SQLite handle entry", () => {
     ["dynamic import", ['const { Database } = await import("bun:sqlite");'], ["A:1"]],
     ["template specifier", ['const sqlite = await import(`bun:sqlite`);'], ["A:1"]],
     ["computed specifier", ['const name = "bun:" + "sqlite";', "const sqlite = await import(name);"], ["A:2"]],
+    ["function scope shadow (QA round 2)",
+      ['const moduleName = "bun:sqlite";', 'function unrelated() {', '  const moduleName = "node:fs";',
+        '  return moduleName;', '}', 'const sqlite = await import(moduleName);'], ["A:6"]],
+    ["block scope shadow",
+      ['const m = "bun:sqlite";', '{ const m = "node:fs"; }', 'await import(m);'], ["A:3"]],
+    ["reverse scope shadow",
+      ['const m = "node:fs";', '{ const m = "bun:sqlite";', '  await import(m);', '}'], ["A:3"]],
+    ["late assignment",
+      ['let m = "node:fs";', 'm = "bun:sqlite";', 'await import(m);'], ["A:3"]],
+    ["append assignment",
+      ['let m = "bun";', 'm += ":";', 'm += "sqlite";', 'require(m);'], ["A:4"]],
+    ["parameter default",
+      ['function load(m = "bun:sqlite") { return import(m); }'], ["A:1"]],
+    ["binding default",
+      ['const { m = "bun:sqlite" } = {};', 'import(m);'], ["A:2"]],
+    ["nullish assignment",
+      ['let m;', 'm ??= "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["logical-or assignment",
+      ['let m;', 'm ||= "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["logical-and assignment",
+      ['let m = "node:fs";', 'm &&= "bun:sqlite";', 'import(m);'], ["A:3"]],
+    ["self-appended candidate",
+      ['let m = "bun:";', 'm += m;', 'm += "sqlite";', 'import(m);'], ["A:4"]],
+    ["literal passed to a label function is conservatively rejected",
+      ['function label(s) { return s; }', 'label("bun:sqlite");'], ["A:2"]],
     ["createRequire",
       ['import { createRequire } from "node:module";', "const load = createRequire(import.meta.url);", 'load("bun:sqlite");'],
       ["A:3"]],
@@ -436,6 +511,9 @@ describe("SQLite handle entry", () => {
       'import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";\nconst db = openSqliteDatabase();',
       'import { Database } from "another-db";\nnew Database();',
       'const label = "bun:sqlite";\n// new Database(":memory:");\nconst example = `new Database(":memory:")`;',
+      'const m = "node:fs";\n{ const m = "node:path"; }\nimport(m);',
+      'let m = "a"; m += m; m += m; import(m);',
+      `db.exec(${JSON.stringify(`CREATE TABLE example (${"column TEXT, ".repeat(30)}id TEXT)`)})`,
     ];
     for (const text of allowed) {
       for (const extension of extensions) expect(summary(scanSqliteUse(text, `probe.${extension}`))).toEqual([]);
