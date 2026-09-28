@@ -845,7 +845,7 @@ export function buildIssueListQuery(options: CliOptions): string {
   addQueryParam(params, "status", rawStringOption(options, "status"));
   addQueryParam(params, "priority", rawStringOption(options, "priority"));
   addQueryParam(params, "assignee_id", rawStringOption(options, "assignee-id", "assigneeId", "assignee"));
-  addQueryParam(params, "assignee_type", rawStringOption(options, "assignee-type", "assigneeType"));
+  addQueryParam(params, "assignee_types", rawStringOption(options, "assignee-type", "assigneeType"));
   addQueryParam(params, "project_id", rawStringOption(options, "project", "project-id"));
   // MUL-400 E3: hierarchy filters. The server resolves a key to its id.
   addQueryParam(params, "parent_id", rawStringOption(options, "parent", "parent-id"));
