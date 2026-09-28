@@ -5,9 +5,39 @@ import { join } from "node:path";
 import ts from "typescript";
 
 const root = join(import.meta.dir, "../..");
-const allowedFiles: Record<string, string> = {
-  "packages/server/src/store/db/sqlite.ts": "The SQLite factory owns creation and marks every returned handle.",
-  "packages/shared/src/db/index.ts": "Shared must not depend on server; openMultiremiDatabase marks getDb() before store use.",
+
+/**
+ * Rule A: the only files that may hold the bun:sqlite `Database` value, and the only uses each may make of it.
+ * Everywhere else `Database` is a type (`import type` / `import { type Database }`), so no alias, re-export,
+ * or reflection trick can reach the constructor. No file needs another bun:sqlite value today; add a reasoned
+ * exception here before importing one.
+ */
+const valueAllowed: Record<string, { uses: string[]; reason: string }> = {
+  "packages/server/src/store/db/sqlite.ts": {
+    uses: ["new", "deserialize"],
+    reason: "The SQLite factory owns creation and marks every returned handle.",
+  },
+  "packages/shared/src/db/index.ts": {
+    uses: ["new"],
+    reason: "Shared must not depend on server; openMultiremiDatabase marks getDb() before store use.",
+  },
+  "packages/shared/src/db/sqlite-custom.ts": {
+    uses: ["setCustomSQLite"],
+    reason: "Swaps the macOS SQLite library before any handle exists; it never creates a handle.",
+  },
+};
+
+/** Rule B: the only files that may create a handle. */
+const constructionAllowed = ["packages/server/src/store/db/sqlite.ts", "packages/shared/src/db/index.ts"];
+
+type Rule = "A" | "B" | "C";
+
+const hints: Record<Rule, string> = {
+  A: "only the entry files may hold the bun:sqlite Database value; elsewhere use `import type` and create handles "
+    + "with openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js.",
+  B: "use openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js; "
+    + "use markSqliteDialect() for existing handles and SQLite wrappers.",
+  C: "never re-export bun:sqlite values (export type is fine); import the factory from @multiremi/store/db/sqlite.js instead.",
 };
 
 interface Construction {
@@ -16,8 +46,33 @@ interface Construction {
   expression: string;
 }
 
+interface Finding {
+  rule: Rule;
+  line: number;
+  column: number;
+  detail: string;
+}
+
+interface Scan {
+  findings: Finding[];
+  /** Named `Database` value imports; an entry file with none no longer needs its whitelist entry. */
+  databaseImports: number;
+  uses: Set<string>;
+  constructions: Construction[];
+}
+
+const unwrap = (expression: ts.Expression): ts.Expression => {
+  while (ts.isParenthesizedExpression(expression) || ts.isAwaitExpression(expression)
+    || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)
+    || ts.isNonNullExpression(expression) || ts.isSatisfiesExpression(expression)) expression = expression.expression;
+  return expression;
+};
+
 function sqliteConstructions(text: string, filename = "probe.ts"): Construction[] {
-  const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true);
+  return constructionsIn(ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true));
+}
+
+function constructionsIn(source: ts.SourceFile): Construction[] {
   const modules = new Set<string>();
   const constructors = new Set<string>();
   const declarations: ts.VariableDeclaration[] = [];
@@ -40,12 +95,6 @@ function sqliteConstructions(text: string, filename = "probe.ts"): Construction[
   };
   collect(source);
 
-  const unwrap = (expression: ts.Expression): ts.Expression => {
-    while (ts.isParenthesizedExpression(expression) || ts.isAwaitExpression(expression)
-      || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)
-      || ts.isNonNullExpression(expression) || ts.isSatisfiesExpression(expression)) expression = expression.expression;
-    return expression;
-  };
   const member = (expression: ts.Expression): { object: ts.Expression; name: string } | undefined => {
     expression = unwrap(expression);
     if (ts.isPropertyAccessExpression(expression)) return { object: expression.expression, name: expression.name.text };
@@ -106,27 +155,291 @@ function sqliteConstructions(text: string, filename = "probe.ts"): Construction[
   return found;
 }
 
+/** Apply rules A, B, and C to one file; `file` is the repository path used for the whitelists. */
+function scanSqliteUse(text: string, filename: string, file = filename): Scan {
+  const source = ts.createSourceFile(filename, text, ts.ScriptTarget.Latest, true);
+  const policy = valueAllowed[file];
+  const findings: Finding[] = [];
+  const report = (rule: Rule, node: ts.Node, detail: string): void => {
+    const position = source.getLineAndCharacterOfPosition(node.getStart(source));
+    findings.push({ rule, line: position.line + 1, column: position.character + 1, detail });
+  };
+  const snippet = (node: ts.Node): string => node.getText(source).replace(/\s+/g, " ").slice(0, 80);
+
+  // Same-file string constants, so a specifier split into pieces or kept in a variable still resolves.
+  const declarations: ts.VariableDeclaration[] = [];
+  const initializers = new Map<string, ts.Expression>();
+  const gather = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) {
+      declarations.push(node);
+      if (ts.isIdentifier(node.name) && node.initializer) initializers.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, gather);
+  };
+  gather(source);
+  const constantString = (expression: ts.Expression, seen: ReadonlySet<string> = new Set()): string | undefined => {
+    expression = unwrap(expression);
+    if (ts.isStringLiteralLike(expression)) return expression.text;
+    if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = constantString(expression.left, seen);
+      const right = constantString(expression.right, seen);
+      return left === undefined || right === undefined ? undefined : left + right;
+    }
+    if (ts.isTemplateExpression(expression)) {
+      let result = expression.head.text;
+      for (const span of expression.templateSpans) {
+        const value = constantString(span.expression, seen);
+        if (value === undefined) return undefined;
+        result += value + span.literal.text;
+      }
+      return result;
+    }
+    if (ts.isIdentifier(expression) && !seen.has(expression.text)) {
+      const initializer = initializers.get(expression.text);
+      if (initializer) return constantString(initializer, new Set([...seen, expression.text]));
+    }
+    return undefined;
+  };
+  const isSpecifier = (expression: ts.Expression | undefined): boolean =>
+    expression !== undefined && constantString(expression) === "bun:sqlite";
+
+  // A: every way of obtaining a bun:sqlite value. Entry files must use a named `Database` import so each use is checked.
+  const databaseNames = new Set<string>();
+  const valueNames = new Set<string>();
+  let databaseImports = 0;
+  const acquire = (node: ts.Node, name: string | undefined, database: boolean): void => {
+    if (name) valueNames.add(name);
+    if (database && name) {
+      databaseNames.add(name);
+      databaseImports++;
+    }
+    if (!policy) report("A", node, `${snippet(node)} obtains a bun:sqlite value outside the entry files`);
+    else if (!database) report("A", node, `${snippet(node)}: entry files may only import { Database } by name`);
+  };
+  const acquisitions = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && isSpecifier(node.moduleSpecifier)
+      && node.importClause && !node.importClause.isTypeOnly) {
+      const { name, namedBindings } = node.importClause;
+      if (name) acquire(name, name.text, false);
+      if (namedBindings && ts.isNamespaceImport(namedBindings)) acquire(namedBindings, namedBindings.name.text, false);
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) {
+          if (!element.isTypeOnly) acquire(element, element.name.text, (element.propertyName ?? element.name).text === "Database");
+        }
+      }
+    } else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly
+      && ts.isExternalModuleReference(node.moduleReference) && isSpecifier(node.moduleReference.expression)) {
+      acquire(node, node.name.text, false);
+    } else if ((ts.isCallExpression(node) || ts.isNewExpression(node)) && node.arguments?.some(isSpecifier)) {
+      // import(), require(), module.require(), createRequire(...)(): any call handed the specifier loads the module.
+      acquire(node, undefined, false);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && isSpecifier(node.moduleSpecifier) && !node.isTypeOnly
+      && (!node.exportClause || ts.isNamespaceExport(node.exportClause)
+        || node.exportClause.elements.some(element => !element.isTypeOnly))) {
+      report("C", node, `${snippet(node)} re-exports bun:sqlite`);
+    }
+    ts.forEachChild(node, acquisitions);
+  };
+  acquisitions(source);
+
+  // Local names that hold a bun:sqlite value, followed through declarations for rule C.
+  const holdsValue = (expression: ts.Expression): boolean => {
+    expression = unwrap(expression);
+    if (ts.isIdentifier(expression)) return valueNames.has(expression.text);
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+      return holdsValue(expression.expression);
+    }
+    return ts.isCallExpression(expression) && expression.arguments.some(isSpecifier);
+  };
+  const bind = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) valueNames.add(name.text);
+    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+  };
+  for (let size = -1; size !== valueNames.size;) {
+    size = valueNames.size;
+    for (const declaration of declarations) {
+      if (declaration.initializer && holdsValue(declaration.initializer)) bind(declaration.name);
+    }
+  }
+
+  // C: local re-exports, in every file including the entry files.
+  const reexports = (node: ts.Node): void => {
+    if (ts.isExportDeclaration(node) && !node.moduleSpecifier && !node.isTypeOnly
+      && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      for (const element of node.exportClause.elements) {
+        if (!element.isTypeOnly && valueNames.has((element.propertyName ?? element.name).text)) {
+          report("C", element, `export { ${snippet(element)} } re-exports a bun:sqlite value`);
+        }
+      }
+    } else if (ts.isExportAssignment(node) && holdsValue(node.expression)) {
+      report("C", node, `${snippet(node)} re-exports a bun:sqlite value`);
+    } else if (ts.isVariableStatement(node) && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      for (const declaration of node.declarationList.declarations) {
+        if (declaration.initializer && holdsValue(declaration.initializer)) {
+          report("C", declaration, `export ${snippet(declaration)} re-exports a bun:sqlite value`);
+        }
+      }
+    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && /^(module\.)?exports\b/.test(node.left.getText(source)) && holdsValue(node.right)) {
+      report("C", node, `${snippet(node)} re-exports a bun:sqlite value`);
+    }
+    ts.forEachChild(node, reexports);
+  };
+  reexports(source);
+
+  // A, entry files: every value reference of Database must be one of the file's listed uses.
+  const uses = new Set<string>();
+  if (policy) {
+    const nameSlot = (identifier: ts.Identifier): boolean => {
+      const parent = identifier.parent;
+      return (ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent) || ts.isClassElement(parent)
+        || ts.isEnumMember(parent)) && parent.name === identifier;
+    };
+    const useOf = (identifier: ts.Identifier): string => {
+      const parent = identifier.parent;
+      if (ts.isNewExpression(parent) && parent.expression === identifier) return "new";
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === identifier
+        && ts.isCallExpression(parent.parent) && parent.parent.expression === parent) return parent.name.text;
+      return "escape";
+    };
+    const references = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) return;
+      // Types never reach the constructor, but `class X extends Database` does.
+      if (ts.isTypeNode(node) && !(ts.isExpressionWithTypeArguments(node) && ts.isHeritageClause(node.parent)
+        && node.parent.token === ts.SyntaxKind.ExtendsKeyword && ts.isClassLike(node.parent.parent))) return;
+      if (ts.isIdentifier(node) && databaseNames.has(node.text) && !nameSlot(node)) {
+        const use = useOf(node);
+        uses.add(use);
+        if (!policy.uses.includes(use)) {
+          report("A", node, `${snippet(node.parent)}: this file may only use Database for ${policy.uses.join(", ")}`);
+        }
+      }
+      ts.forEachChild(node, references);
+    };
+    references(source);
+  }
+
+  // B: handle creation outside the factory files.
+  const constructions = constructionsIn(source);
+  if (!constructionAllowed.includes(file)) {
+    for (const construction of constructions) {
+      findings.push({ rule: "B", line: construction.line, column: construction.column,
+        detail: `${construction.expression}(...) creates a SQLite handle` });
+    }
+  }
+  findings.sort((left, right) => left.line - right.line || left.column - right.column || left.rule.localeCompare(right.rule));
+  return { findings, databaseImports, uses, constructions };
+}
+
+const summary = (scan: Scan): string[] => scan.findings.map(finding => `${finding.rule}:${finding.line}`).sort();
+const extensions = ["ts", "tsx", "js", "mjs"];
+
 describe("SQLite handle entry", () => {
-  test("all tracked source creates SQLite handles through the marked factory", () => {
+  test("tracked source keeps the Database value and handle creation inside the entry files", () => {
     const files = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0")
       .filter(file => /\.(ts|tsx|js|mjs)$/.test(file) && !file.endsWith(".d.ts")
         && !/(^|\/)(node_modules|dist|build|out|coverage|\.next|\.git|\.cache)\//.test(file));
     expect(files.length).toBeGreaterThan(0);
     const violations: string[] = [];
-    const allowedSeen = new Set<string>();
+    const stale: string[] = [];
+    const scanned = new Map<string, Scan>();
     for (const file of files) {
-      const text = readFileSync(join(root, file), "utf8");
-      if (!text.includes("bun:sqlite")) continue;
-      const found = sqliteConstructions(text, file);
-      if (allowedFiles[file]) {
-        if (found.length) allowedSeen.add(file);
-        continue;
+      const scan = scanSqliteUse(readFileSync(join(root, file), "utf8"), file);
+      if (valueAllowed[file] || constructionAllowed.includes(file)) scanned.set(file, scan);
+      for (const finding of scan.findings) {
+        violations.push(`${file}:${finding.line}:${finding.column} [${finding.rule}] ${finding.detail}; ${hints[finding.rule]}`);
       }
-      for (const entry of found) violations.push(`${file}:${entry.line}:${entry.column} (${entry.expression})`);
     }
-    expect(allowedSeen).toEqual(new Set(Object.keys(allowedFiles)));
-    expect(violations, "Use openSqliteDatabase() or deserializeSqliteDatabase() from @multiremi/store/db/sqlite.js; "
-      + "use markSqliteDialect() for existing handles and SQLite wrappers.\n" + violations.join("\n")).toEqual([]);
+    // The whitelists must stay exact: a missing file or an entry that is no longer needed fails.
+    for (const [file, policy] of Object.entries(valueAllowed)) {
+      const scan = scanned.get(file);
+      if (!scan) stale.push(`${file}: whitelisted for rule A but not tracked`);
+      else if (!scan.databaseImports) stale.push(`${file}: no longer imports the Database value; drop it from rule A`);
+      else for (const use of policy.uses) if (!scan.uses.has(use)) stale.push(`${file}: no longer uses Database for ${use}`);
+    }
+    for (const file of constructionAllowed) {
+      if (!scanned.get(file)?.constructions.length) stale.push(`${file}: no longer creates a handle; drop it from rule B`);
+    }
+    expect(stale).toEqual([]);
+    expect(violations, violations.join("\n")).toEqual([]);
+  }, 120_000);
+
+  // D. Self-checks: each case runs as ts, tsx, js, and mjs; results are `rule:line`.
+  const outside: [string, string[], string[]][] = [
+    ["cross-module bridge (QA case 1)", ['export { Database } from "bun:sqlite";'], ["C:1"]],
+    ["renamed bridge", ['export { Database as Db } from "bun:sqlite";'], ["C:1"]],
+    ["bridge consumer that takes the value itself", ['import { Database } from "bun:sqlite";', 'new Database(":memory:");'],
+      ["A:1", "B:2"]],
+    ["method alias (QA case 2)", ['import { Database } from "bun:sqlite";', "const open = Database.open;", 'open(":memory:");'],
+      ["A:1"]],
+    ["late-assigned alias (QA case 3)",
+      ['import { Database } from "bun:sqlite";', "let D: typeof Database;", "D = Database;", 'new D(":memory:");'], ["A:1"]],
+    ["destructured method", ['import { Database } from "bun:sqlite";', "const { open } = Database;", 'open(":memory:");'],
+      ["A:1"]],
+    ["element access", ['import { Database } from "bun:sqlite";', 'Database["open"](":memory:");'], ["A:1", "B:2"]],
+    ["Reflect.construct", ['import { Database } from "bun:sqlite";', "Reflect.construct(Database, []);"], ["A:1"]],
+    ["export *", ['export * from "bun:sqlite";'], ["C:1"]],
+    ["export * as", ['export * as sqlite from "bun:sqlite";'], ["C:1"]],
+    ["export default", ['import { Database } from "bun:sqlite";', "export default Database;"], ["A:1", "C:2"]],
+    ["local export", ['import { Database } from "bun:sqlite";', "export { Database };"], ["A:1", "C:2"]],
+    ["exported alias", ['import { Database } from "bun:sqlite";', "export const Db = Database;"], ["A:1", "C:2"]],
+    ["exported namespace", ['import * as sqlite from "bun:sqlite";', "export { sqlite };"], ["A:1", "C:2"]],
+    ["CommonJS export", ['const sqlite = require("bun:sqlite");', "module.exports = sqlite;"], ["A:1", "C:2"]],
+    ["default import", ['import Sqlite from "bun:sqlite";'], ["A:1"]],
+    ["namespace import", ['import * as sqlite from "bun:sqlite";'], ["A:1"]],
+    ["import-equals", ['import sqlite = require("bun:sqlite");'], ["A:1"]],
+    ["other value import", ['import { constants } from "bun:sqlite";'], ["A:1"]],
+    ["multi-line import", ["import {", "  type SQLQueryBindings,", "  Database,", '} from "bun:sqlite";'], ["A:3"]],
+    ["dynamic import", ['const { Database } = await import("bun:sqlite");'], ["A:1"]],
+    ["template specifier", ['const sqlite = await import(`bun:sqlite`);'], ["A:1"]],
+    ["computed specifier", ['const name = "bun:" + "sqlite";', "const sqlite = await import(name);"], ["A:2"]],
+    ["createRequire",
+      ['import { createRequire } from "node:module";', "const load = createRequire(import.meta.url);", 'load("bun:sqlite");'],
+      ["A:3"]],
+  ];
+  for (const [title, lines, expected] of outside) {
+    test(`scanner flags ${title}`, () => {
+      for (const extension of extensions) expect(summary(scanSqliteUse(lines.join("\n"), `probe.${extension}`))).toEqual(expected);
+    });
+  }
+
+  const custom = "packages/shared/src/db/sqlite-custom.ts";
+  const factory = "packages/server/src/store/db/sqlite.ts";
+  const inside: [string, string, string[], string[]][] = [
+    ["the library swap", custom, ['import { Database } from "bun:sqlite";', "Database.setCustomSQLite(path);"], []],
+    ["a method alias", custom, ['import { Database } from "bun:sqlite";', "const open = Database.open;"], ["A:2"]],
+    ["a construction", custom, ['import { Database } from "bun:sqlite";', 'new Database(":memory:");'], ["A:2", "B:2"]],
+    ["a namespace import", custom, ['import * as sqlite from "bun:sqlite";'], ["A:1"]],
+    ["a re-export", custom, ['export { Database } from "bun:sqlite";'], ["C:1"]],
+    ["a local export", factory, ['import { Database } from "bun:sqlite";', "export { Database };"], ["A:2", "C:2"]],
+    ["export default", factory, ['import { Database } from "bun:sqlite";', "export default Database;"], ["A:2", "C:2"]],
+    ["a returned value", factory, ['import { Database } from "bun:sqlite";', "export const leak = () => Database;"], ["A:2"]],
+    ["a subclass", factory, ['import { Database } from "bun:sqlite";', "class Db extends Database {}"], ["A:2"]],
+    ["the factory's own uses", factory,
+      ['import { Database } from "bun:sqlite";', "let options: ConstructorParameters<typeof Database>[1];",
+        "new Database(filename, options);", "Database.deserialize(bytes);"], []],
+  ];
+  for (const [title, file, lines, expected] of inside) {
+    test(`scanner checks ${title} in ${file}`, () => {
+      for (const extension of extensions) {
+        expect(summary(scanSqliteUse(lines.join("\n"), `probe.${extension}`, file))).toEqual(expected);
+      }
+    });
+  }
+
+  test("scanner accepts types, the factory, and unrelated code", () => {
+    const allowed = [
+      'import type { Database } from "bun:sqlite";\nlet db: Database;',
+      'import { type Database, type SQLQueryBindings } from "bun:sqlite";\nlet db: Database;',
+      'export type { Database } from "bun:sqlite";',
+      'export type * from "bun:sqlite";',
+      'import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";\nconst db = openSqliteDatabase();',
+      'import { Database } from "another-db";\nnew Database();',
+      'const label = "bun:sqlite";\n// new Database(":memory:");\nconst example = `new Database(":memory:")`;',
+    ];
+    for (const text of allowed) {
+      for (const extension of extensions) expect(summary(scanSqliteUse(text, `probe.${extension}`))).toEqual([]);
+    }
   });
 
   const forbidden = [
@@ -149,9 +462,9 @@ describe("SQLite handle entry", () => {
     ['import { Database } from "bun:sqlite"; const X = Database;', 'new X(":memory:");'],
   ];
   for (const [setup, code] of forbidden) {
-    test(`scanner rejects ${setup} ${code}`, () => {
-      for (const filename of ["probe.ts", "probe.tsx", "probe.js", "probe.mjs"]) {
-        const found = sqliteConstructions(`${setup}\n${code}`, filename);
+    test(`construction check rejects ${setup} ${code}`, () => {
+      for (const extension of extensions) {
+        const found = sqliteConstructions(`${setup}\n${code}`, `probe.${extension}`);
         expect(found).toHaveLength(1);
         expect(found[0].line).toBe(2);
         expect(found[0].column).toBe(1);
@@ -159,7 +472,7 @@ describe("SQLite handle entry", () => {
     });
   }
 
-  test("scanner ignores comments, string literals, types, and unrelated databases", () => {
+  test("construction check ignores comments, string literals, types, and unrelated databases", () => {
     expect(sqliteConstructions(`
       import { Database } from "bun:sqlite";
       // new Database(":memory:");

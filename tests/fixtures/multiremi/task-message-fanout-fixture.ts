@@ -10,7 +10,7 @@
 // The clock and id generation are pinned the same way
 // `issue-detail-first-screen-fixture.ts` pins them: `created_at` is part of the
 // frame, so without a fixed clock the comparison would only be a shape check.
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import type {
   BrowserScopeWebSocketRegistry,
