@@ -171,9 +171,9 @@ describe("CLI capabilities manifest", () => {
     // machine-to-server protocol, so they raise the exempt count with the total.
     // MUL-483 combines main with C5's daemon decision-card read, B1's two log
     // reads, B5's two trace reads, and B4's fourteen daemon archive routes:
-    // 775 + 1 + 2 + 2 + 14 = 794.
+    // MUL-485 adds one mapped Session log entry read: 794 + 1 = 795.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 683,
+      mapped: 684,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -183,7 +183,7 @@ describe("CLI capabilities manifest", () => {
       // traffic between two API processes with no user-facing command.
       exempt: 111,
       missing: 0,
-      total: 794,
+      total: 795,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
