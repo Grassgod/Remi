@@ -194,12 +194,17 @@ export async function boot(): Promise<void> {
       // The real Worker, built from `worker-entry.ts`: the fixture must not
       // exercise a same-thread stand-in, because the OPFS refusal on the page's
       // thread is exactly why the Worker exists.
-      createWorker: () =>
-        new Worker("/worker-entry.js", { type: "module" }) as unknown as {
+      createWorker: () => {
+        const worker = new Worker("/worker-entry.js", { type: "module" });
+        const responses: unknown[] = [];
+        (window as unknown as { __qaWorkerResponses: unknown[] }).__qaWorkerResponses = responses;
+        worker.addEventListener("message", (event) => responses.push(event.data));
+        return worker as unknown as {
           postMessage(message: never): void;
           addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
           terminate(): void;
-        },
+        };
+      },
     },
     onCleared: (reason) => {
       (window as unknown as { __replicaCleared?: string[] }).__replicaCleared ??= [];
@@ -241,6 +246,7 @@ export async function boot(): Promise<void> {
     open: () => replica?.open(cfg.sessionId),
     resubscribe: () => replica?.resubscribe(cfg.sessionId),
     close: () => instanceSafe()?.close(cfg.sessionId),
+    dispose: () => instanceSafe()?.dispose(),
     clear: (reason: "logout" | "user_mismatch" | "schema_upgrade") => {
       instanceSafe()?.clear(reason);
       return Promise.resolve();
@@ -256,4 +262,3 @@ export async function boot(): Promise<void> {
     return replica;
   }
 }
-

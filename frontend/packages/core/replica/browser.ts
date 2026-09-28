@@ -161,6 +161,8 @@ class ReplicaFacade implements BrowserReplica {
   private degradedReason: string | null = null;
   private disposed = false;
   private requestCounter = 0;
+  private releaseLock: (() => void) | null = null;
+  private readonly lockAbort = new AbortController();
 
   constructor(
     private readonly options: BrowserReplicaOptions,
@@ -249,10 +251,15 @@ class ReplicaFacade implements BrowserReplica {
     const locks = this.env.locks ?? (globalThis.navigator as Navigator | undefined)?.locks;
     if (!locks) return;
     void locks
-      .request(replicaLockName(this.options.userId, this.options.workspaceId), { mode: "exclusive" }, async () => {
+      .request(replicaLockName(this.options.userId, this.options.workspaceId), { mode: "exclusive", signal: this.lockAbort.signal }, async () => {
         if (this.disposed) return;
-        await this.becomeLeader();
-        await new Promise<never>(() => {});
+        const released = new Promise<void>((resolve) => { this.releaseLock = resolve; });
+        try {
+          await this.becomeLeader();
+          await released;
+        } finally {
+          this.releaseLock = null;
+        }
       })
       .catch(() => {
         // A rejected lock request means this tab never leads; it stays a follower,
@@ -357,6 +364,9 @@ class ReplicaFacade implements BrowserReplica {
     this.disposed = true;
     this.leader?.leader.dispose();
     this.leader?.bridge.terminate?.();
+    this.leader = null;
+    this.lockAbort.abort();
+    this.releaseLock?.();
     this.channel?.close();
   }
 

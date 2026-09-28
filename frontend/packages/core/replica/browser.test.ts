@@ -5,6 +5,27 @@ import { replicaLockName } from "./channel";
 const replicas: BrowserReplica[] = [];
 afterEach(() => { for (const replica of replicas.splice(0)) replica.dispose(); });
 
+test("dispose lets the Web Lock callback finish and prevents a queued disposed page from starting", async () => {
+  let callback: (() => Promise<void>) | undefined;
+  let released = false;
+  const replica = await openBrowserReplica({
+    userId: "user", workspaceId: "ws", tabId: "tab", subscribe: () => {}, unsubscribe: () => {}, readRange: async () => [],
+    env: { hasOpfs: true, broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+      locks: { request: (_name: string, _options: unknown, run: () => Promise<void>) => {
+        callback = run;
+        return run().then(() => { released = true; });
+      } } as never },
+  });
+  replicas.push(replica);
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  expect(replica.isLeader).toBe(true);
+  replica.dispose();
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  expect(released).toBe(true);
+  await callback!();
+  expect(replica.isLeader).toBe(false);
+});
+
 describe("identity partitions", () => {
   test.each([ ["other_user", "ws"], ["user", "other_ws"] ])("isolates %s/%s even when a foreign envelope reaches the receiver", async (userId, workspaceId) => {
     const channels: Array<{ name: string; onmessage: ((event: MessageEvent) => void) | null; sent: unknown[] }> = [];
