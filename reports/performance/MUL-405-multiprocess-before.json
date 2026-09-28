@@ -1,0 +1,295 @@
+{
+  "issue": "MUL-405",
+  "label": "before",
+  "generatedAt": "2026-09-27T05:59:11.428Z",
+  "command": "MULTIREMI_TEST_POSTGRES_URL=postgres://… bun run tests/manual/mul405-multiprocess-safety.ts --part all --rounds 20 --per-process 200",
+  "postgresVersion": "PostgreSQL 15.19 (Debian 15.19-0+deb12u1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "bun": "1.3.14",
+  "node": "v24.3.0",
+  "platform": "linux x64",
+  "cpuCount": 64,
+  "gitHead": "",
+  "migrations": {
+    "name": "concurrent cold-start migrations (2 processes x N fresh databases)",
+    "rounds": 20,
+    "failedRounds": 20,
+    "failureRate": 1,
+    "firstErrors": [
+      "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )",
+      "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )",
+      "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )",
+      "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )",
+      "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+    ],
+    "roundMsP50": 2900,
+    "roundMsP95": 3016,
+    "roundsDetail": [
+      {
+        "round": 0,
+        "ms": 2795,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2615
+        ]
+      },
+      {
+        "round": 1,
+        "ms": 2775,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2602,
+          null
+        ]
+      },
+      {
+        "round": 2,
+        "ms": 3016,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2841,
+          null
+        ]
+      },
+      {
+        "round": 3,
+        "ms": 2913,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2738,
+          null
+        ]
+      },
+      {
+        "round": 4,
+        "ms": 2921,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2746
+        ]
+      },
+      {
+        "round": 5,
+        "ms": 3012,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2830,
+          null
+        ]
+      },
+      {
+        "round": 6,
+        "ms": 2875,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2701,
+          null
+        ]
+      },
+      {
+        "round": 7,
+        "ms": 3103,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2928,
+          null
+        ]
+      },
+      {
+        "round": 8,
+        "ms": 2915,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2733
+        ]
+      },
+      {
+        "round": 9,
+        "ms": 2976,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2801
+        ]
+      },
+      {
+        "round": 10,
+        "ms": 2916,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2739
+        ]
+      },
+      {
+        "round": 11,
+        "ms": 2859,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2680,
+          null
+        ]
+      },
+      {
+        "round": 12,
+        "ms": 2730,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2555,
+          null
+        ]
+      },
+      {
+        "round": 13,
+        "ms": 2684,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n\n    CREATE TABLE IF NOT EXISTS multiremi_agents (\n      id TEXT PRIMARY KEY,\n      workspace_id TEXT NOT NULL DEFAULT 'local',\n      name TEXT NOT NULL,\n      description TEXT NOT NULL DEFAULT '',\n      avatar_url TEXT,\n      provider TEXT NOT NULL,\n      owner_id TEXT NOT NULL DEFAULT 'local',\n      visibility TEXT NOT NULL DEFAULT 'private',\n      runtime_id TEXT,\n      instructions TEXT NOT N"
+        ],
+        "childMs": [
+          2510,
+          null
+        ]
+      },
+      {
+        "round": 14,
+        "ms": 2915,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2740
+        ]
+      },
+      {
+        "round": 15,
+        "ms": 2959,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2787
+        ]
+      },
+      {
+        "round": 16,
+        "ms": 2823,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          2644,
+          null
+        ]
+      },
+      {
+        "round": 17,
+        "ms": 2814,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2637
+        ]
+      },
+      {
+        "round": 18,
+        "ms": 2818,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2642
+        ]
+      },
+      {
+        "round": 19,
+        "ms": 2900,
+        "failed": true,
+        "errors": [
+          "postgres: duplicate key value violates unique constraint \"pg_type_typname_nsp_index\"\n  SQL: \n    CREATE TABLE IF NOT EXISTS multiremi_schema_migrations (\n      id TEXT PRIMARY KEY,\n      applied_at TEXT NOT NULL\n    )"
+        ],
+        "childMs": [
+          null,
+          2722
+        ]
+      }
+    ]
+  },
+  "issueAllocation": {
+    "name": "concurrent createIssue (2 processes x N issues, one workspace)",
+    "rounds": 1,
+    "failedRounds": 1,
+    "failureRate": 1,
+    "firstErrors": [
+      "52 duplicate issue numbers across processes"
+    ],
+    "roundMsP50": 3647,
+    "roundMsP95": 3647,
+    "roundsDetail": [
+      {
+        "created": 400,
+        "failures": 0,
+        "duplicatesAcrossProcesses": 52,
+        "minNumber": 1,
+        "maxNumber": 348,
+        "expected": 400,
+        "childOk": [
+          true,
+          true
+        ]
+      }
+    ]
+  },
+  "measuredOn": "43d75571 (parent commit of this branch, without the MUL-405 changes)"
+}

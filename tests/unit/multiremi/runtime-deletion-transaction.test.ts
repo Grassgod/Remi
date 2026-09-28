@@ -155,8 +155,14 @@ for (const dialect of ["sqlite", "postgres"] as const) {
 
     function assertSingleTransaction() {
       expect(maxTransactionDepth).toBe(1);
+      if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
       expect(depth).toBe(0);
       expect(db.inTransaction).toBe(false);
+    }
+
+    function resetTransactionDepth() {
+      maxTransactionDepth = 0;
+      if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
     }
 
     it.each([false, true])("rolls back every table and emits nothing after a late Runtime DELETE failure (cascade=%s)", async cascade => {
@@ -173,7 +179,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         }
         return result;
       };
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         const response = await deleteRequest(f, cascade);
         expect(response.status).toBe(500);
@@ -202,7 +208,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         }
         return result;
       };
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         expect((await deleteRequest(f, true)).status).toBe(500);
       } finally {
@@ -226,7 +232,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         });
         return notify.apply(this, args);
       });
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         const response = await deleteRequest(f, cascade);
         expect(response.status).toBe(200);
@@ -266,7 +272,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       if (blocker === "daemon_last_runtime") db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [`sibling_${workspaceId}`]);
       const before = await graph();
       const observed = observe();
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         expect(store.archiveAgentsAndDeleteRuntime(f.runtime.id, blocker === "plan_changed" ? [] : [f.agent.id], {
           abandonIssueWorkspaces: blocker !== "active_issue_workspaces",
@@ -303,7 +309,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       expect(delegated.delegationId).not.toBeNull();
       store.completeTask(leaderTask.id, { output: "Task completed." });
       const observed = observe();
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         const response = await deleteRequest(f, true);
         expect(response.status).toBe(200);
@@ -318,6 +324,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       expect(store.getTask(delegatedId)).toMatchObject({ status: "cancelled", prompt: "Delegated original request" });
       expect(observed.events.filter(event => event.type === "task:enqueued"))
         .toContainEqual({ type: "task:enqueued", taskId: wake!.id, inTransaction: false });
+      expect(observed.events.filter(event => event.type === "task:enqueued" && event.taskId === wake!.id)).toHaveLength(1);
       expect(observed.events.findIndex(event => event.type === "task:enqueued" && event.taskId === wake!.id))
         .toBeLessThan(observed.events.findIndex(event => event.type === "task:cancelled" && event.taskId === delegatedId));
       expect(observed.events.every(event => !event.inTransaction)).toBe(true);
@@ -328,11 +335,27 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const f = fixture(false);
       const before = await graph();
       const observed = observe();
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         const response = await deleteRequest(f, false, false);
         expect(response.status).toBe(409);
         expect(await response.json()).toMatchObject({ code: "runtime_has_active_issue_workspaces" });
+      } finally {
+        observed.stop();
+      }
+      expect(await graph()).toEqual(before);
+      expect(observed.events).toEqual([]);
+      assertSingleTransaction();
+    });
+
+    it("rejects low-level deletion before taking the Plugin write lock", async () => {
+      const f = fixture(false);
+      db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE id = ?", [f.agent.id]);
+      const before = await graph();
+      const observed = observe();
+      resetTransactionDepth();
+      try {
+        expect(store.deleteRuntime(f.runtime.id)).toBe(false);
       } finally {
         observed.stop();
       }
@@ -356,7 +379,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         }
         return result;
       };
-      maxTransactionDepth = 0;
+      resetTransactionDepth();
       try {
         expect((await request(`/api/issues/${f.issue.id}/workspace/abandon`, "POST")).status).toBe(failure ? 500 : 200);
       } finally {

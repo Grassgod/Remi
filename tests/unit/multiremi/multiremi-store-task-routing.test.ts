@@ -1,7 +1,9 @@
 // Store-level task scheduling: which runtime may claim which task.
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
 // guards, re-pooling on runtime changes, and the execution-engine session snapshots.
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { MultiremiStore } from "@multiremi/store/store.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
@@ -862,7 +864,55 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
   // a new hard constraint that is wired into only one of the two paths shows up
   // as a red cell instead of a silent queue.
   // ───────────────────────────────────────────────────────────────────────
-  describe("placement invariant matrix", () => {
+  for (const dialect of ["sqlite", "postgres"] as const) {
+  describe.skipIf(dialect === "postgres" && !process.env.MULTIREMI_TEST_POSTGRES_URL)(`placement invariant matrix (${dialect})`, () => {
+    let matrixDb: SqlDatabase;
+    let admin: PostgresSyncDatabase;
+    let cellDatabase: string | null = null;
+    let sequence = 0;
+    const template = `mul449_matrix_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+
+    beforeAll(() => {
+      if (dialect !== "postgres") return;
+      admin = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
+      admin.exec(`CREATE DATABASE ${template}`);
+      const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
+      url.pathname = `/${template}`;
+      const db = new PostgresSyncDatabase(url.toString());
+      try {
+        new MultiremiStore(db).ensureLocalWorkspace();
+      } finally {
+        db.close();
+      }
+    });
+
+    afterAll(() => {
+      if (dialect !== "postgres" || !admin) return;
+      matrixDb?.close();
+      try {
+        if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
+        admin.exec(`DROP DATABASE ${template} WITH (FORCE)`);
+      } finally {
+        admin.close();
+      }
+    });
+
+    function createCellStore(): MultiremiStore {
+      matrixDb?.close();
+      if (dialect === "sqlite") {
+        const store = createLocalStore();
+        matrixDb = db!;
+        return store;
+      }
+      if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
+      cellDatabase = `${template}_${++sequence}`;
+      // Clone only the migrated, empty fixture; each cell still owns all its rows.
+      admin.exec(`CREATE DATABASE ${cellDatabase} TEMPLATE ${template}`);
+      const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
+      url.pathname = `/${cellDatabase}`;
+      matrixDb = new PostgresSyncDatabase(url.toString());
+      return new MultiremiStore(matrixDb);
+    }
     const M = "dev-inv-m";
     const M_LEGACY = "dev-inv-m-legacy";
     const U = "dev-inv-u";           // named only in data; no Runtime row
@@ -898,7 +948,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
      */
     function cell(shape: Shape, pin: Pin, devices: Devices, dedicated: boolean): Fixture {
       const label = `${shape} / ${pin} / ${devices} / ${dedicated ? "dedicated" : "shared"}`;
-      const store = createLocalStore();
+      const store = createCellStore();
       const codex = store.registerRuntime({
         id: "rt_inv_m_codex", name: "M codex", provider: "codex", workspaceId: "local", daemonId: M,
         metadata: { runtime_workspaces: 1 },
@@ -912,7 +962,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       // under that older daemon id. This is the shape that makes the
       // `legacy_daemon_id` joins load-bearing — a workspace recorded on M must
       // still admit M' even though M' s daemon id differs from M's.
-      db!.run("UPDATE multiremi_runtimes SET legacy_daemon_id = ? WHERE id = ?", [M_LEGACY, codex.id]);
+      matrixDb.run("UPDATE multiremi_runtimes SET legacy_daemon_id = ? WHERE id = ?", [M_LEGACY, codex.id]);
       const legacy = store.registerRuntime({
         id: "rt_inv_m_legacy", name: "M prime", provider: "codex", workspaceId: "local", daemonId: M_LEGACY,
         metadata: { runtime_workspaces: 1 },
@@ -927,7 +977,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       });
       store.updateDaemonDedicated("local", "dev-inv-settler", true, "local");
       if (shape === "runtime-workspace-on-U") {
-        db!.run(
+        matrixDb.run(
           `INSERT INTO multiremi_daemon_profiles (workspace_id, daemon_id, display_name, dedicated, updated_at)
            VALUES ('local', ?, 'U', ?, ?)`,
           [U, dedicated ? 1 : 0, new Date().toISOString()],
@@ -976,7 +1026,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
           // this cell's device routing happens to admit the seeding Runtime.
           const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
           store.getOrCreateSessionAgentLane(parent.id, agent.id);
-          db!.run(
+          matrixDb.run(
             `UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider = 'codex',
                provider_session_id = 'sess_matrix_code', updated_at = ?
              WHERE session_id = ? AND agent_id = ?`,
@@ -1005,31 +1055,31 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
           status: "ready", repos: [],
         });
         // ON DELETE SET NULL, the state `deleteRuntimeWithinTransaction` leaves.
-        db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issueId]);
+        matrixDb.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL WHERE issue_id = ?", [issueId]);
       } else if (shape.startsWith("runtime-workspace-")) {
         const workspace = (store as unknown as {
           runtimeWorkspaces: { create(runtimeId: string, input: { name: string; root_path: string }): { id: string } };
         }).runtimeWorkspaces.create(codex.id, { name: `matrix ${label}`, root_path: "/tmp/matrix-rw" });
         if (shape === "runtime-workspace-on-U") {
-          db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [U, workspace.id]);
+          matrixDb.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [U, workspace.id]);
         } else if (shape === "runtime-workspace-on-M-legacy") {
-          db!.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [M_LEGACY, workspace.id]);
+          matrixDb.run("UPDATE multiremi_runtime_workspaces SET daemon_id = ? WHERE id = ?", [M_LEGACY, workspace.id]);
         } else if (shape === "runtime-workspace-archived-on-M") {
-          db!.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
+          matrixDb.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
         }
-        db!.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
+        matrixDb.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
       } else if (shape === "frozen-retry-on-M") {
-        db!.run(
+        matrixDb.run(
           `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'matrix-fp' WHERE id = ?`,
           [codex.id, taskId],
         );
       }
       if (pin === "task-pinned-M-legacy") {
-        db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
+        matrixDb.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
       } else if (pin === "agent-bound-M-legacy-unpinned") {
         // Isolate the Agent constraint from the task pin. With U's workspace,
         // removing agentBinding must now change (c) into the daemon fallback.
-        db!.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE id = ?", [taskId]);
+        matrixDb.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE id = ?", [taskId]);
       }
       return {
         store, codexId: codex.id, claudeId: claude.id, legacyId: legacy.id,
@@ -1071,7 +1121,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     function claimAccepts(fixture: Fixture, runtimeId: string): boolean {
       let accepted = false;
       try {
-        db!.transaction(() => {
+        matrixDb.transaction(() => {
           accepted = fixture.store.claimTask(runtimeId)?.id === fixture.taskId;
           throw new Error("__rollback__");
         })();
@@ -1167,7 +1217,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
               // Observe while still queued: claiming first would clear a wrong
               // wait reason and hide disagreement with an allowed routing state.
               const now = Date.now();
-              db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
+              matrixDb.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
                 new Date(now - 200_000).toISOString(), fixture.taskId,
               ]);
               fixture.store.refreshQueuedCapabilityWaitReasons(now);
@@ -1225,10 +1275,12 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       // Chat and explicit U workspaces use only the unbound device column.
       expect(cells).toBe(11 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
       expect(failures).toEqual([]);
+      console.info(`MUL-449 ${dialect} matrix: ${cells} combinations; per-Runtime rollback probes, real claims and wait-text checks passed`);
     },
-    { timeout: 120_000 });
+    { timeout: dialect === "postgres" ? 600_000 : 120_000 });
 
   });
+  }
 
   it("resets an Issue lane whose device the Project no longer allows", () => {
     const store = createLocalStore();
