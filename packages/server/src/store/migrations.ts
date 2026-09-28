@@ -5103,7 +5103,7 @@ function migrateChatIssueOwnership(db: SqlDatabase, chatSchema?: string | null):
       SELECT push.workspace_id, push.binding_id, push.issue_id, retry.id, push.delivery_mode, push.source
       FROM push_lineage push
       JOIN multiremi_tasks parent ON parent.id = push.wake_task_id
-      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent")}
+      JOIN multiremi_tasks retry ON ${chatTaskRetryParentSql("retry", "parent", "legacy")}
     )
     SELECT push.*, task.chat_session_id FROM push_lineage push
     LEFT JOIN multiremi_tasks task ON task.id = push.wake_task_id

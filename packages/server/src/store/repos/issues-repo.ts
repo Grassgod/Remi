@@ -1242,7 +1242,7 @@ export class IssuesRepo {
        FROM multiremi_issue_sessions s
        WHERE s.issue_id = ? AND (
          s.is_default = 0
-         OR EXISTS (SELECT 1 FROM multiremi_session_events e WHERE e.session_id = s.id)
+         OR EXISTS (SELECT 1 FROM multiremi_conversation_log e WHERE e.session_id = s.id AND e.kind <> 'head' AND e.seq > 0)
          OR EXISTS (SELECT 1 FROM multiremi_session_participants p WHERE p.session_id = s.id)
          OR EXISTS (SELECT 1 FROM multiremi_session_agent_lanes l WHERE l.session_id = s.id)
        )
@@ -1541,9 +1541,11 @@ export class IssuesRepo {
     if (!parentAgentId) return { satisfied: false, lastChildClosedAt };
     if (options.acceptCommentBy === parentAgentId) {
       const comments = this.ctx.db.query(
-        `SELECT body FROM multiremi_issue_comments
-         WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
-           ${lastChildClosedAt ? "AND created_at >= ?" : ""}`,
+        `SELECT log.body_md AS body FROM multiremi_conversation_log log
+         JOIN multiremi_issue_sessions session ON session.id = log.session_id
+         WHERE session.issue_id = ? AND log.author_type = 'agent' AND log.author_id = ? AND log.kind = 'message'
+           AND SUBSTR(log.id, 1, 4) = 'cmt_' AND log.deleted_at IS NULL
+           ${lastChildClosedAt ? "AND log.created_at >= ?" : ""}`,
       ).all(...(lastChildClosedAt ? [parentIssueId, parentAgentId, lastChildClosedAt] : [parentIssueId, parentAgentId])) as Row[];
       if (comments.some((row) => String(row.body ?? "").trim().length > 0)) {
         return { satisfied: true, lastChildClosedAt };
@@ -3100,15 +3102,15 @@ export class IssuesRepo {
    * commits, even though nested database writes now use savepoints.
    */
   dispatchDeferredAgentCommentMentions(commentId: string): MultiremiTask[] {
-    const comment = this.getIssueComment(commentId);
+    const comment = this.ctx.getLogIssueComment(commentId);
     if (!comment || comment.authorType !== "agent") {
       throw new Error(`Deferred agent comment not found: ${commentId}`);
     }
     const issue = this.getIssue(comment.issueId);
     if (!issue) throw new Error(`Issue not found: ${comment.issueId}`);
     const event = this.ctx.db.query(
-      `SELECT seq FROM multiremi_session_events
-       WHERE session_id = ? AND source_comment_id = ? AND kind = 'message'
+      `SELECT seq FROM multiremi_conversation_log
+       WHERE session_id = ? AND id = ? AND kind = 'message'
        ORDER BY seq DESC LIMIT 1`,
     ).get(comment.issueSessionId, comment.id) as { seq: number } | null;
     if (!event) throw new Error(`Session event not found for comment: ${comment.id}`);
@@ -4613,10 +4615,7 @@ export class IssuesRepo {
   }
 
   /**
-   * The conversation log seq of a comment. Issue comments are mirrored into
-   * `session_events` at the same seq as the log row, and that event carries
-   * `source_comment_id`, so it is the authoritative pointer for in-place updates
-   * (edit, delete, resolve) which arrive with a comment id, not a seq.
+   * Comment ids are log row ids; edits, deletes and resolves keep their seq.
    */
   private commentLogSeq(commentId: string): number {
     const row = this.ctx.db.query(
@@ -4624,12 +4623,8 @@ export class IssuesRepo {
        WHERE id = ? AND kind IN ('message', 'system')
        LIMIT 1`,
     ).get(commentId) as { seq?: number } | null;
-    if (row?.seq != null) return Number(row.seq);
-    const event = this.ctx.db.query(
-      "SELECT seq FROM multiremi_session_events WHERE source_comment_id = ? LIMIT 1",
-    ).get(commentId) as { seq?: number } | null;
-    if (event?.seq == null) throw new Error(`Conversation log entry not found for comment: ${commentId}`);
-    return Number(event.seq);
+    if (row?.seq == null) throw new Error(`Conversation log entry not found for comment: ${commentId}`);
+    return Number(row.seq);
   }
 
   /** The comment log row's current metadata, for a metadata update that replaces it. */

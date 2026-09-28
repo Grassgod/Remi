@@ -10,6 +10,7 @@ import {
   type MirrorSessionEvent,
 } from "@multiremi/store/conversation-log-mirror.js";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { conversationLogProjectionEvents } from "@multiremi/store/conversation-log-projection.js";
 import { resolveFollowDeltaRatio, resolveFollowTokenLimit, resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -31,8 +32,9 @@ import type {
 type Row = Record<string, unknown>;
 const log = createLogger("multiremi-store");
 const SESSION_SELECT = `SELECT s.*, (
-  SELECT COUNT(*) FROM multiremi_session_events e
+  SELECT COUNT(*) FROM multiremi_conversation_log e
   WHERE e.session_id = s.parent_session_id
+    AND e.kind <> 'head' AND e.seq > 0
     AND ((s.inherit_mode = 'follow' AND (s.follow_frozen_seq IS NULL OR e.seq <= s.follow_frozen_seq))
       OR (s.inherit_mode <> 'follow' AND e.seq <= s.inherit_cutoff_seq))
 ) AS inherited_event_count FROM multiremi_issue_sessions s`;
@@ -130,7 +132,7 @@ export class IssueSessionsRepo {
       if (parent.issueId !== issueId) throw new Error("Parent session must belong to the same issue");
       if (parent.inheritMode !== "none") throw new Error("Cannot inherit from a side session (chained forks are not supported)");
       const max = this.ctx.db.query(
-        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
       ).get(parentSessionId) as { seq: number } | null;
       inheritCutoffSeq = Number(max?.seq ?? 0);
       if (withCode) {
@@ -546,7 +548,7 @@ export class IssueSessionsRepo {
       // The projection budget needs the Agent's provider/model, not its Skills.
       const agent = this.ctx.agents().getAgentLite(task.agentId);
       const session = this.getIssueSession(task.issueSessionId)!;
-      const events = this.listSessionEvents(task.issueSessionId);
+      const events = this.projectionEvents(task.issueSessionId);
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,
@@ -592,7 +594,7 @@ export class IssueSessionsRepo {
         const inheritedProjection = buildSessionProjection({
           sessionId: parent.id,
           targetAgentId: task.agentId,
-          events: this.listSessionEvents(parent.id, { sinceSeq: parentFromSeq, toSeq: parentToSeq }),
+          events: this.projectionEvents(parent.id).filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
           cursorSeq: 0,
           fromSeq: parentFromSeq,
           toSeq: parentToSeq,
@@ -771,9 +773,13 @@ export class IssueSessionsRepo {
 
   private parentMaxSeq(sessionId: string): number {
     const row = this.ctx.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
     ).get(sessionId) as { seq: number };
     return Number(row.seq);
+  }
+
+  private projectionEvents(sessionId: string): MultiremiSessionEvent[] {
+    return conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
   }
 
   private sessionAuthorName(authorType: string, authorId: string | null): string | null {

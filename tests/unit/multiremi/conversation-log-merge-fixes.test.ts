@@ -1,30 +1,7 @@
-import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
-
-const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-
-async function withStore(backend: "sqlite" | "pg", run: (store: MultiremiStore, db: SqlDatabase) => void): Promise<void> {
-  if (backend === "sqlite") {
-    const db = new Database(":memory:");
-    try { run(new MultiremiStore(db), db); } finally { db.close(); }
-    return;
-  }
-  const name = `mul427_fixes_${process.pid}_${Math.floor(Math.random() * 1e8)}`;
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  await admin.unsafe(`CREATE DATABASE ${name}`);
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  const db = new PostgresSyncDatabase(url.toString());
-  try { run(new MultiremiStore(db), db); } finally {
-    db.close();
-    await admin.unsafe(`DROP DATABASE ${name} WITH (FORCE)`);
-    await admin.end();
-  }
-}
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
 
 describe("MUL-427 merge rulings", () => {
   for (const backend of ["sqlite", "pg"] as const) {

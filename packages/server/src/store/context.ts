@@ -1217,10 +1217,20 @@ export class StoreContext {
     return assignment?.daemon ?? null;
   }
 
-  // Cross-domain: the un-hydrated comment row. Read by the issues band and by the tasks band
-  // (createTask / getTaskTriggerMetadata / getThreadRootCommentId), so it lives here.
+  // Legacy comment rows remain the mutation source until the legacy tables retire.
   getRawIssueComment(id: string): MultiremiIssueComment | null {
     const row = this.db.query("SELECT * FROM multiremi_issue_comments WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueComment(row) : null;
+  }
+
+  // Wake-up and task trigger readers use the current, non-deleted log comment.
+  getLogIssueComment(id: string): MultiremiIssueComment | null {
+    if (!id.startsWith("cmt_")) return null;
+    const row = this.db.query(`SELECT log.*, s.issue_id, log.session_id AS issue_session_id,
+      log.body_md AS body, CASE WHEN log.kind = 'system' THEN 'system' ELSE 'comment' END AS type
+      FROM multiremi_conversation_log log
+      JOIN multiremi_issue_sessions s ON s.id = log.session_id
+      WHERE log.id = ? AND log.kind IN ('message', 'system') AND log.deleted_at IS NULL`).get(id) as Row | null;
     return row ? toIssueComment(row) : null;
   }
 
