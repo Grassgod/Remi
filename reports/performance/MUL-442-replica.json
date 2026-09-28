@@ -1,6 +1,12 @@
 {
-  "generatedAt": "2026-09-28T03:20:16.893Z",
-  "head": "355f89762f715b140c6dae81a58591204a007ab6",
+  "generatedAt": "2026-09-28T03:49:00.088Z",
+  "head": "d3fa7216713e4e8f707ce5fe3e9ff5cfc7932a0d",
+  "worktree": {
+    "dirty": [
+      "tests/integration/replica-fixture/run.ts"
+    ],
+    "note": "paths changed in the working tree when this ran, relative to `head`; empty means the report is the only difference"
+  },
   "checks": [
     {
       "name": "three-tabs: exactly one leader",
@@ -25,8 +31,8 @@
     {
       "name": "handoff: a surviving page takes over within 1s",
       "ok": true,
-      "detail": "took 51ms",
-      "ms": 51
+      "detail": "took 52ms",
+      "ms": 52
     },
     {
       "name": "handoff: the new leader's head is continuous",
@@ -46,8 +52,8 @@
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 170 of 170, fresh true, 648ms after the append (budget 2000ms)",
-      "ms": 648
+      "detail": "head 170 of 170, fresh true, 654ms after the append (budget 2000ms)",
+      "ms": 654
     },
     {
       "name": "offline-catch-up: no full /log read",
@@ -117,8 +123,8 @@
     {
       "name": "offline-catch-up: head matches within 2s of the socket returning",
       "ok": true,
-      "detail": "head 225 of 225, fresh true, 13ms after the append (budget 2000ms)",
-      "ms": 13
+      "detail": "head 225 of 225, fresh true, 10ms after the append (budget 2000ms)",
+      "ms": 10
     },
     {
       "name": "offline-catch-up: no full /log read",

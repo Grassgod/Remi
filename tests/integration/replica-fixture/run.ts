@@ -296,9 +296,18 @@ async function main(): Promise<void> {
   }
 
   const failed = results.filter((result) => !result.ok);
+  // The report is written from a working tree, so it can never name the commit
+  // that carries it. Recording the dirty paths instead is what makes the file
+  // checkable later: the repo's performance rules ask for the diff summary beside
+  // the SHA for exactly this reason (docs/dev/performance.md), and a reader can
+  // then confirm that the only difference to HEAD is the report itself.
   const report = {
     generatedAt: new Date().toISOString(),
     head: gitHead(),
+    worktree: {
+      dirty: gitDirtyPaths(),
+      note: "paths changed in the working tree when this ran, relative to `head`; empty means the report is the only difference",
+    },
     checks: results,
     summary: { total: results.length, passed: results.length - failed.length, failed: failed.length },
   };
@@ -664,6 +673,16 @@ function resolveChromium(): string | undefined {
 function gitHead(): string | null {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
   return result.status === 0 ? result.stdout.trim() : null;
+}
+
+/** Paths modified or untracked in the working tree, so the report is self-describing. */
+function gitDirtyPaths(): string[] {
+  const result = spawnSync("git", ["status", "--porcelain"], { cwd: REPO_ROOT, encoding: "utf8" });
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split("\n")
+    .map((line) => line.slice(3).trim())
+    .filter((line) => line.length > 0);
 }
 
 void main().catch((error) => {
