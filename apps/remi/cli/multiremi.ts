@@ -199,7 +199,7 @@ async function serve(options: CliOptions): Promise<void> {
     databaseUrl: process.env.MULTIREMI_DATABASE_URL,
     locks: locksForRole(apiRole, Boolean(process.env.MULTIREMI_PEER_URL?.trim())),
   });
-  const server = startMultiremiServer({ port, hostname: host, authToken: token, apiRole });
+  const server = startMultiremiServer({ port, hostname: host, authToken: token });
   console.log(`Bun Multiremi API listening on ${formatListenUrls(host, server.port ?? port).join(", ")}`);
   await waitForShutdown(async () => {
     server.stop(true);
