@@ -1,0 +1,26 @@
+{
+  "mainHead": "439aa1410a8a6040763221bad7423ea586b2d2ff",
+  "implementationHead": "8a48b0b59d32b4aa00ba3ed4a8efcd9a77531f48",
+  "checks": [
+    { "command": "bun run typecheck:frontend", "result": "通过；main + 472 最后合并后的版本。" },
+    { "command": "bun run test:frontend", "result": "3625 pass / 18 skip / 0 fail；core 1106、views 2464、web 55。" },
+    { "command": "bun run --cwd frontend/packages/core test issues/status-pages.test.ts", "result": "等价、请求数、失效、404 与错误隔离守卫全部通过；定向四文件合计 72/72。" },
+    { "command": "bun run tests/manual/mul395-s9-3b-backend.ts postgres tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts", "result": "真实 PG：新路由、静态 metrics 标签、归档可选成本用例通过；连同合并后专项共 52 pass / 0 fail。" },
+    { "command": "bun run tests/manual/mul395-s9-3b-backend.ts sqlite tests/unit/multiremi/issue-status-pages.test.ts tests/unit/multiremi/request-metrics.test.ts tests/unit/remi/cli-collaboration.test.ts", "result": "SQLite + CLI：85 pass / 8 PG 专项 skip / 0 fail。dbq 单个用例独立启动也通过，预热不再依赖前序。" },
+    { "command": "bun test tests/arch/ --timeout 20000", "result": "108 pass / 0 fail，3898 次断言。" },
+    { "command": "bunx tsc --noEmit", "result": "通过；含新增复现脚本。" },
+    { "command": "npm run docs:check；npm run docs:test", "result": "通过；docs:test 13 pass。" },
+    { "command": "npm run cli:capabilities:check", "result": "678 mapped / 96 exempt / 0 missing；774 路由。" },
+    { "command": "bun run scripts/snapshot-api-routes.ts --check", "result": "通过；本任务只给已有 grouped 加显式参数，路由条数未增加。" },
+    { "command": "bun run tests/manual/mul395-s9-3b-browser.ts <472 的 git archive 快照目录>；bun run tests/manual/mul395-s9-3b-report.ts", "result": "原 S1 after 28 轮与实际行位置 after 28 轮均为 0px；before/after 配对各 20 轮。" }
+  ],
+  "notes": [
+    "这是本地性能与定向测试报告。顺序执行的 PG/SQLite 全量和最终提交 CI 的完整结果见 MUL-395 的 S9-3b 交付评论；本报告不提前声称全量通过。",
+    "before 为 472 最终 head e95b7a23。前后 Next dev 都出现已有 use-kanban-drag.ts:121 的 Maximum update depth exceeded 告警；该 hook 不在本单改动内，真实行的 3 秒采样仍没有跳动或断连。合成 squad fixture 的 creator_id/leader_id=null 另触发 schema 告警。这些本地环境现象不代表生产页面。",
+    "原 S1 after issues cold 首轮 ready=11315ms 的离群值未剔除。S1 列表 profile 以容器就绪为准，首行字段可能为空，因此另外固定实际 issue/inbox/comment 行，不能单凭 S1 jump=0 推断列表稳定。",
+    "472 的六场景是 issues/inbox/detail 的 cold/warm 各一轮；长样本是同一 fixture 中 MUL-454 的 210 条评论副本，cold/warm 各一轮。所有 after 固定行 px、S1 jumpPx 与断连帧都为 0。",
+    "PG 全量中已有 MUL-473 inbox热点 N=200 用例曾在共享负载下接近或超过 20s。已单独重跑，并在纯 472 e95b7a23 上复现同一个 24.480s 超时；没有放宽断言、增加 timeout 或跳过用例。一次跨 main 合并的全量还读到 772/774 路由两版本；该次不作为最终验证，已固定合并态重跑。",
+    "按前置约定保留旧服务端 creator_id、involves_user_id、排序参数的既有语义；本单只合并往返和修复观测标签，不改变筛选结果。404 兼容模式仍需要旧请求数量，新 API 的请求数收益不适用于该模式。"
+  ],
+  "ownFiles": []
+}

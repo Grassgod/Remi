@@ -7,7 +7,7 @@ if (!before) throw new Error("Pass a dependency snapshot directory for the befor
 const out = resolve(repo, "reports/performance/MUL-395-s9-3b");
 const marker = randomBytes(24).toString("hex");
 const env: Record<string, string | undefined> = { ...process.env, MUL395_S9_3B_FIXTURE_AUTH: marker, MULTIREMI_QA_WEB_TOKEN: marker,
-  MUL395_S9_3B_BEFORE_HEAD: "a5b26160a8607eeea2dc5ca113ab18d1765619e0" };
+  MUL395_S9_3B_BEFORE_HEAD: "e95b7a2345393fe7f79f13dcca3bdd4f6c32abe5" };
 delete env.MULTIREMI_TOKEN;
 const services: ReturnType<typeof Bun.spawn>[] = [];
 const mask = (value: string) => value.replaceAll(marker, "[fixture auth]").replace(/(?:postgres(?:ql)?|redis):\/\/\S+/g, "[connection]");
@@ -53,6 +53,7 @@ async function probe(origin: string, name: string, only: string, rounds: number)
     "--issue-running", "iss_pin_me", "--out", out, "--name", name], {
     cwd: repo, env, stdout: "pipe", stderr: "pipe",
   });
+  services.push(process);
   await Promise.all([process.stdout, process.stderr].map(async (stream) => {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
@@ -73,6 +74,8 @@ try {
     if (phase === "after") {
       for (const scene of ["page-issues", "page-inbox", "detail-short", "detail-xlong"]) await probe(origin, `after-472-${scene}`, scene, 1);
     }
+    const positions = start([process.execPath, resolve(import.meta.dir, "mul395-s9-3b-positions.ts"), phase, origin], repo);
+    if (await positions.exited !== 0) throw new Error(`S1 row-position probe failed: ${phase}`);
     await stop(web);
   }
 } finally { await Promise.all(services.map(stop)); }
