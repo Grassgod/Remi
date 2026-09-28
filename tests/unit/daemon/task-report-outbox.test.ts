@@ -539,6 +539,43 @@ describe("MultiremiTaskReportOutbox", () => {
     expect(existsSync(`${sourcePath}.migrated-v2`)).toBe(true);
   });
 
+  it("preserves a crashed legacy WAL alongside its recoverable renamed database", async () => {
+    const sourcePath = tempPath();
+    const module = new URL("../../../packages/server/src/worker/outbox.ts", import.meta.url).href;
+    const writer = Bun.spawn([process.execPath, "-e", `
+      const { MultiremiTaskReportOutbox } = await import(Bun.argv.at(-2));
+      const old = new MultiremiTaskReportOutbox({ path: Bun.argv.at(-1), canSend: () => false, deliver: async () => {} });
+      old.enqueue("task", "progress", { progress: "before crash" });
+      old.enqueue("task", "complete", { output: "after crash" });
+      console.log("ready");
+      setInterval(() => {}, 1000);
+    `, module, sourcePath], { stdout: "pipe", stderr: "pipe" });
+    try {
+      const ready = await writer.stdout.getReader().read();
+      expect(Buffer.from(ready.value ?? []).toString()).toContain("ready");
+    } finally {
+      writer.kill("SIGKILL");
+      await writer.exited;
+    }
+    expect(existsSync(`${sourcePath}-wal`)).toBe(true);
+    const delivered: string[] = [];
+    const shared = track(new MultiremiTaskReportOutbox({ path: tempPath(),
+      deliver: async record => { delivered.push(record.kind); } }));
+    shared.importLegacy(sourcePath, "runtime");
+    const backupPath = `${sourcePath}.migrated-v2`;
+    expect(existsSync(`${backupPath}-wal`)).toBe(true);
+    expect(existsSync(`${sourcePath}-wal`)).toBe(false);
+    const backup = new Database(backupPath, { readonly: true });
+    try {
+      expect(backup.query("SELECT kind FROM outbox_events ORDER BY id").all()).toEqual([
+        { kind: "progress" }, { kind: "complete" },
+      ]);
+    } finally { backup.close(); }
+    await shared.flushAll();
+    expect(delivered).toEqual(["progress", "complete"]);
+    expect(shared.stats().pending).toBe(0);
+  });
+
   it("skips a committed import after a pre-rename crash and does not lose a v1 rollback generation", async () => {
     const sourcePath = tempPath();
     const path = tempPath();

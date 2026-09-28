@@ -228,7 +228,13 @@ export class MultiremiTaskReportOutbox {
       })();
     } finally { source.close(); }
     const backup = `${path}.migrated-v2`;
-    renameSync(path, existsSync(backup) ? `${path}.${randomUUID()}.migrated-v2` : backup);
+    const destination = ["", "-wal", "-shm"].some(suffix => existsSync(`${backup}${suffix}`))
+      ? `${path}.${randomUUID()}.migrated-v2` : backup;
+    renameSync(path, destination);
+    // A crashed v1 writer can leave committed rows only in its WAL.
+    for (const suffix of ["-wal", "-shm"]) {
+      if (existsSync(`${path}${suffix}`)) renameSync(`${path}${suffix}`, `${destination}${suffix}`);
+    }
   }
 
   /** Resolves when the task queue is empty (delivered), blocked, or the signal aborts. */
