@@ -56,7 +56,7 @@ function createProbeDaemon(options: {
     runtimeModelListRequests: new Map(),
     workspaceOwnershipLost: false,
     waitWake: null,
-    taskWakeup: null,
+    protocolClient: null,
     onRestartRequested: null,
     supervisorReady: () => true,
     onReadyChange: () => {},
@@ -267,32 +267,25 @@ describe("daemon terminal-authority keep-alive probe", () => {
     }
   }, 20_000);
 
-  it("pauses the wake-up channel while authority is revoked and resumes it on start", async () => {
+  it("suspends the protocol connection throughout the revoked-authority probe window", async () => {
     jest.useFakeTimers();
     const logger = captureLogger();
-    const calls: boolean[] = [];
+    let suspensions = 0;
     const bed = createProbeDaemon();
-    (bed.daemon as unknown as { taskWakeup: unknown }).taskWakeup = {
-      setRuntimeId: () => {},
-      setAuthoritySuspended: (suspended: boolean) => { calls.push(suspended); },
-      close: () => {},
-      status: () => ({
-        state: "disabled", connected: false, runtime_id: null, connected_since: null,
-        last_error: null, reconnect_attempts: 0, next_reconnect_at: null, suspended: true,
-      }),
+    (bed.daemon as unknown as { protocolClient: unknown }).protocolClient = {
+      suspendAuthority: () => { suspensions++; },
     };
     try {
-      await startProbe(bed);
+      const { pending } = await startProbe(bed);
       // A refused credential refuses the handshake too, so reconnecting every
       // 30s for the whole probe window would only add noise.
-      expect(calls).toEqual([true]);
-
-      // A reused instance must not inherit the pause.
-      const start = (bed.daemon as unknown as { start(): Promise<void> }).start.bind(bed.daemon);
-      calls.length = 0;
-      void start().catch(() => {});
-      await Promise.resolve();
-      expect(calls).toEqual([false]);
+      expect(suspensions).toBe(1);
+      jest.advanceTimersByTime(30_000);
+      for (let index = 0; index < 8; index++) await Promise.resolve();
+      expect(bed.registerTimes).toHaveLength(1);
+      expect(suspensions).toBe(1);
+      bed.daemon.stop();
+      await pending;
     } finally {
       bed.daemon.stop();
       logger.restore();

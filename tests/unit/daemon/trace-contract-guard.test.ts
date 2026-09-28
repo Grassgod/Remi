@@ -118,8 +118,8 @@ const MESSAGE_PRODUCER_DIRS = [join(REPO_ROOT, "packages/server/src/worker")];
  * visible decision rather than a silently widened regex.
  */
 const NON_EVENT_FILES: Record<string, string> = {
-  "packages/server/src/worker/daemon-websocket.ts":
-    "the wake-up socket's own control frames ({type: \"ping\"}), never a task message",
+  "packages/server/src/worker/daemon-protocol-client.ts":
+    "protocol control frames use t and ts, never a TaskMessageInput",
 };
 
 /** The files to read the type inventory from, and why each is in scope. */
@@ -228,7 +228,7 @@ describe("trace contract drift guards", () => {
     // An exclusion is a hole in the guard, so each one must name a real file and a
     // reason. This is the only place a producer directory may be skipped.
     const excluded = Object.keys(NON_EVENT_FILES);
-    expect(excluded).toContain("packages/server/src/worker/daemon-websocket.ts");
+    expect(excluded).toContain("packages/server/src/worker/daemon-protocol-client.ts");
     for (const [path, reason] of Object.entries(NON_EVENT_FILES)) {
       expect(sourceFiles().map(rel), `${path} no longer exists`).toContain(path);
       expect(reason.length, `${path} has no justification`).toBeGreaterThan(20);

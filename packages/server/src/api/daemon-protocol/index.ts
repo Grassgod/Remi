@@ -6,19 +6,8 @@
  * the session registry, the handshake, the downlink sequence, the ack deadline,
  * backpressure and the frame metrics - lives behind it.
  *
- * COEXISTENCE (A-1 only; A-2 deletes the old path). v1 daemons still connect per
- * runtime and still receive `daemon:task_available`, and their behavior is
- * unchanged: a socket that names `runtime_ids` is a v1 socket. A v2 socket is
- * recognized by either
- *
- *   - `?protocol=2` in the upgrade URL, which is what A-2's client will send; or
- *   - the absence of runtime parameters *and* a verified daemon token, which is
- *     the shape a v2 client has anyway.
- *
- * The explicit marker exists because the protocol document describes the frames
- * and deliberately says nothing about the URL, while the legacy path must stay
- * byte-identical for the fleet that is still on v1. Both rules are checked here,
- * in one place, and A-2 removes them together with the legacy path.
+ * A-2 removes the per-runtime v1 wake-up path. Upgrades must carry the protocol=2
+ * URL marker; every runtime is advertised and authorized in hello instead.
  *
  * NO BUSINESS FRAMES. A-1 wires the transport: `hello`, `hb`, the downlink
  * sequence and its deadline, acks, backpressure, RPC dispatch and the frame
@@ -104,36 +93,6 @@ export class DaemonProtocolLayer {
     this.metrics?.stop();
   }
 
-  /**
-   * Whether an upgrade carrying no runtime parameters is a v2 connection, and
-   * therefore whether {@link authorizeUpgrade}'s answer applies.
-   *
-   * The rules, in order, and why each exists:
-   *
-   *   1. Runtime parameters present -> v1, always. The envelope is the v1
-   *      client's, and the v2 client never sends it.
-   *   2. An explicit `?protocol=2` -> v2. A-2's client sends this, and it is the
-   *      only way a connection is unambiguous even in an auth-disabled or
-   *      bot-less deployment.
-   *   3. Otherwise the caller must have authenticated as a daemon identity - the
-   *      bindable daemon token, or the deployment master credential. A request
-   *      with neither keeps today's answer (`runtime_ids required`, 400), which
-   *      is what every malformed v1 upgrade already gets.
-   *
-   * Rule 3 deliberately excludes the open-mode case where no credential is
-   * configured at all: without a credential there is nothing to bind a session's
-   * daemon identity to, and the historical answer is more useful to a human
-   * debugging with curl than a socket that waits for a `hello` nobody sends.
-   */
-  isV2Upgrade(url: URL, identity: DaemonProtocolIdentity, explicitMarker: boolean): boolean {
-    if (hasRuntimeParameters(url)) return false;
-    if (explicitMarker) return true;
-    // The bindable daemon token, or the deployment master credential that the
-    // v1 client also uses. A v2 daemon does not know its runtimes until it has
-    // sent `hello`, so neither credential can name them in the query string.
-    if (identity.masterToken) return true;
-    return identity.accessToken?.type === "daemon";
-  }
 
   /** Open a v2 session for an upgraded socket. */
   openSession(socket: DaemonProtocolSocket, identity: DaemonProtocolIdentity): DaemonProtocolSession {
@@ -159,7 +118,7 @@ export class DaemonProtocolLayer {
    * against a known list. A v2 socket does not know its runtimes until it sends
    * `hello`, so the upgrade can only settle identity and membership here; the
    * per-runtime rules run in {@link authorizeRuntime} once the list arrives. Both
-   * halves reuse the same store lookups as `authorizeDaemonWebSocketRequest`.
+   * halves reuse the HTTP daemon identity and membership rules.
    */
   async resolveIdentity(
     req: Request,
@@ -253,7 +212,7 @@ export class DaemonProtocolLayer {
   }
 
   /**
-   * Per-runtime authorization, reusing the rules `authorizeDaemonWebSocketRequest`
+   * Per-runtime authorization, reusing the HTTP daemon identity rules
    * applies to a v1 socket's runtime list.
    *
    * Two kinds of answer come out of here, and the difference is the important
@@ -496,19 +455,6 @@ export class DaemonProtocolLayer {
   }
 }
 
-/** Any of the three runtime-parameter spellings the v1 client and tests use. */
-export function hasRuntimeParameters(url: URL): boolean {
-  return url.searchParams.get("runtime_id") !== null
-    || url.searchParams.get("runtime_ids") !== null
-    || url.searchParams.get("runtimeId") !== null;
-}
-
-/** The explicit v2 marker, when the request carries one. */
-export function requestsDaemonProtocolV2(url: URL): boolean {
-  const marker = (url.searchParams.get("protocol") ?? url.searchParams.get("v") ?? "").trim();
-  if (!marker) return false;
-  return marker === String(DAEMON_PROTOCOL_VERSION);
-}
 
 function isOwnerStillMember(store: MultiremiStore, token: MultiremiAccessToken): boolean {
   const owner = token.userId?.trim();

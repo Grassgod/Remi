@@ -4,7 +4,9 @@
 
 Accepted (MUL-401, sub-issue A-0). The protocol is specified in
 [daemon-protocol-v2.md](../daemon-protocol-v2.md); the contract module lands with
-this ADR and the connection layer follows in A-1/A-2.
+this ADR. A-1/A-2 now wire the server and daemon transport, handshake, heartbeat,
+RPC and upgrade wait. Claim remains HTTP backoff polling and pending work is not
+delivered until MUL-419; outbox and trace transport follow in MUL-421.
 
 ## Context
 
