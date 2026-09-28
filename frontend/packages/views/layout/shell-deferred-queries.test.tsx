@@ -200,12 +200,28 @@ function Shell() {
   return <DashboardLayout extra={<><ChatFab /><ChatWindow /></>}><PendingPage /></DashboardLayout>;
 }
 
+function isDeferredShellKey(key: readonly unknown[]): boolean {
+  if (["chat", "pins", "invitations"].includes(String(key[0]))) return true;
+  if (key[0] === "workspaces") return ["agents", "squads", "agent-task-snapshot"].includes(String(key[2]));
+  if (key[0] === "inbox") return key[2] === "summary";
+  if (key[0] === "runtimes") return key[1] === "latestVersion";
+  if (key[0] === "issues") return ["workbench", "child-progress", "detail"].includes(String(key[2]));
+  return key[0] === "projects" && key[2] === "detail";
+}
+
 describe("complete shell observer guard (MUL-472 R1)", () => {
   it("keeps every deferred key quiet with the real hidden ChatWindow, then loads after the gate", async () => {
     const client = newClient();
+    const startedKeys: Array<readonly unknown[]> = [];
+    const unsubscribe = client.getQueryCache().subscribe((event) => {
+      if (event.type === "updated" && event.action.type === "fetch" && isDeferredShellKey(event.query.queryKey)) {
+        startedKeys.push(event.query.queryKey);
+      }
+    });
     const view = render(<Shell />, { wrapper: wrapper(client) });
     await act(async () => { flushIdle(); });
     await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
+    expect(startedKeys).toEqual([]);
     for (const request of [listAgents, listSquads, getAgentTaskSnapshot, listMyInvitations,
       listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions, listPendingChatTasks]) {
       expect(request).not.toHaveBeenCalled();
@@ -219,6 +235,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       }
     });
     view.unmount();
+    unsubscribe();
     client.clear();
   });
 
