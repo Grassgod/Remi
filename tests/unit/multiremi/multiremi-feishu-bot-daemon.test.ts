@@ -32,6 +32,7 @@ import {
   type MultiremiFeishuBotRuntimeStatus,
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { uploadedAttachmentPath } from "@multiremi/api/helpers/uploads.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -321,7 +322,7 @@ describe("Feishu bot control-plane delivery", () => {
     expect(messages.status).toBe(404);
     expect(await reportFrame(test.store, "trace.head", { task_id: submitted.taskId },
       { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: true, head: 1 });
-    const streamed: Array<{ content?: string }> = [];
+    const streamed: TraceEvent[] = [];
     const subscription = reportTraceSink(test.store).subscribe(submitted.taskId, 0, (_id, events) => streamed.push(...events));
     subscription.unsubscribe();
     expect(streamed).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
