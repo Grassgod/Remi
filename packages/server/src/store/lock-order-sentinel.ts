@@ -142,10 +142,15 @@ function sqlNodes(sql: string): SqlNode[] {
       i += 1;
       continue;
     }
+    // Keep the common ASCII path cheap; a high-bit continuation belongs to the same PG identifier.
+    const asciiWord = /^[A-Za-z_][\w$]*/.exec(sql.slice(i));
+    const entirelyAscii = asciiWord && !(sql.charCodeAt(i + asciiWord[0].length) >= 0x80);
     // PG scan.l accepts every high-bit byte; UTF-8 identifiers retain non-ASCII case.
-    const word = /^[A-Za-z_\u0080-\u{10ffff}][A-Za-z_0-9$\u0080-\u{10ffff}]*/u.exec(sql.slice(i));
+    const word = entirelyAscii ? asciiWord
+      : (asciiWord || sql.charCodeAt(i) >= 0x80)
+        ? /^[A-Za-z_\u0080-\u{10ffff}][A-Za-z_0-9$\u0080-\u{10ffff}]*/u.exec(sql.slice(i)) : null;
     if (word) {
-      nodes.push({ text: asciiLower(word[0]), kind: "word" });
+      nodes.push({ text: entirelyAscii ? word[0].toLowerCase() : asciiLower(word[0]), kind: "word" });
       i += word[0].length;
     } else {
       nodes.push({ text: ch, kind: "symbol" });
