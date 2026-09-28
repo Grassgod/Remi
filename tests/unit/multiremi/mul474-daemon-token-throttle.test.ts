@@ -7,6 +7,7 @@
 // map-hit and the map-miss path.
 import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import {
+  lastUsedAtThrottlePeakSizeForTest,
   lastUsedAtThrottleSizeForTest,
   resetLastUsedAtThrottleForTest,
 } from "@multiremi/store/repos/access-tokens-repo.js";
@@ -166,6 +167,10 @@ describe("MUL-474 last_used_at write throttle", () => {
     );
     for (const created of bulk) await store.verifyAccessToken(created.token);
     expect(lastUsedAtThrottleSizeForTest()).toBeLessThanOrEqual(MAP_CAPACITY);
+    // The cap is about the peak: a sweep that ran after the insert would settle
+    // below the cap between calls while briefly holding 4097.
+    expect(lastUsedAtThrottlePeakSizeForTest(), "the map must never hold more than its declared capacity")
+      .toBeLessThanOrEqual(MAP_CAPACITY);
   });
 
   it("treats a stored stamp ahead of the clock as an anomaly and writes", async () => {

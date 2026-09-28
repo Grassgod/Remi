@@ -306,15 +306,13 @@ export class AccessTokensRepo {
     // No usable map entry: judge the window from the value the row already carries.
     const storedMs = storedLastUsedAt ? Date.parse(storedLastUsedAt) : Number.NaN;
     if (storedLastUsedAt && Number.isFinite(storedMs) && withinLastUsedAtWindow(storedMs, nowMs)) {
-      makeRoomForLastUsedAtWrite(nowMs);
-      lastUsedAtWrites.set(tokenId, { writtenAt: storedMs, lastUsedAt: storedLastUsedAt });
+      rememberLastUsedAtWrite(tokenId, { writtenAt: storedMs, lastUsedAt: storedLastUsedAt }, nowMs);
       return storedLastUsedAt;
     }
 
     const lastUsedAt = new Date(nowMs).toISOString();
     this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [lastUsedAt, tokenId]);
-    makeRoomForLastUsedAtWrite(nowMs);
-    lastUsedAtWrites.set(tokenId, { writtenAt: nowMs, lastUsedAt });
+    rememberLastUsedAtWrite(tokenId, { writtenAt: nowMs, lastUsedAt }, nowMs);
     return lastUsedAt;
   }
 }
@@ -342,10 +340,28 @@ function withinLastUsedAtWindow(stampMs: number, nowMs: number): boolean {
  */
 const lastUsedAtWrites = new Map<string, { writtenAt: number; lastUsedAt: string }>();
 
+/** High-water mark of {@link lastUsedAtWrites}, for the capacity assertion. */
+let lastUsedAtPeakSize = 0;
+
+/**
+ * Store one throttle decision, making room first.
+ *
+ * The order is the point: the sweep runs *before* the insert, so the map's size never exceeds
+ * {@link LAST_USED_AT_MAP_MAX_ENTRIES} — not even between the sweep and the insert.
+ */
+function rememberLastUsedAtWrite(
+  tokenId: string,
+  entry: { writtenAt: number; lastUsedAt: string },
+  nowMs: number,
+): void {
+  makeRoomForLastUsedAtWrite(nowMs);
+  lastUsedAtWrites.set(tokenId, entry);
+  if (lastUsedAtWrites.size > lastUsedAtPeakSize) lastUsedAtPeakSize = lastUsedAtWrites.size;
+}
+
 /**
  * Make room for one more entry: drop everything that has already left its window, then evict the
- * oldest live entries until the map has room for the insert. Called *before* every `set`, so the
- * map's size never exceeds {@link LAST_USED_AT_MAP_MAX_ENTRIES}.
+ * oldest live entries until the map has room for the insert.
  */
 function makeRoomForLastUsedAtWrite(nowMs: number): void {
   if (lastUsedAtWrites.size < LAST_USED_AT_MAP_MAX_ENTRIES) return;
@@ -364,9 +380,20 @@ export function lastUsedAtThrottleSizeForTest(): number {
   return lastUsedAtWrites.size;
 }
 
+/**
+ * Test seam: the largest the map has been since the last reset.
+ *
+ * The cap is about the peak, not the resting size — a sweep that ran after the insert would
+ * still settle below the cap between calls while briefly holding one entry too many.
+ */
+export function lastUsedAtThrottlePeakSizeForTest(): number {
+  return lastUsedAtPeakSize;
+}
+
 /** Test seam: forget every throttle decision, so a capacity case starts from empty. */
 export function resetLastUsedAtThrottleForTest(): void {
   lastUsedAtWrites.clear();
+  lastUsedAtPeakSize = 0;
 }
 
 function toAccessToken(row: Row): MultiremiAccessToken {
