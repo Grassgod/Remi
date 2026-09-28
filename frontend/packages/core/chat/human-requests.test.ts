@@ -8,7 +8,7 @@ vi.mock("../api", () => ({
   api: { listTaskHumanRequests },
 }));
 
-import { humanRequestsOptions } from "./human-requests";
+import { humanRequestsOptions, parseTaskHumanRequest } from "./human-requests";
 
 const REQUEST = {
   id: "hrq_1",
@@ -36,6 +36,15 @@ beforeEach(() => {
 });
 
 describe("humanRequestsOptions", () => {
+  it("rejects malformed card payloads before a consumer renders them", () => {
+    expect(parseTaskHumanRequest(REQUEST)).toEqual(REQUEST);
+    expect(parseTaskHumanRequest({
+      ...REQUEST,
+      kind: "permission",
+      payload: { options: "not-an-array" },
+    })).toBeNull();
+  });
+
   it("parses optional question context", async () => {
     listTaskHumanRequests.mockResolvedValue({
       requests: [{ ...REQUEST, payload: { ...REQUEST.payload, context: { text: "Context", truncated: true } } }],
