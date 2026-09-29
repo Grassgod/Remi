@@ -3994,7 +3994,7 @@ ${placementAfter.sql}
           task.issueSessionId, task.agentId, taskExecutionScope(task),
         )?.cursorSeq ?? 0;
         const wakeSeq = Number(row.wake_seq ?? 0);
-        if (cursorSeq >= wakeSeq
+        if (wakeSeq > 0 && cursorSeq >= wakeSeq
           && this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, cursorSeq) === null) {
           const cancelledAt = nowIso();
           this.ctx.db.run(`UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?,

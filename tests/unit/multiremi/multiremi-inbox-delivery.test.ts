@@ -138,6 +138,22 @@ describe("MUL-484 inbox delivery and pending turns", () => {
       });
     }, 30_000);
 
+    test(`${backend}: an unmerged system wake with wake_seq zero remains claimable`, async () => {
+      await withStore(backend, (store, db) => {
+        store.ensureLocalWorkspace();
+        const runtime = store.registerRuntime({ name: "Legacy runtime", provider: "codex" });
+        const agent = store.createAgent({ name: "Legacy owner", provider: "codex", runtimeId: runtime.id });
+        const issue = store.createIssue({ title: "Legacy wake", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id,
+          prompt: "Legacy system round", wakeSource: "child_status" });
+        expect(Number(db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(task.id).wake_seq)).toBe(0);
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        const skipped = db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_skipped'").all(issue.id);
+        expect(skipped).toHaveLength(0);
+      });
+    }, 30_000);
+
     test(`${backend}: requeue clears the frozen projection and includes later entries`, async () => {
       await withStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
