@@ -748,12 +748,14 @@ describe("Multiremi API — agent plugins", () => {
       status: "pending",
     });
 
-    const reported = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret" });
+    const reported = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret", capabilities: { agent_plugin_protocol: 1 } });
     expect(reported.ok).toBe(true);
     expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({ status: "ready", observedDigest: plugin.activeVersion!.artifactDigest });
-    const repeatedReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret" });
+    const eventsAfterFirstReport = runtimeStateEvents.length;
+    const repeatedReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { ...daemonHeaders, "Content-Type": "application/json" }, authToken: "root-secret", capabilities: { agent_plugin_protocol: 1 } });
     expect(repeatedReport.ok).toBe(true);
-    expect(runtimeStateEvents).toHaveLength(1);
+    expect(runtimeStateEvents.filter(event => event.payload.state.status === "ready")).toHaveLength(1);
+    expect(runtimeStateEvents).toHaveLength(eventsAfterFirstReport);
 
     // With v2, each new socket's hello counts as a runtime heartbeat. Verify
     // master capability writes after the daemon reports ready so this auth check
@@ -769,11 +771,11 @@ describe("Multiremi API — agent plugins", () => {
     expect(masterHeartbeat.status).toBe(200);
     expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(2);
 
-    const masterReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" }, authToken: "root-secret" });
+    const masterReport = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" }, authToken: "root-secret", capabilities: { agent_plugin_protocol: 2 } });
     expect(masterReport.ok).toBe(true);
 
     expect((await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, "", "")).ok).toBe(true);
-    expect((await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { "Content-Type": "application/json" }, authToken: "" })).ok).toBe(true);
+    expect((await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: { "Content-Type": "application/json" }, authToken: "", capabilities: { agent_plugin_protocol: 2 } })).ok).toBe(true);
     expect((await requestRuntimeRpc(store, runtime.id, "plugin.desired", {}, localPat.token, "")).ok).toBe(false);
 
     const retry = await app.request(`/api/multiremi/agent-plugins/${plugin.id}/runtimes/retry`, {
@@ -1090,7 +1092,7 @@ describe("Multiremi API — agent plugins", () => {
 
     // Daemon-observed state is excluded: the daemon produces it, so reporting it
     // must not look like a control-plane change and re-trigger the desired GET.
-    const report = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: headers, authToken: "root-secret" });
+    const report = await reportFrame(store, "plugin.state", { runtime_id: runtime.id, version_id: plugin.activeVersionId, status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }, { headers: headers, authToken: "root-secret", capabilities: { agent_plugin_protocol: 1 } });
     expect(report.ok).toBe(true);
     expect(await desiredRevision()).toBe(initialRevision);
     expect((await heartbeat()).agent_plugins).toEqual({ revision: initialRevision });
