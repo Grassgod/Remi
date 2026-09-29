@@ -2550,9 +2550,17 @@ export class IssuesRepo {
       ? resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", null) : null;
     const requestedStatus = hasAnyField(input, "status") ? normalizeIssueStatus(input.status) : null;
     const mayReopen = requestedStatus !== null && !isTerminalIssueStatus(requestedStatus);
-    const hint = parentRef || (mayReopen && !hasParentField)
+    const hasWorkspaceField = hasAnyField(input, "workspaceId", "workspace_id");
+    const hint = parentRef || (mayReopen && !hasParentField) || hasWorkspaceField
       ? this.ctx.db.query("SELECT workspace_id, parent_issue_id, status FROM multiremi_issues WHERE id = ?").get(id) as Row | null
       : null;
+    // A move takes a number in its target workspace (the MUL-405 unique index
+    // rejects the old one there), so it takes that workspace's number lock (N)
+    // before any Issue row (D). No workspace lock is added for it.
+    const hintedTarget = hint && hasWorkspaceField
+      ? resolveOptionalStringField(input, "workspaceId", "workspace_id", null) ?? "local" : null;
+    const numberLockWorkspaceId = hintedTarget !== null && hintedTarget !== String(hint!.workspace_id) ? hintedTarget : null;
+    if (numberLockWorkspaceId) advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${numberLockWorkspaceId}`));
     const parentId = parentRef
       ? this.resolveIssueRelationRef(parentRef, input.workspaceId ?? input.workspace_id ?? (hint ? String(hint.workspace_id) : null)) ?? parentRef
       : null;
@@ -2564,6 +2572,10 @@ export class IssuesRepo {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+    const moving = nextWorkspaceId !== current.workspaceId;
+    // The Issue moved while this transaction waited, so the number lock it did
+    // not take is now needed; it is never taken after an Issue row.
+    if (moving && numberLockWorkspaceId !== nextWorkspaceId) throw new IssueLockSetStaleError();
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = parentId ?? resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
     const nextStatus = requestedStatus ?? current.status;
@@ -2671,6 +2683,10 @@ export class IssuesRepo {
         handledForcedStart: false,
       };
     }
+    // Read under the target's number lock taken above. The number and the
+    // workspace change in one statement so the unique index never sees the
+    // row with the old number in either workspace.
+    const movedNumber = moving ? this.nextIssueNumber(nextWorkspaceId) : null;
     this.ctx.db.run(
       `UPDATE multiremi_issues SET
       title = ?,
@@ -2678,6 +2694,8 @@ export class IssuesRepo {
       status = ?,
       priority = ?,
       workspace_id = ?,
+      issue_number = COALESCE(?, issue_number),
+      issue_key = COALESCE(?, issue_key),
       project_id = ?,
       runtime_workspace_id = ?,
       parent_issue_id = ?,
@@ -2698,6 +2716,8 @@ export class IssuesRepo {
       nextStatus,
       normalizeIssuePriority(input.priority ?? current.priority),
       nextWorkspaceId,
+      movedNumber,
+      movedNumber === null ? null : formatIssueKey(movedNumber),
       nextProjectId,
       nextRuntimeWorkspaceId,
       nextParentIssueId,

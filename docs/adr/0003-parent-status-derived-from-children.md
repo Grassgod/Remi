@@ -127,8 +127,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    and reopening a `done`/`cancelled` child lock that same parent before writing.
    This also covers Agent assignment's direct terminal-to-`todo` write, whose
    locks and assignment update commit before task creation opens its transaction.
-   Lock order is workspace lifecycle (when required) and, for creation, the
-   issue-number lock (MUL-405's W -> N -> D, `store/advisory-locks.ts`), then
+   Lock order is workspace lifecycle (when required) and, for creation and for
+   a move into another workspace, the issue-number lock (MUL-405's W -> N -> D,
+   `store/advisory-locks.ts`; a move takes only its target's N), then
    every Issue row the transaction writes or whose relation it changes, taken
    **once in ascending id order** (`lockIssueRowsWithinTransaction`), then no further Issue row and no
    workspace lock. The set is computed before locking from the input plus one
@@ -136,11 +137,14 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    every guarded value is re-read after the locks. A child that is reopened
    still locks its parent; a child that is re-parented locks the new parent;
    creation locks the parent and every `blocked_by` endpoint; a dependency locks
-   both endpoints; a workspace move locks only itself and is blocked by active
-   tasks as well as relations; task creation locks its Issue before checking
+   both endpoints; a workspace move locks only itself, is blocked by active
+   tasks as well as relations, and takes the target's next number (number and
+   key change in the same UPDATE, because MUL-405's unique index rejects the
+   old number there); task creation locks its Issue before checking
    the Issue's workspace, so it and a move serialize. If the post-lock re-read
    shows the set was incomplete (the child's parent or terminal status changed
-   while it waited), the transaction owner rolls back and retries once with a
+   while it waited, or the Issue now moves and its N was not taken), the
+   transaction owner rolls back and retries once with a
    fresh set; a second miss, or a caller-owned transaction, raises 409
    `issue_relation_changed`. A late lock is never taken. A parent's guarded
    decision still reads children without locking their rows. A write serialized after parent closure may still introduce an

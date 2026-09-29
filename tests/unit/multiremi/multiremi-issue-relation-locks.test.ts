@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { IssueLockSetStaleError, IssuesRepo, IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
@@ -281,6 +282,33 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       expect(taskIds(f.child.id)).toEqual([]);
     });
 
+    it("S4: a move takes the next number in the target workspace, alone, over HTTP and in a batch", async () => {
+      const f = fixture();
+      const leaves = [1, 2].map((i) => store.createIssue({ title: `Leaf ${i}`, workspaceId: f.source }));
+      const occupants = [1, 2, 3].map((i) => store.createIssue({ title: `Occupant ${i}`, workspaceId: f.target }));
+      const top = Math.max(...occupants.map((issue) => issue.number));
+      // The source numbers are already taken in the target (MUL-405's unique index).
+      expect(occupants.map((issue) => issue.number)).toContain(f.child.number);
+      expect(store.updateIssue(f.child.id, { workspaceId: f.target }))
+        .toMatchObject({ workspaceId: f.target, number: top + 1, key: `MUL-${top + 1}` });
+      // Saving the same workspace again is not a move and keeps the number.
+      expect(store.updateIssue(f.child.id, { workspaceId: f.target, title: "Renamed" }).number).toBe(top + 1);
+      const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
+      const response = await app.request(`/api/multiremi/issues/${f.parent.id}`, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer mul476-locks-root", "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: f.target }),
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+      expect((await response.json()).issue).toMatchObject({ number: top + 2, key: `MUL-${top + 2}` });
+      store.batchUpdateIssues({ issue_ids: leaves.map((leaf) => leaf.id), updates: { workspace_id: f.target } });
+      expect(leaves.map((leaf) => store.getIssue(leaf.id)!.number)).toEqual([top + 3, top + 4]);
+      const numbers = store.listIssues({ workspaceId: f.target }).map((issue) => issue.number);
+      expect(new Set(numbers).size).toBe(numbers.length);
+      expect(store.listIssues({ workspaceId: f.source })).toEqual([]);
+      assertNoForeignEdges();
+    });
+
     for (const action of ["create", "reparent", "dependency", "reopen", "assign", "sibling-status"] as const) {
       it(`S2: ${action} locks its Issue rows once in ascending order, then re-reads them`, () => {
         const f = fixture();
@@ -449,6 +477,48 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       });
       expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
       expect(taskIds(f.child.id)).toEqual([]);
+      assertNoForeignEdges();
+    }, 15_000);
+
+    it("PG-L9: a move waits on a creation holding the target's number lock, then takes the next number", async () => {
+      const f = fixture();
+      const occupant = store.createIssue({ title: "Occupant", workspaceId: f.target });
+      const createdId = `iss_n_${f.tag}`;
+      await hold({ mode: "hold-number", role: "create", issueId: f.child.id, otherId: createdId,
+        sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
+        store.updateIssue(f.child.id, { workspaceId: f.target });
+      });
+      expect(store.getIssue(createdId)?.number).toBe(occupant.number + 1);
+      expect(store.getIssue(f.child.id)).toMatchObject({ workspaceId: f.target, number: occupant.number + 2 });
+      assertNoForeignEdges();
+    }, 15_000);
+
+    it("PG-L10: a move whose Issue was moved away while it waited retries once, taking the number lock first", async () => {
+      const f = fixture();
+      // Target numbers run past the source's, so the raw move back to the source keeps a free number.
+      for (const i of [1, 2, 3]) store.createIssue({ title: `Filler ${i}`, workspaceId: f.target });
+      const issue = store.createIssue({ title: "Moved away", workspaceId: f.target });
+      const pg = db as PostgresSyncDatabase;
+      const events: string[] = [];
+      const originalRun = pg.run.bind(pg);
+      const runSpy = spyOn(pg, "run").mockImplementation((sql: string, params?: SqlParams) => {
+        if (sql === LOCK_SQL && params?.[0] === issue.id) events.push("row");
+        return originalRun(sql, params ?? []);
+      });
+      const originalLock = pg.advisoryXactLock.bind(pg);
+      const lockSpy = spyOn(pg, "advisoryXactLock").mockImplementation((key: string) => {
+        events.push(key);
+        return originalLock(key);
+      });
+      try {
+        await hold({ mode: "hold-move", role: "move", issueId: issue.id, otherId: f.child.id,
+          sourceWorkspace: f.target, targetWorkspace: f.source }, () => {
+          store.updateIssue(issue.id, { workspaceId: f.target });
+        });
+      } finally { lockSpy.mockRestore(); runSpy.mockRestore(); }
+      // The first attempt saw the Issue already in the target and took no number lock.
+      expect(events).toEqual(["row", numberAllocationLockKey(`issue:${f.target}`), "row"]);
+      expect(store.getIssue(issue.id)).toMatchObject({ workspaceId: f.target, number: issue.number });
       assertNoForeignEdges();
     }, 15_000);
 

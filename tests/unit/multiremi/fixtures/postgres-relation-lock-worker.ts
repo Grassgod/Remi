@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock, PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 export interface RelationLockInput {
   databaseUrl: string;
-  mode: "hold-move" | "hold-child" | "hold-reparent" | "race";
+  mode: "hold-move" | "hold-child" | "hold-reparent" | "hold-number" | "race";
   role: "move" | "create" | "reparent" | "dependency" | "reopen" | "assign" | "task";
   issueId: string;
   otherId: string;
@@ -37,9 +38,14 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
         if (Atomics.wait(gate, 0, 0, 15_000) === "timed-out") throw new Error("relation gate timeout");
       }
       db.transaction(() => {
-        // hold-reparent takes the same sorted set as a real re-parent: the child and its new parent.
-        const locked = input.mode === "hold-reparent" ? [input.issueId, input.otherId].sort() : [input.issueId];
-        for (const id of locked) db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
+        if (input.mode === "hold-number") {
+          // A creation in the target workspace, paused after its number lock.
+          advisoryXactLock(db, numberAllocationLockKey(`issue:${input.targetWorkspace}`));
+        } else {
+          // hold-reparent takes the same sorted set as a real re-parent: the child and its new parent.
+          const locked = input.mode === "hold-reparent" ? [input.issueId, input.otherId].sort() : [input.issueId];
+          for (const id of locked) db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [id]);
+        }
         self.postMessage({ phase: "locked" });
         if (gate) { Atomics.store(gate, 1, 1); Atomics.notify(gate, 1); }
         // Commit only once the peer is queued behind these rows, so it must re-read.
@@ -48,6 +54,16 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
           db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [input.targetWorkspace, input.issueId]);
         } else if (input.mode === "hold-reparent") {
           db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [input.otherId, input.issueId]);
+        } else if (input.mode === "hold-number") {
+          const { next } = db.query(
+            "SELECT COALESCE(MAX(issue_number), 0) + 1 AS next FROM multiremi_issues WHERE workspace_id = ?",
+          ).get(input.targetWorkspace) as { next: number | string };
+          const now = new Date().toISOString();
+          db.run(
+            `INSERT INTO multiremi_issues (id, issue_number, issue_key, title, status, workspace_id, created_at, updated_at)
+             VALUES (?, ?, ?, 'Concurrent creation', 'todo', ?, ?, ?)`,
+            [input.otherId, Number(next), `MUL-${next}`, input.targetWorkspace, now, now],
+          );
         } else {
           db.run(
             `INSERT INTO multiremi_issues (id, issue_number, issue_key, title, status, workspace_id,
