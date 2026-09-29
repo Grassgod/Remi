@@ -12,9 +12,14 @@
  *
  * Default is a random sample of 200 tasks, 50 from each of the four groups,
  * drawn with a seed fixed in code (`TRACE_RECONCILE_SAMPLE_QUOTAS`,
- * `TRACE_RECONCILE_SAMPLE_SEED`); `--sample-size` splits another size evenly
- * instead and `--seed` replaces the seed. `--mode=full` checks every task and
- * every subject digest. Quotas and seed are recorded in the report.
+ * `TRACE_RECONCILE_SAMPLE_SEED`). A group with fewer than 50 candidates gives
+ * all of them and its shortfall is drawn from the groups that still have
+ * candidates, one at a time in group order (chat, task,
+ * issue_without_archive, issue_with_archive); fewer than 200 in all are all
+ * taken and the report's `sample.note` says so. `--sample-size` splits
+ * another size evenly instead and `--seed` replaces the seed; the same seed
+ * over the same data draws the same tasks. `--mode=full` checks every task and
+ * every subject digest. Quotas, refills and seed are recorded in the report.
  *
  * Nothing is written: SQLite is opened on an existing file with
  * `query_only`, Postgres with `default_transaction_read_only`, and every
@@ -131,7 +136,14 @@ export async function runTraceReconcile(options: TraceReconcileRunOptions): Prom
     archive_root: options.archiveRoot,
     old_table_stopped_at: cutoff,
     sample: sample
-      ? { seed: sample.seed, requested: sample.requested, tasks: sample.taskIds.size, by_group: sample.by_group }
+      ? {
+        seed: sample.seed,
+        requested: sample.requested,
+        tasks: sample.taskIds.size,
+        refilled: sample.refilled,
+        note: sample.note,
+        by_group: sample.by_group,
+      }
       : null,
     result,
   };

@@ -788,13 +788,15 @@ function markdown(report: {
     const sample = backend.reconcile_sample.sample;
     if (sample) {
       lines.push(
-        `\`scripts/reconcile-task-traces.ts\` 默认抽样（不传 \`--sample-size\` / \`--seed\`）：四组配额 ${Object.entries(TRACE_RECONCILE_SAMPLE_QUOTAS).map(([group, quota]) => `${GROUP_LABEL[group] ?? group} ${quota}`).join(" / ")}，共 ${sample.requested}；seed \`${sample.seed}\`（\`TRACE_RECONCILE_SAMPLE_QUOTAS\` / \`TRACE_RECONCILE_SAMPLE_SEED\`，固化在 \`scripts/lib/task-trace-reconcile.ts\`）。某组候选不足配额时取全，缺额不挪给别组。`,
+        `\`scripts/reconcile-task-traces.ts\` 默认抽样（不传 \`--sample-size\` / \`--seed\`）：四组配额 ${Object.entries(TRACE_RECONCILE_SAMPLE_QUOTAS).map(([group, quota]) => `${GROUP_LABEL[group] ?? group} ${quota}`).join(" / ")}，共 ${sample.requested}；seed \`${sample.seed}\`（\`TRACE_RECONCILE_SAMPLE_QUOTAS\` / \`TRACE_RECONCILE_SAMPLE_SEED\`，固化在 \`scripts/lib/task-trace-reconcile.ts\`）。某组候选不足配额时取全，缺额按固定组序（${TRACE_BACKFILL_GROUPS.map((group) => GROUP_LABEL[group] ?? group).join(" → ")}）轮流、每轮一个，从仍有候选的组补足，用同一个 seed 抽；同一 seed、同一数据抽出的任务相同。总候选不足 ${sample.requested} 时全取，并在 \`sample.note\` 写明实际数量和原因。`,
         "",
-        "| 组 | 配额 | 候选 | 抽中 |",
-        "| --- | ---: | ---: | ---: |",
+        `本次实际抽中 **${sample.tasks}** 个，其中补抽 ${sample.refilled} 个；${sample.note ? `说明：${sample.note}。` : "候选足够，抽满。"}`,
+        "",
+        "| 组 | 配额 | 候选 | 抽中 | 其中补抽 |",
+        "| --- | ---: | ---: | ---: | ---: |",
       );
       for (const [group, entry] of Object.entries(sample.by_group)) {
-        lines.push(`| ${GROUP_LABEL[group] ?? group} | ${entry.quota} | ${entry.candidates} | ${entry.sampled} |`);
+        lines.push(`| ${GROUP_LABEL[group] ?? group} | ${entry.quota} | ${entry.candidates} | ${entry.sampled} | ${entry.refill} |`);
       }
       lines.push("", `核对 ${backend.reconcile_sample.checked_tasks} 个任务、${backend.reconcile_sample.checked_rows.toLocaleString("en-US")} 行，用时 ${backend.reconcile_sample.ms} ms，不一致 **${backend.reconcile_sample.mismatch_total}**。`, "");
     }

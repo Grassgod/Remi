@@ -313,7 +313,9 @@ function readArchiveRow(db: SqlDatabase, archiveId: string) {
 /**
  * The default reconcile sample (MUL-432 QA round 1): 50 tasks from each of the
  * four groups, 200 in all, drawn with this seed. Both are fixed here so a
- * rerun on the same data checks the same tasks; both go in the report.
+ * rerun on the same data checks the same tasks; both go in the report. A group
+ * with fewer candidates than its 50 gives all of them and the shortfall is
+ * drawn from the other groups (QA round 2, M2; see `selectTraceReconcileSample`).
  */
 export const TRACE_RECONCILE_SAMPLE_QUOTAS: Readonly<Record<TraceBackfillGroup, number>> = {
   chat: 50,
@@ -327,18 +329,41 @@ export interface TraceReconcileSample {
   seed: string;
   requested: number;
   taskIds: Set<string>;
+  /** Tasks drawn beyond their group's quota to make up other groups' shortfall. */
+  refilled: number;
+  /** Why fewer than `requested` tasks were drawn; null when the request was met. */
+  note: string | null;
   by_group: Record<
     TraceBackfillGroup,
-    { quota: number; candidates: number; sampled: number; sampled_render: number; sampled_none: number }
+    {
+      /** The group's share of the request: its configured quota, or its even split of `size`. */
+      quota: number;
+      candidates: number;
+      sampled: number;
+      /** `sampled` beyond `quota`, drawn for another group's shortfall. */
+      refill: number;
+      sampled_render: number;
+      sampled_none: number;
+    }
   >;
 }
 
 /**
- * A seeded random sample of backfilled tasks (rendered and `none`). With
- * `quotas`, each group gives exactly its quota, or all its candidates when it
- * has fewer (the shortfall shows as `sampled < quota`). With `size`, the size
- * is split evenly across groups and what a small group cannot use goes to the
- * others.
+ * A seeded random sample of backfilled tasks (rendered and `none`).
+ *
+ * Every group first takes its quota, or all its candidates when it has fewer.
+ * The total shortfall is then handed out one task at a time, in the fixed
+ * group order (chat, task, issue_without_archive, issue_with_archive), to the
+ * groups that still have candidates, round after round, until the request is
+ * met or no group has any left (QA round 2, M2). So the default request draws
+ * 200 whenever there are 200 candidates, every group with candidates is
+ * represented, and fewer than 200 means every candidate was taken; the report
+ * then says so in `note`. With `size`, every group starts from zero and the
+ * same loop hands out the whole size, which splits it evenly; its `quota` is
+ * that even split. The counts depend only on the candidates, and the tasks
+ * only on the counts and the seed: candidates are sorted and each group is
+ * drawn in group order from one seeded generator, so the same seed over the
+ * same data gives the same sample.
  */
 export function selectTraceReconcileSample(
   assignment: TraceBackfillAssignment,
@@ -356,15 +381,31 @@ export function selectTraceReconcileSample(
   // Sorted, so the same seed picks the same tasks whatever order the database returned.
   for (const group of TRACE_BACKFILL_GROUPS) candidates[group].sort();
 
-  const quota = Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, 0])) as Record<TraceBackfillGroup, number>;
-  if ("quotas" in options) Object.assign(quota, options.quotas);
-  let remaining = "quotas" in options ? 0 : options.size;
+  const zero = () => Object.fromEntries(TRACE_BACKFILL_GROUPS.map((group) => [group, 0])) as Record<TraceBackfillGroup, number>;
+  // Each group's share of the request, before any shortfall moves.
+  const share = zero();
+  if ("quotas" in options) {
+    for (const group of TRACE_BACKFILL_GROUPS) share[group] = options.quotas[group];
+  } else {
+    TRACE_BACKFILL_GROUPS.forEach((group, i) => {
+      share[group] = Math.floor(options.size / TRACE_BACKFILL_GROUPS.length)
+        + (i < options.size % TRACE_BACKFILL_GROUPS.length ? 1 : 0);
+    });
+  }
+  const requested = TRACE_BACKFILL_GROUPS.reduce((sum, group) => sum + share[group], 0);
+  // How many each group gives: its quota up to its candidates, then the rest of
+  // the request one at a time in group order to groups that still have some.
+  const take = zero();
+  if ("quotas" in options) {
+    for (const group of TRACE_BACKFILL_GROUPS) take[group] = Math.min(share[group], candidates[group].length);
+  }
+  let remaining = requested - TRACE_BACKFILL_GROUPS.reduce((sum, group) => sum + take[group], 0);
   while (remaining > 0) {
-    const open = TRACE_BACKFILL_GROUPS.filter((group) => quota[group] < candidates[group].length);
+    const open = TRACE_BACKFILL_GROUPS.filter((group) => take[group] < candidates[group].length);
     if (open.length === 0) break;
     for (const group of open) {
       if (remaining === 0) break;
-      quota[group]++;
+      take[group]++;
       remaining--;
     }
   }
@@ -372,20 +413,26 @@ export function selectTraceReconcileSample(
   const random = seededRandom(options.seed);
   const taskIds = new Set<string>();
   const byGroup = {} as TraceReconcileSample["by_group"];
+  let refilled = 0;
   for (const group of TRACE_BACKFILL_GROUPS) {
-    const picked = sampleWithoutReplacement(random, candidates[group], quota[group]);
+    const picked = sampleWithoutReplacement(random, candidates[group], take[group]);
     for (const taskId of picked) taskIds.add(taskId);
     const none = picked.filter((taskId) => noneIds.has(taskId)).length;
+    const refill = Math.max(0, picked.length - share[group]);
+    refilled += refill;
     byGroup[group] = {
-      quota: quota[group],
+      quota: share[group],
       candidates: candidates[group].length,
       sampled: picked.length,
+      refill,
       sampled_render: picked.length - none,
       sampled_none: none,
     };
   }
-  const requested = "quotas" in options ? Object.values(options.quotas).reduce((a, b) => a + b, 0) : options.size;
-  return { seed: options.seed, requested, taskIds, by_group: byGroup };
+  const note = taskIds.size < requested
+    ? `all ${taskIds.size} candidates taken: the groups hold fewer than the ${requested} requested`
+    : null;
+  return { seed: options.seed, requested, taskIds, refilled, note, by_group: byGroup };
 }
 
 function sameSeqSet(left: number[], right: number[]): boolean {

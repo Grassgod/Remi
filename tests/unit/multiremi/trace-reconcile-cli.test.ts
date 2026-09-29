@@ -146,8 +146,12 @@ describe("reconcile sample selection", () => {
       const uneven = pick(30, "a");
       expect(uneven.taskIds.size).toBe(30);
       expect(uneven.by_group).toMatchObject({
-        chat: { sampled: 9 }, task: { sampled: 9 }, issue_without_archive: { sampled: 8 }, issue_with_archive: { sampled: 4 },
+        chat: { quota: 8, sampled: 9, refill: 1 },
+        task: { quota: 8, sampled: 9, refill: 1 },
+        issue_without_archive: { quota: 7, sampled: 8, refill: 1 },
+        issue_with_archive: { quota: 7, sampled: 4, refill: 0 },
       });
+      expect(uneven).toMatchObject({ refilled: 3, note: null });
       const whole = pick(1000, "a");
       expect(whole.taskIds.size).toBe(43);
       expect(whole.by_group.chat).toMatchObject({ sampled_render: 12, sampled_none: 2 });
@@ -160,7 +164,7 @@ describe("reconcile sample selection", () => {
     }
   });
 
-  it("takes fixed per-group quotas without moving a shortfall to other groups", () => {
+  it("takes fixed per-group quotas and draws a short group's shortfall from the others in group order", () => {
     expect(TRACE_RECONCILE_SAMPLE_QUOTAS).toEqual({ chat: 50, task: 50, issue_without_archive: 50, issue_with_archive: 50 });
     expect(TRACE_RECONCILE_SAMPLE_SEED).toBe("mul-432-reconcile-sample-v1");
     const raw = new Database(":memory:");
@@ -169,27 +173,81 @@ describe("reconcile sample selection", () => {
       new MultiremiStore(db).ensureLocalWorkspace();
       seedGroups(db);
       const assignment = assignTraceBackfillSubjects(db, { oldTableStoppedAt: CUTOFF });
+      // issue_with_archive has 4 of its 10: the other 6 come one at a time from chat, task, issue_without_archive.
       const quotas = { chat: 5, task: 3, issue_without_archive: 6, issue_with_archive: 10 };
       const fixed = selectTraceReconcileSample(assignment, { quotas, seed: TRACE_RECONCILE_SAMPLE_SEED });
-      expect(fixed.requested).toBe(24);
-      expect(fixed.taskIds.size).toBe(18);
+      expect(fixed).toMatchObject({ requested: 24, refilled: 6, note: null });
+      expect(fixed.taskIds.size).toBe(24);
       expect(fixed.by_group).toMatchObject({
-        chat: { quota: 5, candidates: 14, sampled: 5 },
-        task: { quota: 3, candidates: 10, sampled: 3 },
-        issue_without_archive: { quota: 6, candidates: 15, sampled: 6 },
-        issue_with_archive: { quota: 10, candidates: 4, sampled: 4 },
+        chat: { quota: 5, candidates: 14, sampled: 7, refill: 2 },
+        task: { quota: 3, candidates: 10, sampled: 5, refill: 2 },
+        issue_without_archive: { quota: 6, candidates: 15, sampled: 8, refill: 2 },
+        issue_with_archive: { quota: 10, candidates: 4, sampled: 4, refill: 0 },
       });
       expect([...selectTraceReconcileSample(assignment, { quotas, seed: TRACE_RECONCILE_SAMPLE_SEED }).taskIds])
         .toEqual([...fixed.taskIds]);
 
+      // 43 candidates in all, fewer than 200: every one is taken and the report says why.
       const defaults = selectTraceReconcileSample(assignment, { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS, seed: TRACE_RECONCILE_SAMPLE_SEED });
-      expect(defaults.requested).toBe(200);
+      expect(defaults).toMatchObject({
+        requested: 200, refilled: 0, note: "all 43 candidates taken: the groups hold fewer than the 200 requested",
+      });
+      expect(defaults.taskIds.size).toBe(43);
       expect(Object.values(defaults.by_group).map((group) => [group.quota, group.sampled])).toEqual([[50, 14], [50, 10], [50, 15], [50, 4]]);
     } finally {
       raw.close();
     }
   });
 });
+
+for (const backend of backends) {
+  it.skipIf(!backend.available)(`QA2: 200-task default sample fills a sparse group's shortfall (${backend.name})`, async () => {
+    const opened = await backend.open();
+    try {
+      seedGroups(opened.db);
+      const extra = (prefix: string, count: number, issueId?: string) => {
+        for (let i = 0; i < count; i++) {
+          const id = `${prefix}_${i}`;
+          insertSyntheticTask(opened.db, {
+            id, agentId: "agt_r", runtimeId: "rt_r", issueId, status: "completed", createdAt: T0, startedAt: T0, endedAt: ENDED,
+          });
+          insertSyntheticMessages(opened.db, id, rows(id, 1));
+        }
+      };
+      // chat 14, task 100, issue_without_archive 100, issue_with_archive 100.
+      extra("tsk_more_one", 90);
+      extra("tsk_more_no_archive", 85, "iss_r1");
+      extra("tsk_more_archive", 96, "iss_arch");
+      const assignment = assignTraceBackfillSubjects(opened.db, { oldTableStoppedAt: CUTOFF });
+      const draw = (seed: string) =>
+        selectTraceReconcileSample(assignment, { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS, seed });
+      const sample = draw(TRACE_RECONCILE_SAMPLE_SEED);
+
+      expect(sample.taskIds.size).toBe(200);
+      expect(sample).toMatchObject({ requested: 200, refilled: 36, note: null });
+      // chat's 36 short go to the other three, one at a time in group order: 12 each.
+      expect(Object.entries(sample.by_group).map(([group, counts]) =>
+        [group, counts.quota, counts.candidates, counts.sampled, counts.refill])).toEqual([
+        ["chat", 50, 14, 14, 0],
+        ["task", 50, 100, 62, 12],
+        ["issue_without_archive", 50, 100, 62, 12],
+        ["issue_with_archive", 50, 100, 62, 12],
+      ]);
+      const inGroup = (group: string) => new Set(assignment.subjects.filter((subject) => subject.group === group)
+        .flatMap((subject) => [...subject.renderTaskIds, ...subject.noneTaskIds]));
+      for (const group of Object.keys(sample.by_group)) {
+        const members = inGroup(group);
+        expect([...sample.taskIds].filter((taskId) => members.has(taskId)).length).toBe(sample.by_group[group as keyof typeof sample.by_group].sampled);
+      }
+
+      // The same seed draws the same tasks in the same order; another seed draws others.
+      expect([...draw(TRACE_RECONCILE_SAMPLE_SEED).taskIds]).toEqual([...sample.taskIds]);
+      expect([...draw("another seed").taskIds].sort()).not.toEqual([...sample.taskIds].sort());
+    } finally {
+      await opened.close();
+    }
+  }, TIMEOUT);
+}
 
 describe("read-only database handle", () => {
   it("refuses anything but a single SELECT before the backend sees it", () => {
@@ -280,7 +338,10 @@ for (const backend of backends) {
           // No size and no seed: the quotas and seed fixed in code, recorded in the report.
           const byDefault = runCli(env, ...common);
           expect(byDefault.exitCode).toBe(0);
-          expect(byDefault.stdout.sample).toMatchObject({ seed: TRACE_RECONCILE_SAMPLE_SEED, requested: 200, tasks: 43 });
+          expect(byDefault.stdout.sample).toMatchObject({
+            seed: TRACE_RECONCILE_SAMPLE_SEED, requested: 200, tasks: 43, refilled: 0,
+            note: "all 43 candidates taken: the groups hold fewer than the 200 requested",
+          });
           expect(Object.values(byDefault.stdout.sample.by_group).map((group: any) => [group.quota, group.sampled]))
             .toEqual([[50, 14], [50, 10], [50, 15], [50, 4]]);
 
