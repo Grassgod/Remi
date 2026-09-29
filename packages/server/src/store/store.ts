@@ -3960,6 +3960,11 @@ runMigrations(this.db);
     return this.sessions.getOrCreateDefaultIssueSession(issueId, createdById);
   }
 
+  /** For callers that already own the transaction (Senior ruling cmt_96e1yqxgifms §2). */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    return this.sessions.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
+  }
+
   createIssueSession(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     return this.sessions.createIssueSession(issueId, input);
   }

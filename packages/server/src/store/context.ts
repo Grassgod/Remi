@@ -713,6 +713,8 @@ export interface ConversationLogSurface {
 export interface IssueSessionsSurface {
   getIssueSession(id: string): MultiremiIssueSession | null;
   getOrCreateDefaultIssueSession(issueId: string, createdById?: string | null): MultiremiIssueSession;
+  /** For callers that already own the transaction: never opens a nested frame. */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById?: string | null): MultiremiIssueSession;
   createIssueSessionWithinTransaction(issueId: string, input?: CreateIssueSessionInput): MultiremiIssueSession;
   getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null;
   addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant;
@@ -1287,22 +1289,28 @@ export class StoreContext {
         now,
       ],
     );
-    try {
-      const queueUpdate = () => this.host.queueAgentIssueUpdate({
-        activityId: id,
-        issueId,
-        actorType: input.actorType,
-        actorId: input.actorId ?? null,
-        type: input.type,
-        body: input.body ?? null,
-        data: input.data ?? null,
-        createdAt: now,
-      });
-      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
-      else queueUpdate();
-    } catch (err) {
-      log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    // Best-effort side effect, so it must not ride the caller's transaction:
+    // a SAVEPOINT here would add two extra bridge round-trips per activity on
+    // the hottest parent-status path and would still be rolled back by an
+    // outer ROLLBACK. `afterCommit` runs it after the outermost COMMIT (or
+    // immediately outside a transaction) and keeps the warn-and-continue
+    // contract. Basis: Senior ruling cmt_96e1yqxgifms §2.
+    afterCommit(this.db, () => {
+      try {
+        this.host.queueAgentIssueUpdate({
+          activityId: id,
+          issueId,
+          actorType: input.actorType,
+          actorId: input.actorId ?? null,
+          type: input.type,
+          body: input.body ?? null,
+          data: input.data ?? null,
+          createdAt: now,
+        });
+      } catch (err) {
+        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity
@@ -1310,10 +1318,12 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
-      const workspaceId = this.db.inTransaction
-        ? this.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      // Plain read, no savepoint. After MUL-402 ports B1's bridge-failure
+      // classification a failed bridge reply no longer poisons the
+      // transaction, so the only remaining failure is a real SQL error, and a
+      // broken schema must fail the write rather than be swallowed.
+      // Basis: Senior ruling cmt_96e1yqxgifms §2.
+      const workspaceId = this.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       const event: WorkspaceEvent = {
         type: "activity:created",

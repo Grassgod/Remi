@@ -33,23 +33,8 @@ class LockRecordingDatabase implements SqlDatabase {
   readonly trace: Array<{ cls: LockClass; key: string; depth: number }> = [];
   // Like the sentinel, nested calls share their outermost transaction frame.
   readonly frames: Array<LockRecordingDatabase["trace"]> = [];
-  // PG only: the transaction control SQL crossing the one bridge connection.
-  readonly controls: Array<{ sql: string; inTransaction: boolean }> = [];
-  readonly postgres: boolean;
   private depth = 0;
-  constructor(private readonly inner: SqlDatabase) {
-    this.postgres = inner instanceof PostgresSyncDatabase;
-    if (!(inner instanceof PostgresSyncDatabase)) return;
-    const target = inner as unknown as { execute(sql: string, params: unknown[]): unknown };
-    const execute = target.execute.bind(inner);
-    target.execute = (sql, params) => {
-      const command = sql.trim().toUpperCase();
-      if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
-        this.controls.push({ sql: command, inTransaction: inner.inTransaction });
-      }
-      return execute(sql, params);
-    };
-  }
+  constructor(private readonly inner: SqlDatabase) {}
 
   get currentDepth(): number {
     return this.depth;
@@ -95,23 +80,17 @@ class LockRecordingDatabase implements SqlDatabase {
     this.classify(sql);
     this.inner.exec(sql);
   }
-  // MUL-402 cmt_yxzagz5d1vqn item 2, same basis as ② cmt_78bx01xhb75x and (c)
-  // cmt_gestk2r6imjh: only an outer BEGIN (entered with inTransaction=false)
-  // is depth; a nested transaction() is a SAVEPOINT inside that one frame.
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
-    const run = this.inner.transaction(fn);
-    return (...args: any[]) => {
-      const nested = this.inner.inTransaction === true;
-      if (!nested) {
-        this.frames.push([]);
-        this.depth += 1;
-      }
+    return this.inner.transaction((...args: any[]) => {
+      const outermost = this.depth === 0;
+      if (outermost) this.frames.push([]);
+      this.depth += 1;
       try {
-        return run(...args);
+        return fn(...args);
       } finally {
-        if (!nested) this.depth -= 1;
+        this.depth -= 1;
       }
-    };
+    }) as (...args: any[]) => T;
   }
   get inTransaction(): boolean {
     return this.inner.inTransaction === true;
@@ -270,42 +249,6 @@ function assertFrames(
     expect(firstAcquisitions(frame).map((entry) => entry.cls)).toEqual([...expected[index]!]);
     expect(frame.every((entry) => entry.depth === 1)).toBe(true);
   });
-  if (recorder.postgres) expectOuterTransactions(recorder.controls, expected.length);
-}
-
-/**
- * PG: exactly `units` outer transactions, each a single BEGIN closed by COMMIT
- * or ROLLBACK with no second BEGIN inside it. Nested layers show only
- * SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT on a matching name stack.
- */
-function expectOuterTransactions(controls: LockRecordingDatabase["controls"], units: number): void {
-  const detail = controls.map((control) => control.sql).join(", ");
-  const savepoints: string[] = [];
-  let begins = 0;
-  let open = false;
-  for (const control of controls) {
-    if (control.sql === "BEGIN") {
-      expect(open, detail).toBe(false);
-      expect(control.inTransaction, detail).toBe(false);
-      begins += 1;
-      open = true;
-    } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
-      expect(open, detail).toBe(true);
-      expect(savepoints, detail).toEqual([]);
-      open = false;
-    } else {
-      expect(open, detail).toBe(true);
-      expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
-      const name = control.sql.split(" ").at(-1)!;
-      if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
-      else {
-        expect(savepoints.at(-1), detail).toBe(name);
-        if (control.sql.startsWith("RELEASE ")) savepoints.pop();
-      }
-    }
-  }
-  expect(open, detail).toBe(false);
-  expect(begins, detail).toBe(units);
 }
 
 function assertMonotonic(label: string, trace: LockRecordingDatabase["trace"]): void {
@@ -327,7 +270,6 @@ function assertMonotonic(label: string, trace: LockRecordingDatabase["trace"]): 
 function clear(recorder: LockRecordingDatabase): void {
   recorder.trace.length = 0;
   recorder.frames.length = 0;
-  recorder.controls.length = 0;
 }
 
 /** One ingested messaging-core message, so the outcome service has a target. */

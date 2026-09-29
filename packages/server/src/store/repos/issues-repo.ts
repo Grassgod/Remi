@@ -3007,10 +3007,11 @@ export class IssuesRepo {
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
-      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
-      const workspaceId = this.ctx.db.inTransaction
-        ? this.ctx.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      // Plain read, no savepoint (Senior ruling cmt_96e1yqxgifms §2). B1's
+      // bridge-failure classification is what lets this drop the wrapper: a
+      // failed bridge reply no longer aborts the surrounding transaction, so
+      // what reaches the catch below is a real SQL error.
+      const workspaceId = this.ctx.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
         type: "comment:created",
@@ -4131,7 +4132,11 @@ export class IssuesRepo {
       ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
     return delegatedSession?.issueId === parentIssueId
       ? delegatedSession.id
-      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
+      // Both callers are `WithinTransaction` flavours owned by the child-status
+      // transaction, so ask for the within-transaction flavour explicitly
+      // instead of letting the public entry point add a nested frame
+      // (Senior ruling cmt_96e1yqxgifms §2).
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(parentIssueId, null).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -4559,12 +4564,23 @@ export class IssuesRepo {
     // Notifications and agent dispatch follow that COMMIT, as before B1: a
     // failed forced start (MUL-458) must not roll back the member's comment,
     // and no realtime push may reach clients before the row is durable.
+    //
+    // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
+    // also reached from callers that already own a transaction — the run's
+    // completion transaction in `postAgentReplyComment`, the Organizer action
+    // transaction that passes `withinTransaction` — so it opens a BEGIN only
+    // when it is called from outside one. A second frame there would be a pure
+    // savepoint wrapper over the same writes and would push a guarded path past
+    // the single BEGIN the depth probes assert. When we do own the frame, we
+    // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,
+    // so a caller-owned rollback still drops every push either way.
     const commitEvents = options.deferredEvents ? null : createCommitEventQueue();
-    const created = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
-      issueId,
-      input,
-      commitEvents ? { ...options, deferredEvents: commitEvents } : options,
-    ))();
+    const deferredEvents = commitEvents ?? options.deferredEvents;
+    const run = () => this.createIssueCommentWithinTransaction(issueId, input, {
+      ...options,
+      ...(deferredEvents ? { deferredEvents } : {}),
+    });
+    const created = this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
     if (commitEvents) this.ctx.emitCommitEvents(commitEvents);
     const { issue, comment, body, authorType, issueSessionId, sessionEventSeq } = created;
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
@@ -4586,7 +4602,7 @@ export class IssuesRepo {
   private createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: CreateIssueCommentOptions,
+    options: { deferAgentMentionDispatch?: boolean; deferredEvents?: CommitEventQueue },
   ): {
     issue: MultiremiIssue;
     comment: MultiremiIssueComment;
@@ -4653,25 +4669,17 @@ export class IssuesRepo {
       }
     }
     const sessionEvents = this.ctx.issueSessions();
-    const commentEvent = options.withinTransaction
-      ? sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      })
-      : sessionEvents.appendSessionEvent(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      });
+    // Always the within-transaction flavour: the public entry point guarantees a
+    // frame (its own or the caller's) is open around every write below.
+    const commentEvent = sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
+      authorType,
+      authorId: input.authorId ?? null,
+      kind: "message",
+      body,
+      sourceCommentId: id,
+      metadata: { parent_comment_id: parentId },
+      createdAt: now,
+    });
     if (authorType === "member" && input.authorId) {
       // Member authors may use a member row id or a request user id. Resolve
       // explicitly for subscriptions without broadening authorization lookup.

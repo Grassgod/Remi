@@ -51,11 +51,23 @@ type AppendSessionEventInput = {
 export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
 
+  /**
+   * Open (or find) the default session for an issue.
+   *
+   * The public entry point owns a transaction only when it is called from
+   * outside one — the default session row and its conversation head must be
+   * atomic for autocommit callers. When a caller that already owns the
+   * transaction needs this, it calls
+   * {@link getOrCreateDefaultIssueSessionWithinTransaction} directly instead,
+   * so the guard-listed paths stay at outer depth 1 (Senior ruling
+   * cmt_96e1yqxgifms §2; the same shape as `createIssue` on main).
+   */
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
-    return this.ctx.db.transaction(() => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById))();
+    const withinTx = () => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
+    return this.ctx.db.inTransaction ? withinTx() : this.ctx.db.transaction(withinTx)();
   }
 
-  private getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null): MultiremiIssueSession {
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null): MultiremiIssueSession {
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const existing = this.ctx.db.query(
