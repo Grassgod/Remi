@@ -299,6 +299,177 @@ discards them. Update and delete cancel comment-triggered tasks after the
 comment transaction, so cancellation's workspace lifecycle lock and terminal
 notifications cannot run inside that transaction.
 
+## MUL-432 trace backfill: what the operator confirms, and what is still open
+
+This section is written for the later request to 贺华杰 for production backfill
+authorization. It records facts, not decisions. It covers three things:
+
+- what the operator confirms before `scripts/backfill-task-traces.ts --execute`;
+- a side effect of a new `ready` archive becoming the latest one;
+- the points the specification leaves open.
+
+Sources:
+
+- MUL-432 segment 1 QA round 3, suggestion 2 (`cmt_hdwibkbvfv2b`);
+- ruling (ao) `cmt_tzwxfqleb2ch`;
+- ruling D `cmt_yyn3uxliyzfm`.
+
+Line numbers are as of the MUL-432 segment 2 merge. The read-latency numbers are
+in the [MUL-432 read-latency report](../../reports/performance/MUL-402-archive-trace-read-2026-09-29.md).
+
+### Cross-switch tasks (ruling D)
+
+A cross-switch task is a terminal task that has old-table rows and whose trace
+may continue on a daemon. The daemon's seq restarts at 1; the old table's seq
+does not. `crossSwitchReasons` (`scripts/lib/task-trace-backfill.ts:1046`)
+decides this. A task counts once for each reason it meets:
+
+- `ended_at_or_after_cutoff` and `ended_at_unknown`, evaluated only when
+  `--old-table-stopped-at` is given;
+- `daemon_archive_pointer`: the task's pointer already reads a daemon's archive.
+
+- **Count list.** The dry run prints `cross_switch` with the fields `cutoff_evaluated`,
+  `count`, `by_reason`, the full sorted `task_ids` and `ack`:
+  - the type is at `task-trace-backfill.ts:239`;
+  - the fields are filled at `:1159-1164`, sorted at `:1219` and reported at `:1368`.
+
+  Execute stops with `cross_switch_tasks` unless `--cross-switch-ack=<n>` equals
+  `count`, so a wrong number also stops the run (`:1514-1529`). Execute requires
+  `--old-table-stopped-at`, so the acknowledged count has to come from a dry run
+  with the same moment. Without the moment, only `daemon_archive_pointer` is
+  counted. `cmt_84uiax9lh5f8` found that if the cutover runbook drains running
+  tasks and the outbox, this set is empty.
+- **Only the daemon's suffix is shown.** The backfill still writes the old rows
+  of these tasks into the backfilled archive, as a prefix backup. The pointer
+  follows its source (Decision 6):
+  - A daemon archive takes the pointer or keeps it, whichever lands first.
+  - The backfill never replaces a daemon archive's pointer. The rejection reason
+    is `daemon_owned` (`packages/server/src/store/repos/task-traces-repo.ts:249-255`).
+
+  The normal read path then shows only the daemon's suffix. The prefix can be
+  read only from the backfilled archive member and from the backup taken before
+  the old table is dropped. If the backfill lands first, the task reads the old
+  prefix until the daemon's `ready` archive takes over.
+
+  A task with no daemon trace keeps reading the old rows through the backfill
+  pointer. This covers a task claimed by a v1 daemon, or one whose in-memory
+  daemon trace was lost.
+
+  `tests/unit/multiremi/trace-backfill-cross-switch.test.ts` pins this:
+  - T1 and T2 in both orders;
+  - T3 for the v1 task.
+- **Lost stays lost.** The dry run counts `lost` pointers in
+  `source.tasks_with_lost_pointer` (`task-trace-backfill.ts:201`, `:1156`). The
+  swap rule never moves a `lost` pointer: the rejection reason is `lost`, and the
+  run counts it in `pointers_kept.lost` (`scripts/backfill-task-traces.ts:320`).
+  These tasks keep reading as lost, although the archive holds their rows.
+- **Skipped cards.** A cross-switch task's `turn` card describes its whole run,
+  so the backfill does not rewrite its event count, tool call count, histogram
+  or model. Each group's execution result counts these cards as
+  `turn_cards_skipped_cross_switch` (`scripts/backfill-task-traces.ts:280-283`).
+  T1 and T2 assert that the card is unchanged. The read-latency corpus has no
+  history cards, so its `turn_cards_skipped_cross_switch: 0` says nothing about
+  this count. The real count comes from the production dry run and execution.
+
+### A new `ready` archive becomes the subject's latest
+
+A subject's archives are listed by `updated_at DESC, id DESC` (`listSubject`,
+`packages/server/src/store/repos/session-archives-repo.ts:183`). The status that
+the UI and daemons read takes the first row as `latest` (`subjectStatus`, `:323`).
+This rule already applies to daemon archives. A backfilled archive is a new
+`ready` row, so it becomes the `latest` of a subject that may still hold older
+`failed` rows. Then:
+
+- **Sidebar header.** The Issue sidebar's Session archives header shows the
+  status and retry state of `latest` only
+  (`frontend/packages/views/issues/components/issue-session-archives-section.tsx:62`,
+  `:103`). An older `failed`, retries-exhausted or backoff state no longer shows
+  there.
+- **Daemon retry gate.** The daemon's retry gate also reads `latest`.
+  - Issues: `ensureIssueSessionArchive` passes `preflightStatus.latest` to
+    `shouldDeferIssueSessionArchive` (`packages/server/src/worker/daemon.ts:2825`,
+    `:2957`). That function defers only when `latest` is `pending`, `uploading`
+    or `failed` and is in backoff or exhausted.
+  - Chat and one-shot Task archives use the same gate:
+    `ensureSubjectSessionArchive` (`daemon.ts:3016`) calls into
+    `packages/server/src/worker/subject-session-archive.ts:86` and `:166`.
+
+  When `latest` is `ready`, the daemon no longer waits for an older row's
+  backoff or stops at its exhaustion. It prepares and uploads again the next
+  time it archives the subject.
+- **What stays visible.** Older rows are not deleted:
+  - The expanded list still shows every row with its own state and an inline
+    retry (`issue-session-archives-section.tsx:196`, `:210`, `:227`).
+  - The workspace storage settings count failed and exhausted rows across all
+    rows, not only the latest (`session-archives-repo.ts:269-300`,
+    `frontend/packages/views/settings/components/storage-cleanup-tab.tsx:229`).
+
+### Open for the production authorization
+
+These points are not asked this round (ruling (ah) `cmt_aek4ct5ieqcd`, ruling (ao)).
+The specification does not settle any of them.
+
+1. **The masking by `latest`, described above.** The specification does not say
+   whether the header or the daemon's retry gate should change.
+2. **Empty Runtime or daemon identity.**
+   - Which Runtime is recorded: a backfilled archive records the Runtime of the
+     subject's most recent task whose Runtime still exists, and that Runtime's
+     daemon (`scripts/lib/task-trace-backfill.ts:1204-1209`).
+   - Empty values are counted: if no task has a Runtime, the Runtime is empty
+     and the plan counts it in `archive_runtime_missing`. A Runtime with no daemon
+     is counted in `archive_daemon_missing` (`:1210-1213`).
+   - What is shown: the archive API returns the recorded `runtime_id` and
+     `daemon_id` (`packages/server/src/api/routers/session-archives.ts:69-70`).
+     The Issue sidebar's archive rows show neither. The specification does not
+     say how an empty identity should show.
+   - Retry after a failure: the inline retry (`retry`,
+     `session-archives-repo.ts:846`) sets the row back to `pending` for its
+     recorded Runtime. Only that Runtime's daemon can upload it again. The daemon
+     uploads from its own local session state, and that state does not contain
+     the old-table rows. So a daemon retry cannot be counted on to restore a
+     backfilled archive. With an empty Runtime, there is no daemon to retry it
+     at all.
+3. **Monitoring and handling of verification failures.** What the repository
+   does today:
+   - Before each commit, the backfill re-reads and verifies every staged member
+     (`scripts/backfill-task-traces.ts:398`, `:407`).
+   - After each group, it reconciles that group and stops on any mismatch
+     (`:203-213`).
+   - A rerun resumes from the per-subject progress (`:232-238`).
+   - `scripts/reconcile-task-traces.ts` is a read-only check, by sample or in
+     full. It exits 0 when there is no mismatch, 3 on a mismatch and 1 on an
+     error.
+   - Later, someone can verify a `ready` archive by hand (`verify`,
+     `packages/server/src/session-archive/service.ts:1119`). On a sha256 or size
+     mismatch the row becomes `failed` (`session-archives-repo.ts:818`). The
+     archive reader refuses a row that is not ready
+     (`packages/server/src/session-archive/reader.ts:141`). The trace read then
+     returns `unreachable` with reason `archive_read_failed`
+     (`packages/server/src/trace/trace-reader.ts:96`).
+
+   There is no scheduled verification, alert or automatic re-backfill. The
+   specification names no plan for production monitoring, backup or handling.
+4. **Production peak, WAL, headroom and p99.** What the read-latency report
+   covers:
+   - It times synthetic size tiers in process, without HTTP, on a shared
+     machine. Its numbers are not an SLO.
+   - Its disk figures are estimates plus synthetic measurements. The PostgreSQL
+     size comes from `pg_database_size`, which excludes the shared `pg_wal`, so
+     it does not give a production peak.
+   - p99 tier, whole read (about 35 pages of 500 events, from seq 0 to eof):
+     3.06 s to 3.87 s per read, from the smallest p50 to the largest max across
+     both backends, cold and warm. This is not a first-screen time.
+   - p99 tier, tail window of 100: 86 ms to 122 ms per read.
+
+   What was not measured:
+   - the production compression ratio;
+   - peak disk and WAL during the run;
+   - free space on 209;
+   - production read latency. The report defers it to after an authorized
+     backfill.
+
+   The specification sets no threshold for any of these.
+
 ## Alternatives considered
 
 - **Immutable append-only log with reader-side folding** — every SSR and replica

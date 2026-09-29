@@ -170,3 +170,4 @@
 - 计时在共享机器的并发负载下测得（见文首“负载”），不是生产 SLO。
 - 合成文本取自本仓库，压缩比与真实 trace 仍会有出入；生产压缩比未知（见“压缩率”）。
 - 生产 209 上的真实延迟要等回填经贺华杰授权执行后再测，本报告不替代那一步。
+- 回填执行前的跨切换确认清单、新 ready 成为 latest 后的遮盖、「投产授权待确认」各项，见 [ADR 0006「MUL-432 trace backfill」一节](../../docs/adr/0006-conversation-log-and-daemon-owned-traces.md#mul-432-trace-backfill-what-the-operator-confirms-and-what-is-still-open)。
