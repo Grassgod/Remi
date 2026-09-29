@@ -282,6 +282,12 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const { source, target } = workspaces(reverse);
         const auth = await credentials(source, target);
         const { issue, runtime } = issueWorkspace(source);
+        const daemon = (await store.createAccessToken({ type: "daemon", purpose: "daemon", workspaceId: source,
+          daemonId: runtime.daemonId!, name: "Source daemon" })).token;
+        const cleanedPath = `/api/daemon/issues/${issue.id}/workspace/cleaned`;
+        const reachable = await auth.request(daemon, cleanedPath, "POST", {});
+        expect(reachable.status).toBe(400);
+        expect(await reachable.json()).toEqual({ error: "runtime_id is required" });
         db.run("UPDATE multiremi_issues SET workspace_id = ?, issue_number = 999, issue_key = 'MUL-999' WHERE id = ?", [target, issue.id]);
         expect(() => store.initSessionArchive({ workspaceId: target, issueId: issue.id, runtimeId: runtime.id,
           daemonId: runtime.daemonId!, sourceRevision: "foreign-runtime", sha256: "f".repeat(64), sizeBytes: 0 },
@@ -294,10 +300,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.reportIssueWorkspace(input)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id });
         assertWorkspaceInvariant(issue.id);
         expect(() => store.reportIssueWorkspace({ ...input, runtimeId: runtime.id })).toThrow("runtime belongs to another workspace");
-        const daemon = (await store.createAccessToken({ type: "daemon", purpose: "daemon", workspaceId: source,
-          daemonId: runtime.daemonId!, name: "Source daemon" })).token;
-        const cleaned = await auth.request(daemon, `/api/daemon/runtimes/${runtime.id}/issues/${issue.id}/workspace/cleaned`, "POST", {});
-        expect([403, 404]).toContain(cleaned.status);
+        const cleaned = await auth.request(daemon, cleanedPath, "POST", { runtime_id: runtime.id,
+          archive_id: "sar_source", source_revision: "source-revision", sha256: "f".repeat(64) });
+        expect(cleaned.status).toBe(403);
         expect(store.getIssueWorkspace(issue.id)).toMatchObject({ workspaceId: target, issueKey: "MUL-999", runtimeId: targetRuntime.id, status: "ready" });
       });
 
