@@ -1,0 +1,6250 @@
+{
+  "baselineSha": "b95dd2fa",
+  "samples": 31,
+  "warmups": 3,
+  "fixture": {
+    "batchSizes": [
+      1,
+      10,
+      50
+    ],
+    "contentBytes": 1024,
+    "longMessageCount": 96,
+    "longMessageBytes": 262144,
+    "peerMessageBodyBytes": 589822,
+    "queuedRuns": 20,
+    "queuedPromptBytes": 524288
+  },
+  "measurements": [
+    {
+      "kind": "daemon",
+      "count": 1,
+      "before": {
+        "queries": [
+          10
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 7.221505999999863,
+        "p95Ms": 11.027573999999731
+      },
+      "after": {
+        "queries": [
+          10
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 8.212436000000253,
+        "p95Ms": 12.554889000000003
+      },
+      "pairedExtraP95Ms": 4.951612000000296,
+      "pairs": [
+        {
+          "after": {
+            "ms": 9.02722400000016,
+            "queries": 10
+          },
+          "before": {
+            "ms": 7.221505999999863,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 9.340647999999874,
+            "queries": 10
+          },
+          "after": {
+            "ms": 12.554889000000003,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.796994999999924,
+            "queries": 10
+          },
+          "before": {
+            "ms": 11.767229000000043,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 9.430674000000181,
+            "queries": 10
+          },
+          "after": {
+            "ms": 13.75031799999988,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.182127000000037,
+            "queries": 10
+          },
+          "before": {
+            "ms": 8.506603000000268,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.835962000000109,
+            "queries": 10
+          },
+          "after": {
+            "ms": 6.363231999999698,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.658077999999932,
+            "queries": 10
+          },
+          "before": {
+            "ms": 8.850351000000046,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.238174000000072,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.39352400000007,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.624960999999985,
+            "queries": 10
+          },
+          "before": {
+            "ms": 11.027573999999731,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.335023999999976,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.212436000000253,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 10.534453000000212,
+            "queries": 10
+          },
+          "before": {
+            "ms": 7.796242000000348,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.722657999999683,
+            "queries": 10
+          },
+          "after": {
+            "ms": 11.02176799999961,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.543143999999756,
+            "queries": 10
+          },
+          "before": {
+            "ms": 7.47744800000055,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.5031669999998485,
+            "queries": 10
+          },
+          "after": {
+            "ms": 9.38582499999984,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.769361000000117,
+            "queries": 10
+          },
+          "before": {
+            "ms": 5.294961999999941,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.678028000000268,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.775433000000248,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 4.644921000000068,
+            "queries": 10
+          },
+          "before": {
+            "ms": 5.701762000000599,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 5.358662999999979,
+            "queries": 10
+          },
+          "after": {
+            "ms": 4.275741999999809,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 7.495875000000069,
+            "queries": 10
+          },
+          "before": {
+            "ms": 8.234132999999929,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 3.70542099999966,
+            "queries": 10
+          },
+          "after": {
+            "ms": 8.657032999999956,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.6762479999997595,
+            "queries": 10
+          },
+          "before": {
+            "ms": 6.560179999999491,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 10.779171000000133,
+            "queries": 10
+          },
+          "after": {
+            "ms": 9.310107000000244,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.3491140000001,
+            "queries": 10
+          },
+          "before": {
+            "ms": 6.150441000000683,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.074337999999443,
+            "queries": 10
+          },
+          "after": {
+            "ms": 6.019644999999855,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 9.357147000000168,
+            "queries": 10
+          },
+          "before": {
+            "ms": 8.01757699999962,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 6.267407999999705,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.499665000000277,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 2.13169999999991,
+            "queries": 10
+          },
+          "before": {
+            "ms": 5.414874000000054,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 7.5211779999999635,
+            "queries": 10
+          },
+          "after": {
+            "ms": 10.732740999999805,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 8.768259999999827,
+            "queries": 10
+          },
+          "before": {
+            "ms": 9.878100000000813,
+            "queries": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 8.799887999999555,
+            "queries": 10
+          },
+          "after": {
+            "ms": 7.004723000000013,
+            "queries": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 5.541733999999906,
+            "queries": 10
+          },
+          "before": {
+            "ms": 4.361778999999842,
+            "queries": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "daemon",
+      "count": 10,
+      "before": {
+        "queries": [
+          20
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 9.74659999999949,
+        "p95Ms": 17.596872999999505
+      },
+      "after": {
+        "queries": [
+          20
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 10.494349000000057,
+        "p95Ms": 16.9158010000001
+      },
+      "pairedExtraP95Ms": 7.043521999999939,
+      "pairs": [
+        {
+          "after": {
+            "ms": 16.9158010000001,
+            "queries": 20
+          },
+          "before": {
+            "ms": 8.836635999999999,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 11.308015999999952,
+            "queries": 20
+          },
+          "after": {
+            "ms": 10.42825300000004,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 11.675438000000213,
+            "queries": 20
+          },
+          "before": {
+            "ms": 10.80240799999956,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 10.696777000000111,
+            "queries": 20
+          },
+          "after": {
+            "ms": 9.938452000000325,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 10.193607000000156,
+            "queries": 20
+          },
+          "before": {
+            "ms": 17.596872999999505,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 8.19121499999983,
+            "queries": 20
+          },
+          "after": {
+            "ms": 12.178114999999707,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 12.570263000000068,
+            "queries": 20
+          },
+          "before": {
+            "ms": 11.930569999999534,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 10.183878000000732,
+            "queries": 20
+          },
+          "after": {
+            "ms": 14.394898000000012,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 11.989231999999902,
+            "queries": 20
+          },
+          "before": {
+            "ms": 11.257262000000082,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 8.747465999999804,
+            "queries": 20
+          },
+          "after": {
+            "ms": 11.605176000000029,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 16.02789500000017,
+            "queries": 20
+          },
+          "before": {
+            "ms": 8.984373000000232,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 10.252714999999625,
+            "queries": 20
+          },
+          "after": {
+            "ms": 10.515026999999918,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 7.13256999999976,
+            "queries": 20
+          },
+          "before": {
+            "ms": 8.774145999999746,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 7.116735999999946,
+            "queries": 20
+          },
+          "after": {
+            "ms": 10.454046999999719,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 7.790877000000364,
+            "queries": 20
+          },
+          "before": {
+            "ms": 7.9722350000001825,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 13.40764500000023,
+            "queries": 20
+          },
+          "after": {
+            "ms": 10.494349000000057,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 15.5912229999999,
+            "queries": 20
+          },
+          "before": {
+            "ms": 10.822328999999627,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 11.655279000000519,
+            "queries": 20
+          },
+          "after": {
+            "ms": 12.852780999999595,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 15.13160199999993,
+            "queries": 20
+          },
+          "before": {
+            "ms": 14.805561000000125,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 13.67729799999961,
+            "queries": 20
+          },
+          "after": {
+            "ms": 11.124049000000014,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 8.596184999999878,
+            "queries": 20
+          },
+          "before": {
+            "ms": 7.748199999999997,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 8.411903999999595,
+            "queries": 20
+          },
+          "after": {
+            "ms": 9.142542999999932,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 10.716535000000022,
+            "queries": 20
+          },
+          "before": {
+            "ms": 8.888997999999447,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 6.987259000000449,
+            "queries": 20
+          },
+          "after": {
+            "ms": 9.444507000000158,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 10.304175000000214,
+            "queries": 20
+          },
+          "before": {
+            "ms": 8.988909000000604,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 8.555362999999488,
+            "queries": 20
+          },
+          "after": {
+            "ms": 7.965171000000282,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 8.145014000000174,
+            "queries": 20
+          },
+          "before": {
+            "ms": 9.74659999999949,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 9.741769000000204,
+            "queries": 20
+          },
+          "after": {
+            "ms": 8.98855500000036,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 21.64664800000037,
+            "queries": 20
+          },
+          "before": {
+            "ms": 24.853234000000157,
+            "queries": 20
+          }
+        },
+        {
+          "before": {
+            "ms": 9.670906999999715,
+            "queries": 20
+          },
+          "after": {
+            "ms": 8.639212000000043,
+            "queries": 20
+          }
+        },
+        {
+          "after": {
+            "ms": 7.339081000000078,
+            "queries": 20
+          },
+          "before": {
+            "ms": 10.379461999999876,
+            "queries": 20
+          }
+        }
+      ]
+    },
+    {
+      "kind": "daemon",
+      "count": 50,
+      "before": {
+        "queries": [
+          65
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 32.35389200000009,
+        "p95Ms": 46.75257800000054
+      },
+      "after": {
+        "queries": [
+          65
+        ],
+        "pageRows": [],
+        "messageSelects": [],
+        "p50Ms": 30.43473899999981,
+        "p95Ms": 42.744823
+      },
+      "pairedExtraP95Ms": 11.539482000000135,
+      "pairs": [
+        {
+          "after": {
+            "ms": 24.430476,
+            "queries": 65
+          },
+          "before": {
+            "ms": 23.366901000000325,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 26.453560999999354,
+            "queries": 65
+          },
+          "after": {
+            "ms": 26.92404600000009,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 24.324757999999747,
+            "queries": 65
+          },
+          "before": {
+            "ms": 41.01079900000059,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 29.711647000000085,
+            "queries": 65
+          },
+          "after": {
+            "ms": 37.93578800000023,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 30.43473899999981,
+            "queries": 65
+          },
+          "before": {
+            "ms": 40.76022599999942,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 32.35389200000009,
+            "queries": 65
+          },
+          "after": {
+            "ms": 37.487898000000314,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 20.962298999999803,
+            "queries": 65
+          },
+          "before": {
+            "ms": 46.75257800000054,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 36.399757999999565,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.92565100000047,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 21.850957000000562,
+            "queries": 65
+          },
+          "before": {
+            "ms": 45.78766499999983,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 50.26874299999963,
+            "queries": 65
+          },
+          "after": {
+            "ms": 36.1052009999994,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 34.96361200000047,
+            "queries": 65
+          },
+          "before": {
+            "ms": 32.66287900000043,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 28.159647999999834,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.30393500000082,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 31.515357000000222,
+            "queries": 65
+          },
+          "before": {
+            "ms": 24.548518999999942,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 37.11606100000063,
+            "queries": 65
+          },
+          "after": {
+            "ms": 33.080887000000075,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 22.741308000000572,
+            "queries": 65
+          },
+          "before": {
+            "ms": 26.822243999999955,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 33.59270800000013,
+            "queries": 65
+          },
+          "after": {
+            "ms": 33.75474000000031,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 27.611895000000004,
+            "queries": 65
+          },
+          "before": {
+            "ms": 30.791136999999253,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 32.42685699999947,
+            "queries": 65
+          },
+          "after": {
+            "ms": 31.25233399999979,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 22.67094100000031,
+            "queries": 65
+          },
+          "before": {
+            "ms": 31.01366599999983,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 30.45697100000052,
+            "queries": 65
+          },
+          "after": {
+            "ms": 24.507354000000305,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 23.808983000000808,
+            "queries": 65
+          },
+          "before": {
+            "ms": 22.837516999999934,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 27.70240400000057,
+            "queries": 65
+          },
+          "after": {
+            "ms": 38.37532700000065,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 27.299552000000403,
+            "queries": 65
+          },
+          "before": {
+            "ms": 32.07816699999967,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 35.25669800000014,
+            "queries": 65
+          },
+          "after": {
+            "ms": 42.744823,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 58.44765699999971,
+            "queries": 65
+          },
+          "before": {
+            "ms": 31.662451000000146,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 28.924495000000206,
+            "queries": 65
+          },
+          "after": {
+            "ms": 30.678767999999764,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 37.80782900000031,
+            "queries": 65
+          },
+          "before": {
+            "ms": 26.268347000000176,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 33.108892999999625,
+            "queries": 65
+          },
+          "after": {
+            "ms": 40.79914899999949,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 25.69513999999981,
+            "queries": 65
+          },
+          "before": {
+            "ms": 36.542137000000366,
+            "queries": 65
+          }
+        },
+        {
+          "before": {
+            "ms": 35.58266300000014,
+            "queries": 65
+          },
+          "after": {
+            "ms": 29.710062000000107,
+            "queries": 65
+          }
+        },
+        {
+          "after": {
+            "ms": 36.65808399999969,
+            "queries": 65
+          },
+          "before": {
+            "ms": 35.99725099999978,
+            "queries": 65
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 1,
+      "before": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          1
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 4.447718999999779,
+        "p95Ms": 6.335857000000033
+      },
+      "after": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          1
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 4.350950000000012,
+        "p95Ms": 6.533419000000322
+      },
+      "pairedExtraP95Ms": 2.088541000000987,
+      "pairs": [
+        {
+          "after": {
+            "ms": 5.406047999999828,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.866063999999824,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.148599000000104,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.878873000000567,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.292065999999977,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 6.882434000000103,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.030304000000797,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.9403419999998732,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.1469600000000355,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.8409750000000713,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.814092000000528,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.8884130000005825,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.8442880000002333,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.7241299999996045,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.697211000000607,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.983922000000348,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.405829000000267,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.525075999999899,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.198930000000473,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.229851000000053,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.122604000000138,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.0955089999997654,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.4507509999994,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.9756790000001274,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.711789999999382,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.447718999999779,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.409413999999742,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.7379339999997683,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.142461999999796,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.554065999999693,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.4575379999996585,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.955155000000559,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.169742000000042,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.5263319999994565,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.649711000000025,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.860185999999885,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.615888000000268,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.8807440000000497,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.70263900000009,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.2382169999991675,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 6.161574000000655,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.8363030000000435,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.2465480000000753,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.9639420000003156,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.2228039999999964,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.124885000000177,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.37867499999993,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.961068999999952,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 6.533419000000322,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.444877999999335,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.06896499999948,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.0175200000003315,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.350950000000012,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.645966000000044,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.2897499999999127,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.8504219999995257,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.418832999999722,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.159235000000081,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 6.335857000000033,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 2.919311999999991,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 6.694469000000026,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.70098599999983,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 1
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 10,
+      "before": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          2
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 22.306711999999607,
+        "p95Ms": 27.839374000001044
+      },
+      "after": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          2
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 23.037234999999782,
+        "p95Ms": 26.959506000000147
+      },
+      "pairedExtraP95Ms": 6.203456000001097,
+      "pairs": [
+        {
+          "after": {
+            "ms": 25.575074999999742,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.031239999998434,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 25.927394000000277,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.45504600000004,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 26.125049000000217,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 26.747360999999728,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 22.92913899999985,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 24.3627749999996,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 24.846636999999646,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 19.487630999999965,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 22.664951000000656,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 22.35248599999977,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 26.31713200000013,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.11367599999903,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 25.992975999999544,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.48776700000053,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 26.959506000000147,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.415585999999166,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 22.01550899999893,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 19.90860200000043,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.419684999999845,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.44341699999859,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 23.76886100000047,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.504587999999785,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.82573599999978,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 27.839374000001044,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.822407999999996,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 22.266962000000603,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 24.534053000000313,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 26.690559000000576,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 30.9133810000003,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.075744999999188,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.496345999999903,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.935739000000467,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.220471999999063,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 19.868265999999494,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.976000999999997,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 18.725564999998824,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.291733000000022,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.27125199999955,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 25.652467999999317,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.586106000000655,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.05917000000045,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.677959000000556,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 25.24619299999995,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.490488999999798,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 20.316741999999067,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.83001200000035,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 24.929971999999907,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 22.306711999999607,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 23.024833999999828,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 22.223688999999467,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.0448609999994,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 24.69136499999877,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 26.835503000000244,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.037234999999782,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 23.50398000000041,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 22.65803700000106,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 25.303737000000183,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 28.8566550000005,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.195026999999754,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 24.520141999999396,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer",
+      "count": 50,
+      "before": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          7
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 105.21352299999853,
+        "p95Ms": 121.1454049999993
+      },
+      "after": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          7
+        ],
+        "origin": {
+          "method": "<background>",
+          "route": "<background>"
+        },
+        "p50Ms": 102.7894269999997,
+        "p95Ms": 122.45336099999986
+      },
+      "pairedExtraP95Ms": 22.302730999999767,
+      "pairs": [
+        {
+          "after": {
+            "ms": 106.34859000000142,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 101.62470799999937,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 118.60896099999991,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 95.9238860000005,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 106.86911200000031,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 100.5645370000002,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 114.82903299999998,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 99.85563100000036,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 106.99455600000147,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 99.2932209999999,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 120.04860399999961,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 91.23099399999955,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 122.45336099999986,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 108.70946600000025,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 100.96760299999914,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 92.60877599999912,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 123.31285799999932,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 100.36246799999935,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 104.97968500000025,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 102.69471900000099,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 116.89926300000116,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 95.14133799999945,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 110.73696299999938,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 106.28276699999878,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 100.086233,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 96.51008400000137,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 119.75687299999845,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 94.2271610000007,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 111.30522000000019,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 105.21352299999853,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 121.1454049999993,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 100.43204100000003,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 103.9288030000007,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 102.757834,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 116.09983599999941,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 99.24474699999882,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 103.03087300000152,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 108.09091699999954,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 112.93913500000053,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 100.42557800000031,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 116.95827400000053,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 99.53848800000014,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 105.23996400000033,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 89.6917369999992,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 121.73796799999946,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 99.88084600000002,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 101.86654099999942,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 90.60028500000044,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 119.54910000000018,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 97.24636900000041,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 116.85008300000118,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 102.7894269999997,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 108.60423699999956,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 101.83684999999969,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 122.86987299999964,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 96.17388500000015,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 114.28434600000037,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 97.99299299999984,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 115.92355599999792,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 92.23949400000129,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 102.50081900000077,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 106.59877099999721,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "<background>",
+              "route": "<background>"
+            },
+            "frames": 50
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 1,
+      "before": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          1
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 4.639823000001343,
+        "p95Ms": 5.7987690000009025
+      },
+      "after": {
+        "queries": [
+          4
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          1
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 4.4958520000000135,
+        "p95Ms": 6.783902999999555
+      },
+      "pairedExtraP95Ms": 2.128031000000192,
+      "pairs": [
+        {
+          "after": {
+            "ms": 4.061641000000236,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.100438000001304,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.543440000001283,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.2163369999998395,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.436505000001489,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.828317999999854,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.5167959999998857,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.7864900000004127,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.4958520000000135,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.614540999999008,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.778272999999899,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.012301999999181,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.8260059999993246,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.9015010000002803,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.639823000001343,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.961584999999104,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 3.9538489999995363,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.728285999997752,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.7987690000009025,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.5889919999990525,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.368510999998762,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 3.9241470000015397,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.331362000000809,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 7.0435230000002775,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 6.783902999999555,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.791965000000346,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 5.602896999997029,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.784797000000253,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.393410000000586,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.831883999999263,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.449761999996554,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.7773379999998724,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.306130999999368,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.070917000000918,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.892693999998301,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.18397399999958,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.4122929999994085,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.410540000000765,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.8659499999994296,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.781471999998757,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.471822999999858,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.984870000000228,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.476477000000159,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 3.6671540000006644,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.486648000000059,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.880152999998245,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.8703700000005483,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.99840100000074,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.2562010000001465,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 4.505662999999913,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.322964999999385,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.885901999999987,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 6.227540000001682,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.278641000000789,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 4.55027500000142,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 4.286991000000853,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 4.086573999999018,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 7.523138000000472,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "before": {
+            "ms": 3.366231999996671,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "after": {
+            "ms": 5.791459000000032,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        },
+        {
+          "after": {
+            "ms": 5.050683999999819,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          },
+          "before": {
+            "ms": 5.077493000000686,
+            "queries": 4,
+            "messageSelects": 1,
+            "referencedBodyBytes": 589822,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 1
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 10,
+      "before": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          2
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 22.229161999999633,
+        "p95Ms": 25.49630800000159
+      },
+      "after": {
+        "queries": [
+          7
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          2
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 21.530697999998665,
+        "p95Ms": 26.918041000000812
+      },
+      "pairedExtraP95Ms": 6.18513499999608,
+      "pairs": [
+        {
+          "after": {
+            "ms": 26.332792999999583,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 22.229161999999633,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.948678000000655,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.091104999999516,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 23.517401999999493,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 23.287693000002037,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 26.52981599999839,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.49810499999876,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 22.697793000001184,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 24.170810999999958,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.12058199999956,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.358110000001034,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 23.09961199999998,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 25.49630800000159,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 23.200356999997894,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.887054999999236,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 28.30634900000041,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.655320999998366,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 22.98754199999894,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.167225999999573,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.557222000001275,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 23.99895699999979,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 25.05919299999732,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.7344209999992,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.821921999999176,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 19.954388999998628,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 24.28406300000279,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 24.532154000000446,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.833458999997674,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.026671999999962,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 23.11485900000116,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.7139849999985,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 21.269400999997742,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.17771300000095,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 19.541043000001082,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 25.726177999997162,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.98913299999913,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 20.28407900000093,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 20.799440999999206,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 18.554550999997446,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 26.171877000000677,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.395505000000412,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 20.813384999997652,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 20.12079200000153,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 19.316361000001052,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 22.754108000000997,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 23.29061300000103,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.530697999998665,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 20.030679999999847,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.301392999997915,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 21.780203999998776,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 21.492973000000347,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 21.284638000000996,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 22.607387000000017,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 24.39949699999852,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 22.392416000002413,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 21.09166499999992,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 21.101081000000704,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "before": {
+            "ms": 20.66344400000162,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "after": {
+            "ms": 23.579462999998213,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        },
+        {
+          "after": {
+            "ms": 26.918041000000812,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          },
+          "before": {
+            "ms": 23.35436800000025,
+            "queries": 7,
+            "messageSelects": 2,
+            "referencedBodyBytes": 5898220,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 10
+          }
+        }
+      ]
+    },
+    {
+      "kind": "peer-http",
+      "count": 50,
+      "before": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          7
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 102.54764100000102,
+        "p95Ms": 121.95268099999885
+      },
+      "after": {
+        "queries": [
+          22
+        ],
+        "pageRows": [
+          8
+        ],
+        "messageSelects": [
+          7
+        ],
+        "origin": {
+          "method": "POST",
+          "route": "/internal/peer/events"
+        },
+        "p50Ms": 101.20472700000028,
+        "p95Ms": 131.4395829999994
+      },
+      "pairedExtraP95Ms": 28.49655100000018,
+      "pairs": [
+        {
+          "after": {
+            "ms": 111.65224099999978,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 94.38392900000326,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 115.66428200000155,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 91.02724099999978,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 120.1031980000007,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 111.0572370000009,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 102.54764100000102,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 99.36772700000074,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 115.57036399999924,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 91.50266600000032,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 115.00055599999905,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 100.51654100000087,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 118.49171399999977,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 92.76983699999982,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 123.40323299999727,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 92.20110399999976,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 101.8433389999991,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 86.71548899999834,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 121.95268099999885,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 100.3346789999996,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 101.20472700000028,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 91.74008400000093,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 119.03752499999973,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 103.88617000000158,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 131.4395829999994,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 106.22149999999965,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 103.43475100000069,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 91.93527900000117,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 113.60418100000243,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 97.59691000000021,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 119.06760299999951,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 97.61322300000029,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 99.6303450000014,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 96.29524800000218,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 110.67081399999734,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 98.19630000000325,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 113.52498600000035,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 93.64299100000062,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 115.1945659999983,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 92.4812729999976,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 116.85675800000172,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 91.7867010000009,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 115.718832999999,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 91.49675399999978,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 125.91425700000036,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 97.41770600000018,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 116.46891799999867,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 96.64287300000069,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 108.47904600000038,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 95.25902799999676,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 95.45149400000082,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 94.96730000000025,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 95.20994500000234,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 90.54284700000062,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 121.94641200000115,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 104.94224499999837,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 134.1004979999998,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 101.7688589999998,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "before": {
+            "ms": 119.50305799999842,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "after": {
+            "ms": 96.02491299999747,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        },
+        {
+          "after": {
+            "ms": 102.92822199999864,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          },
+          "before": {
+            "ms": 100.95783600000141,
+            "queries": 22,
+            "messageSelects": 7,
+            "referencedBodyBytes": 29491100,
+            "rows": 8,
+            "origin": {
+              "method": "POST",
+              "route": "/internal/peer/events"
+            },
+            "frames": 50
+          }
+        }
+      ]
+    }
+  ],
+  "long": {
+    "before": {
+      "routes": [
+        {
+          "route": "GET /api/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25185688,
+          "sha256": "076b74e8a4645ab32e105ff5c4ed603f1f44435305060b8e9c0834c83004992d",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/multiremi/tasks/:id/messages",
+          "status": 200,
+          "bytes": 25185701,
+          "sha256": "47947f30825d963faa3cdcf2aaa95c8e699570336695e2336f17e3110e2fd42e",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/daemon/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25178488,
+          "sha256": "6ab5dfc7871caf759702bfbcd7430f5b684ea4dd6b2398c0980a2cf6c07dbb32",
+          "dbBytes": 25187343,
+          "queries": 4,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/shares/:token",
+          "status": 200,
+          "bytes": 25191557,
+          "sha256": "06a419dbbcb90cf0d4e8c83df85fd7e41f3a9c25c7bf8a6805ddf25da7724061",
+          "dbBytes": 25203186,
+          "queries": 37,
+          "maxSingleBytes": 25186092
+        }
+      ],
+      "messageContentBytes": 25165824
+    },
+    "after": {
+      "routes": [
+        {
+          "route": "GET /api/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25185688,
+          "sha256": "076b74e8a4645ab32e105ff5c4ed603f1f44435305060b8e9c0834c83004992d",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/multiremi/tasks/:id/messages",
+          "status": 200,
+          "bytes": 25185701,
+          "sha256": "47947f30825d963faa3cdcf2aaa95c8e699570336695e2336f17e3110e2fd42e",
+          "dbBytes": 25189256,
+          "queries": 6,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/daemon/tasks/:taskId/messages",
+          "status": 200,
+          "bytes": 25178488,
+          "sha256": "6ab5dfc7871caf759702bfbcd7430f5b684ea4dd6b2398c0980a2cf6c07dbb32",
+          "dbBytes": 25187343,
+          "queries": 4,
+          "maxSingleBytes": 25186092
+        },
+        {
+          "route": "GET /api/shares/:token",
+          "status": 200,
+          "bytes": 25191557,
+          "sha256": "06a419dbbcb90cf0d4e8c83df85fd7e41f3a9c25c7bf8a6805ddf25da7724061",
+          "dbBytes": 25203186,
+          "queries": 37,
+          "maxSingleBytes": 25186092
+        }
+      ],
+      "messageContentBytes": 25165824
+    }
+  },
+  "reject": {
+    "before": {
+      "status": 200,
+      "dbBytes": 9437659,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "GET",
+          "route": "/api/c1/nonexception",
+          "bytes": 9437216
+        }
+      ]
+    },
+    "after": {
+      "status": 500,
+      "dbBytes": 9437659,
+      "events": [
+        {
+          "event": "api_db_reply_rejected",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "GET",
+          "route": "/api/c1/nonexception",
+          "bytes": 9437216,
+          "max_bytes": 8388608
+        }
+      ]
+    }
+  },
+  "queued": {
+    "before": {
+      "completed": true,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "<background>",
+          "route": "<background>",
+          "bytes": 10495571
+        }
+      ],
+      "rows": 8
+    },
+    "after": {
+      "completed": true,
+      "events": [
+        {
+          "event": "api_large_db_reply",
+          "ts": "2026-09-28T00:00:00.000Z",
+          "method": "<background>",
+          "route": "<background>",
+          "bytes": 10495571
+        }
+      ],
+      "rows": 8
+    }
+  },
+  "afterSha": "8a24e7692efbff681a2bbe9754252f477dbcf78a",
+  "postgres": "15.19 (local, jit=off for wiki measurement only)"
+}
