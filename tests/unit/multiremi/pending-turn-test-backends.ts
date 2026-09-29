@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
@@ -48,7 +48,7 @@ export function pendingTurnBackendTests(
           databaseUrl = url.toString();
           db = new PostgresSyncDatabase(databaseUrl);
         } else {
-          db = new Database(":memory:") as unknown as SqlDatabase;
+          db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
         }
         current = {
           db, store: new MultiremiStore(db), databaseUrl,

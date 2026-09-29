@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "../packages/server/src/store/db/sqlite.js";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
@@ -17,7 +17,7 @@ export interface ConversationReconciliationTarget { sqlite?: string; pgEnv?: str
 /** Opens the selected target exactly the way the CLI does: SQLite read-only, Postgres behind the sync bridge. */
 export function openConversationLogTarget(target: ConversationReconciliationTarget): SqlDatabase {
   return target.sqlite
-    ? new Database(target.sqlite, { readonly: true })
+    ? openSqliteDatabase(target.sqlite, { readonly: true })
     : new PostgresSyncDatabase(process.env[target.pgEnv!]!);
 }
 

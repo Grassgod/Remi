@@ -1,6 +1,6 @@
 /** Run in an origin/main snapshot with `baseline`, then in the Hub branch with `upgrade`. */
 import { randomUUID } from "node:crypto";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
@@ -31,7 +31,7 @@ if (phase === "baseline" && backend === "postgres") {
 const targetUrl = new URL(adminUrl ?? "postgresql://postgres@127.0.0.1/postgres");
 targetUrl.pathname = `/${databaseName ?? "unused"}`;
 const db: SqlDatabase = backend === "sqlite"
-  ? new Database(sqlitePath!) as unknown as SqlDatabase
+  ? openSqliteDatabase(sqlitePath!) as unknown as SqlDatabase
   : new PostgresSyncDatabase(targetUrl.toString());
 
 try {
