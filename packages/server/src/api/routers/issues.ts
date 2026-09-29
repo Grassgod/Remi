@@ -1638,7 +1638,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const agentId = recipient?.role === "agent" && recipient.issueSessionId === sessionId
       ? recipient.agentId
       : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null;
-    const delivered = agentId !== null && (
+    const delivered: boolean | null = agentId === null ? null : (
       (store.getSessionAgentLane(sessionId, agentId)?.cursorSeq ?? 0) >= entry.seq
       || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
         if (turn.kind !== "turn" || turn.author_id !== agentId) return false;

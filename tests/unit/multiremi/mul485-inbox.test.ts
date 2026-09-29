@@ -43,13 +43,26 @@ async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
     expect(complete.body_md).toBe(plan);
     expect(complete.body_md.length).toBe(plan.length);
     expect(complete.metadata).toEqual(entry.metadata);
-    expect(complete.delivered).toBe(false);
+    expect(complete.delivered).toBeNull();
   }
   for (const query of ["", "?seq=-1", "?seq=1.5", `?seq=${entry.seq}&id=${entry.id}`]) {
     expect((await app.request(`/api/sessions/${session.id}/log/entry${query}`)).status).toBe(400);
   }
   expect((await app.request(`/api/sessions/${session.id}/log/entry?id=missing`)).status).toBe(404);
   expect((await app.request(`/api/sessions/ises_other/log/entry?seq=${entry.seq}`)).status).not.toBe(200);
+}
+
+async function verifyLegacyDeliveryUnknown(store: MultiremiStore): Promise<void> {
+  const issue = store.createIssue({ title: "Legacy delivery", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const entry = store.appendConversationLog({ sessionId: session.id, kind: "message",
+    authorType: "member", authorId: "local", bodyMd: "Before envelopes" });
+  const app = createMultiremiApp({ store });
+  for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+    const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).delivered).toBeNull();
+  }
 }
 
 async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
@@ -162,6 +175,10 @@ describe("MUL-485 SQLite", () => {
   it("derives the delivery flag from a recipient turn receipt", async () => {
     await verifyDeliveryReceipt(createStore());
   });
+
+  it("reports unknown delivery for a legacy entry without a recipient", async () => {
+    await verifyLegacyDeliveryUnknown(createStore());
+  });
 });
 
 function verifyPriorityAndCompatibility(): void {
@@ -269,5 +286,9 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
 
   it("derives the delivery flag from a recipient turn receipt on real PostgreSQL", async () => {
     await verifyDeliveryReceipt(store);
+  });
+
+  it("reports unknown delivery for a legacy entry without a recipient on real PostgreSQL", async () => {
+    await verifyLegacyDeliveryUnknown(store);
   });
 });

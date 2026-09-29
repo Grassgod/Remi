@@ -212,9 +212,6 @@ function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, targ
   if (envelope && typeof envelope === "object") {
     const value = envelope as Record<string, unknown>;
     const lifecycleEvent = typeof value.lifecycleEvent === "string" ? value.lifecycleEvent : event.kind;
-    if (value.kind === "lifecycle") {
-      return lifecycleEvent === "task_failed" || lifecycleEvent === "task_cancelled" ? 2 : 4;
-    }
     return envelopePriority({
       kind: value.kind as "request",
       wake: value.wake as "now",

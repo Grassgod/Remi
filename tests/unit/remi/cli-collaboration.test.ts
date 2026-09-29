@@ -42,14 +42,19 @@ describe("native collaboration CLI contracts", () => {
     globalThis.fetch = capabilityFetch(get.id, (request) => {
       const url = new URL(request.url);
       paths.push(`${url.pathname}${url.search}`);
-      return Response.json({ body_md: "complete", metadata: {}, delivered: null });
+      return Response.json({ session_id: "ises_1", seq: 12, id: "cmt_12", body_md: "complete\nsecond line", metadata: {}, delivered: null });
     });
     const getRegistry = registryFor([get]);
-    await capture(() => getRegistry.execute([...get.path, "ises_1", "12", "--output", "json"]));
+    const json = await capture(() => getRegistry.execute([...get.path, "ises_1", "12", "--output", "json"]));
+    expect(JSON.parse(json.stdout).delivered).toBeNull();
     await capture(() => getRegistry.execute([...get.path, "ises_1", "cmt_12", "--output", "json"]));
+    const table = await capture(() => getRegistry.execute([...get.path, "ises_1", "12"]));
+    expect(table.stdout).toContain("Delivered: 未知（旧条目无收件人）");
+    expect(table.stdout).toContain("Body:\ncomplete\nsecond line");
     expect(paths).toEqual([
       "/api/sessions/ises_1/log/entry?seq=12",
       "/api/sessions/ises_1/log/entry?id=cmt_12",
+      "/api/sessions/ises_1/log/entry?seq=12",
     ]);
     globalThis.fetch = capabilityFetch(list.id, (request) => {
       const url = new URL(request.url);
