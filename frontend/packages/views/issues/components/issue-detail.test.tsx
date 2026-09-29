@@ -20,6 +20,11 @@ const timelinePageControl = vi.hoisted(() => ({
   olderEntries: [] as TimelineEntry[],
 }));
 const issueLogOverride = vi.hoisted(() => ({ current: null as any }));
+const mockWS = vi.hoisted(() => ({
+  subscribe: vi.fn(() => () => {}),
+  subscribeStream: vi.fn(() => ({ unsubscribe: vi.fn() })),
+  onReconnect: vi.fn(() => () => {}),
+}));
 
 vi.mock("@multiremi/core/session-log/use-issue-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multiremi/core/session-log/use-issue-log")>();
@@ -454,7 +459,7 @@ vi.mock("@multiremi/core/realtime", () => ({
   useWSEvent: vi.fn(),
   useWSReconnect: vi.fn(),
   useTaskScopeSubscription: vi.fn(),
-  useWS: () => ({ subscribe: vi.fn(() => () => {}), onReconnect: vi.fn(() => () => {}) }),
+  useWS: () => mockWS,
   WSProvider: ({ children }: { children: React.ReactNode }) => children,
   useRealtimeSync: () => {},
 }));
