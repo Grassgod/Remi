@@ -315,6 +315,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((task) => task.agentId === f.leader.id && task.parentTaskId === childTask.id)).toHaveLength(1);
     }));
 
+    // Cold PG setup dominates this case: 3.65-4.61s locally, 5.22s in CI.
+    // Both baseline heads use 161/221 terminal queries with no lock wait.
     it("resolves the result comment once inside the terminal transaction", async () => withStore(backend, async (store) => {
       const f = fixture(store);
       const first = await dispatch(store, f.leaderTask, f.child, f.worker.id);
@@ -371,7 +373,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((event) => event.kind === "delegation_report" && event.taskId === second.id);
       expect(bridgeEvents).toHaveLength(1);
       expect((bridgeEvents[0]!.metadata as Record<string, unknown>).result_comment_id).toBe(newest.id);
-    }));
+    }), backend === "postgres" ? 15_000 : 5_000);
 
     it("still queues the return when the post-commit auto comment fails", async () => withStore(backend, async (store) => {
       const f = fixture(store);
