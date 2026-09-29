@@ -4615,6 +4615,7 @@ ${placementAfter.sql}
     const terminal = this.ctx.db.transaction(() =>
       this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents))();
     this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });
     this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminal.task;
@@ -4745,6 +4746,7 @@ ${placementAfter.sql}
       });
     })();
     this.runChildStatusChanges(childStatusChanges);
+    this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });
     for (const terminal of terminals) this.notifyCancelledTask(terminal);
     this.ctx.emitCommitEvents(deferredEvents);
     return terminals.length;
@@ -5164,7 +5166,7 @@ ${placementAfter.sql}
          ORDER BY seq DESC LIMIT 1`,
       ).get(returnSession.id, source.id) as { seq: number } | null;
       const sourceIssue = source.issueId ? this.ctx.issues().getIssue(source.issueId) : null;
-      // The bridge metadata and the return prompt must name the same comment. A
+      // The bridge metadata and inbox report must name the same comment. A
       // second SELECT could see a comment that landed between the two reads
       // (comment writes do not take the workspace lifecycle lock), and both
       // writes commit in one transaction, so resolve here and thread the value

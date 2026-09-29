@@ -2628,10 +2628,6 @@ export class IssuesRepo {
     this.notifyChildStatusChangeWithinTransaction(current, next,
       resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"), collector, deferredEvents,
       { statusChangeEventId: statusEvent?.id });
-    if (parentStatusGuardEnabled() && current.parentIssueId && current.parentIssueId !== next.parentIssueId) {
-      const oldParent = this.getIssue(current.parentIssueId);
-      if (oldParent) this.rederiveParentStatus(oldParent, next, collector, deferredEvents);
-    }
     return {
       issue: next,
       previous: current,
@@ -2667,8 +2663,9 @@ export class IssuesRepo {
     // publish events for rows its rolled-back transaction just erased.
     this.ctx.emitCommitEvents(deferredEvents);
     if (updated === previous) return;
-    // Reports already committed with the status. Only automatic starts replay
-    // here, after the originating transaction releases its locks.
+    const hookEvents = createCommitEventQueue();
+    // Reports already committed with the status. Automatic starts and the old
+    // family's E1 re-derivation run after the originating locks are released.
     try {
       this.notifyChildStatusChange(
         previous,
@@ -2677,6 +2674,12 @@ export class IssuesRepo {
         collector,
         { dependencyCheckEventId: result.dependencyCheckEventId },
       );
+      // Re-parenting retains MUL-471's post-commit E1 boundary for the old family.
+      if (parentStatusGuardEnabled() && previous.parentIssueId && previous.parentIssueId !== updated.parentIssueId) {
+        const oldParent = this.getIssue(previous.parentIssueId);
+        if (oldParent) this.ctx.db.transaction(() =>
+          this.rederiveParentStatus(oldParent, updated, collector, hookEvents))();
+      }
     } catch (err) {
       log.warn(
         `child status hook failed for ${updated.id}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2684,6 +2687,7 @@ export class IssuesRepo {
       throw err;
     }
     this.ctx.tasks().runCollectedChildStatusChanges(collector);
+    this.ctx.emitCommitEvents(hookEvents);
   }
 
   /**

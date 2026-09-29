@@ -960,6 +960,7 @@ export class RuntimesRepo {
       return { status: "ok" as const, agentsArchived, tasksCancelled: cancelled.length,
         issueWorkspacesAbandoned: options.abandonIssueWorkspaces ? issues.length : 0 };
     })();
+    this.ctx.emitCommitEvents({ ...createCommitEventQueue(), enqueuedTasks: deferredEvents.enqueuedTasks.splice(0) });
     for (const terminal of cancelled) this.ctx.tasks().notifyCancelledTask(terminal);
     this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
