@@ -86,6 +86,23 @@ pendingTurnBackendTests("transactional inbox writers", (fixture) => {
     expect(f.queued()).toBe(1);
   });
 
+  it("T4: next_turn coalesces queued work even while another turn is running", () => {
+    const f = setup();
+    const running = f.ensure().task!;
+    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    const queued = f.ensure({ wake: { seq: 10, reason: "test" } }).task!;
+    const result = f.ensure({ wake: { mode: "next_turn", seq: 30, reason: "notice" },
+      create: () => { throw new Error("Queued work must be coalesced"); } });
+    expect(result.action).toBe("coalesced");
+    expect(result.task!.id).toBe(queued.id);
+    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(queued.id).wake_seq)).toBe(30);
+    expect(f.queued()).toBe(1);
+    expect(f.store.getTask(running.id)!.status).toBe("running");
+    const audit = f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_coalesced' AND issue_id = ?")
+      .all(f.issue.id).map(row => JSON.parse(row.data));
+    expect(audit).toContainEqual({ task_id: queued.id, seq: 30, reason: "notice", commentId: null });
+  });
+
   it("keeps execution scopes independent and coalesces Chat-only turns", () => {
     const f = setup();
     const main = f.ensure();
