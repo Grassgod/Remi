@@ -743,6 +743,7 @@ export interface FeishuBotSurface {
   getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string): {
     decision: import("@multiremi/contracts/types.js").MultiremiIssueDecision;
     issue: MultiremiIssue;
+    appId: string;
     chatId: string;
     messageId: string | null;
     recipientOpenId: string;

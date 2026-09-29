@@ -26,6 +26,7 @@ import {
 } from "@multiremi/store/context.js";
 import type { ChildStatusChange, ChildStatusChangeCollector } from "./tasks-repo.js";
 import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspaces-repo.js";
+import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
@@ -323,6 +324,7 @@ export class IssueDecisionError extends Error {
  */
 export interface AnswerIssueDecisionOptions {
   idempotent?: boolean;
+  cardCredential?: QuestionCardCredential;
 }
 
 export type IssueDeletionBlockCode =
@@ -643,6 +645,21 @@ export class IssuesRepo {
       this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       const decision = this.getIssueDecision(issueId, decisionId);
       if (!decision) throw new IssueDecisionError(404, "decision not found");
+      const credential = options.cardCredential;
+      if (credential) {
+        const row = this.ctx.db.query("SELECT * FROM multiremi_issue_decisions WHERE id = ?").get(decisionId) as Row | null;
+        assertQuestionCardToken(row, credential, "escalated");
+        const context = this.ctx.feishuBot().getFeishuIssueDecisionCardContext(parent.workspaceId, decisionId);
+        if (!context || context.recipientOpenId !== credential.operatorOpenId) {
+          throw Object.assign(new IssueDecisionError(403, "please answer from the card addressed to you"), { code: "decision_operator_mismatch" });
+        }
+        const operator = this.ctx.feishuBot().resolveFeishuDecisionOperatorMember(parent.workspaceId, context.appId, credential.operatorOpenId);
+        if (operator.status !== "resolved") {
+          const code = operator.status === "ambiguous" ? "decision_member_ambiguous" : "decision_member_unmapped";
+          throw Object.assign(new IssueDecisionError(403, code), { code });
+        }
+        actor = { type: "member", id: operator.member.id, taskId: null };
+      }
       const owner = this.decisionOwner(parent);
       if (actor.type === "agent" && (!this.decisionTaskActorAllowed(actor, parent, owner)
         || decision.status !== "pending" || decision.kind === "production_change")) {
@@ -660,14 +677,23 @@ export class IssuesRepo {
         answererType: actor.type, answererId: actor.id, answer, reason,
         overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
       };
-      this.ctx.db.run(
+      const result = this.ctx.db.run(
         `UPDATE multiremi_issue_decisions
          SET status = 'answered', answer = ?, answered_by_member_id = ?, answered_at = ?, history = ?, updated_at = ?
-         WHERE id = ?`,
+           ${credential ? ", token_consumed_at = ?" : ""}
+         WHERE id = ?
+           ${credential ? "AND status = 'escalated' AND token_hash = ? AND token_recipient = ? AND token_consumed_at IS NULL" : ""}`,
         [toJson(record), actor.type === "member" ? actor.id : null,
-          record.answeredAt, toJson([...decision.history, record]), record.answeredAt, decision.id],
+          record.answeredAt, toJson([...decision.history, record]), record.answeredAt,
+          ...(credential ? [record.answeredAt] : []), decision.id,
+          ...(credential ? [hashQuestionCardToken(credential.token), credential.operatorOpenId] : [])],
       );
-      const result = this.getIssueDecision(issueId, decisionId)!;
+      if (credential && result.changes === 0) {
+        assertQuestionCardToken(this.ctx.db.query("SELECT * FROM multiremi_issue_decisions WHERE id = ?")
+          .get(decisionId) as Row | null, credential, "escalated");
+        throw new QuestionCardTokenError("token_invalid");
+      }
+      const answered = this.getIssueDecision(issueId, decisionId)!;
       this.ctx.appendIssueActivity(parent.id, {
         actorType: actor.type, actorId: actor.id, type: "decision_answered",
         body: `${decision.title}: ${answer}`,
@@ -685,12 +711,12 @@ export class IssuesRepo {
       if (actor.type === "member" && decision.answer?.answererType === "agent" && owner) {
         this.queueDecisionRound(parent, owner, `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${answer}\nSee the decision history on ${parent.key}.`, changes, events);
       }
-      this.decisionEvent(events, "decision:updated", result);
+      this.decisionEvent(events, "decision:updated", answered);
       // In-place terminal rewrite. The delivery row is written inside this
       // transaction so a rollback leaves neither an answer nor a patch, and the
       // realtime event is queued rather than emitted mid-transaction.
-      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
-      return result;
+      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(answered, events);
+      return answered;
     })();
     this.ctx.tasks().runCollectedChildStatusChanges(changes);
     this.ctx.emitCommitEvents(events);
