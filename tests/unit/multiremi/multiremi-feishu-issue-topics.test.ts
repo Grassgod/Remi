@@ -412,7 +412,9 @@ describe("Feishu Issue topics", () => {
         expect(events.filter(event => event.type === "chat:message")).toHaveLength(0);
         expect(events).toEqual([]);
       } else {
-        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+        expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
+        expect(store.listChatMessages(wake.chatSessionId!).some(message =>
+          message.role === "system" && message.body.includes(leader.id))).toBe(true);
         expect(events.filter(event => event.type === "chat:message")).toEqual([{ type: "chat:message", inTransaction: false }]);
         expect(chatActorIds).toEqual([store.getChatSession(wake.chatSessionId!)!.creatorId]);
         expect(events[0].type).toBe("chat:message");
@@ -683,8 +685,12 @@ describe("Feishu Issue topics", () => {
     expect(store.getFeishuIssueIdForChatSession(inbound.chatSessionId)).toBe(issue.id);
     expect(store.getChatSession(inbound.chatSessionId)).not.toHaveProperty("issueId");
     store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Verify topic update delivery" });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
-    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain("Verify topic update delivery");
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const round = store.createSessionTask(session.id, { agentId: store.getFeishuBotConfig("local")!.agentId, prompt: "Report progress" });
+    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [round.id]);
+    store.completeTask(round.id, { output: "Round complete" });
+    expect(store.listChatMessages(inbound.chatSessionId).at(-1)?.body).toContain(`会话 ${session.id}`);
+    expect(store.listConversationLogShown(session.id).some(entry => entry.body_md === "Verify topic update delivery")).toBe(true);
   });
 
   it("wakes the bound topic Agent when an Issue task asks a human", () => {
