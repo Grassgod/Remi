@@ -8,10 +8,12 @@ import { authenticateBrowserWebSocket, createStore, db, expectNoWebSocketMessage
 
 afterEach(resetMultiremiTestEnv);
 
-function v2Hello(daemonId: string, runtimeIds: string[]): string {
+function v2Hello(daemonId: string, runtimeIds: string[],
+  capabilitiesByRuntime: Record<string, { agent_plugin_protocol: number }> = {}): string {
   return JSON.stringify({ v: 2, t: "hello", ts: Date.now(), p: {
     protocol: 2, daemon_id: daemonId, cli_version: "0.2.83", launched_by: null,
-    runtimes: runtimeIds.map(runtime_id => ({ runtime_id, provider: "codex", max_concurrency: 1, active_task_ids: [] })), caps: [],
+    runtimes: runtimeIds.map(runtime_id => ({ runtime_id, provider: "codex", max_concurrency: 1,
+      active_task_ids: [], ...(capabilitiesByRuntime[runtime_id] ? { capabilities: capabilitiesByRuntime[runtime_id] } : {}) })), caps: [],
   } });
 }
 
@@ -726,13 +728,15 @@ describe("Multiremi API — realtime websockets", () => {
       const inbox = watchRuntimeFrames(socket);
       inboxes.set(socket, inbox);
       await waitWebSocketOpen(socket);
-      socket.send(v2Hello(daemonId, ids));
+      socket.send(v2Hello(daemonId, ids, daemonId === "daemon-local"
+        ? { rt_ws_local: { agent_plugin_protocol: 1 } } : {}));
       expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
       return socket;
     };
     try {
       const local = await connect(daemonToken.token, "daemon-local", ["rt_ws_local", "rt_ws_other_daemon", "rt_ws_remote"]);
-      local.send(JSON.stringify({ v: 2, t: "hb", id: "hb-auth", p: { active_task_count: 0 } }));
+      local.send(JSON.stringify({ v: 2, t: "hb", id: "hb-auth", p: { active_task_count: 0,
+        runtimes: [{ runtime_id: "rt_ws_local", capabilities: { agent_plugin_protocol: 1 } }] } }));
       expect(await inboxes.get(local)!.next("res", "hb-auth")).toMatchObject({ t: "res", re: "hb-auth", p: { runtime_acks: [
         { runtime_id: "rt_ws_local", status: "ok" },
         { runtime_id: "rt_ws_other_daemon", status: "runtime_gone", runtime_gone: true },
@@ -761,7 +765,8 @@ describe("Multiremi API — realtime websockets", () => {
       const retired = await fetch(`http://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`, { headers: { Upgrade: "websocket", Connection: "Upgrade", Authorization: `Bearer ${removedDaemonToken.token}` } });
       expect(retired.status).toBe(401);
       const master = await connect("root-secret", "daemon-local", ["rt_ws_local"]);
-      master.send(JSON.stringify({ v: 2, t: "hb", id: "hb-master", p: { active_task_count: 0 } }));
+      master.send(JSON.stringify({ v: 2, t: "hb", id: "hb-master", p: { active_task_count: 0,
+        runtimes: [{ runtime_id: "rt_ws_local", capabilities: { agent_plugin_protocol: 1 } }] } }));
       expect(await inboxes.get(master)!.next("res", "hb-master")).toMatchObject({ t: "res", re: "hb-master", p: { runtime_acks: [{ runtime_id: "rt_ws_local", status: "ok" }] } });
       expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(1);
       expect(store.getRuntime("rt_ws_remote")?.lastHeartbeatAt).toBe(remoteHeartbeat);
@@ -810,11 +815,12 @@ describe("Multiremi API — realtime websockets", () => {
     const inbox = watchRuntimeFrames(socket);
     try {
       await waitWebSocketOpen(socket);
-      socket.send(v2Hello("daemon-ws-plugin", [runtime.id]));
+      socket.send(v2Hello("daemon-ws-plugin", [runtime.id], { [runtime.id]: { agent_plugin_protocol: 1 } }));
       expect(await inbox.next("welcome")).toMatchObject({ t: "welcome" });
       const revision = await inbox.next("plugin.desired_revision");
       socket.send(JSON.stringify({
-        v: 2, t: "hb", id: "hb-plugin", p: { active_task_count: 0 },
+        v: 2, t: "hb", id: "hb-plugin", p: { active_task_count: 0,
+          runtimes: [{ runtime_id: runtime.id, capabilities: { agent_plugin_protocol: 1 } }] },
       }));
       const ack = await inbox.next("res", "hb-plugin");
       expect(ack).toMatchObject({
