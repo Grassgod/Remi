@@ -11,11 +11,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
-import { decisionInteractionMarker, decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { decisionInteractionMarker, decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import {
   handleIssueDecisionInteractionEvent,
-  registerIssueDecisionCardInteraction,
 } from "@connectors/feishu/task-interaction.js";
+import { registerIssueDecisionCardFixture as registerIssueDecisionCardInteraction } from "../connectors/question-card-host-fixture.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
 
@@ -42,7 +42,8 @@ async function probe(): Promise<boolean> {
 }
 
 const available = await probe();
-if (!available) console.warn(`[multiremi-issue-decision-card-postgres] Postgres unreachable at ${PG_ADMIN_URL} — skipping.`);
+if (!available && process.env.MULTIREMI_TEST_POSTGRES_URL) throw new Error("Configured test Postgres is unreachable");
+if (!available) console.warn("[multiremi-issue-decision-card-postgres] Postgres unavailable; skipping.");
 
 const CLAIM_BARRIER_TIMEOUT_MS = 10_000;
 type ClaimWorkerMessage = {
@@ -367,15 +368,15 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       appId: "cli_pg412", chatId: "oc_pg412", messageId,
       recipientOpenId: scope.openId,
       getDecision: () => client.getFeishuIssueDecision(scope.parent.id, decision.id),
-      submit: (answer, operatorOpenId) => client.answerFeishuIssueDecision(
-        scope.parent.id, decision.id, { answer, operatorOpenId },
+      submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
+        scope.parent.id, decision.id, { answer, operatorOpenId, token },
       ),
     });
     try {
       const result = await handleIssueDecisionInteractionEvent("cli_pg412", {
         operator: { open_id: scope.openId },
         context: { open_message_id: messageId, open_chat_id: "oc_pg412" },
-        action: { name: `${marker}_o0`, form_value: {} },
+        action: { value: questionCardAction(decodeDecisionCardBody(card.body)!.card), name: `${marker}_o0`, form_value: {} },
       });
       expect(result?.toast).toEqual({
         type: "info",

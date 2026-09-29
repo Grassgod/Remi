@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
+import { questionCardAction } from "@shared/feishu-task-card.js";
 import {
   FEISHU_CONCIERGE_OUTBOUND_CLAIM_HEADER,
   FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION,
@@ -162,10 +163,19 @@ describe("Feishu bot control-plane delivery", () => {
     expect(messages.status).toBe(200);
     expect(await messages.json()).toEqual(expect.arrayContaining([expect.objectContaining({ content: "Answer from Claude" })]));
     const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
-      payload: { question: "Continue?" } });
+      payload: { questions: [{ question: "Continue?", options: [{ label: "yes" }] }] } });
+    const cardPath = `${taskPath}/human-requests/${question.id}/card`;
+    const cardInput = JSON.stringify({ recipient_open_id: "ou_cross_provider_recipient" });
+    expect((await test.app.request(cardPath, { method: "POST", headers: daemonHeaders(test.tokens.rt_b!),
+      body: cardInput })).status).toBe(403);
+    const card = await test.app.request(cardPath, { method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
+      body: cardInput });
+    expect(card.status).toBe(200);
+    const credential = questionCardAction((await card.json() as any).card);
+    expect(typeof credential?.t).toBe("string");
     const answer = await test.app.request(`${taskPath}/human-requests/${question.id}/respond`, {
       method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
-      body: JSON.stringify({ response: { answer: "yes" }, responded_by: "feishu" }),
+      body: JSON.stringify({ response: { answer: "yes" }, token: credential!.t, operator_open_id: "ou_cross_provider_recipient" }),
     });
     expect(answer.status).toBe(200);
     expect(test.store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "yes" });

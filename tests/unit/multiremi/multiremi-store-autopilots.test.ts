@@ -839,6 +839,28 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
   });
 
+  it("U7 does not match dependency_auto_start_check to a done autopilot", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Done checker", provider: "claude" });
+    const issue = store.createIssue({ title: "Completed prerequisite", status: "in_progress" });
+    const autopilot = store.createAutopilot({ title: "Observe done", assigneeId: agent.id, executionMode: "trigger_issue" });
+    store.createAutopilotTrigger(autopilot.id, {
+      kind: "system_event", eventConfig: { resource: "issue", event: "status_changed",
+        conditions: [{ field: "status", operator: "becomes", value: "done" }] },
+    });
+    store.updateIssue(issue.id, { status: "done" });
+    const rows = db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(issue.id) as Array<{ id: string }>;
+    const events = rows.map(({ id }) => store.getSystemEvent(id)!);
+    const check = events.find((event) => event.event === "dependency_auto_start_check")!;
+    const status = events.find((event) => event.event === "status_changed")!;
+    const first = store.dispatchPendingSystemEvents(new Date(check.availableAt));
+    expect(first).toHaveLength(1);
+    expect(first[0]?.eventId).toBe(status.id);
+    expect(store.dispatchPendingSystemEvents(new Date(Date.parse(check.availableAt) + 60_000))).toEqual([]);
+    expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
+    expect(store.getSystemEvent(check.id)?.status).toBe("processed");
+  });
+
   it("does not feed automation-owned task status writes back into the same system event trigger", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Review maintainer", provider: "codex" });

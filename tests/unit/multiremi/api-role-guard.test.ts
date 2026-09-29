@@ -356,9 +356,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // 72 of the 772 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // 73 of the 773 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
-    // so the full-inventory total is 73. Pinning the swept count AND the arithmetic
+    // so the full-inventory total is 74. Pinning the swept count AND the arithmetic
     // means a route cannot be reclassified without one of the numbers moving.
     // MUL-412's two /api/daemon/issues/:issueId/decisions routes are runtime
     // protocol traffic, so they move the swept/full totals from 70/71 to 72/73.
@@ -366,8 +366,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // the swept inventory grows from 769 to 771 while these refusal totals stay put.
     // MUL-479's context-window PUT is browser traffic that ui serves, so it takes
     // the swept inventory to 772 without moving these totals either.
-    expect(misdirected, routeCountHint("ui")).toHaveLength(72);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(73);
+    // MUL-487's native card mint takes it to 773 and ui must refuse that route.
+    expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
+    expect(misdirected, routeCountHint("ui")).toHaveLength(73);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(74);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
@@ -378,7 +380,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 693 of the 772 swept patterns are refused; the two browser upgrade routes
+    // 693 of the 773 swept patterns are refused; the two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
     // total is 695. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
@@ -392,6 +394,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // MUL-462's two /internal/peer/* routes increase the swept inventory by two,
     // but runtime serves both, so they leave the refusal totals unchanged. Only
     // MUL-479's context-window PUT moves them, from 692/694 to 693/695.
+    // The native card mint is served by runtime and leaves these totals unchanged.
+    const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
+    expect(statuses.has(mintRoute)).toBe(true);
+    expect(statuses.get(mintRoute)).not.toBe(421);
     expect(refused, routeCountHint("runtime")).toBe(693);
     expect(refused + 2, routeCountHint("runtime")).toBe(695);
   });

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { createPeerChannel, PEER_REALTIME_TOPIC, type PeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
@@ -547,6 +548,8 @@ describe("realtime fanout — two servers over one database", () => {
         expect(two.postCounts.b).toBe(postsBeforeCreate.b);
 
         const card = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+        const cardCredential = questionCardAction(decodeDecisionCardBody(card.body)!.card);
+        expect(typeof cardCredential?.t).toBe("string");
         storeA.reportFeishuBotOutbound("local", "rt_peer_decision", card.id, {
           claimToken: card.claimToken,
           status: "sent",
@@ -566,6 +569,7 @@ describe("realtime fanout — two servers over one database", () => {
         const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
           answer: "yes",
           operatorOpenId: "ou_peer_decision",
+          token: cardCredential!.t as string,
         });
         expect(answered.status).toBe("answered");
         const answerDeadline = Date.now() + WS_TIMEOUT_MS;

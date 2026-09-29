@@ -4053,7 +4053,7 @@ export interface MultiremiSystemEvent {
   id: string;
   workspaceId: string;
   resource: "issue" | "feishu_source";
-  event: "status_changed" | "messages_ingested";
+  event: "status_changed" | "messages_ingested" | "dependency_auto_start_check";
   resourceId: string;
   projectId: string | null;
   payload: Record<string, unknown>;
@@ -4579,7 +4579,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
   body: string;
   bodyOrigin: FeishuBotOutboundBodyOrigin;
   body_origin?: FeishuBotOutboundBodyOrigin;
-  /** Stable across retries so Feishu can deduplicate send-success/ack-failure. */
+  /** Base delivery key. Question cards derive a key per rotated credential. */
   idempotencyKey: string;
   idempotency_key?: string;
   /** Present only for stream-capable daemons; absent on topic seed messages. */
@@ -4594,7 +4594,7 @@ export interface MultiremiFeishuBotOutboundDelivery {
    * legacy behavior: text for a topic seed, a Task stream when `taskId` is set.
    * `decision_card` carries a server-built card in `body` and posts it as a
    * proactive thread reply; `decision_card_patch` edits the message named by
-   * `previousDeliveryId`; `decision_reminder` is a plain text nudge.
+   * `targetMessageId`; `decision_reminder` carries a rotated card and text nudge.
    */
   kind?: FeishuBotOutboundDeliveryKind;
   /** Set on every decision-card lane so the host can poll the request. */
@@ -4603,11 +4603,11 @@ export interface MultiremiFeishuBotOutboundDelivery {
   /**
    * The Task that asked. The host needs it to read and answer the request over
    * the existing task-scoped routes, including after it restarts and has to
-   * re-register a card it no longer remembers sending.
+   * route a click without any per-message registration.
    */
   humanRequestTaskId?: string;
   human_request_task_id?: string;
-  /** `decision_card_patch` only: the message this lane rewrites in place. */
+  /** Card patches and reminders: the message this lane rewrites in place. */
   targetMessageId?: string;
   target_message_id?: string;
   /**
