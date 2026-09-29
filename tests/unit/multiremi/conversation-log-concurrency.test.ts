@@ -661,6 +661,61 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: nested transactions roll back only failed savepoints", async () => {
     await withPostgres(async (db) => verifyNestedTransactions(db));
   });
+  // MUL-402 QA F3 (cmt_1khg3kqww3q5): the peak was raised only on the outer
+  // BEGIN, so a helper that added a SAVEPOINT frame still read as depth 1 and
+  // every PG `maxTransactionDepth` guard missed it. Main (01810898) raises the
+  // peak on every frame; the depth-1 guards depend on that (ADR 0011).
+  it.skipIf(!pgAdminUrl)("Postgres: maxTransactionDepth counts every nested frame, as on main", async () => {
+    await withPostgres(async (db) => {
+      const depthNow = () => (db as unknown as { transactionDepth: number }).transactionDepth;
+      let observed = 0;
+      db.resetTransactionDepthStats();
+      db.transaction(() => db.transaction(() => { observed = depthNow(); })())();
+      expect(observed).toBe(2);
+      expect(db.maxTransactionDepth).toBe(2);
+
+      db.resetTransactionDepthStats();
+      db.transaction(() => {})();
+      expect(db.maxTransactionDepth).toBe(1);
+
+      // A nested frame that rolls back is still a frame.
+      db.resetTransactionDepthStats();
+      db.transaction(() => {
+        try { db.transaction(() => db.transaction(() => { throw new Error("inner"); })())(); } catch { /* outer continues */ }
+      })();
+      expect(db.maxTransactionDepth).toBe(3);
+    });
+  });
+  // Senior ruling cmt_96e1yqxgifms §3: main's rollback path, without the extra
+  // RELEASE SAVEPOINT that B1 sent after ROLLBACK TO SAVEPOINT.
+  it.skipIf(!pgAdminUrl)("Postgres: a failed savepoint rolls back to itself with no second RELEASE, as on main", async () => {
+    await withPostgres(async (db) => {
+      db.exec("CREATE TABLE savepoint_control_case (n INTEGER PRIMARY KEY)");
+      const controls: string[] = [];
+      const target = db as unknown as { execute(sql: string, params: unknown[]): unknown };
+      const execute = target.execute.bind(db);
+      target.execute = (sql, params) => {
+        if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql.trim())) controls.push(sql.trim());
+        return execute(sql, params);
+      };
+      db.transaction(() => {
+        db.run("INSERT INTO savepoint_control_case (n) VALUES (1)");
+        try {
+          db.transaction(() => db.run("INSERT INTO savepoint_control_case (n) VALUES (1)"))();
+        } catch { /* the outer transaction continues */ }
+        db.transaction(() => db.run("INSERT INTO savepoint_control_case (n) VALUES (2)"))();
+      })();
+      expect(controls).toEqual([
+        "BEGIN",
+        "SAVEPOINT multiremi_sp_1",
+        "ROLLBACK TO SAVEPOINT multiremi_sp_1",
+        "SAVEPOINT multiremi_sp_1",
+        "RELEASE SAVEPOINT multiremi_sp_1",
+        "COMMIT",
+      ]);
+      expect(db.query("SELECT n FROM savepoint_control_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+    });
+  });
   for (const nested of [false, true]) {
     const label = nested ? "inside a savepoint" : "in the outer transaction";
     it(`SQLite: a caught local reply failure ${label} still commits`, async () => {

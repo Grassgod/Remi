@@ -59,7 +59,7 @@ export class IssueSessionsRepo {
    * atomic for autocommit callers. When a caller that already owns the
    * transaction needs this, it calls
    * {@link getOrCreateDefaultIssueSessionWithinTransaction} directly instead,
-   * so the guard-listed paths stay at outer depth 1 (Senior ruling
+   * so the guard-listed paths stay at depth 1 (Senior ruling
    * cmt_96e1yqxgifms §2; the same shape as `createIssue` on main).
    */
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {

@@ -105,8 +105,9 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
           const name = control.sql.split(" ").at(-1)!;
           if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
           else {
+            // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
             expect(savepoints.at(-1), detail).toBe(name);
-            if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+            savepoints.pop();
           }
         }
       }

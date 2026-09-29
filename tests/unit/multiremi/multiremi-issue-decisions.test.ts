@@ -453,14 +453,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
     database = new PostgresSyncDatabase(url.toString());
     const original = database.transaction.bind(database);
     let depth = 0;
-    let invocationDepth = 0;
     let callbackDepth = 0;
     const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
     const execute = target.execute.bind(database);
     target.execute = (sql, params) => {
       const command = sql.trim().toUpperCase();
       if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
-        controls.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+        controls.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
       }
       return execute(sql, params);
     };
@@ -469,15 +468,11 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
         callbackDepth++;
         try { return fn(); } finally { callbackDepth--; }
       });
+      // Every frame counts, a nested SAVEPOINT included (ADR 0011).
       return () => {
-        // MUL-402 cmt_gestk2r6imjh (c): count outer BEGIN ownership, not SAVEPOINT nesting.
-        const topLevel = !database.inTransaction;
-        invocationDepth++;
-        if (topLevel) maxDepth = Math.max(maxDepth, ++depth);
-        try { return run(); } finally {
-          invocationDepth--;
-          if (topLevel) depth--;
-        }
+        depth++;
+        maxDepth = Math.max(maxDepth, depth);
+        try { return run(); } finally { depth--; }
       };
     };
     store = new MultiremiStore(database);
@@ -521,8 +516,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
         const name = control.sql.split(" ").at(-1)!;
         if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
         else {
+          // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
           expect(savepoints.at(-1), detail).toBe(name);
-          if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+          savepoints.pop();
         }
       }
     }

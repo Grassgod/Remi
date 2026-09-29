@@ -148,9 +148,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `PostgresSyncDatabase.transaction()` was a bare `BEGIN`/`COMMIT`, so a nested
    `transaction()` inside an open one committed the outer transaction early,
    released its row locks, and turned the outer `ROLLBACK` into a no-op. Since
-   B1 (MUL-426, cmt_ces3m03jimtd) a nested `transaction()` is a `SAVEPOINT`
-   inside the outer unit on both backends, and `maxTransactionDepth` counts only
-   the outer `BEGIN` (MUL-402 rulings cmt_78bx01xhb75x, cmt_gestk2r6imjh). The
+   MUL-405 a nested `transaction()` is a `SAVEPOINT` inside the outer unit on
+   both backends, and `maxTransactionDepth` counts every frame, the `SAVEPOINT`
+   included, so depth 1 still means no nested frame at all (ADR 0011). The
    store keeps its `...WithinTransaction` convention: the outermost caller owns
    the only `BEGIN`/`COMMIT`, and everything under it calls the variant that
    assumes an open transaction. A standalone wrapper publishes its events and
@@ -248,13 +248,12 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    - This issue left `PostgresSyncDatabase.transaction()` alone. Teaching it
      savepoints was a platform-level change with its own blast radius (every
      caller, the worker bridge, and the SQLite backend's differing semantics),
-     and it landed later in B1 (MUL-426, cmt_ces3m03jimtd): a nested
-     `transaction()` now sends `SAVEPOINT` / `RELEASE SAVEPOINT` /
-     `ROLLBACK TO SAVEPOINT` inside the outer unit. The constraint is still held
-     by the call-site convention above and by the depth-counter regression
-     tests, which count only the outer `BEGIN`; the Postgres ones also record
-     that no second `BEGIN` or early `COMMIT` is sent (MUL-402 rulings
-     cmt_78bx01xhb75x, cmt_gestk2r6imjh).
+     and it landed later in MUL-405: a nested `transaction()` now sends
+     `SAVEPOINT` and then `RELEASE SAVEPOINT` or `ROLLBACK TO SAVEPOINT` inside
+     the outer unit. The constraint is still held by the call-site convention
+     above and by the depth-counter regression tests, which count every frame,
+     a `SAVEPOINT` included; the Postgres ones also record that no second
+     `BEGIN` or early `COMMIT` is sent (ADR 0011).
    - Two nesting sites remain, both pre-existing on `main` and out of this
      issue's scope: `FeishuBotRepo.submitMessage`'s steer path
      (`feishu-bot-repo.ts`) and `MultiremiStore.updateAgent`'s role-change token

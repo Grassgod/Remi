@@ -109,11 +109,9 @@ export interface SqlDatabase {
    */
   readonly inTransaction?: boolean;
   /**
-   * Deepest top-level `transaction()` (outer `BEGIN`) nesting seen by this
-   * handle. A nested `transaction()` is a SAVEPOINT inside the outer unit
-   * (MUL-426, cmt_ces3m03jimtd) and is not counted (MUL-402 rulings
-   * cmt_78bx01xhb75x, cmt_gestk2r6imjh); a path whose contract is "one atomic
-   * unit" asserts this is 1.
+   * Deepest `transaction()` nesting seen by this handle. Nested PostgreSQL
+   * calls use SAVEPOINTs; paths with an explicit transaction owner still
+   * assert this is 1 so their helpers cannot silently add transaction frames.
    */
   readonly maxTransactionDepth?: number;
 
@@ -587,11 +585,11 @@ export class PostgresSyncDatabase implements SqlDatabase {
     }
   }
   /**
-   * Deepest top-level nesting reached so far. A caller that must stay a single
-   * atomic unit (issue creation, for example) opens its transaction only when it
-   * does not already own one and then checks this is 1. Only the outer `BEGIN`
-   * counts: a nested `transaction()` is a SAVEPOINT that commits or rolls back
-   * with the outer unit (MUL-402 rulings cmt_78bx01xhb75x, cmt_gestk2r6imjh).
+   * Deepest nesting reached so far. A caller that must stay a single atomic
+   * unit (issue creation, for example) opens its transaction only when it does
+   * not already own one and then checks this is 1. MUL-405 added SAVEPOINTs for
+   * nested `transaction()` calls, so a nested frame is now independently
+   * rollback-able; this counter still reports the deepest nesting observed.
    */
   get maxTransactionDepth(): number {
     return this.peakTransactionDepth;
@@ -637,64 +635,50 @@ export class PostgresSyncDatabase implements SqlDatabase {
    */
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
-      if (this.inTransaction) {
-        const savepointDepth = this.transactionDepth;
-        const savepoint = `multiremi_sp_${savepointDepth}`;
-        this.execute(`SAVEPOINT ${savepoint}`, []);
-        this.transactionDepth += 1;
-        this.afterCommitFrames.push([]);
-        let released = false;
-        try {
-          const result = fn(...args);
-          this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
-          released = true;
-          return result;
-        } catch (err) {
-          try {
-            this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
-            if (this.failedAtDepth != null && this.failedAtDepth > savepointDepth) this.failedAtDepth = null;
-            this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
-          } catch {
-            // The outer transaction sees the remaining failure flag.
-          }
-          throw err;
-        } finally {
-          this.transactionDepth -= 1;
-          const frame = this.afterCommitFrames.pop()!;
-          if (released) this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
-        }
-      }
-      this.execute("BEGIN", []);
+      const outermost = this.transactionDepth === 0;
+      const savepointDepth = this.transactionDepth;
+      const savepoint = outermost ? null : `multiremi_sp_${savepointDepth}`;
+      if (outermost) this.execute("BEGIN", []);
+      else this.execute(`SAVEPOINT ${savepoint}`, []);
       this.transactionDepth += 1;
-      this.failedAtDepth = null;
-      this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
-      lockOrderSentinelTransactionBegin();
+      if (outermost) this.failedAtDepth = null;
+      if (outermost) lockOrderSentinelTransactionBegin();
       this.afterCommitFrames.push([]);
       let committed = false;
+      this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
       try {
         const result = fn(...args);
-        if (this.failedAtDepth != null) {
-          throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
-        }
-        const reply = this.execute("COMMIT", []);
-        if (reply.command?.toUpperCase() === "ROLLBACK") {
-          throw new Error("Postgres rolled back an aborted transaction at COMMIT");
-        }
+        if (outermost) {
+          if (this.failedAtDepth != null) {
+            throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
+          }
+          const reply = this.execute("COMMIT", []);
+          if (reply.command?.toUpperCase() === "ROLLBACK") {
+            throw new Error("Postgres rolled back an aborted transaction at COMMIT");
+          }
+        } else this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
         committed = true;
         return result;
       } catch (err) {
         try {
-          this.execute("ROLLBACK", []);
+          if (outermost) this.execute("ROLLBACK", []);
+          else {
+            this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
+            if (this.failedAtDepth != null && this.failedAtDepth > savepointDepth) this.failedAtDepth = null;
+          }
         } catch {
-          // connection already aborted the transaction
+          // connection already aborted the transaction; an outer frame sees the remaining failure flag
         }
         throw err;
       } finally {
         this.transactionDepth -= 1;
-        this.failedAtDepth = null;
+        if (outermost) this.failedAtDepth = null;
         const frame = this.afterCommitFrames.pop()!;
-        if (committed) runAfterCommitCallbacks(frame);
-        lockOrderSentinelTransactionEnd();
+        if (committed) {
+          if (outermost) runAfterCommitCallbacks(frame);
+          else this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
+        }
+        if (outermost) lockOrderSentinelTransactionEnd();
       }
     };
   }

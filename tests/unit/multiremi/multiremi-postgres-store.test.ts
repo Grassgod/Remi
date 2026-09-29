@@ -204,13 +204,13 @@ function waitForWorkerMessage<T extends Record<string, unknown>>(
 }
 
 /**
- * `maxTransactionDepth` counts only the top-level BEGIN (MUL-405), so the
- * depth-1 cases also check the control statements the bridge sent in the same
- * window. Before the outer COMMIT there is no second BEGIN and no early COMMIT;
- * nested levels send only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO
- * SAVEPOINT, and the guarded entry points have no nested level at all
- * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md). Same
- * recording as B5's multiremi-parent-status-pg-depth.test.ts.
+ * `maxTransactionDepth` counts every `transaction()` frame, SAVEPOINTs included
+ * (MUL-405), so a depth-1 case has no nested level at all
+ * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md). The same
+ * window's control statements are checked as well: before the outer COMMIT
+ * there is no second BEGIN and no early COMMIT, and a nested level sends only
+ * SAVEPOINT, then one RELEASE SAVEPOINT or ROLLBACK TO SAVEPOINT that ends it.
+ * Same recording as B5's multiremi-parent-status-pg-depth.test.ts.
  */
 function recordTransactionControl(database: PostgresSyncDatabase): (label: string) => void {
   let controls: Array<{ sql: string; inTransaction: boolean }> = [];
@@ -250,8 +250,9 @@ function recordTransactionControl(database: PostgresSyncDatabase): (label: strin
         const name = control.sql.split(" ").at(-1)!;
         if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
         else {
+          // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
           expect(savepoints.at(-1), detail).toBe(name);
-          if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+          savepoints.pop();
         }
       }
     }
@@ -386,7 +387,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       });
       stop();
       expect(db.maxTransactionDepth).toBe(1);
-      // ADR 0011: any nested level is a SAVEPOINT inside the one BEGIN…COMMIT.
+      // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
       assertTransactionControl(`${source} exemption`);
       expect(eventStates).toEqual([false]);
       expect(store.getTask(task.id)?.status).toBe("queued");
@@ -415,7 +416,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(prerequisite.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("active exempt round");
     expect(store.getIssue(issue.id)?.status).toBe("backlog");
     expect(store.listTasksForIssue(issue.id).map((row) => row.id)).toEqual([task.id]);
@@ -3262,10 +3263,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    * MUL-409 fix round, blocking 2: issue creation is one transaction on this
    * bridge. When the QA pass found the orphan, a nested `transaction()` here was
    * a bare `BEGIN` that committed the issue row early and let it survive the
-   * rollback. Since B1 (MUL-426) a nested `transaction()` is a SAVEPOINT inside
-   * the outer unit, and `maxTransactionDepth` counts only the outer `BEGIN`
-   * (② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh); the data assertions below pin
-   * the rollback itself.
+   * rollback. A nested `transaction()` is now a SAVEPOINT inside the outer unit
+   * (MUL-405), and `maxTransactionDepth` still counts it as a frame, so the
+   * depth-1 assertion keeps catching a reintroduced nesting; the data
+   * assertions below pin the rollback itself.
    */
   it("rolls a rejected blocked_by creation back and stays a single transaction (PG)", () => {
     const parent = store.createIssue({ title: "PG rollback parent", status: "in_progress" });
@@ -3303,11 +3304,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   });
 
   /**
-   * MUL-409 fix round 2, blocking 4: the automatic-start chain must stay one
-   * top-level transaction on this bridge. When this was written `transaction()`
-   * was a bare BEGIN/COMMIT, so a nested BEGIN let the inner COMMIT end the
-   * outer unit and a later ROLLBACK could not undo it; since B1 (MUL-426) a
-   * nested `transaction()` is a SAVEPOINT inside the outer unit. S1 moved the
+   * MUL-409 fix round 2, blocking 4: the automatic-start chain must not nest a
+   * transaction on this bridge. When this was written `transaction()` was a
+   * bare BEGIN/COMMIT, so a nested BEGIN let the inner COMMIT end the outer unit
+   * and a later ROLLBACK could not undo it; a nested `transaction()` is now a
+   * SAVEPOINT inside the outer unit, and still counts as a frame. S1 moved the
    * E1/E2 hook post-commit; these three scenarios pin that the S2 dependency
    * logic (auto-start on `done`, the two-prerequisite case, and the member
    * forced start) runs at depth 1 and sends no second BEGIN or early COMMIT.
@@ -3334,7 +3335,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(prereq.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("(a) prerequisite done");
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
@@ -3353,7 +3354,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(first.id, { status: "done" });
     store.updateIssue(second.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("(b) two prerequisites");
     expect(store.getIssue(bothWaiting.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(bothWaiting.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
@@ -3370,7 +3371,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(forced.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("(c) member forced start");
     expect(store.getIssue(forced.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(forced.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
@@ -3401,7 +3402,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(prereq.id, { status: "done" });
 
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("auto-start dispatch fails");
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     // Still waiting, so the automatic path can pick it up again once a human
@@ -3744,7 +3745,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // The prerequisite's own transition is untouched, and the depth stayed 1.
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     expect(db.maxTransactionDepth).toBe(1);
-    // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
     assertTransactionControl("automatic start step fails");
 
     // And the retry after a fixed owner really starts it, through public assign.
