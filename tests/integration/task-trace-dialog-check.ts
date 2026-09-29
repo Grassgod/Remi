@@ -9,7 +9,10 @@ import { seedZeroJumpFixture } from "./zero-jump-fixture";
 import { launchBrowser, mktContext } from "../../frontend/scripts/perf/lib/harness";
 
 const root = resolve(import.meta.dir, "../..");
-const out = join(root, "reports/performance/MUL-444-step4");
+const outArg = process.argv.indexOf("--out");
+const out = outArg >= 0 && process.argv[outArg + 1]
+  ? resolve(process.argv[outArg + 1])
+  : join(root, "reports/performance/MUL-444-step4");
 mkdirSync(out, { recursive: true });
 const results: Array<Record<string, unknown>> = [];
 function check(name: string, ok: boolean, detail: Record<string, unknown> = {}) {
