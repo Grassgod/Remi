@@ -90,6 +90,22 @@ function seedGroups(db: SqlDatabase): void {
   for (let i = 0; i < 4; i++) task(`tsk_arch_${i}`, { issueId: "iss_arch" }, 3);
 }
 
+/** `count` more one-event backfill candidates, one-shot unless linked to an Issue or a Chat. */
+function addCandidates(
+  db: SqlDatabase,
+  prefix: string,
+  count: number,
+  link: { issueId?: string; chatSessionId?: string } = {},
+): void {
+  for (let i = 0; i < count; i++) {
+    const id = `${prefix}_${i}`;
+    insertSyntheticTask(db, {
+      id, agentId: "agt_r", runtimeId: "rt_r", ...link, status: "completed", createdAt: T0, startedAt: T0, endedAt: ENDED,
+    });
+    insertSyntheticMessages(db, id, rows(id, 1));
+  }
+}
+
 async function backfill(store: MultiremiStore, db: SqlDatabase, root: string): Promise<void> {
   const report = await runTraceBackfill({
     db,
@@ -205,19 +221,10 @@ for (const backend of backends) {
     const opened = await backend.open();
     try {
       seedGroups(opened.db);
-      const extra = (prefix: string, count: number, issueId?: string) => {
-        for (let i = 0; i < count; i++) {
-          const id = `${prefix}_${i}`;
-          insertSyntheticTask(opened.db, {
-            id, agentId: "agt_r", runtimeId: "rt_r", issueId, status: "completed", createdAt: T0, startedAt: T0, endedAt: ENDED,
-          });
-          insertSyntheticMessages(opened.db, id, rows(id, 1));
-        }
-      };
       // chat 14, task 100, issue_without_archive 100, issue_with_archive 100.
-      extra("tsk_more_one", 90);
-      extra("tsk_more_no_archive", 85, "iss_r1");
-      extra("tsk_more_archive", 96, "iss_arch");
+      addCandidates(opened.db, "tsk_more_one", 90);
+      addCandidates(opened.db, "tsk_more_no_archive", 85, { issueId: "iss_r1" });
+      addCandidates(opened.db, "tsk_more_archive", 96, { issueId: "iss_arch" });
       const assignment = assignTraceBackfillSubjects(opened.db, { oldTableStoppedAt: CUTOFF });
       const draw = (seed: string) =>
         selectTraceReconcileSample(assignment, { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS, seed });
@@ -243,6 +250,39 @@ for (const backend of backends) {
       // The same seed draws the same tasks in the same order; another seed draws others.
       expect([...draw(TRACE_RECONCILE_SAMPLE_SEED).taskIds]).toEqual([...sample.taskIds]);
       expect([...draw("another seed").taskIds].sort()).not.toEqual([...sample.taskIds].sort());
+    } finally {
+      await opened.close();
+    }
+  }, TIMEOUT);
+
+  it.skipIf(!backend.available)(`QA3: a shortfall the other groups cannot split evenly goes one at a time in group order (${backend.name})`, async () => {
+    const opened = await backend.open();
+    try {
+      seedGroups(opened.db);
+      // chat 24, task 213, issue_without_archive 151, issue_with_archive 142.
+      addCandidates(opened.db, "tsk_more_chat", 10, { chatSessionId: "chs_r1" });
+      addCandidates(opened.db, "tsk_more_one", 203);
+      addCandidates(opened.db, "tsk_more_no_archive", 136, { issueId: "iss_r2" });
+      addCandidates(opened.db, "tsk_more_archive", 138, { issueId: "iss_arch" });
+      const draw = () => selectTraceReconcileSample(assignTraceBackfillSubjects(opened.db, { oldTableStoppedAt: CUTOFF }),
+        { quotas: TRACE_RECONCILE_SAMPLE_QUOTAS, seed: TRACE_RECONCILE_SAMPLE_SEED });
+      const sample = draw();
+
+      expect(sample.taskIds.size).toBe(200);
+      expect(sample).toMatchObject({ requested: 200, refilled: 26, note: null });
+      // chat's 26 short do not split by three: 9, 9, 8 in group order.
+      expect(Object.entries(sample.by_group).map(([group, counts]) =>
+        [group, counts.quota, counts.candidates, counts.sampled, counts.refill])).toEqual([
+        ["chat", 50, 24, 24, 0],
+        ["task", 50, 213, 59, 9],
+        ["issue_without_archive", 50, 151, 59, 9],
+        ["issue_with_archive", 50, 142, 58, 8],
+      ]);
+
+      // The same seed over the same data, read again, draws the same tasks in the same order.
+      const again = draw();
+      expect([...again.taskIds]).toEqual([...sample.taskIds]);
+      expect(again.by_group).toEqual(sample.by_group);
     } finally {
       await opened.close();
     }
