@@ -68,6 +68,13 @@ export function ChatMessageList({
   const { t } = useT("chat");
   const scrollRoot = useRef<HTMLElement | null>(null);
   const prependAnchor = useRef<{ id: string; top: number } | null>(null);
+  const previousAvailability = useRef(availability);
+  useLayoutEffect(() => {
+    if (previousAvailability.current === availability) return;
+    previousAvailability.current = availability;
+    const root = scrollRoot.current;
+    if (root?.dataset.stickState === "pinned") root.scrollTop = root.scrollHeight;
+  }, [availability]);
   const snapshot = useSyncExternalStore(
     useCallback(listener => replica.subscribe(sessionId, listener), [replica, sessionId]),
     useCallback(() => replica.getSnapshot(sessionId), [replica, sessionId]),
