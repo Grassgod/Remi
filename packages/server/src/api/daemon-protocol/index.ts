@@ -113,9 +113,13 @@ export class DaemonProtocolLayer {
   private readonly metrics: WsFrameMetricsRuntime | null;
   /** RPC handlers registered by later sub-issues, keyed by frame type. */
   private readonly rpcHandlers = new Map<string, DaemonProtocolRpcHandler>();
-  private readonly bestEffortHandlers = new Map<string, (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
   private readonly sessionHooks = new Set<DaemonProtocolSessionHooks>();
   private readonly background = new Set<Promise<unknown>>();
+  private readonly eventHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly bestEffortHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly replyListeners = new Set<(frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
+  private readonly closeListeners = new Set<(session: DaemonProtocolSession) => void>();
+  private traceHeads: (session: DaemonProtocolSession) => Record<string, number> = () => ({});
 
   constructor(options: DaemonProtocolLayerOptions) {
     this.store = options.store;
@@ -162,11 +166,19 @@ export class DaemonProtocolLayer {
       },
       onFrame: (sample) => this.metrics?.record(sample),
       onRpc: frame => this.dispatchRpc(frame, session),
-      onBestEffort: frame => this.bestEffortHandlers.get(frame.type)?.(frame, session),
-      onReply: frame => { for (const hooks of this.sessionHooks) hooks.reply?.(session, frame); },
+      onEvent: frame => this.eventHandlers.get(frame.type)?.(frame, session) ?? null,
+      onBestEffort: frame => this.bestEffortHandlers.get(frame.type)?.(frame, session) ?? null,
+      traceHeads: () => this.traceHeads(session),
+      onReply: frame => {
+        for (const hooks of this.sessionHooks) hooks.reply?.(session, frame);
+        for (const listener of this.replyListeners) listener(frame, session);
+      },
       onAck: ack => { for (const hooks of this.sessionHooks) hooks.ack?.(session, ack); },
       onDrain: () => { for (const hooks of this.sessionHooks) hooks.drain?.(session); },
-      onClose: () => { for (const hooks of this.sessionHooks) hooks.close?.(session); },
+      onClose: () => {
+        for (const hooks of this.sessionHooks) hooks.close?.(session);
+        for (const listener of this.closeListeners) listener(session);
+      },
     });
     return session;
   }
@@ -260,10 +272,6 @@ export class DaemonProtocolLayer {
     this.rpcHandlers.set(frameType, handler);
   }
 
-  registerBestEffortHandler(frameType: string, handler: (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void): void {
-    this.bestEffortHandlers.set(frameType, handler);
-  }
-
   registerSessionHooks(hooks: DaemonProtocolSessionHooks): void { this.sessionHooks.add(hooks); }
 
   trackBackground(run: Promise<unknown>): void {
@@ -273,6 +281,24 @@ export class DaemonProtocolLayer {
 
   async drain(): Promise<void> {
     while (this.background.size) await Promise.allSettled([...this.background]);
+  }
+
+  registerEventHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
+    this.eventHandlers.set(frameType, handler);
+  }
+
+  registerBestEffortHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
+    this.bestEffortHandlers.set(frameType, handler);
+  }
+
+  setTraceHeads(source: (session: DaemonProtocolSession) => Record<string, number>): void { this.traceHeads = source; }
+  onReply(listener: (frame: DaemonParsedFrame, session: DaemonProtocolSession) => void): () => void {
+    this.replyListeners.add(listener);
+    return () => this.replyListeners.delete(listener);
+  }
+  onClose(listener: (session: DaemonProtocolSession) => void): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   /** Close every live session with 4001 (server shutdown). */
@@ -285,7 +311,6 @@ export class DaemonProtocolLayer {
     if (!handler) return null;
     return handler(frame, session);
   }
-
   /**
    * Per-runtime authorization, reusing the HTTP daemon identity rules
    * applies to a v1 socket's runtime list.

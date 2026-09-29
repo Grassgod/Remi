@@ -8,6 +8,7 @@ import { MultiremiDaemonClient, normalizeDaemonClaimTask } from "@multiremi/clie
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { prepareFeishuIssueTopic as prepareIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { configureRepositoryWikiAutomation, createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
+import { captureReports } from "../../fixtures/report-session.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -49,18 +50,18 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     let response: object = { runtime_id: "rt_bot", pending_feishu_outbound: {
       id: "fbo_test", claim_token: "lease", chat_id: "oc_topic", body: "", body_origin: "agent", task_id: "tsk_test", mention,
     } };
-    const requests: object[] = [];
+    const requests = captureReports(client, () => response as Record<string, unknown>);
     mockFetch((_input, init) => {
-      if (String(_input).endsWith("/result")) requests.push(JSON.parse(String(init?.body)));
       return jsonResponse(response);
     });
     expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toEqual(mention);
     response = { runtime_id: "rt_bot", pending_feishu_outbound: { id: "fbo_test", mention: { mode: "everyone" } } };
     expect((await client.heartbeatRuntime("rt_bot")).pending_feishu_outbound?.mention).toBeUndefined();
-    response = { status: "ok", mention_open_id: "ou_owner" };
+    response = { ok: true, mention_open_id: "ou_owner" };
     expect(await client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", "ou_owner")).toBe("ou_owner");
-    expect(requests).toEqual([{ claim_token: "lease", status: "prepared", mention_open_id: "ou_owner" }]);
-    response = { status: "ok" };
+    expect(requests).toEqual([{ type: "feishu.outbound_result", partition: "rt:rt_bot", wait: true, timeoutMs: 30_000,
+      payload: { runtime_id: "rt_bot", request_id: "fbo_test", claim_token: "lease", status: "prepared", mention_open_id: "ou_owner" } }]);
+    response = { ok: true };
     await expect(client.prepareFeishuBotOutboundMention("rt_bot", "fbo_test", "lease", null)).rejects.toThrow("checkpoint response");
   });
 

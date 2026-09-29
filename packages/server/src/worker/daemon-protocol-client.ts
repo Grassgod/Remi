@@ -20,6 +20,7 @@ import {
   type DaemonHelloRuntime,
   type DaemonProtocolCap,
   type DaemonWelcomePayload,
+  type DaemonGcErrorReply,
 } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiDaemonHeartbeatAck } from "@multiremi/contracts/types.js";
 import { daemonAuthorizationCloseCode } from "../api/daemon-protocol/session.js";
@@ -51,6 +52,7 @@ export interface DaemonProtocolLane {
   onTerminal(code: number): Promise<void>;
   onStateChange?(): void;
   onConnected?(): void;
+  readyToConnect?(): boolean;
 }
 
 export interface DaemonProtocolClientOptions {
@@ -73,9 +75,14 @@ export interface DaemonProtocolClientOptions {
 }
 
 export class DaemonProtocolRpcError extends Error {
-  constructor(readonly code: string, readonly retryable: boolean, readonly detail?: string,
+  readonly detail?: string;
+  readonly operationError?: DaemonGcErrorReply["operation_error"];
+  constructor(readonly code: string, readonly retryable: boolean,
+    detailOrOperationError?: string | DaemonGcErrorReply["operation_error"],
     readonly httpStatus?: number, readonly httpCode?: string | null) {
     super(`daemon RPC failed: ${code}`);
+    this.detail = typeof detailOrOperationError === "string" ? detailOrOperationError : undefined;
+    this.operationError = typeof detailOrOperationError === "object" ? detailOrOperationError : undefined;
   }
 }
 
@@ -122,6 +129,8 @@ export class DaemonProtocolClient {
   private readonly laneWork = new Map<DaemonProtocolLane, Promise<void>>();
   private readonly pending = new Map<string, PendingRpc>();
   private readonly frameHandlers = new Map<string, Set<(frame: DaemonParsedFrame) => void | Promise<void>>>();
+  private readonly frameListeners = new Set<(frame: DaemonParsedFrame) => void | Promise<void>>();
+  private readonly welcomeListeners = new Set<(welcome: DaemonWelcomePayload) => void>();
   private readonly timers = new Set<DaemonProtocolTimer>();
   private socket: DaemonProtocolSocketLike | null = null;
   private listeners: Array<[string, (event: any) => void]> = [];
@@ -152,8 +161,19 @@ export class DaemonProtocolClient {
     handlers.add(handler);
   }
 
+  onFrame(listener: (frame: DaemonParsedFrame) => void | Promise<void>): () => void {
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
+  }
+
+  onWelcome(listener: (welcome: DaemonWelcomePayload) => void): () => void {
+    this.welcomeListeners.add(listener);
+    return () => this.welcomeListeners.delete(listener);
+  }
+
   startLane(lane: DaemonProtocolLane): void {
     this.activeLanes.add(lane);
+    if (this.state === "disconnected" && this.attempts === 0 && !this.socket) { this.connect(); return; }
     if (this.state !== "stopped") return;
     this.attempts = 0;
     this.transition("disconnected");
@@ -208,19 +228,28 @@ export class DaemonProtocolClient {
 
   /** Callers own retries; retryable errors preserve the peer's explicit flag. */
   rpc(type: string, payload: unknown, runtimeId?: string, timeoutMs = 10_000): Promise<Record<string, unknown>> {
-    if (this.state !== "connected") return Promise.reject(new DaemonProtocolRpcError("daemon_unreachable", true));
     const id = randomUUID();
+    return this.exchange({ t: type, id, ...(runtimeId ? { rt: runtimeId } : {}), p: payload }, id, timeoutMs);
+  }
+
+  /** Reliable uplink acknowledgements address the durable outbox id. */
+  event(frame: DaemonOutboundFrame & { seq: number }): Promise<Record<string, unknown>> {
+    return this.exchange(frame, String(frame.seq), DAEMON_ACK_TIMEOUT_MS);
+  }
+
+  private exchange(frame: DaemonOutboundFrame, key: string, timeoutMs: number): Promise<Record<string, unknown>> {
+    if (this.state !== "connected") return Promise.reject(new DaemonProtocolRpcError("daemon_unreachable", true));
     return new Promise((resolve, reject) => {
       const timer = this.schedule(() => {
-        this.pending.delete(id);
+        this.pending.delete(key);
         reject(new DaemonProtocolRpcError("daemon_timeout", true));
       }, timeoutMs);
-      this.pending.set(id, { timer, resolve, reject });
+      this.pending.set(key, { timer, resolve, reject });
       try {
-        this.send({ t: type, id, ...(runtimeId ? { rt: runtimeId } : {}), p: payload });
+        this.send(frame);
       } catch (error) {
         this.cancel(timer);
-        this.pending.delete(id);
+        this.pending.delete(key);
         reject(error);
       }
     });
@@ -251,6 +280,7 @@ export class DaemonProtocolClient {
 
   private connect(): void {
     if (!this.activeLanes.size || this.state === "upgrade_wait" || this.state === "terminal" || this.state === "stopped") return;
+    if ([...this.lanes].some(lane => lane.readyToConnect?.() === false)) return;
     const runtimes: DaemonHelloRuntime[] = [];
     this.advertised = [];
     for (const lane of this.lanes) {
@@ -337,6 +367,7 @@ export class DaemonProtocolClient {
       this.transition("connected");
       this.options.onWelcome?.(frame.payload as unknown as DaemonWelcomePayload);
       for (const { lane } of this.advertised) lane.onConnected?.();
+      for (const listener of this.welcomeListeners) listener(frame.payload as unknown as DaemonWelcomePayload);
       this.ackTick();
       this.heartbeatTick();
       return;
@@ -352,10 +383,17 @@ export class DaemonProtocolClient {
       if (pending) {
         this.pending.delete(frame.re);
         this.cancel(pending.timer);
-        if (frame.payload.ok === false) pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true,
-          typeof frame.payload.message === "string" ? frame.payload.message : undefined,
-          typeof frame.payload.http_status === "number" ? frame.payload.http_status : undefined,
-          typeof frame.payload.http_code === "string" ? frame.payload.http_code : null));
+        if (frame.payload.ok === false) {
+          const operation = frame.payload.operation_error as Record<string, unknown> | null | undefined;
+          const operationError = operation && typeof operation === "object" && typeof operation.status === "number"
+            && Number.isInteger(operation.status) && operation.status >= 400 && operation.status <= 599
+            && (operation.code === null || typeof operation.code === "string") && typeof operation.message === "string"
+            ? operation as DaemonGcErrorReply["operation_error"] : undefined;
+          pending.reject(new DaemonProtocolRpcError(String(frame.payload.code), frame.payload.retryable === true,
+            operationError ?? (typeof frame.payload.message === "string" ? frame.payload.message : undefined),
+            typeof frame.payload.http_status === "number" ? frame.payload.http_status : undefined,
+            typeof frame.payload.http_code === "string" ? frame.payload.http_code : null));
+        }
         else pending.resolve(frame.payload);
         return;
       }
@@ -364,6 +402,7 @@ export class DaemonProtocolClient {
     for (const handler of this.frameHandlers.get(frame.type) ?? []) {
       this.track(Promise.resolve().then(() => handler(frame)).catch(error => this.report(error)));
     }
+    for (const listener of this.frameListeners) this.track(Promise.resolve().then(() => listener(frame)).catch(error => this.report(error)));
   }
 
   private heartbeatTick(): void {

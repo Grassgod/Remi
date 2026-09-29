@@ -111,6 +111,8 @@ JSON 文本帧，不用二进制：
 是同一个理由——它们都能从本地状态重算，丢一帧没有代价。
 
 `best_effort` 与 `rpc` 都不参与滑动窗口，也不带 `seq`。
+trace 组不是窗口可靠帧：上行 `trace.append` 用 RPC 的 `id`/`re` 关联，可靠性来自 task trace
+head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` 仍是带 `seq` 的 event。
 
 ### 1.4 可靠事件清单
 
@@ -121,7 +123,7 @@ JSON 文本帧，不用二进制：
 `runtime.model_list_result`、`runtime.local_skills_result`、`runtime.directory_scan_result`、
 `runtime.local_skill_import_result`、`runtime.bot_menu_result`、`feishu.outbound_result`、`plugin.state`、
 `runtime.archive_sessions_result`（`rt:` 分区）。
-另有 `trace.append`，可靠但**不进 outbox**，见 §5。
+`trace.append` 不属于可靠事件清单：它是按 trace head 续传的 RPC，**不进 outbox**，见 §5。
 
 **server → daemon**（由 DB 状态重推导，无服务端队列，见 §2.3）：
 
@@ -129,12 +131,12 @@ JSON 文本帧，不用二进制：
 `runtime.command`、`runtime.model_list`、`runtime.local_skills`、`runtime.directory_scan`、
 `runtime.local_skill_import`、`runtime.bot_menu`、`runtime.profile`、`feishu.outbound`、
 `feishu.directive`、`ssh_mesh.reconcile`、`platform.drain`、`plugin.desired_revision`、`workspace.settings`、
-`runtime.archive_sessions`。
+`runtime.archive_sessions`、`trace.push`（订阅内保序，可暂停）。
 
 ### 1.5 RPC 清单
 
 **daemon → server**：`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
-`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
+`trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
 **server → daemon**：`trace.read`。
@@ -151,10 +153,13 @@ RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
 日志口径就不成立，因此一并改成 RPC；不做批量合并。
+仅 `gc.*` 的失败应答（`DaemonGcErrorReply`）可附 `operation_error: {status, code, message}`，
+保留原 HTTP 业务错误的状态码、`code`（没有时为 null）和 `error` 文案；daemon 包装器还原同一个
+`MultiremiDaemonHttpError`，维护调用点的判断不变。此字段不属于通用 `DaemonProtocolErrorReply`。
 
 ### 1.6 错误码与 close code
 
-错误码共 18 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 4 个、
+错误码共 19 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 5 个、
 offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_error`）。
 
 `DAEMON_RETRYABLE_ERROR_CODES` 有 `daemon_busy`、`daemon_timeout` 与 `server_error`；其余都是
@@ -163,8 +168,9 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 `server_error` 是服务端自己处理某一帧时抛异常时给出的答复（可重试）：它表示「这一次是我的问题，
 你按退避重发就好」，而不是「你的帧不对」。这类异常同时会往 stdout 写一条 warn，只带帧类型、方向、
 会话 id 与异常的类名，不带异常内容和 payload。`DAEMON_TERMINAL_ERROR_CODES`（`authority_revoked`、`task_not_found`、
-`invalid_report`）会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
+`invalid_report`）表示确定性失败；其中 `authority_revoked`、`invalid_report` 会让该分区停摆，语义等同于今天 HTTP 侧的终态鉴权错误
 （`isTerminalDaemonAuthorityError` 的 401/403/410）。
+`task_not_found` 清掉整个 outbox 分区并记 warn（§2.1）；这条规则不适用于不进入 outbox 的 RPC。
 
 报送类错误码取代 HTTP 状态码：
 
@@ -174,6 +180,7 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 | 401 / 403 / 410 | `authority_revoked` |
 | 其他确定性 4xx | `invalid_report` |
 | `start` 的 400「已离开 dispatched」（原本就是成功） | `start_replayed` |
+| 409 `steer_pending` | `steer_pending` |
 
 close code。协议**只显式列出四个终态码**，其余一律默认重连：
 
@@ -255,9 +262,23 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 泵按 id 顺序单泵发送，滑动窗口取 64 帧或 1 MiB 先到者；服务端逐帧回 `res{re: seq}`，`ok` 即删行。
 `ok:false` 且 `retryable:false` → 该分区（task 或 runtime）进入 blocked，与今天
 `isPermanentDeliveryError` 的语义一致。
+例外是 `task_not_found`：daemon 清掉整个分区并记 warn，任务已被删除，重放没有意义；
+`steer_pending` 也不进入 blocked，daemon 删除这一行，将结果交回正在等待的执行端。
+没有执行端等待时（重启重放或等待超时），改报 `task.fail`，原因 `runtime_recovery`，
+说明完成时有未注入的 steer，执行端已不在，并记 warn。
+尾帧例外：`task.progress(final:true)`（展示摘要）和 runAgent `finally` 的 `task.workspace`
+允许排在 complete 之后；complete 是最后一条改变任务状态的帧，其余帧类型仍须在它之前。
+服务端接收这两种终态尾帧，不改变任务状态，相同内容的重放只生效一次。
 
 `outbox_events.task_id` 语义扩展为分区键：runtime 级记录写 `rt:<runtime_id>`。每分区内保序，
 分区间可并行。断线期间照常入库，重连后从最小未删 id 续发。
+
+**容量上限（默认 256 MiB）是软上限。** 超限时只允许删除同分区、同类型已有更新待发行覆盖的
+`task.progress`、`task.session_pin`、`task.workspace` 旧行；`progress(final:true)` 不删除。
+其余可靠行一律保留，包括 start、prompt、usage（合并计量）、messages、complete、fail、
+所有 runtime 结果、feishu.outbound_result 和 plugin.state。压缩后仍超限只记 warn，stats 的
+`overCapBytes` 暴露 SQLite 已分配文件大小超过上限的字节数（空闲页可能仍被保留），
+不阻塞调用方，也不向调用方报错。
 
 **下行可靠帧：`seq` 每连接从 1 起，只在内存。不建服务端持久队列——DB 就是队列。**
 
@@ -284,7 +305,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 |---|---|---|---|
 | daemon 重启 | outbox 行仍在，启动后按 id 续发；服务端幂等吸收重复 | 重连后快照重推，实体 id 去重 | 从 `welcome.trace_heads` 续传；文件是唯一来源 |
 | 服务端重启 | daemon 收到 close，走 1 s→30 s 抖动退避；窗口内未 `res` 的帧不删行，重连后重发 | 服务端无状态可丢，从 DB 重推导 | head 归零，daemon 回放尾部，Hub 记 `first_seq` |
-| 任务进行中断线 | 同上；`task.complete` 永远在其 task 分区最后，不可能先于 progress 到达 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
+| 任务进行中断线 | 同上；`task.complete` 是其 task 分区最后一条改变状态的帧；只允许 §2.1 两种展示/工作区尾帧排在其后 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
 
 判定口径：每一帧在服务端**至少到达一次、至多生效一次**，用 `(分区键, seq)` 对账。重复到达允许，
 必须被幂等吸收。
@@ -302,11 +323,12 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | 帧 | 幂等键 | 重复到达时 |
 |---|---|---|
 | `task.start` | task id | 已离开 dispatched 视为成功（`start_replayed`） |
-| `task.progress` | task id | 覆盖写 |
-| `task.session_pin` / `task.workspace` | task id | 覆盖写 |
+| `task.progress` | task id | 覆盖写；终态的 `final:true` 尾帧相同内容即 ok，不重复写 |
+| `task.session_pin` / `task.workspace` | task id | 覆盖写；终态的 workspace 尾帧相同内容即 ok，不重复写 |
 | `task.usage` | task id + provider + model | 合并 |
 | `task.complete` / `task.fail` | task id | 已终态即 ok |
 | `runtime.*_result` | request id | 状态机 pending→running→completed/failed 只能前进 |
+| `feishu.outbound_result` | delivery id + claim_token | 租约已不是当前的即 ok（不写库，记 warn），应答带 `lease_lost:true`，在等结果的发送方据此停止；相同终态和没有推进的 streaming 检查点也吸收，不带 `lease_lost`。`prepared` 成功应答带 `mention_open_id`（open_id 或 null） |
 | `plugin.state` | request id | 同上 |
 | `runtime.archive_sessions` | request id | 状态机 pending→sent→acked→completed/failed 只能前进 |
 | `runtime.archive_sessions_result` | request id | 已终态即 ok；重复结果被幂等吸收 |
@@ -556,6 +578,9 @@ B 的 `unreachable` 对应其余三种错误。
 
 `TaskMessageBatcher` 的出口从 outbox 改为 `TraceStore.append`，随后 `TraceStreamer` 按 head 读游标
 发 `trace.append`。daemon 上只有一份数据：trace 文件既是被上传的内容，也是重放缓冲。
+`trace.append` 的外层信封用 `id`/`re`，不带 `seq`，应答仍捎带 `hub_head`；带 `seq`、
+不带 `id` 的误用按 RPC 拒绝为 `protocol_violation`，不追加事件。丢失应答后按服务端 head
+重发，服务端按 task 内事件 seq 幂等，不使用 outbox 或滑动窗口。
 
 **trace 不进 outbox。**B 已经要写规范化 trace 文件，再进 outbox 就是双写，而且这个量级
 （线上 4.9M 行）会把 SQLite outbox 变成瓶颈。
@@ -582,7 +607,7 @@ model: { provider: string; model: string } | null;                // 最后一�
 - `type_histogram` 按 `(type, tool)` 分桶，`tool` 只在 `tool_use` / `tool_result` 上非空（A11）；
   organizer 今天就是这么算的（`api/helpers/organizer.ts:52-58`），只按 type 会让它丢掉工具维度。
 - `final_reply_md` 由 `deriveFinalReply(events)` 产出，规则见 §5.4c。服务端收到即写轮次卡；
-  daemon 缺字段（同版上线，不应发生）时卡片留空并打日志，不去读 trace 补算。
+  字段缺失或畸形时，终态照常生效，卡片留空并打日志；卡片字段永不阻塞终态。不去读 trace 补算。
 - `output` 字段保持原样：它是全部顶层 text 的拼接（`worker/daemon.ts:4416`），不随本改动变化。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**回填的历史 trace 是稀疏的**，
   `head ≠ event_count`（A11）。

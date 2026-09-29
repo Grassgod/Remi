@@ -1,3 +1,4 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 // Bearer auth, daemon-token route scoping, and the cookie fallback for safe methods.
 import { afterEach, describe, expect, it } from "bun:test";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
@@ -779,45 +780,22 @@ describe("Multiremi API — authentication and token scoping", () => {
       method: "POST",
     })).status).toBe(200);
 
-    const crossDaemonWorkspaceReport = await app.request(
-      `/api/daemon/tasks/${otherDaemonIssueTask.id}/workspace`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${daemonBody.token.token}`,
-        },
-        body: JSON.stringify({
-          runtime_id: otherDaemonRuntime.id,
+    const crossDaemonWorkspaceReport = await reportFrame(store, "task.workspace", { task_id: otherDaemonIssueTask.id, runtime_id: otherDaemonRuntime.id,
           root_path: "/tmp/other-daemon",
           branch_name: "feat/other-daemon",
-          status: "ready",
-        }),
-      },
-    );
-    expect(crossDaemonWorkspaceReport.status).toBe(403);
-    expect(await crossDaemonWorkspaceReport.json()).toEqual({
-      error: "forbidden for daemon identity",
-      code: "daemon_identity_forbidden",
-    });
-    expect(store.getIssueWorkspace(otherDaemonIssue.id)).toBeNull();
-
-    const crossDaemonWorkspaceCleanup = await app.request(
-      `/api/daemon/issues/${otherDaemonIssue.id}/workspace/cleaned`,
-      {
-        method: "POST",
-        headers: {
+          status: "ready", }, { headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${daemonBody.token.token}`,
-        },
-        body: JSON.stringify({ runtime_id: otherDaemonRuntime.id }),
-      },
-    );
-    expect(crossDaemonWorkspaceCleanup.status).toBe(403);
-    expect(await crossDaemonWorkspaceCleanup.json()).toEqual({
-      error: "forbidden for daemon identity",
-      code: "daemon_identity_forbidden",
-    });
+         }, authToken: "root-secret" });
+    expect(crossDaemonWorkspaceReport).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
+    expect(crossDaemonWorkspaceReport).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(store.getIssueWorkspace(otherDaemonIssue.id)).toBeNull();
+
+    const crossDaemonWorkspaceCleanup = await reportFrame(store, "gc.workspace_cleaned", {
+      issue_id: otherDaemonIssue.id, runtime_id: otherDaemonRuntime.id,
+    }, { headers: { Authorization: `Bearer ${daemonBody.token.token}` }, authToken: "root-secret" });
+    expect(crossDaemonWorkspaceCleanup).toEqual({ ok: false, code: "authority_revoked", message: "authority_revoked", retryable: false,
+      operation_error: { status: 403, code: null, message: "authority_revoked" } });
     const masterCanInspectOtherDaemon = await taskOfferResponse(store, otherDaemonRuntime.id,
       { headers: { Authorization: "Bearer root-secret" }, authToken: "root-secret" });
     expect(masterCanInspectOtherDaemon.status).toBe(200);
@@ -847,15 +825,9 @@ describe("Multiremi API — authentication and token scoping", () => {
         error: "daemon token required",
         code: "daemon_token_required",
       });
-      const humanTaskWrite = await app.request(`/api/daemon/tasks/${remoteTask.id}/start`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      expect(humanTaskWrite.status, `${label} task write`).toBe(403);
-      expect(await humanTaskWrite.json()).toEqual({
-        error: "daemon token required",
-        code: "daemon_token_required",
-      });
+      const humanTaskWrite = await reportFrame(store, "task.start", { task_id: remoteTask.id,  }, { headers: { Authorization: `Bearer ${token}` }, authToken: "root-secret" });
+      expect(humanTaskWrite).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
+      expect(humanTaskWrite).toEqual({ ok: false, code: "authority_revoked", retryable: false });
     }
 
     const remoteDaemonRegister = await app.request("/api/daemon/register", {
@@ -890,12 +862,9 @@ describe("Multiremi API — authentication and token scoping", () => {
     expect(remoteRecover.status).toBe(403);
     expect(await remoteRecover.json()).toEqual({ error: "forbidden for daemon token workspace" });
 
-    const remoteTaskStart = await app.request(`/api/daemon/tasks/${remoteTask.id}/start`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${daemonBody.token.token}` },
-    });
-    expect(remoteTaskStart.status).toBe(403);
-    expect(await remoteTaskStart.json()).toEqual({ error: "forbidden for daemon token workspace" });
+    const remoteTaskStart = await reportFrame(store, "task.start", { task_id: remoteTask.id,  }, { headers: { Authorization: `Bearer ${daemonBody.token.token}` }, authToken: "root-secret" });
+    expect(remoteTaskStart).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
+    expect(remoteTaskStart).toEqual({ ok: false, code: "authority_revoked", retryable: false });
 
     const remoteTaskReportRoutes: Array<{ method: string; path: string; body?: unknown }> = [
       { method: "POST", path: `/api/daemon/tasks/${remoteTask.id}/wait-local-directory`, body: { reason: "/tmp/remote" } },

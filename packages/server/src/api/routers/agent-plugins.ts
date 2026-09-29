@@ -10,31 +10,14 @@ import {
   publishWorkspaceEvent,
   readJsonStrict,
 } from "../helpers.js";
-import {
-  currentRequestUserId,
-  currentAccessToken,
-  cleanString,
-  currentWorkspaceRoleStrict,
-  daemonAgentPluginDesiredResponse,
-  daemonAgentPluginStateResponse,
-} from "../wire/index.js";
+import { currentRequestUserId, currentAccessToken, cleanString, currentWorkspaceRoleStrict, daemonAgentPluginDesiredResponse } from "../wire/index.js";
 import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { AgentPluginValidationError } from "@multiremi/agent-plugins/import.js";
 import {
   AgentPluginGitImportError,
   type ResolvedAgentPluginGitSource,
 } from "@multiremi/agent-plugins/git-import.js";
-import type {
-  CreateAgentPluginBindingInput,
-  CreateAgentPluginVersionInput,
-  ImportAgentPluginInput,
-  ImportAgentPluginFromGitInput,
-  ImportAgentPluginRequest,
-  InspectAgentPluginRepositoryInput,
-  ReportAgentPluginRuntimeStateInput,
-  UpdateAgentPluginBindingInput,
-  UpdateAgentPluginInput,
-} from "@multiremi/contracts/types.js";
+import type { CreateAgentPluginBindingInput, CreateAgentPluginVersionInput, ImportAgentPluginInput, ImportAgentPluginFromGitInput, ImportAgentPluginRequest, InspectAgentPluginRepositoryInput, UpdateAgentPluginBindingInput, UpdateAgentPluginInput } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
 
 export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
@@ -333,28 +316,6 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
         binding_id: c.req.param("bindingId"),
       });
       return c.json({ deleted: true, capabilityRevision });
-    } catch (error) {
-      return pluginErrorResponse(c, error);
-    }
-  });
-
-  app.post("/api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state", async (c) => {
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"), authToken);
-    if (denied) return denied;
-    const body = await readJsonStrict<ReportAgentPluginRuntimeStateInput>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    try {
-      const { state, changed } = store.reportAgentPluginRuntimeStateResult(
-        c.req.param("runtimeId"),
-        c.req.param("versionId"),
-        body,
-      );
-      if (changed) {
-        publishWorkspaceEvent(c, store, "agent_plugin:runtime_state", state.workspaceId, {
-          state: daemonAgentPluginStateResponse(state),
-        });
-      }
-      return c.json({ state: daemonAgentPluginStateResponse(state) });
     } catch (error) {
       return pluginErrorResponse(c, error);
     }

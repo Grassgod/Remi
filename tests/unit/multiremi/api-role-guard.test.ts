@@ -13,7 +13,7 @@
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 759 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -355,11 +355,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // MUL-419 removes daemon-internal polling routes, including the human-request
-    // GET moved to an authorized v2 RPC. MUL-412's two on-demand daemon decision
-    // routes remain HTTP; the WebSocket upgrade is checked separately.
-    expect(misdirected, routeCountHint("ui")).toHaveLength(62);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(63);
+    // Every daemon route is checked above; the upgrade-only route is checked below.
+    expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
+    expect(misdirected, routeCountHint("ui")).toHaveLength(44);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(45);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {

@@ -1,5 +1,7 @@
 import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
 import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
+import { reportFrame } from "../../fixtures/report-session.js";
+import { daemonTaskWireResponse } from "@multiremi/api/wire/index.js";
 // The compatibility surface the upstream (Go) clients still call: register/deregister,
 // local user + workspace, invitations, config/cli token, health, cloud runtime,
 // billing/lark/chat batches, and the linked-resource console workflows.
@@ -1148,21 +1150,19 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const waitingBody = await waiting.json();
     expect(waitingBody.status).toBe("waiting_local_directory");
     expect(waitingBody.wait_reason).toBe("/tmp/compat");
-    const started = await app.request(`/api/daemon/tasks/${task.id}/start`, { method: "POST" });
-    const startedBody = await started.json();
+    const started = await reportFrame(store, "task.start", { task_id: task.id,  }, { headers: undefined, authToken: "" });
+    expect(started.ok).toBe(true);
+    const startedTask = store.getTask(task.id)!;
+    const startedBody = daemonTaskWireResponse(startedTask, store.getTaskTriggerMetadata(startedTask));
     expect(startedBody.status).toBe("running");
     expect(startedBody.wait_reason ?? null).toBeNull();
     expect(startedBody.waitReason).toBeUndefined();
-    await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: [{ type: "assistant", content: "compat done" }] }),
-    });
+    store.appendTaskMessages(task.id, [{ type: "assistant", content: "compat done" }]);
     const taskPrefix = task.id.slice(0, 8);
     expect((await (await app.request(`/api/tasks/${taskPrefix}/messages`)).json())[0].content).toBe("compat done");
 
-    const gc = await app.request(`/api/daemon/issues/${issue.key}/gc-check`);
-    expect((await gc.json()).updated_at).toBeString();
+    const gc = await reportFrame(store, "gc.check_issue", { issue_id: issue.key }, { runtimeId: runtime.id });
+    expect(gc.updated_at).toBeString();
 
     const scopedTask = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Cancel scoped" });
     const issueScopedCancel = await app.request(`/api/issues/${issue.key}/tasks/${scopedTask.id.slice(0, 8)}/cancel`, { method: "POST" });
@@ -1484,11 +1484,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
 
     const claim = await taskOfferResponse(store, runtime.id);
     expect((await claim.json()).task.id).toBe(task.id);
-    await app.request(`/api/daemon/tasks/${task.id}/usage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }),
-    });
+    await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
     // Dashboard rollups are snake_case on the wire (MUL-92): the frontend zod
     // schemas default unknown fields to 0, so camelCase here renders all-zeros.

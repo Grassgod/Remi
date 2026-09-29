@@ -930,6 +930,47 @@ describe("MUL-417 daemon protocol session — heartbeat and serialization", () =
     expect(h.socket.lastOfType("res")).toMatchObject({ re: "b", p: { ok: true } });
   });
 
+  it("defers trace.fetch replies without changing other handlers' serial dispatch", async () => {
+    const order: string[] = [];
+    let finishFetch!: (value: Record<string, unknown>) => void;
+    let finishRpc!: () => void;
+    let startRpc!: () => void;
+    const fetched = new Promise<Record<string, unknown>>((resolve) => { finishFetch = resolve; });
+    const blocked = new Promise<void>((resolve) => { finishRpc = resolve; });
+    const started = new Promise<void>((resolve) => { startRpc = resolve; });
+    const socket = new FakeDaemonSocket();
+    const session: DaemonProtocolSession = new DaemonProtocolSession({
+      sessionId: "dws_deferred_serial",
+      socket,
+      registry: new DaemonSessionRegistry(),
+      serverVersion: "0.2.83",
+      clock: new ManualDaemonProtocolClock(),
+      authorizeRuntime: async (_daemonId, runtimeId) => ({ runtimeId, ok: true, scope: "daemon" }),
+      onRpc: async (frame) => {
+        order.push(frame.id!);
+        if (frame.type === "trace.fetch") return session.deferReply(frame.id!, fetched);
+        if (frame.id === "first") { startRpc(); await blocked; }
+        order.push(`${frame.id}:done`);
+        return { ok: true };
+      },
+    });
+    await session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1, p: helloPayload() }));
+    await session.handleMessage(JSON.stringify({ v: 2, t: "trace.fetch", id: "fetch", ts: 2, p: {} }));
+    const first = session.handleMessage(JSON.stringify({ v: 2, t: "gc.check_task", id: "first", ts: 3, p: {} }));
+    const second = session.handleMessage(JSON.stringify({ v: 2, t: "trace.head", id: "second", ts: 4, p: {} }));
+    await started;
+    expect(order).toEqual(["fetch", "first"]);
+    expect(socket.sent.filter((frame) => frame.t === "res")).toEqual([]);
+    finishRpc();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["fetch", "first", "first:done", "second", "second:done"]);
+    expect(socket.sent.filter((frame) => frame.t === "res").map((frame) => frame.re)).toEqual(["first", "second"]);
+    finishFetch({ ok: true, head: 3 });
+    await Promise.resolve();
+    expect(socket.lastOfType("res")).toMatchObject({ re: "fetch", p: { ok: true, head: 3 } });
+    session.handleSocketClose();
+  });
+
   it("answers a failed reliable frame using its seq and logs no exception content", async () => {
     const h = harness({
       heartbeat: () => { throw new Error("sensitive payload"); },

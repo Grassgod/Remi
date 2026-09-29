@@ -3,17 +3,14 @@ import { ensureDaemonProtocolUpgrade } from "../helpers/daemon-protocol-upgrade.
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
-import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
+
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import {
-  MAX_TASK_MESSAGES_PER_REQUEST,
   bindDaemonTokenIdentityOrDeny,
   buildDaemonInstallInstructions,
   callerCanReceiveRelay,
   compareDaemonPendingTasks,
   daemonRegisterOwnerContext,
-  daemonTaskMessageInput,
-  daemonTaskUsageEntries,
   denyCurrentUserWorkspaceAccess,
   denyDaemonTokenIssueDecisionAccess,
   denyDaemonTokenRuntimeIdentity,
@@ -26,8 +23,6 @@ import {
   isTerminalTaskStatus,
   issueFromParam,
   normalizeRuntimeIds,
-  parseOptionalTaskMessageSince,
-  readJson,
   readJsonStrict,
   readJsonStrictAllowEmpty,
   registerDaemonRuntimes,
@@ -44,7 +39,6 @@ import {
   daemonBotAgentResponse,
   daemonHeartbeatHttpResponse,
   daemonTaskClaimResponse,
-  daemonTaskMessageWireResponse,
   daemonTaskWireResponse,
   workspaceReposResponse,
 } from "../wire/index.js";
@@ -76,10 +70,11 @@ import type {
   SubmitFeishuBotMessageInput,
 } from "@multiremi/contracts/types.js";
 import { TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
+import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
-import { SessionArchiveError } from "@multiremi/session-archive/service.js";
+
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
 import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
@@ -600,97 +595,6 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     return c.json({ cards });
   });
 
-  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/status", async (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
-    if (denied) return denied;
-    const runtime = store.getRuntime(runtimeId);
-    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-    const body = await readJsonStrict<{
-      applied_revision?: number;
-      state?: string;
-      bot_name?: string | null;
-      bot_open_id?: string | null;
-      error_code?: string | null;
-      error_message?: string | null;
-    }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const state = String(body.state ?? "");
-    if (state !== "stopped" && state !== "starting" && state !== "online" && state !== "failed") {
-      return c.json({ error: "invalid feishu bot runtime state" }, 400);
-    }
-    const appliedRevision = Number(body.applied_revision);
-    const workspaceId = runtime.workspaceId ?? "local";
-    store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, {
-      appliedRevision: Number.isSafeInteger(appliedRevision) && appliedRevision >= 0 ? appliedRevision : 0,
-      state,
-      botName: cleanString(body.bot_name) ?? null,
-      botOpenId: cleanString(body.bot_open_id) ?? null,
-      errorCode: normalizeFeishuBotErrorCode(body.error_code),
-      // The daemon already redacts, but a second pass costs nothing and this
-      // string is rendered to admins verbatim.
-      errorMessage: body.error_message ? redactFeishuBotError(body.error_message) : null,
-    });
-    c.header("Cache-Control", "no-store");
-    // Echo the current directive so a daemon that just confirmed `stopped` can
-    // act on the handover in the same round trip.
-    return c.json({
-      status: "ok",
-      directive: store.feishuBotDirectiveForRuntime(workspaceId, runtimeId),
-    });
-  });
-  app.post("/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result", async (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
-    if (denied) return denied;
-    const runtime = store.getRuntime(runtimeId);
-    if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
-    const body = await readJsonStrict<{
-      claim_token?: unknown;
-      status?: unknown;
-      external_message_id?: unknown;
-      error?: unknown;
-      mention_open_id?: unknown;
-      presentation?: unknown;
-      retryable?: unknown;
-      interaction_open_id?: unknown;
-      degraded?: unknown;
-    }>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const claimToken = cleanString(typeof body.claim_token === "string" ? body.claim_token : null);
-    if (body.status === "prepared") {
-      if (!claimToken || (body.mention_open_id !== null && !isFeishuOpenId(body.mention_open_id))) {
-        return c.json({ error: "claim_token and mention_open_id (open_id or null) are required" }, 400);
-      }
-      const prepared = store.prepareFeishuBotOutboundMention(
-        runtime.workspaceId ?? "local", runtimeId, c.req.param("deliveryId"), claimToken, body.mention_open_id,
-      );
-      if (!prepared) return c.json({ error: "outbound mention lease or policy is stale", code: "stale_lease" }, 409);
-      return c.json({ status: "ok", mention_open_id: prepared.openId });
-    }
-    const status = body.status === "sent" || body.status === "failed" || body.status === "streaming" ? body.status : null;
-    if (!claimToken || !status) return c.json({ error: "claim_token and a valid status are required" }, 400);
-    const presentation = body.presentation === undefined ? undefined : parseFeishuPresentation(body.presentation);
-    if (presentation === null) return c.json({ error: "invalid presentation checkpoint" }, 400);
-    const accepted = store.reportFeishuBotOutbound(
-      runtime.workspaceId ?? "local",
-      runtimeId,
-      c.req.param("deliveryId"),
-      {
-        claimToken,
-        status,
-        externalMessageId: cleanString(typeof body.external_message_id === "string" ? body.external_message_id : null),
-        error: body.error ? redactFeishuBotError(String(body.error)) : null,
-        presentation,
-        retryable: typeof body.retryable === "boolean" ? body.retryable : undefined,
-        interactionOpenId: body.interaction_open_id === null ? null
-          : cleanString(typeof body.interaction_open_id === "string" ? body.interaction_open_id : null),
-        degraded: normalizeDecisionDegradeReason(body.degraded),
-      },
-    );
-    if (!accepted) return c.json({ error: "outbound delivery lease is stale", code: "stale_lease" }, 409);
-    return c.json({ status: "ok" });
-  });
   app.get(
     "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     async (c) => {
@@ -899,27 +803,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         : null,
     });
   });
-  app.post("/api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result", async (c) => {
-    const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
-    if (denied) return denied;
-    const requestId = c.req.param("requestId");
-    const request = store.getBotMenuPublishRequest(runtimeId, requestId);
-    if (!request) return c.json({ error: "request not found" }, 404);
-    // `timeout` is deliberately absent: a report that arrives after the
-    // deadline carries the concierge's real outcome, and dropping it here left
-    // operators staring at a generic timeout with the Feishu error discarded.
-    if (request.status === "completed" || request.status === "failed") {
-      return c.json({ status: "ok" });
-    }
-    const body = await readJsonStrict<ReportBotMenuPublishInput>(c);
-    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    if (body.status !== "completed" && body.status !== "failed") {
-      return c.json({ error: "invalid bot menu publish status" }, 400);
-    }
-    store.reportBotMenuPublishResult(runtimeId, requestId, body);
-    return c.json({ status: "ok" });
-  });
+
   app.get("/api/daemon/ssh-mesh/config", (c) => {
     const runtimeId = String(c.req.query("runtime_id") ?? "").trim();
     if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
@@ -963,6 +847,13 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     c.header("Cache-Control", "no-store");
     return c.json({ allowed });
   });
+  // Temporary HTTP orphan recovery remains until the v2 startup path is retired.
+  app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    if (!store.getRuntime(runtimeId)) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.recoverOrphans(runtimeId));
+  });
+
   app.post("/api/daemon/tasks/:taskId/start", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
@@ -1009,210 +900,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!responded) return c.json({ error: "request is no longer pending" }, 409);
     return c.json({ request: responded });
   });
-  app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
-    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number; final?: boolean }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    // A `final` summary describes the run's terminal outcome and is produced
-    // after the status flip, so it may land on an already-terminal task.
-    const final = body.final === true;
-    if (!isTerminalTaskStatus(existing.status) || final) {
-      store.reportProgress(taskId, body.summary ?? "", body.step, body.total, { allowTerminal: final });
-    }
-    return c.json({ status: "ok" });
-  });
-  app.post("/api/daemon/tasks/:taskId/messages", async (c) => {
-    const body = await readJsonStrict<{ messages?: any[] }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-    if (!rawMessages.length) return c.json({ status: "ok" });
-    if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
-      return c.json({ error: "too many messages" }, 413);
-    }
-    // MUL-474: identity only — this route writes messages and never reads the
-    // prompt, result or usage columns.
-    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
-    // Whitelist each message to the known TaskMessageInput fields (accepting
-    // both camel and snake casing) so a compromised/buggy daemon can't smuggle
-    // arbitrary JSON into the row; the store layer additionally byte-caps every
-    // field.
-    store.appendTaskMessages(taskId, rawMessages.map(daemonTaskMessageInput));
-    return c.json({ status: "ok" });
-  });
-  app.post("/api/daemon/tasks/:taskId/prompt", async (c) => {
-    const body = await readJsonStrict<{ mode?: string; prompt?: string; sha256?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
-    try {
-      const artifact = store.recordTaskPrompt(taskId, {
-        mode: body.mode as "bootstrap" | "delta",
-        prompt: body.prompt ?? "",
-        sha256: body.sha256 ?? "",
-      });
-      return c.json({
-        task_id: artifact.taskId,
-        mode: artifact.mode,
-        sha256: artifact.sha256,
-        assembled_at: artifact.assembledAt,
-      });
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-    }
-  });
-  app.get("/api/daemon/tasks/:taskId/messages", (c) => {
-    const taskId = c.req.param("taskId");
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    // MUL-474: the wire payload reads `issue_id` only.
-    const task = store.getTaskIdentity(taskId);
-    if (!task) return c.json({ error: "task not found" }, 404);
-    const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
-    if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
-    return c.json(store.listTaskMessages(taskId, since).map((message) => daemonTaskMessageWireResponse(message, task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/session", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ session_id?: string; work_dir?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
-    const sessionId = body.session_id ?? null;
-    const workDir = body.work_dir ?? null;
-    if (!sessionId && !workDir) return c.json({ error: "session_id or work_dir required" }, 400);
-    store.pinTaskSession(
-      taskId,
-      sessionId,
-      workDir,
-    );
-    return c.body(null, 204);
-  });
-  app.post("/api/daemon/tasks/:taskId/workspace", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{
-      runtime_id?: string;
-      root_path?: string;
-      branch_name?: string;
-      status?: MultiremiIssueWorkspaceStatus;
-      repos?: Array<{
-        repo_url?: string;
-        repo_name?: string;
-        worktree_path?: string;
-        branch_name?: string;
-        base_ref?: string;
-        base_commit?: string | null;
-        status?: "ready" | "dirty" | "error";
-        dirty?: boolean;
-        error?: string | null;
-      }>;
-    }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const taskIdentityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (taskIdentityDenied) return taskIdentityDenied;
-    const task = store.getTask(taskId);
-    if (!task || !task.issueId) return c.json({ error: "issue task not found" }, 404);
-    const runtimeId = body.runtime_id?.trim() ?? "";
-    if (!runtimeId || runtimeId !== task.runtimeId) return c.json({ error: "runtime_id does not own task" }, 403);
-    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
-    if (denied) return denied;
-    if (!body.root_path?.trim() || typeof body.branch_name !== "string" || !body.status) {
-      return c.json({ error: "root_path, branch_name and status are required" }, 400);
-    }
-    const repos: MultiremiIssueWorkspaceRepo[] = (body.repos ?? []).map((repo) => ({
-      repoUrl: repo.repo_url?.trim() ?? "",
-      repoName: repo.repo_name?.trim() ?? "",
-      worktreePath: repo.worktree_path?.trim() ?? "",
-      branchName: repo.branch_name?.trim() ?? body.branch_name!,
-      baseRef: repo.base_ref?.trim() ?? "",
-      baseCommit: repo.base_commit?.trim() || null,
-      status: repo.status ?? (repo.dirty ? "dirty" : "ready"),
-      dirty: repo.dirty ?? false,
-      error: repo.error?.trim() || null,
-    }));
-    try {
-      const workspace = store.reportIssueWorkspace({
-        issueId: task.issueId,
-        runtimeId,
-        rootPath: body.root_path.trim(),
-        branchName: body.branch_name.trim(),
-        status: body.status,
-        repos,
-        lastTaskId: taskId,
-      });
-      return c.json({ issue_id: workspace.issueId, status: workspace.status });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ error: message }, message.includes("does not own active") ? 409 : 400);
-    }
-  });
-  app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ output?: string; pr_url?: string; session_id?: string; work_dir?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    if (existing.status !== "running") {
-      return c.json(daemonTaskWireResponse(existing, store.getTaskTriggerMetadata(existing)));
-    }
-    let task: MultiremiTask;
-    try {
-      task = store.completeTask(taskId, {
-        output: body.output ?? "",
-        branchName: body.pr_url ?? null,
-        sessionId: body.session_id ?? null,
-        workDir: body.work_dir ?? null,
-      });
-    } catch (err) {
-      // Unconsumed steer messages won the race against completion: tell the
-      // daemon to fetch and inject them instead of ending the run.
-      if (err instanceof TaskSteerPendingError) {
-        return c.json({ error: err.message, code: "steer_pending" }, 409);
-      }
-      throw err;
-    }
-    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ error?: string; session_id?: string; work_dir?: string; failure_reason?: string }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    const existing = store.getTask(taskId);
-    if (!existing) return c.json({ error: "task not found" }, 404);
-    if (existing.status !== "dispatched" && existing.status !== "running" && existing.status !== "waiting_local_directory") {
-      return c.json(daemonTaskWireResponse(existing, store.getTaskTriggerMetadata(existing)));
-    }
-    const task = store.failTask(taskId, {
-      error: body.error ?? "Task failed",
-      sessionId: body.session_id ?? null,
-      workDir: body.work_dir ?? null,
-      failureReason: body.failure_reason ?? null,
-    });
-    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
-  });
-  app.post("/api/daemon/tasks/:taskId/usage", async (c) => {
-    const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ usage?: any[] }>(c);
-    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
-    if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
-    store.reportTaskUsage(taskId, daemonTaskUsageEntries(body.usage));
-    return c.json({ status: "ok" });
-  });
+
   app.get("/api/daemon/tasks/:taskId/status", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
