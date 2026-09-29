@@ -3147,8 +3147,11 @@ describe("Bun Multiremi daemon smoke", () => {
     });
     const originalHeartbeat = store.heartbeatRuntime.bind(store);
     let injectedRuntimeGone = false;
+    let v2HeartbeatCalls = 0;
     store.heartbeatRuntime = ((runtimeId, options) => {
-      if (!injectedRuntimeGone) {
+      // Hello now declares capabilities through heartbeatRuntime. Lose the row
+      // on the following WS heartbeat so the runtime_gone ack drives recovery.
+      if (options?.claimPending === false && ++v2HeartbeatCalls === 2) {
         injectedRuntimeGone = true;
         // Simulate the server losing the row unexpectedly. The product delete
         // path intentionally protects a daemon's last Runtime and therefore is
