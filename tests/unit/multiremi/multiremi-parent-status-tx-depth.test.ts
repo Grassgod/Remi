@@ -1,12 +1,13 @@
 /**
  * MUL-400 S1: every parent-status entry point owns at most one outer transaction.
  *
- * Since B1 (MUL-426), PostgreSQL nested `transaction()` calls use SAVEPOINT.
- * Per MUL-402 cmt_78bx01xhb75x section 2, count BEGIN ownership separately from
- * savepoint nesting. The real PG suite records transaction control statements
- * for every entry point: one outer BEGIN/COMMIT, no early COMMIT, and only
- * SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT inside the outer one.
- * Hook post-commit ordering, atomicity and rollback/event assertions stay intact.
+ * PostgreSQL nested `transaction()` calls use SAVEPOINT (MUL-405), but for the
+ * entry points this file guards, depth 1 is a hard contract, not a bridge limit:
+ * see docs/adr/0011-transaction-ownership-and-side-effect-timing.md. The real PG
+ * suite records transaction control statements for every entry point: one outer
+ * BEGIN/COMMIT, no early COMMIT, and only SAVEPOINT / RELEASE SAVEPOINT /
+ * ROLLBACK TO SAVEPOINT inside the outer one. Hook post-commit ordering,
+ * atomicity and rollback/event assertions stay intact.
  *
  * This file runs the counter on SQLite; multiremi-parent-status-pg-depth.test.ts
  * runs it and the SQL control assertions on real PostgreSQL.
