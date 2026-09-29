@@ -59,7 +59,8 @@ export async function waitFor(predicate: () => boolean, label: string, timeoutMs
 export class DaemonProtocolHarness {
   readonly root = mkdtempSync(join(tmpdir(), "mul418-protocol-"));
   readonly db = new Database(join(this.root, "server.db"));
-  readonly store = new MultiremiStore(this.db);
+  // Commit the fresh fixture schema once; business writes remain separate real transactions.
+  readonly store = this.db.transaction(() => new MultiremiStore(this.db))();
   readonly clock = new ManualDaemonProtocolClock();
   readonly sockets: InjectedSocket[] = [];
   readonly sessions: DaemonProtocolSession[] = [];
@@ -131,6 +132,12 @@ export class DaemonProtocolHarness {
             },
           },
         })));
+        for (const daemon of daemons) {
+          // Inert providers have no installed CLI or ACP bridge to inspect.
+          const versions = daemon as unknown as { acpVersion(): string | null; agentVersion(): string | null };
+          versions.acpVersion = () => null;
+          versions.agentVersion = () => null;
+        }
         const client = daemons[0]!.daemonProtocolClient();
         const rpc = client.rpc.bind(client);
         const event = client.event.bind(client);

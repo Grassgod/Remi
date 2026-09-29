@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { DAEMON_HEARTBEAT_INTERVAL_MS } from "@multiremi/contracts/daemon-protocol.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
@@ -103,6 +105,34 @@ describe("daemon protocol v2 real connection", () => {
       await expect(h.settleHeartbeat(25)).rejects.toThrow("Timed out waiting for heartbeat and runtime callbacks");
       expect(h.client.diagnostics().pending_rpcs).toBe(1);
     } finally { release(); await exchange; await h.settleHeartbeat(); }
+  });
+
+  it("registers inert providers without probing installed agent or ACP binaries", async () => {
+    const h = await fixture();
+    const prototype = Object.getPrototypeOf(h.daemon);
+    const bridge = spyOn(prototype, "acpVersion").mockImplementation(() => { throw new Error("Unexpected local ACP version probe"); });
+    const agent = spyOn(prototype, "agentVersion").mockImplementation(() => { throw new Error("Unexpected local agent version probe"); });
+    try {
+      await h.startDaemon(); await h.settleHeartbeat();
+      expect(bridge).not.toHaveBeenCalled();
+      expect(agent).not.toHaveBeenCalled();
+      expect(h.store.listRuntimes()).toHaveLength(1);
+      expect(h.client.connectionState()).toBe("connected");
+    } finally { bridge.mockRestore(); agent.mockRestore(); }
+  });
+
+  it("commits fixture initialization without reducing file-backed SQLite durability", async () => {
+    const h = await fixture();
+    expect(h.db.inTransaction).toBe(false);
+    expect(h.db.query("PRAGMA synchronous").get()).toEqual({ synchronous: 2 });
+    expect(h.db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    await h.startDaemon(); await h.settleHeartbeat();
+    const persisted = new Database(join(h.root, "server.db"), { readonly: true });
+    try {
+      expect(persisted.query("SELECT id FROM multiremi_runtimes").all()).toEqual([
+        { id: h.store.listRuntimes()[0]!.id },
+      ]);
+    } finally { persisted.close(); }
   });
 
   it("records task and runtime partition keys with sequence numbers at real API ingress", async () => {
