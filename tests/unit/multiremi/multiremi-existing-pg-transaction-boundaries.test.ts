@@ -337,10 +337,27 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
     const originalRun = db.run;
+    const originalQuery = db.query;
+    // What this probe protects, and why B1's allocator counts as "session":
+    // main's steer path took two locks on the *session row* — the barrier lock
+    // in `lockTaskIssueSessionsWithinWorkspaceLock` and the seq allocator
+    // (`UPDATE multiremi_issue_sessions SET updated_at = updated_at` followed by
+    // `MAX(seq)+1`), both after the workspace lock. B1 replaced the allocator
+    // with the conversation-head counter, so the second lock moved to
+    // `multiremi_conversation_heads`; it is the same session-domain lock in the
+    // same seat of the W-before-S order. Counting it keeps this assertion
+    // pinning order *and* count — a third session-domain lock appearing here
+    // still fails, which is the regression this array exists to catch.
     db.run = function run(sql, ...params) {
       if (sql === "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?") locks.push("workspace");
       if (sql === "UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?") locks.push("session");
       return originalRun.call(this, sql, ...params);
+    };
+    db.query = function query(sql) {
+      if (sql.includes("UPDATE multiremi_conversation_heads") && sql.includes("SET head_seq = head_seq + 1")) {
+        locks.push("session");
+      }
+      return originalQuery.call(this, sql);
     };
     maxDepth = 0;
     try {
@@ -349,6 +366,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       }))();
     } finally {
       db.run = originalRun;
+      db.query = originalQuery;
       unsubscribe();
     }
     expect(locks).toEqual(["workspace", "session", "session"]);
