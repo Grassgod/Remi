@@ -100,6 +100,7 @@ function createLoopDaemon(options: {
     desiredFetchedAt: 0,
     lastDesiredRefreshAt: 0,
     lastDesired: null,
+    nextPluginDesiredAt: 0,
     nextClaimAt: 0,
     waitWake: null,
     protocolClient: {
@@ -393,7 +394,7 @@ describe("daemon poll cadence", () => {
     expect(probe.claims).toBe(0);
     expect(probe.claimTimes).toEqual([]);
     expect(probe.heartbeats).toBe(0);
-    expect(probe.desiredGets).toBe(1);
+    expect(probe.desiredGets).toBe(2);
   }, 20_000);
 
   it("does not spin the poll loop while claims are paused or draining", async () => {

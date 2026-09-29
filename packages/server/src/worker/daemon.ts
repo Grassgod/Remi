@@ -825,6 +825,8 @@ export class MultiremiDaemon {
   private readonly taskDownlinks: DaemonTaskDownlinks;
   private readonly drainRuntimeDownlinks: () => Promise<void>;
   private readonly authorityProbeDelaysMs: number[];
+  /** Ten-minute RPC fallback for incomplete plugin revision definitions. */
+  private nextPluginDesiredAt = 0;
   private pluginLocalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private onceTaskAccepted = false;
   private onceOfferTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1384,6 +1386,7 @@ export class MultiremiDaemon {
       }
 
       this.protocolClient?.startLane(this.protocolLane);
+      this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
       this.onceTaskAccepted = false;
       while (!this.stopped) {
         try {
@@ -1391,6 +1394,10 @@ export class MultiremiDaemon {
           if (!this.supervisorReady()) {
             await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
             continue;
+          }
+          if (Date.now() >= this.nextPluginDesiredAt) {
+            this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
+            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
           }
           await this.waitForNextTick();
         } catch (err) {
@@ -1470,9 +1477,10 @@ export class MultiremiDaemon {
   }
 
 
-  /** Business pushes wake this wait; only the error path schedules a retry. */
+  /** Business pushes wake this wait; the timer retains the ten-minute RPC fallback. */
   private async waitForNextTick(retryMs?: number): Promise<void> {
     if (this.stopped) return;
+    const delayMs = retryMs ?? Math.max(0, this.nextPluginDesiredAt - Date.now());
     await new Promise<void>(resolveWait => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1483,7 +1491,7 @@ export class MultiremiDaemon {
         if (this.waitWake === finish) this.waitWake = null;
         resolveWait();
       };
-      if (retryMs !== undefined) timer = setTimeout(finish, retryMs);
+      timer = setTimeout(finish, delayMs);
       this.waitWake = finish;
       if (this.stopped) finish();
     });
