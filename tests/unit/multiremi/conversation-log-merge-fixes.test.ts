@@ -105,7 +105,11 @@ describe("MUL-427 merge rulings", () => {
       });
     }, 30_000);
 
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: late mention SQL failure rolls back the comment and discards all queued events`, async () => {
+    // fix A (cmt_bpp6kbt1eccz; ruling cmt_ffadwzab6cnb): the mention dispatch
+    // runs after the comment's COMMIT, so its failure reaches the caller but
+    // cannot take the member's comment with it — main's "a failed forced start
+    // (MUL-458) must not roll back the member's comment", ADR 0011 §3.
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: late mention SQL failure after COMMIT throws, keeps the comment and emits only outside the transaction`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Rejected recipient", provider: "codex", workspaceId: "local" });
         const issue = store.createIssue({ title: "Late rollback", workspaceId: "local" });
@@ -116,22 +120,27 @@ describe("MUL-427 merge rulings", () => {
         } else {
           db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
         }
-        const emitted: string[] = [];
+        const body = `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push`;
+        const emitted: Array<{ type: string; inTransaction: boolean | undefined }> = [];
         const unsubscribers = [
-          store.onWorkspaceEvent((event) => emitted.push(event.type)),
-          store.onTaskEnqueued(() => emitted.push("enqueued")),
-          store.onTaskEvent((event) => emitted.push(event.type)),
+          store.onWorkspaceEvent((event) => emitted.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEnqueued(() => emitted.push({ type: "enqueued", inTransaction: db.inTransaction })),
+          store.onTaskEvent((event) => emitted.push({ type: event.type, inTransaction: db.inTransaction })),
         ];
         try {
-          expect(() => store.createIssueComment(issue.id, { body: `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push` }))
-            .toThrow("late mention rejected");
-          expect(emitted).toEqual([]);
-          expect(store.listIssueComments(issue.id)).toEqual([]);
-          expect(store.listSessionEvents(session.id)).toEqual([]);
-          expect(store.listConversationLogEntries(session.id)).toEqual([]);
-          expect(store.getConversationLogHead(session.id)?.headSeq).toBe(0);
-          expect(store.listTasksForIssue(issue.id)).toEqual([]);
-          expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
+          expect(() => store.createIssueComment(issue.id, { body })).toThrow("late mention rejected");
+          const comments = store.listIssueComments(issue.id);
+          expect(comments.map((comment) => comment.body)).toEqual([body]);
+          expect(store.getConversationLogEntryById(comments[0]!.id)).toMatchObject({
+            session_id: session.id, kind: "message", body_md: body,
+          });
+          expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+            .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([comments[0]!.id]);
+          expect(emitted).toEqual([
+            { type: "activity:created", inTransaction: false },
+            { type: "comment:created", inTransaction: false },
+          ]);
+          expect(db.query("SELECT id FROM multiremi_tasks").all()).toEqual([]);
         } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
       });
     }, 30_000);
