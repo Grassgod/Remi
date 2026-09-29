@@ -9,6 +9,7 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { afterCommit } from "@multiremi/store/db/postgres.js";
 import { renderMarkdown } from "../../render/markdown.js";
 import {
   CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP,
@@ -103,13 +104,15 @@ export class ConversationLogRepo {
   }
 
   private emit(sessionId: string, payload: ConversationLogEntry | ConversationLogPatch): void {
-    for (const listener of [...this.listeners]) {
-      try {
-        listener.onEntry(sessionId, payload);
-      } catch {
-        // A subscriber must not be able to roll back a conversation write.
+    afterCommit(this.ctx.db, () => {
+      for (const listener of [...this.listeners]) {
+        try {
+          listener.onEntry(sessionId, payload);
+        } catch {
+          // A subscriber must not be able to roll back a conversation write.
+        }
       }
-    }
+    });
   }
 
   /** The seq `head` row occupies; also the anchor when no anchor is requested. */
