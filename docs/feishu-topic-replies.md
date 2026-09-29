@@ -95,7 +95,7 @@ remain retryable. Settled human requests are not reopened during replay.
 An Issue task that asks a human for input no longer wakes a relay Agent to ask in
 prose. The control plane builds the card itself and queues it as a
 `decision_card` outbound delivery; the bot host resolves the @, sends it,
-registers the click, and later rewrites it. `buildTaskInteractionCard` and the
+forwards clicks, and later rewrites it. `buildTaskInteractionCard` and the
 `encodeDecisionCardBody`/`decodeDecisionCardBody` pair live in
 `packages/shared/src/feishu-task-card.ts`, so the writer and the reader cannot
 disagree about the body shape.
@@ -110,18 +110,32 @@ behind a card still go out.
 Who may press the button comes from the topic's `notifyMode`. `person` names the
 open ID in `interaction_open_id` before the delivery is queued; `group_owner` is
 resolved by the host with the bot token, and the recipient it used is
-checkpointed when it reports the send; `none` never produces a card. A click is
-accepted only when the callback's chat matches and the operator's open ID equals
-the checkpointed recipient — anyone else gets the 「请由卡片中指定的处理人提交」
-toast.
+checkpointed when it reports the send; `none` never produces a card. Every
+delivery mints 32 random bytes. Buttons carry `value.t` (the secret token),
+`value.r` (the request or decision id), and a public Task/Issue id for routing.
+The request/decision table stores only `token_hash` (SHA256), `token_recipient`
+and `token_consumed_at`; plaintext exists only in the outbound card payload.
+`person` binds immediately; a group-owner recipient binds once via `COALESCE`
+when the host reports `sent` with `interaction_open_id`. A stale send report
+cannot bind a replacement token.
 
-The click handler lives in the bot host process. Since this lane has no Task
-stream, there is no presentation checkpoint to replay: the host registers a card
-as it sends it, and rebuilds its registrations after a restart from
+The daemon respond routes require `token` and `operator_open_id`. The server
+settles the answer with a conditional UPDATE matching pending status, hash,
+recipient and an unconsumed token. Failure is HTTP 403 with `token_invalid`,
+`token_consumed` or `recipient_mismatch`, which the host turns into a toast.
+There is no host-side chat or recipient authorisation. Signed-in member Web/CLI
+answers are unchanged and do not require the card token.
+
+An application-level client routes clicks using their action value, even with
+no message registration after a restart. The host's registration map keeps only
+receipt patch metadata. It optionally rebuilds that metadata after a restart from
 `GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards`, which lists the
 pending requests whose cards it sent. The route answers in the daemon protocol's
 snake_case shape (`request_id`, `task_id`, `chat_id`, `message_id`,
 `recipient_open_id`) and is readable only by that Runtime's own daemon token.
+Native Task-stream cards obtain the same server-issued credential through
+`POST /api/daemon/tasks/:taskId/human-requests/:requestId/card`; that internal
+protocol endpoint is scoped to the executing daemon or the configured topic host.
 
 The heartbeat's `pending_feishu_outbound` carries the same decision fields as the
 recovery route — `kind`, `human_request_id`, `human_request_task_id`,
@@ -144,7 +158,14 @@ five-minute unattended request is not already due the moment its card is sent. I
 is materialized inside the claim transaction and deduplicated by
 `reminder_sent_at`; a request whose card has not gone out yet does not consume
 that one slot, so a host that was offline across the window still delivers exactly
-one nudge after it returns.
+one nudge after it returns. A reminder rotates the token and carries the new card
+plus its original text nudge: the host patches the original card before sending
+the text. Redelivery, native send retries and retargeting also mint a replacement;
+the previous token becomes invalid immediately. Card send deduplication keys are
+derived from the delivery and token hash, so a new credential cannot deduplicate
+back to a message carrying the old credential. No plaintext is logged, copied to
+activities/comments or retained in delivery errors. See
+[ADR 0011](adr/0011-question-card-one-time-token.md).
 
 The one floor on that: a reminder is only worth sending while it leaves the reader
 time to act. With less than a minute of lifetime left the nudge is suppressed
