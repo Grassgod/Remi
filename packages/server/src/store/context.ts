@@ -10,7 +10,7 @@
 // facade's constructor and resolved at call time.
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { afterCommit, withSavepoint, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
@@ -1349,52 +1349,64 @@ export class StoreContext {
         now,
       ],
     );
-    try {
-      withSavepoint(this.db, () => this.host.queueAgentIssueUpdate({
-        activityId: id,
-        issueId,
-        actorType: input.actorType,
-        actorId: input.actorId ?? null,
-        type: input.type,
-        body: input.body ?? null,
-        data: input.data ?? null,
-        createdAt: now,
-      }));
-    } catch (err) {
-      log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    afterCommit(this.db, () => {
+      try {
+        this.host.queueAgentIssueUpdate({
+          activityId: id,
+          issueId,
+          actorType: input.actorType,
+          actorId: input.actorId ?? null,
+          type: input.type,
+          body: input.body ?? null,
+          data: input.data ?? null,
+          createdAt: now,
+        });
+      } catch (err) {
+        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity
     // shape of GET /api/issues/:id/timeline. Best-effort: the activity is
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
-    try {
-      const workspaceId = withSavepoint(this.db, () => this.issueWorkspaceId(issueId));
-      if (!workspaceId) return;
-      const event: WorkspaceEvent = {
-        type: "activity:created",
-        workspaceId,
-        actorType: input.actorType,
-        actorId: input.actorId ?? null,
-        payload: {
-          issue_id: issueId,
-          entry: {
-            type: "activity",
-            id,
-            actor_type: input.actorType,
-            actor_id: input.actorId ?? null,
-            created_at: now,
-            action: input.type,
-            details: input.data ?? (input.body == null ? null : { body: input.body }),
-          },
+    const event: WorkspaceEvent = {
+      type: "activity:created",
+      workspaceId: "",
+      actorType: input.actorType,
+      actorId: input.actorId ?? null,
+      payload: {
+        issue_id: issueId,
+        entry: {
+          type: "activity",
+          id,
+          actor_type: input.actorType,
+          actor_id: input.actorId ?? null,
+          created_at: now,
+          action: input.type,
+          details: input.data ?? (input.body == null ? null : { body: input.body }),
         },
-      };
-      if (deferredEvents) deferredEvents.workspace.push(event);
-      else this.emitWorkspaceEvent(event);
-    } catch (err) {
-      log.warn(`activity:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+      },
+    };
+    // Reserve the caller's event order now; optional routing is resolved only
+    // after COMMIT, before the owner can flush its queue.
+    if (deferredEvents) deferredEvents.workspace.push(event);
+    afterCommit(this.db, () => {
+      try {
+        const workspaceId = this.issueWorkspaceId(issueId);
+        if (!workspaceId) return;
+        event.workspaceId = workspaceId;
+        if (!deferredEvents) this.emitWorkspaceEvent(event);
+      } catch (err) {
+        log.warn(`activity:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        if (deferredEvents && !event.workspaceId) {
+          const index = deferredEvents.workspace.indexOf(event);
+          if (index >= 0) deferredEvents.workspace.splice(index, 1);
+        }
+      }
+    });
   }
 
   // Cross-domain: the agent that actually runs work for an assignee ref. Called by the tasks,
