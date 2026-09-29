@@ -961,12 +961,13 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
   const store = options.store ?? new MultiremiStore();
-  // The Hub fill and stream auth share this pool; it must outlive the Hub.
-  const ownedReadPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
+  // The Hub fill and stream auth share this pool; only the server-created one is ours to close.
+  const readPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
     ? null
     : createReadPool({ databaseUrl: process.env.MULTIREMI_DATABASE_URL, role: effectiveApiRole }));
+  const ownedReadPool = options.readPool === undefined ? readPool : null;
   const liveHub = resolveAppHub(options, effectiveApiRole,
-    createConversationLogFillReader(store, ownedReadPool), peer);
+    createConversationLogFillReader(store, readPool), peer);
   if (!liveHub) throw new Error("hub: null is only supported by createMultiremiApp; inject EmptyLiveHub for socket tests");
   // MUL-461: `apiRole` rides the effective config so a typo is visible next to the
   // setting that produced it (the resolver falls back to `all`).
@@ -1068,8 +1069,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();
   const streamAuth: StreamAuthReader = options.streamAuth
-    ?? (ownedReadPool
-      ? createPostgresStreamAuthReader(ownedReadPool)
+    ?? (readPool
+      ? createPostgresStreamAuthReader(readPool)
       : createStreamAuthReader(store, { role: effectiveApiRole }));
   const browserStreams: BrowserStreamHandler = createBrowserStreamHandler({
     hub: liveHub,
