@@ -12,6 +12,7 @@ import { nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
+import type { ChildStatusChangeCollector } from "@multiremi/store/repos/tasks-repo.js";
 import type { MessagingRepo } from "@multiremi/store/repos/messaging-repo.js";
 import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-repo.js";
 
@@ -24,7 +25,7 @@ import type { StoredCanonicalMessage } from "@multiremi/store/repos/messaging-re
  */
 export type MessagingOutcomeHost = Pick<
   StoreContext,
-  "db" | "createInboxItem" | "resolveWorkspaceMemberForNotification" | "isNotificationMuted" | "issues" | "emitCommitEvents"
+  "db" | "createInboxItem" | "resolveWorkspaceMemberForNotification" | "isNotificationMuted" | "issues" | "tasks" | "emitCommitEvents"
 >;
 
 export interface MessageRef {
@@ -263,7 +264,7 @@ export class MessagingOutcomeService {
       const taskId = cleanText(input.taskId);
       this.assertTaskWorkspace(taskId, input.workspaceId);
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -314,7 +315,7 @@ export class MessagingOutcomeService {
         throw new MessagingOutcomeError("Inbox recipient is unavailable");
       }
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -336,13 +337,15 @@ export class MessagingOutcomeService {
   createIssue(ref: MessageRef, input: MessageIssueOutcomeInput): MessageIssueOutcomeResult {
     const issueInput = normalizeIssueInput(input);
     const deferredEvents = createCommitEventQueue();
+    const childStatusChanges: ChildStatusChangeCollector = [];
     const result = this.ctx.db.transaction(() => this.createIssueWithinTransaction(ref, {
       ...issueInput,
       workspaceId: input.workspaceId,
       taskId: cleanText(input.taskId),
       createdBy: cleanText(input.createdBy),
-    }, deferredEvents))();
+    }, childStatusChanges, deferredEvents))();
     this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     return result;
   }
 
@@ -379,7 +382,7 @@ export class MessagingOutcomeService {
       });
       if (this.ctx.isNotificationMuted(input.workspaceId, recipient, inboxType)) return muted();
       const createdAt = nowIso();
-      const outcome = this.repo.recordOutcome({
+      const outcome = this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -424,6 +427,7 @@ export class MessagingOutcomeService {
 
   approveProposal(proposalId: string, input: { workspaceId: string; approvedBy: string }): ResolveMessageProposalResult {
     const deferredEvents = createCommitEventQueue();
+    const childStatusChanges: ChildStatusChangeCollector = [];
     const result = this.ctx.db.transaction(() => {
       const proposal = this.requireProposal(proposalId, input.workspaceId);
       const ref = { connectionId: proposal.connectionId, externalMessageId: proposal.externalMessageId };
@@ -437,7 +441,7 @@ export class MessagingOutcomeService {
         workspaceId: input.workspaceId,
         taskId: null,
         createdBy: input.approvedBy,
-      }, deferredEvents);
+      }, childStatusChanges, deferredEvents);
       this.repo.resolveProposal({
         id: proposalId,
         workspaceId: input.workspaceId,
@@ -448,6 +452,7 @@ export class MessagingOutcomeService {
       return { ...result, proposal: this.requireProposal(proposalId, input.workspaceId) };
     })();
     this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     return result;
   }
 
@@ -465,7 +470,7 @@ export class MessagingOutcomeService {
         .listOutcomes(ref.connectionId, ref.externalMessageId)
         .find((entry) => entry.outcomeKind === "dismissed" && entry.reason === "proposal_rejected");
       const createdAt = nowIso();
-      const outcome = existing ?? this.repo.recordOutcome({
+      const outcome = existing ?? this.repo.recordOutcomeWithinTransaction({
         workspaceId: input.workspaceId,
         connectionId: ref.connectionId,
         externalMessageId: ref.externalMessageId,
@@ -494,6 +499,7 @@ export class MessagingOutcomeService {
   private createIssueWithinTransaction(
     ref: MessageRef,
     input: MessageIssueInput & { workspaceId: string; taskId: string | null; createdBy: string | null },
+    childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): MessageIssueOutcomeResult {
     const message = this.requireMessage(ref, input.workspaceId);
@@ -525,9 +531,9 @@ export class MessagingOutcomeService {
         message_url: message.url,
       }],
       createdBy: input.createdBy,
-    }, deferredEvents);
+    }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
-    const outcome = this.repo.recordOutcome({
+    const outcome = this.repo.recordOutcomeWithinTransaction({
       workspaceId: input.workspaceId,
       connectionId: ref.connectionId,
       externalMessageId: ref.externalMessageId,
@@ -546,7 +552,7 @@ export class MessagingOutcomeService {
     message: StoredCanonicalMessage,
   ): MessageOutcomeResult {
     const createdAt = nowIso();
-    const outcome = this.repo.recordOutcome({
+    const outcome = this.repo.recordOutcomeWithinTransaction({
       workspaceId,
       connectionId: ref.connectionId,
       externalMessageId: ref.externalMessageId,

@@ -200,6 +200,7 @@ import type {
   MultiremiDaemonSshMeshStatus,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceArchiveBinding,
+  MultiremiIssueDecision,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
@@ -1105,6 +1106,29 @@ export class MultiremiDaemon {
     recipientOpenId: string;
   }>> {
     return this.client.listFeishuBotDecisionCards(this.options.runtimeId!);
+  }
+
+  /** Issue decision cards this Runtime must re-register after a restart (MUL-412). */
+  listFeishuIssueDecisionCards(): Promise<Array<{
+    decisionId: string;
+    issueId: string;
+    chatId: string;
+    messageId: string;
+    recipientOpenId: string;
+  }>> {
+    return this.client.listFeishuIssueDecisionCards(this.options.runtimeId!);
+  }
+
+  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
+    return this.client.getFeishuIssueDecision(issueId, decisionId);
+  }
+
+  answerFeishuIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: { answer: string; operatorOpenId: string },
+  ): Promise<MultiremiIssueDecision> {
+    return this.client.answerFeishuIssueDecision(issueId, decisionId, input);
   }
 
   getFeishuBotHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
@@ -3506,7 +3530,10 @@ export class MultiremiDaemon {
       }
       this.enqueueTaskReport(task.id, "progress", { summary: pickTaskStartupLine(task.agent?.name), step: 1, total: 3 });
       progressSummarizer = await this.createTaskProgressSummarizer(task, providerEnv, relay?.fragment);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv, progressSummarizer, taskPrivateTmp.path);
+      summary = await this.runAgent(
+        task, abort.signal, resolvedWorkDir, pluginRuntime, providerHome, providerEnv,
+        progressSummarizer, taskPrivateTmp.aliasPath ?? taskPrivateTmp.path,
+      );
       if (!summary.completed) {
         const failureReason = summary.failureReason
           ?? classifyPoisonedOutput(summary.output)

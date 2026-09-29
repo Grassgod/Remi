@@ -1,8 +1,6 @@
 import type { Hono } from "hono";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
-import { createUploadAttachmentId, detectContentTypeFromFilename, uploadAbsolutePath, uploadRelativePath,
+import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
@@ -16,6 +14,7 @@ import {
   daemonTaskMessageInput,
   daemonTaskUsageEntries,
   denyCurrentUserWorkspaceAccess,
+  denyDaemonTokenIssueDecisionAccess,
   denyDaemonTokenRuntimeIdentity,
   denyDaemonTokenTaskRuntimeIdentity,
   denyDaemonTokenWorkspace,
@@ -51,6 +50,7 @@ import {
 import {
   FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
   FEISHU_DECISION_DEGRADE_REASONS,
   type FeishuDecisionDegradeReason,
   FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
@@ -76,6 +76,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { BinarySkillFilesUnsupportedError, TaskSteerPendingError } from "@multiremi/store/repos/tasks-repo.js";
 import { FeishuBotConfigError } from "@multiremi/store/repos/feishu-bot-repo.js";
+import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
 import { SshMeshKeyError } from "@multiremi/ssh-mesh/keys.js";
 import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import { scmGitCredentialPassword } from "@multiremi/scm/access-token.js";
@@ -83,6 +84,7 @@ import { resolveScmRepositoryRemote } from "@multiremi/scm/repository-url.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
+import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.js";
 
 /** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
 const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
@@ -387,6 +389,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       feishu_concierge_protocol?: number;
       feishu_decision_card?: number;
       feishu_outbound_kinds?: number;
+      feishu_issue_decision_card?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -422,6 +425,11 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       supportsFeishuBotConfig,
       supportsDecisionCard: normalizeDaemonProtocolVersion(body.feishu_decision_card)
         >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+      // MUL-412: a separate flag, so a host that predates decisions keeps its
+      // human-request cards while the control plane leaves decision cards off
+      // its queue entirely.
+      supportsIssueDecisionCard: normalizeDaemonProtocolVersion(body.feishu_issue_decision_card)
+        >= FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     if (reportsSshMeshProtocol) {
@@ -500,6 +508,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.kind ? { kind: outbound.kind } : {}),
           ...(outbound.receiptState ? { receipt_state: outbound.receiptState } : {}),
           ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
+          ...(outbound.decisionId ? { decision_id: outbound.decisionId } : {}),
+          ...(outbound.decisionIssueId ? { decision_issue_id: outbound.decisionIssueId } : {}),
           // The host needs the asking Task to register a click the moment it
           // sends the card, and needs to know a row is already plain text so it
           // does not retry it as a malformed card (MUL-407).
@@ -556,6 +566,80 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   /**
+   * Read one Issue decision a card click is answering (MUL-412).
+   *
+   * Guarded by the same predicate as the write: the Issue must have an active
+   * topic binding under this host's app, and the token must belong to the
+   * daemon that hosts it. Without an answer the card would still be clickable
+   * after the web settled it.
+   */
+  app.get("/api/daemon/issues/:issueId/decisions/:decisionId", (c) => {
+    const issueId = c.req.param("issueId");
+    const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
+    if (denied) return denied;
+    const decision = store.getIssueDecision(issueId, c.req.param("decisionId"));
+    if (!decision) return c.json({ error: "decision not found" }, 404);
+    c.header("Cache-Control", "no-store");
+    return c.json({ decision });
+  });
+
+  /**
+   * Answer an Issue decision from a card click (MUL-412).
+   *
+   * The answerer is derived from the callback's operator, never from the body:
+   * the host may only tell us `operator_open_id`, and it has to be the person
+   * the card was addressed to. That open_id is then resolved to a live
+   * workspace member — an unmapped, archived or agent identity is refused —
+   * and the write goes through the same store function the HTTP answer route
+   * uses, so the history, the activities, the inbox and the wakeup of the
+   * source Issue's owner are identical.
+   */
+  app.post("/api/daemon/issues/:issueId/decisions/:decisionId/answer", async (c) => {
+    const issueId = c.req.param("issueId");
+    const denied = denyDaemonTokenIssueDecisionAccess(c, store, issueId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ answer?: unknown; operator_open_id?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const decisionId = c.req.param("decisionId");
+    const context = store.getFeishuIssueDecisionCardContext(
+      store.getIssue(issueId)?.workspaceId ?? "local", decisionId);
+    if (!context || context.issue.id !== issueId) return c.json({ error: "decision not found" }, 404);
+    const operatorOpenId = cleanString(typeof body.operator_open_id === "string" ? body.operator_open_id : null);
+    if (!operatorOpenId || operatorOpenId !== context.recipientOpenId) {
+      return c.json({ error: "please answer from the card addressed to you", code: "decision_operator_mismatch" }, 403);
+    }
+    const operator = store.resolveFeishuDecisionOperatorMember(context.issue.workspaceId, context.appId, operatorOpenId);
+    if (operator.status === "unmapped") {
+      return c.json({ error: "operator is not a workspace member", code: "decision_member_unmapped" }, 403);
+    }
+    if (operator.status === "ambiguous") {
+      return c.json({ error: "operator maps to multiple workspace members", code: "decision_member_ambiguous" }, 403);
+    }
+    const member = operator.member;
+    if (context.decision.status !== "escalated") {
+      // Idempotent: a replayed callback (or a second tap) returns the settled
+      // row so the host re-renders the terminal card instead of erroring.
+      return c.json({ decision: context.decision });
+    }
+    const answer = cleanString(typeof body.answer === "string" ? body.answer : null);
+    if (!answer) return c.json({ error: "answer is required" }, 400);
+    try {
+      const decision = store.answerIssueDecision(issueId, decisionId, {
+        answer, reason: "Answered from the Feishu decision card", overturn: null,
+      }, { type: "member", id: member.id, taskId: null }, { idempotent: true });
+      return c.json({ decision });
+    } catch (error) {
+      // The write may have raced a withdrawal or another terminal transition.
+      // Only the canonical row can prove that the decision ended; an HTTP
+      // status alone cannot distinguish that from a rolled-back write.
+      const decision = store.getIssueDecision(issueId, decisionId);
+      if (decision && decision.status !== "escalated") return c.json({ decision });
+      if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
+  });
+
+  /**
    * Cards this Runtime must keep answering clicks for (MUL-407). The host's
    * click map is process-local, so it re-registers from here on every start;
    * unlike a Task-stream card there is no presentation checkpoint to replay.
@@ -569,7 +653,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const runtime = store.getRuntimeLite(runtimeId);
     if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
-    const cards = store.listFeishuBotLiveDecisionCards(runtime.workspaceId ?? "local", runtimeId);
+    const workspaceId = runtime.workspaceId ?? "local";
+    // Two card families ride this route (MUL-407, MUL-412); each is listed only
+    // for a host that declared the matching capability, exactly like the queue.
+    const humanRequestCards = store.listFeishuBotLiveDecisionCards(workspaceId, runtimeId);
+    const issueDecisionCards = store.listFeishuIssueDecisionCards(workspaceId, runtimeId);
+    // The S5a rows keep exactly their old shape; only the new family carries a
+    // discriminator, so an older daemon's parser is unaffected.
+    const cards = [
+      ...humanRequestCards,
+      ...issueDecisionCards.map(card => ({
+        lane: "issue_decision",
+        issue_id: card.issue_id,
+        decision_id: card.decision_id,
+        chat_id: card.chat_id,
+        message_id: card.message_id,
+        recipient_open_id: card.recipient_open_id,
+      })),
+    ];
     c.header("Cache-Control", "no-store");
     return c.json({ cards });
   });
@@ -708,20 +809,14 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       externalSessionKey: stringFormValue(form.get("external_session_key")) ?? "",
       externalMessageId: stringFormValue(form.get("external_message_id")) ?? "" };
     const workspaceId = runtime.workspaceId ?? "local";
-    let path: string | undefined;
     try {
       store.assertFeishuBotInboundAttachmentScope(workspaceId, runtimeId, scope);
-      const id = createUploadAttachmentId();
       const filename = sanitizeChatAttachmentFilename(file.name);
-      path = uploadAbsolutePath(uploadRelativePath(workspaceId, id, filename));
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, new Uint8Array(await file.arrayBuffer()), { flag: "wx" });
-      const attachment = store.createFeishuBotInboundAttachment(workspaceId, runtimeId, scope, {
-        id, filename, url: `/api/attachments/${id}/content`,
-        contentType: detectContentTypeFromFilename(filename), sizeBytes: file.size });
+      const attachment = await persistUploadedAttachments(workspaceId, [{ filename,
+        bytes: new Uint8Array(await file.arrayBuffer()), contentType: detectContentTypeFromFilename(filename) }],
+        ([input]) => store.createFeishuBotInboundAttachment(workspaceId, runtimeId, scope, input!));
       return c.json({ attachment }, 201);
     } catch (error) {
-      if (path) await unlink(path).catch(() => undefined);
       if (error instanceof FeishuBotConfigError) return c.json({ error: error.message, code: error.code }, error.status as 400 | 403 | 409);
       return c.json({ error: error instanceof Error ? error.message : "attachment upload failed" }, 400);
     }
@@ -968,6 +1063,12 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           }
         }
         const hydratedTask = await hydrateClaimKnowledge(task, deps.projectKnowledge, deps.repositoryWiki);
+        // The hydration above awaits work outside the store, so nothing this request wrote can
+        // have invalidated the cached Task row: another request may have cancelled the Task while
+        // it ran, and a cached row would still say `dispatched`. Drop the request cache so the
+        // re-check below reads committed state — that check is the whole reason a cancelled Task
+        // is not delivered.
+        invalidateRequestReadCache();
         const current = store.getTask(task.id);
         if (current?.status !== "dispatched" || current.runtimeId !== runtimeId) return null;
         const response = daemonTaskClaimResponse(store, hydratedTask, store.getTaskTriggerMetadata(task));
@@ -1127,7 +1228,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
       return c.json({ error: "too many messages" }, 413);
     }
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    // MUL-474: identity only — this route writes messages and never reads the
+    // prompt, result or usage columns.
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     // Whitelist each message to the known TaskMessageInput fields (accepting
     // both camel and snake casing) so a compromised/buggy daemon can't smuggle
     // arbitrary JSON into the row; the store layer additionally byte-caps every
@@ -1162,7 +1265,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const task = store.getTask(taskId);
+    // MUL-474: the wire payload reads `issue_id` only.
+    const task = store.getTaskIdentity(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
     if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
@@ -1305,7 +1409,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    const task = store.getTask(taskId);
+    // MUL-474: the response fields, projected without `prompt`. The body is a
+    // contract (the Feishu host renders `getFeishuBotTaskSnapshot` from it), so
+    // every field it returned before is still returned here.
+    const task = store.getTaskStatusSnapshot(taskId);
     if (!task) return c.json({ error: "task not found" }, 404);
     const snapshot: FeishuBotTaskSnapshot = {
       taskId: task.id,
@@ -1335,7 +1442,9 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    // MUL-474: the poll only needs to know the Task exists; the guard already
+    // resolved the row it is re-reading.
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     return c.json({ messages: store.listPendingTaskSteerMessages(taskId) });
   });
   app.post("/api/daemon/tasks/:taskId/steer/consume", async (c) => {
@@ -1344,7 +1453,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
-    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    if (!store.getTaskIdentity(taskId)) return c.json({ error: "task not found" }, 404);
     const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id)) : [];
     return c.json({ consumed: store.consumeTaskSteerMessages(taskId, ids) });
   });

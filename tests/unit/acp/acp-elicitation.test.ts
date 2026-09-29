@@ -4,7 +4,7 @@ import {
   elicitationToQuestions,
   answersToElicitationContent,
 } from "@acp/index.js";
-import type { ElicitationCreateParams } from "@acp/index.js";
+import type { ElicitationCreateParams, ElicitationPropertySchema } from "@acp/index.js";
 import { sliceElicitationContext } from "@multiremi/daemon.js";
 
 // Mirrors the request shape the Claude ACP agent (>= 0.44.0) builds from the
@@ -102,10 +102,10 @@ describe("elicitationToQuestions", () => {
   });
 });
 
-// Mirrors codex-acp's buildUserInputRequest (dist/index.js:25109-25172): each
-// question carries its help text as a per-option `description`, and a question
-// that accepts a custom answer gets an extra `<questionId>__other` free-text
-// property tagged `_meta.codex.isOtherAnswer`.
+// Mirrors codex-acp 1.11.0 buildUserInputRequest() (dist/index.js:26343-26405):
+// the short header is the field `title`, the question text is `description`,
+// and a question that accepts a custom answer gets an extra
+// `<questionId>__other` free-text property tagged `_meta.codex.isOtherAnswer`.
 function codexRequest(): ElicitationCreateParams {
   return {
     mode: "form",
@@ -160,6 +160,198 @@ describe("elicitationToQuestions (codex)", () => {
     expect(questions).toHaveLength(1);
     expect(questions[0].fieldKey).toBe("name__other");
     expect(questions[0].otherFieldKey).toBeUndefined();
+  });
+});
+
+// Mirrors codex-acp 1.13.1 buildUserInputRequest()
+// (dist/index.js:32052-32105): the question text is the field `title`, the
+// short header is `description`, `message` is the fixed "Codex needs your
+// input to continue." boilerplate, every field is tagged `_meta.codex`, a
+// question that allows a custom answer appends the synthetic "None of the
+// above" option and a `<id>_note` companion field tagged
+// `_meta.codex = { questionId, role: "user_note" }`.
+function codexUserInputRequest(
+  properties: Record<string, ElicitationPropertySchema>,
+  required: string[],
+): ElicitationCreateParams {
+  return {
+    mode: "form",
+    sessionId: "sess_1",
+    toolCallId: "call_1",
+    message: "Codex needs your input to continue.",
+    requestedSchema: { type: "object", properties, required },
+    _meta: { codex: { autoResolutionMs: null } },
+  };
+}
+
+describe("elicitationToQuestions (codex >= 1.12)", () => {
+  it("reads the issue's lunch sample: question from title, header from description, note folded in", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      lunch: {
+        title: "午饭吃什么？",
+        description: "午饭",
+        type: "string",
+        _meta: { codex: { isOther: true, isSecret: false } },
+        oneOf: [
+          { const: "面条 (Recommended)", title: "面条 (Recommended)" },
+          { const: "米饭", title: "米饭" },
+          {
+            const: "None of the above",
+            title: "None of the above",
+            description: "Provide a different answer in the note field.",
+          },
+        ],
+      },
+      lunch_note: {
+        type: "string",
+        title: "Additional answer or note",
+        _meta: { codex: { questionId: "lunch", role: "user_note", isSecret: false } },
+      },
+    }, ["lunch"]))!;
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0].fieldKey).toBe("lunch");
+    expect(questions[0].otherFieldKey).toBe("lunch_note");
+    expect(questions[0].question.question).toBe("午饭吃什么？");
+    expect(questions[0].question.header).toBe("午饭");
+    expect(questions[0].question.options).toEqual([
+      { label: "面条 (Recommended)" },
+      { label: "米饭" },
+    ]);
+  });
+
+  it("keeps several questions apart and folds each note into its own question", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      lunch: {
+        title: "午饭吃什么？",
+        description: "午饭",
+        type: "string",
+        _meta: { codex: { isOther: true, isSecret: false } },
+        oneOf: [
+          { const: "面条", title: "面条" },
+          { const: "None of the above", title: "None of the above" },
+        ],
+      },
+      lunch_note: {
+        type: "string",
+        title: "Additional answer or note",
+        _meta: { codex: { questionId: "lunch", role: "user_note", isSecret: false } },
+      },
+      arrival: {
+        title: "几点到？",
+        description: "到达时间",
+        type: "string",
+        _meta: { codex: { isOther: false, isSecret: false } },
+        oneOf: [
+          { const: "12:00", title: "12:00", description: "午饭前" },
+          { const: "18:00", title: "18:00" },
+        ],
+      },
+    }, ["lunch", "arrival"]))!;
+
+    expect(questions.map((q) => q.fieldKey)).toEqual(["lunch", "arrival"]);
+    expect(questions[0].otherFieldKey).toBe("lunch_note");
+    expect(questions[1].otherFieldKey).toBeUndefined();
+    expect(questions[1].question.question).toBe("几点到？");
+    expect(questions[1].question.header).toBe("到达时间");
+    expect(questions[1].question.options).toEqual([
+      { label: "12:00", description: "午饭前" },
+      { label: "18:00" },
+    ]);
+  });
+
+  it("keeps a note field whose questionId has no matching question as a standalone question", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      orphan_note: {
+        type: "string",
+        title: "Additional answer or note",
+        _meta: { codex: { questionId: "gone", role: "user_note" } },
+      },
+    }, []))!;
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0].fieldKey).toBe("orphan_note");
+    expect(questions[0].otherFieldKey).toBeUndefined();
+    expect(questions[0].question.question).toBe("Additional answer or note");
+  });
+
+  it("renders a question without options as free text and never consults message", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      name: {
+        title: "你的名字？",
+        description: "姓名",
+        type: "string",
+        _meta: { codex: { isOther: false, isSecret: false } },
+      },
+    }, ["name"]))!;
+
+    expect(questions).toHaveLength(1);
+    expect(questions[0].question.question).toBe("你的名字？");
+    expect(questions[0].question.header).toBe("姓名");
+    expect(questions[0].question.options).toEqual([]);
+  });
+
+  it("leaves options alone when the question allows no custom answer", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      arrival: {
+        title: "几点到？",
+        description: "到达时间",
+        type: "string",
+        _meta: { codex: { isOther: false, isSecret: false } },
+        oneOf: [
+          { const: "12:00", title: "12:00" },
+          { const: "None of the above", title: "None of the above" },
+        ],
+      },
+    }, ["arrival"]))!;
+
+    expect(questions[0].otherFieldKey).toBeUndefined();
+    expect(questions[0].question.options.map((o) => o.label)).toEqual(["12:00", "None of the above"]);
+  });
+
+  it("posts option labels to the question field and custom text to its note field", () => {
+    const questions = elicitationToQuestions(codexUserInputRequest({
+      lunch: {
+        title: "午饭吃什么？",
+        description: "午饭",
+        type: "string",
+        _meta: { codex: { isOther: true, isSecret: false } },
+        oneOf: [
+          { const: "面条 (Recommended)", title: "面条 (Recommended)" },
+          { const: "米饭", title: "米饭" },
+          { const: "None of the above", title: "None of the above" },
+        ],
+      },
+      lunch_note: {
+        type: "string",
+        title: "Additional answer or note",
+        _meta: { codex: { questionId: "lunch", role: "user_note", isSecret: false } },
+      },
+      arrival: {
+        title: "几点到？",
+        description: "到达时间",
+        type: "string",
+        _meta: { codex: { isOther: true, isSecret: false } },
+        oneOf: [
+          { const: "12:00", title: "12:00" },
+          { const: "None of the above", title: "None of the above" },
+        ],
+      },
+      arrival_note: {
+        type: "string",
+        title: "Additional answer or note",
+        _meta: { codex: { questionId: "arrival", role: "user_note", isSecret: false } },
+      },
+    }, ["lunch", "arrival"]))!;
+
+    // Option answers go to the parent field; custom text goes to the note field
+    // codex-acp reads back as `user_note: <text>`.
+    expect(answersToElicitationContent(questions, { "午饭吃什么？": "面条 (Recommended)", "几点到？": "12:00" }))
+      .toEqual({ lunch: "面条 (Recommended)", arrival: "12:00" });
+    expect(answersToElicitationContent(questions, { "午饭吃什么？": "饺子", "几点到？": "13:30 左右" }))
+      .toEqual({ lunch_note: "饺子", arrival_note: "13:30 左右" });
+    expect(answersToElicitationContent(questions, { "午饭吃什么？": "米饭", "几点到？": "19 点吧" }))
+      .toEqual({ lunch: "米饭", arrival_note: "19 点吧" });
   });
 });
 

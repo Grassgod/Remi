@@ -53,6 +53,7 @@ export function ActorIssuesPanel({
   const projectFilters = useStore(actorIssuesViewStore, (s) => s.projectFilters);
   const includeNoProject = useStore(actorIssuesViewStore, (s) => s.includeNoProject);
   const labelFilters = useStore(actorIssuesViewStore, (s) => s.labelFilters);
+  const showSubIssues = useStore(actorIssuesViewStore, (s) => s.showSubIssues);
 
   const [search, setSearch] = useState("");
 
@@ -71,9 +72,9 @@ export function ActorIssuesPanel({
   const queryFilter: MyIssuesFilter = useMemo(
     () =>
       scope === "assigned"
-        ? { assignee_id: actorId }
-        : { creator_id: actorId },
-    [scope, actorId],
+        ? { assignee_id: actorId, top_level_only: !showSubIssues }
+        : { creator_id: actorId, top_level_only: !showSubIssues },
+    [scope, actorId, showSubIssues],
   );
   const queryScope = `${actorType}:${actorId}:${scope}`;
 

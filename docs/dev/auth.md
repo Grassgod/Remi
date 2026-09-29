@@ -29,6 +29,8 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 修改路由时，从请求实际指向的资源解析 workspace，再调用对应 guard；不要仅凭客户端传入的 ID 或“已经登录”认定有权限。[server.ts](../../packages/server/src/api/server.ts)中的 daemon 前缀中间件必须注册在对应 handler 之前，Hono 的注册顺序会影响覆盖范围。
 
+[MultiremiStore.updateAgent](../../packages/server/src/store/store.ts)的角色更新和所属任务凭据撤销共用一个外层事务；仓储调用 `updateAgentWithinTransaction`，保留排序后的 workspace 锁、plugin workspace 锁与 Agent 行锁，不在撤销之前另行提交。`setAgentRole`、`setAgentSupervisor` 同样在角色变化时撤销任务凭据。整体回滚与正常提交的真 PG 对照见 [事务边界用例](../../tests/unit/multiremi/multiremi-existing-pg-transaction-boundaries.test.ts)。
+
 ## 启动条件
 
 Runtime 的 Codex / Claude Code 自定义连接 GET/PUT 使用 Runtime 可见性/编辑权限，task token 对整个配置路由为 hard deny；直接填写的 API Key 经服务端 AES-256-GCM 加密并版本化。只允许绑定机器身份的 daemon token 从专用 `codex-profile-key` / `claude-profile-key` 路由读取对应 Runtime 的凭据，浏览器响应和任务公共响应不含密钥。加密配置、轮换和执行快照见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)，Claude 的字段和请求头见 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)，权限回归见 [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)。

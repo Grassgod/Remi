@@ -17,6 +17,7 @@ export interface CreateIssueRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   parent_issue_id?: string;
+  blocked_by?: string[];
   project_id?: string | null;
   start_date?: string;
   due_date?: string;
@@ -24,6 +25,7 @@ export interface CreateIssueRequest {
 }
 
 export interface UpdateIssueRequest {
+  force?: boolean;
   runtime_workspace_id?: string | null;
   title?: string;
   description?: string;
@@ -57,6 +59,7 @@ export interface IssueRetitleResponse {
 }
 
 export interface ListIssuesParams {
+  top_level_only?: boolean;
   limit?: number;
   offset?: number;
   workspace_id?: string;
@@ -97,6 +100,7 @@ export interface IssueActorRef {
 }
 
 export interface ListGroupedIssuesParams {
+  top_level_only?: boolean;
   group_by: "assignee";
   limit?: number;
   offset?: number;

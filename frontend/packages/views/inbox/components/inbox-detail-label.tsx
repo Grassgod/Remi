@@ -47,6 +47,8 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     feishu_reply_draft: t(($) => $.types.feishu_reply_draft),
     feishu_issue_proposal: t(($) => $.types.feishu_issue_proposal),
     feishu_ingest_connection_alert: t(($) => $.types.feishu_ingest_connection_alert),
+    child_issue_terminal: t(($) => $.types.child_issue_terminal),
+    decision_requested: t(($) => $.types.decision_requested),
   };
 }
 
