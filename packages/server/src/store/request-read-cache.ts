@@ -217,35 +217,50 @@ export function invalidatingDatabase<T extends object>(database: T): T {
       if (key === "transaction" && typeof value === "function") {
         return (fn: (...args: unknown[]) => unknown) => {
           const runTransaction = value.apply(target, [fn]) as (...args: unknown[]) => unknown;
-          return (...args: unknown[]) => withinTransaction(() => {
-            const outermost = sentinelTransactionDepth === 0;
-            sentinelTransactionDepth += 1;
-            if (outermost) lockOrderSentinelTransactionBegin();
-            afterCommitFrames.push([]);
-            let committed = false;
+          return (...args: unknown[]) => {
+            let callbacks: Array<() => void> = [];
             try {
-              const result = runTransaction(...args);
-              committed = true;
-              // The real transaction committed (for SQLite there is no nesting:
-              // bun:sqlite joins the open transaction). Publish only here, so a
-              // throwing callback cannot be reported as a committed write.
-              return result;
-            } finally {
-              const frame = afterCommitFrames.pop()!;
-              if (committed) {
-                if (afterCommitFrames.length === 0) {
-                  for (const callback of frame) {
-                    try { callback(); } catch { /* best-effort realtime */ }
+              return withinTransaction(() => {
+                const outermost = sentinelTransactionDepth === 0;
+                sentinelTransactionDepth += 1;
+                if (outermost) lockOrderSentinelTransactionBegin();
+                afterCommitFrames.push([]);
+                let committed = false;
+                try {
+                  const result = runTransaction(...args);
+                  committed = true;
+                  // Publish after the runner returned, so rolled-back writes
+                  // and their callbacks cannot be reported as committed.
+                  return result;
+                } finally {
+                  const frame = afterCommitFrames.pop()!;
+                  sentinelTransactionDepth -= 1;
+                  if (outermost) lockOrderSentinelTransactionEnd();
+                  if (committed) {
+                    if (afterCommitFrames.length === 0) {
+                      callbacks = frame;
+                    } else {
+                      afterCommitFrames[afterCommitFrames.length - 1]!.push(...frame);
+                    }
                   }
-                } else {
-                  afterCommitFrames[afterCommitFrames.length - 1]!.push(...frame);
                 }
+              });
+            } finally {
+              for (const callback of callbacks) {
+                try { callback(); } catch { /* best-effort post-commit work */ }
               }
-              sentinelTransactionDepth -= 1;
-              if (outermost) lockOrderSentinelTransactionEnd();
             }
-          });
+          };
         };
+      }
+      if (key === "afterCommit" && typeof value === "function") {
+        // The native hook runs before its transaction runner returns. Drain
+        // after that return so optional work can own a separate transaction.
+        return (fn: () => void) => value.call(target, () => {
+          const frame = afterCommitFrames.at(-1);
+          if (frame) frame.push(fn);
+          else fn();
+        });
       }
       if (key === "afterCommit" && value === undefined) {
         // bun:sqlite has no queue of its own; the wrapper provides the same
