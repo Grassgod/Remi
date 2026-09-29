@@ -57,7 +57,7 @@ import { Database } from "bun:sqlite";
 import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, open, rm } from "node:fs/promises";
-import { cpus, totalmem, tmpdir } from "node:os";
+import { cpus, loadavg, totalmem, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { deflateRawSync } from "node:zlib";
@@ -680,10 +680,11 @@ function markdown(report: {
   const first = report.backends[0];
   lines.push("# MUL-402 B8：回填归档的 trace 读延迟，按体积分档（MUL-432 第 10 项）", "");
   lines.push(
-    "- 父单：MUL-402；本单：MUL-432（第一段，QA 第 1 轮返工）",
+    "- 父单：MUL-402；本单：MUL-432（第一段，QA 第 2 轮返工）",
     `- 生成时间：${report.generated_at}`,
     `- 被测 commit：\`${report.commit.head}\`${report.commit.dirty ? "（运行时已跟踪文件有未提交改动，即本次提交的 bench 与生成器）" : "（运行时已跟踪文件无改动）"}`,
     `- 运行机器：${report.machine.platform} ${report.machine.arch}，${report.machine.cpus} vCPU，${report.machine.mem_gib} GiB RAM；Bun ${report.machine.bun}；归档目录在 ext4 本地盘`,
+    `- **负载**：机器是共享的，计时在并发负载下测得（其他任务同时在跑），不是生产 SLO。load average（1/5/15 分钟）开始 ${(report.machine.loadavg_start as number[] | undefined)?.join(" / ") ?? "未记录"}，结束 ${(report.machine.loadavg_end as number[] | undefined)?.join(" / ") ?? "未记录"}。`,
     `- 原始 JSON：[\`${report.json_name}\`](${report.json_name})`,
   );
   if (report.params.inject_extra_read_bytes > 0) {
@@ -709,8 +710,9 @@ function markdown(report: {
   );
   for (const tier of params.tiers) {
     const target = TRACE_SIZE_TIER_TARGETS[tier];
-    lines.push(`| ${tier} | ${target.rows.toLocaleString("en-US")} | ${target.bytes.toLocaleString("en-US")} | 生产单任务 ${tier}：\`PRODUCTION_TRACE_SHAPE.taskRows/taskBytes\`，${PRODUCTION_TRACE_SHAPE.source}；父单描述（ADR 0006）同值 |`);
+    lines.push(`| ${tier} | ${target.rows.toLocaleString("en-US")} | ${target.bytes.toLocaleString("en-US")} | 生产单任务 ${tier}：\`PRODUCTION_TRACE_SHAPE.taskRows/taskBytes\`，数值出自 ADR 0006（\`docs/adr/0006-conversation-log-and-daemon-owned-traces.md\` 第 53 行，即 ADR 草稿 \`cmt_94esdskv3s3y\`） |`);
   }
+  lines.push("", `分组任务数、行类型占比、seq 缺号比例出自 ${PRODUCTION_TRACE_SHAPE.source}；该评论不含上表的单任务分位数。`);
   lines.push(
     "",
     `参数：每档 ${params.perTier} 个，档内抖动 ±${params.jitter * 100}%，seed \`${params.seed}\`，oldTableStoppedAt=${params.oldTableStoppedAt}。任务按生产各组任务数比例分到四组主体（组内主体大小同形状语料），行类型按生产类型占比，seq 缺号按生产比例。`,
@@ -756,6 +758,13 @@ function markdown(report: {
   for (const [name, estimate] of Object.entries(report.disk_estimate.per_backend)) {
     lines.push(`| ${name} | ${mib(estimate.database)} MiB | ${mib(estimate.staging)} MiB | ${mib(estimate.archives)} MiB | ${mib(estimate.total)} MiB | \`${estimate.database_path}\` |`);
   }
+  const gib = (bytes: number) => (bytes / 1024 ** 3).toFixed(2);
+  const estimates = Object.entries(report.disk_estimate.per_backend);
+  const estimateSum = estimates.reduce((sum, [, estimate]) => sum + estimate.total, 0);
+  lines.push(
+    "",
+    `上表每行是**单个后端**的估算：${estimates.map(([name, estimate]) => `${name} ${estimate.total.toLocaleString("en-US")} B ≈ ${gib(estimate.total)} GiB`).join("、")}${estimates.length > 1 ? `；两个后端合计 ${estimateSum.toLocaleString("en-US")} B ≈ ${gib(estimateSum)} GiB` : ""}。文件系统另须留出预留量（下表“预留”列）。PG 的数据库实测用 \`pg_database_size\`，不含共享的 \`pg_wal\`，不能据此直接推导生产峰值。`,
+  );
   lines.push("", "| 文件系统上的路径 | 估算需要 | 可用 | 预留 | 结论 |", "| --- | ---: | ---: | ---: | --- |");
   for (const fs of report.disk_estimate.by_filesystem) {
     lines.push(`| ${fs.paths.map((path) => `\`${path}\``).join("、")} | ${mib(fs.needed_bytes)} MiB | ${(fs.free_bytes / 1024 ** 3).toFixed(1)} GiB | ${(fs.reserve_bytes / 1024 ** 3).toFixed(0)} GiB | ${fs.fits ? "够" : "不够（本应退出码 4）"} |`);
@@ -827,6 +836,8 @@ function markdown(report: {
     "- 这是进程内服务端读路径的数字，不含 HTTP 与网络；PG 列包含指针与归档行两次查询经桥往返的开销。",
     "- 冷读只把归档文件踢出页缓存；数据库页（SQLite 文件、PG shared buffers）保持热，这与生产上指针表常驻缓存的情况一致。",
     `- 整条读每页 ${TRACE_READ_MAX_LIMIT} 条，每页都要读整个成员、解压、校验 sha256 再切窗口，所以整条读的耗时和字节随“页数 × 成员大小”增长，p99 档（约 ${Math.ceil(TRACE_SIZE_TIER_TARGETS.p99.rows / TRACE_READ_MAX_LIMIT)} 页）最明显；尾窗 100 只读一页。`,
+    `- p99 档“整条”那几秒是从 seq 0 一页页翻到 eof（约 ${Math.ceil(TRACE_SIZE_TIER_TARGETS.p99.rows / TRACE_READ_MAX_LIMIT)} 页）的 \`readTrace\` 累计耗时，不含 HTTP，**不是首屏耗时**；本 bench 没有单测首屏。`,
+    "- 计时在共享机器的并发负载下测得（见文首“负载”），不是生产 SLO。",
     "- 合成文本取自本仓库，压缩比与真实 trace 仍会有出入；生产压缩比未知（见“压缩率”）。",
     "- 生产 209 上的真实延迟要等回填经贺华杰授权执行后再测，本报告不替代那一步。",
     "",
@@ -871,12 +882,14 @@ async function main(): Promise<void> {
   }
 
   const backends: BackendReport[] = [];
+  const loadStart = loadavg().map((value) => Number(value.toFixed(2)));
   started = performance.now();
   try {
     for (const name of BACKENDS) backends.push(await measureBackend(name, workDir, params, pools, injectFile));
   } finally {
     if (!KEEP) await rm(workDir, { recursive: true, force: true });
   }
+  const loadEnd = loadavg().map((value) => Number(value.toFixed(2)));
   const outPath = resolve(OUT!);
   const report = {
     generated_at: new Date().toISOString(),
@@ -888,6 +901,9 @@ async function main(): Promise<void> {
       cpus: cpus().length,
       mem_gib: Math.round(totalmem() / 1024 ** 3),
       bun: Bun.version,
+      /** 1/5/15-minute load averages when measuring started and ended; the machine is shared. */
+      loadavg_start: loadStart,
+      loadavg_end: loadEnd,
     },
     params: {
       corpus: params,
@@ -899,7 +915,8 @@ async function main(): Promise<void> {
       inject_extra_read_bytes: INJECT_EXTRA_READ_BYTES,
     },
     targets: TRACE_SIZE_TIER_TARGETS,
-    target_source: `PRODUCTION_TRACE_SHAPE.taskRows / taskBytes (${PRODUCTION_TRACE_SHAPE.source}; ADR 0006)`,
+    target_source: "PRODUCTION_TRACE_SHAPE.taskRows / taskBytes: ADR 0006 (docs/adr/0006-conversation-log-and-daemon-owned-traces.md, from ADR comment cmt_94esdskv3s3y); "
+      + `group, type and seq-gap shape: ${PRODUCTION_TRACE_SHAPE.source}`,
     pools: pools.sources,
     english_pool_ratio: englishPoolRatio,
     compression_references: COMPRESSION_REFERENCES,
