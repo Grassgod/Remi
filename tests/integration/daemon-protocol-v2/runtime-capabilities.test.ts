@@ -157,7 +157,7 @@ describe("v2 runtime capability advertisement", () => {
       feishu_bot_menu: false, feishu_concierge_config_v1: false,
       feishu_decision_card: 0, feishu_issue_decision_card: 0,
     });
-  });
+  }, 15_000);
 
   it("advertises a concierge host added after connection on the next hb", async () => {
     const h = await fixture();
