@@ -66,6 +66,7 @@ import { normalizeWorkspaceRepositories, workspaceDefaultBranchResolver } from "
 import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
 import type {
+  CreateIssueCommentInput,
   CreateOrganizerActionInput,
   CreateTaskHumanRequestInput,
   CreateTaskInput,
@@ -6062,6 +6063,7 @@ ${placementAfter.sql}
     if (!task.issueId || !task.agentId || task.chatSessionId) return null;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return null;
+    let reply: { id: string } | null = null;
     try {
       // If the agent already posted its own comment during this run (the normal
       // path for @mention/comment-triggered tasks — it replies in-thread via a
@@ -6072,25 +6074,36 @@ ${placementAfter.sql}
         return null;
       }
       const parent = task.triggerCommentId ? this.ctx.issues().getIssueComment(task.triggerCommentId) : null;
-      const comment = this.ctx.db.transaction(() => {
-        const created = this.ctx.issues().createIssueComment(task.issueId!, {
-          issueSessionId: task.issueSessionId,
-          authorType: "agent",
-          authorId: task.agentId,
-          // Links the reply to its run so the chat stream can open the transcript.
-          taskId: task.id,
-          parentId: parent && parent.issueId === task.issueId ? parent.id : null,
-          body,
+      const input: CreateIssueCommentInput = {
+        issueSessionId: task.issueSessionId,
+        authorType: "agent",
+        authorId: task.agentId,
+        // Links the reply to its run so the chat stream can open the transcript.
+        taskId: task.id,
+        parentId: parent && parent.issueId === task.issueId ? parent.id : null,
+        body,
+      };
+      // Ruling (ab) item 2: the reply (comment, Session event, log row) and the
+      // turn card's `final_entry_id` commit together. The reply's push, its
+      // notifications and its agent dispatch follow that COMMIT, as fix A does
+      // for a standalone comment.
+      const deferredEvents = createCommitEventQueue();
+      const created = this.ctx.db.transaction(() => {
+        const created = this.ctx.issues().createIssueCommentWithinTransaction(task.issueId!, input, {
+          withinTransaction: true,
+          deferredEvents,
         });
-        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.id });
+        this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.comment.id });
         return created;
       })();
-      return { id: comment.id };
+      reply = { id: created.comment.id };
+      this.ctx.emitCommitEvents(deferredEvents);
+      this.ctx.issues().runIssueCommentPostCommit(created, input);
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
       log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
     }
+    return reply;
   }
 
   private postContextOverflowSystemComment(task: MultiremiTask): void {

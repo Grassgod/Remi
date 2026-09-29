@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { resetLockOrderSentinelEnabledCache } from "@multiremi/store/lock-order-sentinel.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -373,6 +374,119 @@ function verifyFinalReplyReference(db: SqlDatabase, backend: "sqlite" | "pg"): v
   expect(store.listIssueComments(issue.id)).toHaveLength(1);
 }
 
+// F1 (MUL-402 QA): `postAgentReplyComment` owns one transaction for the reply
+// (comment, Session event, log row) and its turn card's `final_entry_id`; the
+// reply's pushes, notifications and agent dispatch run after that COMMIT, in
+// MUL-427's shape (95d9be9e).
+function startLeaderRound(store: MultiremiStore, runtimeId: string) {
+  const runtime = store.registerRuntime({ id: runtimeId, name: "Reply runtime", provider: "codex", workspaceId: "local" });
+  const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
+  const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
+  const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
+  const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  store.startTask(task.id);
+  return { issue, task, teammate };
+}
+
+function verifyReplyDispatchAfterCommit(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const { issue, task, teammate } = startLeaderRound(store, "rt_reply_after_commit");
+  const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
+  const enqueued: Array<{ agentId: string; inTransaction: boolean | undefined }> = [];
+  const unsubscribers = [
+    store.onWorkspaceEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+    store.onTaskEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+    store.onTaskEnqueued((queued) => enqueued.push({ agentId: queued.agentId, inTransaction: db.inTransaction })),
+  ];
+  try {
+    store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+    const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id)!;
+    expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
+      .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
+    expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
+    expect(events.map((event) => event.type)).toContain("comment:created");
+    expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
+  } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
+}
+
+function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "pg"): void {
+  const store = new MultiremiStore(db);
+  const runtime = store.registerRuntime({ id: "rt_reply_final_entry", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
+  const issue = store.createIssue({ title: "Final entry", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const completeRound = (output: string) => {
+    const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output });
+    return task;
+  };
+  const committed = completeRound("Committed answer");
+  const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === committed.id)!;
+  expect(reply.body).toBe("Committed answer");
+  expect(store.findTurnEntry(committed.id)?.metadata.final_entry_id).toBe(reply.id);
+
+  // Reject only the reply's own card update; the terminal transaction writes
+  // `final_entry_id: null` and must still go through.
+  rejectWrite(db, backend, "multiremi_conversation_log", "UPDATE", backend === "pg"
+    ? "NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL"
+    : "NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL");
+  const emitted: string[] = [];
+  const unsubscribe = store.onWorkspaceEvent((event) => emitted.push(event.type));
+  try {
+    const rejected = completeRound("Rolled back answer");
+    expect(store.getTask(rejected.id)?.status).toBe("completed");
+    expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
+    // Comment log rows carry no task_id, so count the session's message rows.
+    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message")
+      .map((entry) => entry.id)).toEqual([reply.id]);
+    expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
+    expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+      .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
+    expect(emitted).not.toContain("comment:created");
+  } finally { unsubscribe(); }
+}
+
+// QA's F1 scenario: with the lock-order sentinel off, a real SQL failure in the
+// reply's dispatch (the teammate task INSERT) arrives after the reply's COMMIT.
+// The leader's task completes, the reply and its log row stay, and the failure
+// is logged once.
+function verifyLateReplyDispatchFailure(db: SqlDatabase, backend: "sqlite" | "pg"): void {
+  const previousSentinel = process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL;
+  process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = "0";
+  resetLockOrderSentinelEnabledCache();
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  try {
+    const store = new MultiremiStore(db);
+    const { issue, task, teammate } = startLeaderRound(store, "rt_reply_late_dispatch");
+    rejectWrite(db, backend, "multiremi_tasks", "INSERT", `NEW.agent_id = '${teammate.id}'`);
+    console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id);
+    expect(reply?.body).toBe(`[@Reply teammate](mention://agent/${teammate.id}) Please verify`);
+    expect(store.getConversationLogEntryById(reply!.id)).toMatchObject({ kind: "message", body_md: reply!.body });
+    expect(store.findTurnEntry(task.id)?.metadata.final_entry_id).toBe(reply!.id);
+    expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.agentId === teammate.id)).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`agent reply comment skipped for ${task.id}`);
+    expect(warnings[0]).toContain("write rejected");
+  } finally {
+    if (previousSentinel === undefined) delete process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL;
+    else process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = previousSentinel;
+    resetLockOrderSentinelEnabledCache();
+  }
+}
+
 function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
   const agent = store.createAgent({ name: "Delivery agent", provider: "codex", workspaceId: "local" });
@@ -511,6 +625,24 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: final reply card links to its comment and ignores a failed comment", async () => {
     await withPostgres(async (db) => verifyFinalReplyReference(db, "pg"));
   });
+  it("SQLite: an automatic reply pushes and dispatches only after its own COMMIT", async () => {
+    await withSqlite(async (db) => verifyReplyDispatchAfterCommit(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: an automatic reply pushes and dispatches only after its own COMMIT", async () => {
+    await withPostgres(async (db) => verifyReplyDispatchAfterCommit(db));
+  }, 30_000);
+  it("SQLite: an automatic reply commits with its turn card's final_entry_id or not at all", async () => {
+    await withSqlite(async (db) => verifyReplyCommitsWithFinalEntry(db, "sqlite"));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: an automatic reply commits with its turn card's final_entry_id or not at all", async () => {
+    await withPostgres(async (db) => verifyReplyCommitsWithFinalEntry(db, "pg"));
+  }, 30_000);
+  it("SQLite: a late automatic-reply dispatch failure keeps the reply and completes the task", async () => {
+    await withSqlite(async (db) => verifyLateReplyDispatchFailure(db, "sqlite"));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a late automatic-reply dispatch failure keeps the reply and completes the task", async () => {
+    await withPostgres(async (db) => verifyLateReplyDispatchFailure(db, "pg"));
+  }, 30_000);
   it("SQLite: pending delivery changes patch the hidden log metadata", async () => {
     await withSqlite(async (db) => verifyPendingDeliveryMetadata(db));
   });

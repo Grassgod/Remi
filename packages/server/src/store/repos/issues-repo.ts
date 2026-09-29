@@ -18,6 +18,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import {
   type CommitEventQueue,
+  type CreatedIssueComment,
   type StoreContext,
   type WorkspaceEvent,
   createCommitEventQueue,
@@ -4566,10 +4567,11 @@ export class IssuesRepo {
     // and no realtime push may reach clients before the row is durable.
     //
     // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
-    // also reached from callers that already own a transaction — the run's
-    // completion transaction in `postAgentReplyComment`, the Organizer action
-    // transaction that passes `withinTransaction` — so it opens a BEGIN only
-    // when it is called from outside one. A second frame there would be a pure
+    // also reached from a caller that already owns a transaction — the
+    // Organizer action transaction that passes `withinTransaction` — so it
+    // opens a BEGIN only when it is called from outside one. (The automatic
+    // reply owns its frame and calls the two halves directly; see
+    // `postAgentReplyComment`.) A second frame there would be a pure
     // savepoint wrapper over the same writes and would push a guarded path past
     // the single BEGIN the depth probes assert. When we do own the frame, we
     // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,
@@ -4582,6 +4584,20 @@ export class IssuesRepo {
     });
     const created = this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
     if (commitEvents) this.ctx.emitCommitEvents(commitEvents);
+    this.runIssueCommentPostCommit(created, input, options);
+    return created.comment;
+  }
+
+  /**
+   * Post-COMMIT half of {@link createIssueCommentWithinTransaction}: member
+   * notifications, then agent dispatch, in main's order. A caller that owns the
+   * comment's transaction runs it after that COMMIT (ruling (ab) item 2).
+   */
+  runIssueCommentPostCommit(
+    created: CreatedIssueComment,
+    input: CreateIssueCommentInput,
+    options: { deferAgentMentionDispatch?: boolean } = {},
+  ): void {
     const { issue, comment, body, authorType, issueSessionId, sessionEventSeq } = created;
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(
@@ -4593,24 +4609,16 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: comment.id, issue_session_id: issueSessionId },
     );
-    if (options.deferAgentMentionDispatch) return comment;
+    if (options.deferAgentMentionDispatch) return;
     const mentionTasks = this.triggerCommentMentions(issue, comment, sessionEventSeq);
     this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
-    return comment;
   }
 
-  private createIssueCommentWithinTransaction(
+  createIssueCommentWithinTransaction(
     issueId: string,
     input: CreateIssueCommentInput,
-    options: { deferAgentMentionDispatch?: boolean; deferredEvents?: CommitEventQueue },
-  ): {
-    issue: MultiremiIssue;
-    comment: MultiremiIssueComment;
-    body: string;
-    authorType: string;
-    issueSessionId: string;
-    sessionEventSeq: number;
-  } {
+    options: CreateIssueCommentOptions,
+  ): CreatedIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
     // Lock before reading Issue/session state so concurrent first comments can
@@ -4669,8 +4677,9 @@ export class IssuesRepo {
       }
     }
     const sessionEvents = this.ctx.issueSessions();
-    // Always the within-transaction flavour: the public entry point guarantees a
-    // frame (its own or the caller's) is open around every write below.
+    // Always the within-transaction flavour: the public entry point, or the
+    // caller that runs this half directly, guarantees a frame is open around
+    // every write below.
     const commentEvent = sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
       authorType,
       authorId: input.authorId ?? null,

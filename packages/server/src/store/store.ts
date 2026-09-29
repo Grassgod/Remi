@@ -3652,6 +3652,18 @@ runMigrations(this.db);
     return this.issues.createIssueComment(issueId, input);
   }
 
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue },
+  ): import("./context.js").CreatedIssueComment {
+    return this.issues.createIssueCommentWithinTransaction(issueId, input, options);
+  }
+
+  runIssueCommentPostCommit(created: import("./context.js").CreatedIssueComment, input: CreateIssueCommentInput): void {
+    this.issues.runIssueCommentPostCommit(created, input);
+  }
+
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,

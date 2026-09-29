@@ -203,6 +203,16 @@ export type CreateIssueCommentOptions =
   | { deferAgentMentionDispatch?: boolean; withinTransaction?: false; deferredEvents?: CommitEventQueue }
   | { deferAgentMentionDispatch?: boolean; withinTransaction: true; deferredEvents: CommitEventQueue };
 
+/** What the write half of an Issue comment committed, for its post-COMMIT half. */
+export interface CreatedIssueComment {
+  issue: MultiremiIssue;
+  comment: MultiremiIssueComment;
+  body: string;
+  authorType: string;
+  issueSessionId: string;
+  sessionEventSeq: number;
+}
+
 export type TaskEnqueuedListener = (task: MultiremiTask) => void;
 export type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
 export type TaskMessagesListener = (
@@ -244,6 +254,18 @@ export interface IssuesSurface {
     input: CreateIssueCommentInput,
     options?: CreateIssueCommentOptions,
   ): MultiremiIssueComment;
+  /**
+   * The comment, its Session event and its log row, inside the caller's
+   * transaction. After COMMIT the caller flushes `deferredEvents`, then runs
+   * {@link runIssueCommentPostCommit}.
+   */
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: { withinTransaction: true; deferredEvents: CommitEventQueue },
+  ): CreatedIssueComment;
+  /** Post-COMMIT half of {@link createIssueCommentWithinTransaction}: notifications, then agent dispatch. */
+  runIssueCommentPostCommit(created: CreatedIssueComment, input: CreateIssueCommentInput): void;
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,
