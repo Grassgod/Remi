@@ -6,10 +6,12 @@
  * degradation, reminder dedupe, and the terminal in-place rewrite.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { receiveNormalizedRuntimeInputs, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { bindReportFrames } from "../../fixtures/report-session.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_CAPABILITY,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -482,13 +484,12 @@ describe("Feishu decision cards for Issue human requests", () => {
     const request = askQuestion(store, taskId);
     const hostToken = await store.createAccessToken({ name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host" });
     const host = { Authorization: `Bearer ${hostToken.token}`, "content-type": "application/json" };
-    const exec = { Authorization: `Bearer ${executor.token}`, "content-type": "application/json" };
     const requestPath = `/api/daemon/tasks/${taskId}/human-requests/${request.id}`;
 
     // (1) The topic's host may read the request.
-    const read = await app.request(requestPath, { headers: host });
-    expect(read.status).toBe(200);
-    expect(await read.json()).toMatchObject({ request: { id: request.id, status: "pending" } });
+    const read = await requestRuntimeRpc(store, "rt_bot", "human_request.get",
+      { task_id: taskId, request_id: request.id }, hostToken.token, "MASTER");
+    expect(read).toMatchObject({ ok: true, request: { id: request.id, status: "pending" } });
     // (2) The topic's host may answer it.
     const respond = await app.request(`${requestPath}/respond`, {
       method: "POST", headers: host,
@@ -497,23 +498,25 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(respond.status).toBe(200);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
     // (3) The topic's host still may not create or expire requests.
-    const create = await app.request(`/api/daemon/tasks/${taskId}/human-requests`, {
-      method: "POST", headers: host, body: JSON.stringify({ kind: "question", payload: {} }),
-    });
-    expect(create.status).toBe(403);
+    const create = await requestRuntimeRpc(store, "rt_bot", "human_request.create", {
+      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
+    }, hostToken.token, "MASTER");
+    expect(create).toMatchObject({ ok: false, code: "authority_revoked" });
     const second = store.createTaskHumanRequest({ taskId, kind: "question", payload: {} });
-    const expire = await app.request(`/api/daemon/tasks/${taskId}/human-requests/${second.id}/expire`, {
-      method: "POST", headers: host, body: JSON.stringify({ status: "cancelled" }),
-    });
-    expect(expire.status).toBe(403);
+    const expire = await requestRuntimeRpc(store, "rt_bot", "human_request.expire", {
+      task_id: taskId, request_id: second.id, status: "cancelled",
+    }, hostToken.token, "MASTER");
+    expect(expire).toMatchObject({ ok: false, code: "authority_revoked" });
     expect(store.getTaskHumanRequest(second.id)?.status).toBe("pending");
     // (4) S2: a genuinely different daemon is refused, on read and on create.
     const stranger = await store.createAccessToken({ name: "stranger", type: "daemon", workspaceId: "local", daemonId: "someone-else" });
-    const strangerHeaders = { Authorization: `Bearer ${stranger.token}`, "content-type": "application/json" };
-    expect((await app.request(requestPath, { headers: strangerHeaders })).status).toBe(403);
-    expect((await app.request(`/api/daemon/tasks/${taskId}/human-requests`, {
-      method: "POST", headers: strangerHeaders, body: JSON.stringify({ kind: "question", payload: {} }),
-    })).status).toBe(403);
+    store.registerRuntime({ id: "rt_stranger", name: "Stranger", provider: "claude", workspaceId: "local", daemonId: "someone-else" });
+    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.get",
+      { task_id: taskId, request_id: request.id }, stranger.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
+    expect(await requestRuntimeRpc(store, "rt_stranger", "human_request.create", {
+      task_id: taskId, request_id: crypto.randomUUID(), kind: "question", payload: {},
+    }, stranger.token, "MASTER")).toMatchObject({ ok: false, code: "authority_revoked" });
     // (5) S2: a daemon in another workspace has no access either.
     const otherWorkspace = store.createWorkspace({ name: "Other", slug: "other" });
     store.registerRuntime({ id: "rt_other", name: "Other host", provider: "codex",
@@ -521,13 +524,13 @@ describe("Feishu decision cards for Issue human requests", () => {
     store.heartbeatRuntime("rt_other", { supportsFeishuBotConfig: true });
     const outsider = await store.createAccessToken({ name: "outsider", type: "daemon",
       workspaceId: otherWorkspace.id, daemonId: "other-host" });
-    expect((await app.request(requestPath, {
-      headers: { Authorization: `Bearer ${outsider.token}`, "content-type": "application/json" },
-    })).status).toBe(403);
+    expect(await requestRuntimeRpc(store, "rt_other", "human_request.get",
+      { task_id: taskId, request_id: request.id }, outsider.token, "MASTER"))
+      .toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
     // The executing daemon keeps full control.
-    expect((await app.request(`${requestPath}/expire`, {
-      method: "POST", headers: exec, body: JSON.stringify({ status: "cancelled" }),
-    })).status).toBe(200);
+    expect(await requestRuntimeRpc(store, "rt_exec", "human_request.expire", {
+      task_id: taskId, request_id: request.id, status: "cancelled",
+    }, executor.token, "MASTER")).toMatchObject({ ok: true, request: { id: request.id, status: "responded" } });
   });
 
   it("S3: the decision lane never calls a receipt or reaction API", async () => {
@@ -960,7 +963,7 @@ describe("Feishu decision card heartbeat delivery", () => {
   async function withRealClient<T>(
     app: ReturnType<typeof createMultiremiApp>,
     store: MultiremiStore,
-    fn: (client: MultiremiDaemonClient) => Promise<T>,
+    fn: (client: MultiremiDaemonClient, receive: () => ReturnType<typeof receiveNormalizedRuntimeInputs>) => Promise<T>,
   ): Promise<T> {
     const token = await store.createAccessToken({
       name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
@@ -971,7 +974,9 @@ describe("Feishu decision card heartbeat delivery", () => {
       const parsed = new URL(url, "http://local");
       return app.request(parsed.pathname + parsed.search, init);
     }) as typeof fetch;
-    try { return await fn(new MultiremiDaemonClient("http://local", token.token)); }
+    const accessToken = await store.verifyAccessToken(token.token);
+    const receive = () => receiveNormalizedRuntimeInputs(store, "rt_bot", { identity: { accessToken, masterToken: false } });
+    try { return await fn(new MultiremiDaemonClient("http://local", token.token), receive); }
     finally { globalThis.fetch = realFetch; }
   }
 
@@ -985,8 +990,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     // host actually receives.
     const taskId = sourceTask(store, agentId, issue.id);
     const request = askQuestion(store, taskId);
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered).toBeTruthy();
     expect(delivered.kind).toBe("decision_card");
     // The fields the host needs to register a click immediately...
@@ -1004,8 +1009,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
     const degradedTaskId = sourceTask(store, agentId, issue.id);
     const degradedRequest = askQuestion(store, degradedTaskId);
-    const degraded = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const degraded = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(degraded.degraded).toBe("notify_none");
     expect(degraded.humanRequestTaskId).toBe(degradedTaskId);
     expect(degraded.humanRequestId).toBe(degradedRequest.id);
@@ -1018,8 +1023,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const { store, agentId, app } = scaffold({ notifyMode: "none" });
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.id).toBeTruthy();
     expect(delivered.degraded).toBe("notify_none");
 
@@ -1046,8 +1051,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     writeInvalidPersonTopicConfig();
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.kind).toBe("decision_card");
     expect(delivered.degraded).toBe("invalid_recipient");
     expect(delivered.humanRequestId).toBe(request.id);
@@ -1091,8 +1096,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     writeInvalidPersonTopicConfig();
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
-    const first = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const first = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1115,8 +1120,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(relay.mentionOpenId()).toBeUndefined();
 
     // The next heartbeat is the same request's text degradation.
-    const second = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const second = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1156,8 +1161,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const legacy = queueLegacyRelayDelivery(store, agentId, issue.id);
     writePersonTopicConfig("ou_the_person");
 
-    const first = await withRealClient(app, store, async (client) => {
-      const ack = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+    const first = await withRealClient(app, store, async (client, receive) => {
+      const ack = await receive();
       expect(ack.status).toBe("ok");
       return ack.pending_feishu_outbound!;
     });
@@ -1187,8 +1192,8 @@ describe("Feishu decision card heartbeat delivery", () => {
       const issue = issueWithTopic(store, agentId);
       db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [settings]);
       askQuestion(store, sourceTask(store, agentId, issue.id));
-      const result = await withRealClient(app, store, async (client) =>
-        client.heartbeatRuntime("rt_bot", undefined, undefined, false, true));
+      const result = await withRealClient(app, store, async (client, receive) =>
+        receive());
       expect(`${label}: ${result.status}`).toBe(`${label}: ok`);
       // The directive still tells the host to run; only the mention list is
       // empty, because there is no usable chat to suppress mentions in.
@@ -1272,8 +1277,8 @@ describe("Feishu decision card heartbeat delivery", () => {
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
     const request = askQuestion(store, taskId);
-    const delivered = (await withRealClient(app, store, async (client) =>
-      (await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true)).pending_feishu_outbound))!;
+    const delivered = (await withRealClient(app, store, async (client, receive) =>
+      (await receive()).pending_feishu_outbound))!;
     expect(delivered.humanRequestTaskId).toBe(taskId);
 
     const handle = decisionLaneHandle();
@@ -1548,7 +1553,7 @@ describe("Feishu decision card heartbeat delivery", () => {
         return { code: 230001, msg: "permission denied" };
       }
       return null;
-    }, async () => withRealBotHostClient(app, store, async (client) => {
+    }, async () => withRealBotHostClient(app, store, async (client, receive) => {
       // A real daemon over a real daemon token, with the real concierge host
       // attached: the delivery below runs through production code, not a stub.
       const daemon = outboundDaemon(store, client);
@@ -1564,7 +1569,7 @@ describe("Feishu decision card heartbeat delivery", () => {
       const reportDeadline = Date.now() + 2_000;
       while (store.feishuBotStatusSnapshot("local").status !== "online" && Date.now() < reportDeadline) await Bun.sleep(5);
       expect(store.feishuBotStatusSnapshot("local").status).toBe("online");
-      const beat = await client.heartbeatRuntime("rt_bot", undefined, undefined, false, true);
+      const beat = await receive();
       const outbound = beat.pending_feishu_outbound!;
       expect(outbound).toBeTruthy();
       // The real ack path: queueFeishuBotOutbound -> handleFeishuBotOutbound ->
@@ -1713,7 +1718,7 @@ function outboundDaemon(store: MultiremiStore, client?: MultiremiDaemonClient): 
 async function withRealBotHostClient<T>(
   app: ReturnType<typeof createMultiremiApp>,
   store: MultiremiStore,
-  fn: (client: MultiremiDaemonClient) => Promise<T>,
+  fn: (client: MultiremiDaemonClient, receive: () => ReturnType<typeof receiveNormalizedRuntimeInputs>) => Promise<T>,
 ): Promise<T> {
   const token = await store.createAccessToken({
     name: "bot-host", type: "daemon", workspaceId: "local", daemonId: "bot-host",
@@ -1727,9 +1732,17 @@ async function withRealBotHostClient<T>(
     }
     return scripted(input, init);
   }) as typeof fetch;
+  const accessToken = await store.verifyAccessToken(token.token);
+  const receive = () => receiveNormalizedRuntimeInputs(store, "rt_bot", { identity: { accessToken, masterToken: false } });
   const client = new MultiremiDaemonClient("http://local", token.token);
-  const drainReports = bindReportFrames(client, store, { headers: { Authorization: `Bearer ${token.token}` } });
-  try { return await fn(client); }
+  const drainReports = bindReportFrames(client, store, {
+    headers: { Authorization: `Bearer ${token.token}` },
+    capabilities: {
+      feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION,
+      feishu_decision_card: FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+    },
+  });
+  try { return await fn(client, receive); }
   finally { await drainReports(); globalThis.fetch = scripted; }
 }
 

@@ -1,4 +1,4 @@
-import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAccessToken } from "@multiremi/contracts/types.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -51,6 +51,7 @@ export async function reportFrame(
   store: MultiremiStore, type: string, payload: Record<string, unknown> = {},
   options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
     headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void;
+    capabilities?: DaemonRuntimeCapabilities;
     onRoundCard?: Parameters<typeof registerDaemonReportHandlers>[3];
     onTraceClosed?: Parameters<typeof registerDaemonReportHandlers>[2] } = {},
 ): Promise<Record<string, any>> {
@@ -84,7 +85,8 @@ export async function reportFrame(
   try {
     await session.handleMessage(JSON.stringify({ v: 2, t: "hello", p: {
       protocol: 2, cli_version: DAEMON_MIN_CLI_VERSION, daemon_id: daemonId,
-      runtimes: runtimeId ? [{ runtime_id: runtimeId, provider: runtime?.provider ?? "claude", max_concurrency: 1, active_task_ids: [] }] : [],
+      runtimes: runtimeId ? [{ runtime_id: runtimeId, provider: runtime?.provider ?? "claude", max_concurrency: 1,
+        active_task_ids: [], capabilities: options.capabilities }] : [],
     } }));
     const seq = options.seq ?? 1;
     const category = daemonFrameCategory(type);

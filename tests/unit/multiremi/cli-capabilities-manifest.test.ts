@@ -177,9 +177,9 @@ describe("CLI capabilities manifest", () => {
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
       // A-5/A-6 remove 25 daemon routes; MUL-412 keeps its two decision routes.
-      exempt: 71,
+      exempt: 68,
       missing: 0,
-      total: 749,
+      total: 746,
     });
     expect(manifest.routes["POST /api/daemon/tasks/:id/messages"]).toBeUndefined();
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])

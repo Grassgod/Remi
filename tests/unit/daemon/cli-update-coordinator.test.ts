@@ -110,18 +110,12 @@ describe("co-resident CLI update coordination", () => {
     expect(codexState.claimsPaused).toBe(true);
   });
 
-  it("rejects a CLI update while a sibling claim request is in flight", async () => {
+  it("rejects a CLI update while a sibling has pending dispatch work", async () => {
     const [claude, codex] = createDaemons();
     const claudeState = state(claude);
     const codexState = state(codex);
     const reports = captureReports(claudeState);
-    const pendingClaim = deferred<null>();
-    codexState.client = {
-      claimTask: async () => await pendingClaim.promise,
-      reportRuntimeUpdateResult: async () => {},
-    };
-    const claimRun = codexState.claimTask("rt_codex");
-    await Promise.resolve();
+    codexState.pendingClaimCount = 1;
 
     await claudeState.handleRuntimeUpdate("rt_claude", "upd_claiming", "v9.9.9", "cli");
 
@@ -133,8 +127,7 @@ describe("co-resident CLI update coordination", () => {
     expect(codexState.claimsPaused).toBe(false);
     expect(codexState.pendingClaimCount).toBe(1);
 
-    pendingClaim.resolve(null);
-    await claimRun;
+    codexState.pendingClaimCount = 0;
     expect(codexState.pendingClaimCount).toBe(0);
   });
 

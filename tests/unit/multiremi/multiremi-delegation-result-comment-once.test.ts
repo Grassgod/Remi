@@ -217,8 +217,10 @@ async function startThroughDaemon(
   task: MultiremiTask,
   runtimeId: string,
 ): Promise<void> {
-  const claimed = await requestJson(base, `/api/daemon/runtimes/${runtimeId}/tasks/claim`, daemonToken);
-  expect(claimed.task.id).toBe(task.id);
+  // The v2 offer pump claims through this same Store operation; this suite's
+  // subject is the result-comment lifecycle, not the removed HTTP claim route.
+  const claimed = store.claimTask(runtimeId);
+  expect(claimed?.id).toBe(task.id);
   await reportThroughDaemon(store, daemonToken, "task.start", task.id);
 }
 

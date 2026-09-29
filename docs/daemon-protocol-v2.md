@@ -135,7 +135,7 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 ### 1.5 RPC 清单
 
-**daemon → server**：`steer.consume`、`human_request.create`、`human_request.expire`、`plugin.desired`、
+**daemon → server**：`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
 `trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
@@ -143,6 +143,12 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `{ "ok": false, "code": <错误码>, "message": "人话", "retryable": <bool> }`。
+
+`human_request.get` 是只读 RPC，请求 `p:{task_id,request_id}`，成功应答 `p:{ok:true,request}`，
+其中 `request` 与原 GET 的 HTTP 200 载荷相同。执行端、绑定 Chat 的 bot host、Issue concierge
+沿用同一任务身份判定；跨 workspace 和未绑定读者拒绝。任务或请求不存在回 `task_not_found`，
+无权限回 `authority_revoked`，均不重试；失败应答另带 `http_status`、`http_code`，供 daemon
+还原原 GET 的业务异常。断线和超时作为请求失败抛给调用方。
 
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
@@ -332,8 +338,17 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 
 ### 3.1 offer / accept / reject 取代 claim
 
-服务端每 runtime 一个常驻单飞泵（沿用 `preparingClaims` 的单飞思想），触发源四个：
+服务端每 runtime 一个常驻单飞泵（沿用 `preparingClaims` 的单飞思想），基础触发源四个：
 `onTaskEnqueued`、任务终态或 reject 释放容量、`hb` 报告的 `active_task_count` 变化、`hello`。
+另由 `daemon:models_updated` 的模型能力变化、Agent / Plugin 就绪 / Runtime / Project 路由配置与设备绑定变化、
+30 s reject 冷却到期、延迟重试的 `next_retry_at` 到期、断连后未 start 的 accept 租约 90 s 恢复到期触发。
+Chat 恢复、Issue workspace 归属/清理、维护 drain 释放都在写入后触发；drain 租约到期另有定时触发。
+终态释放 Agent 或执行 lane 容量时唤醒同 workspace 的在线 runtime，不只唤醒原 runtime。
+跨进程的写后事件统一经 MUL-462 实时扇出；v2 连接层不直接订阅 Store。
+
+每个在线 runtime 每 `DAEMON_OFFER_SWEEP_MS`（60 s）兜底 `kick` 一次；泵正在运行、等应答、
+等窗口恢复或冷却中则跳过。扫描派出任务意味着遗漏了直接触发，必须记带 task id 的 warn，
+并计入 `ws_minute_summary.offer_sweep_recovered`。普通测试默认将扫描间隔设为很大，仅扫描专测开启。
 
 泵每次跑现有 `store.claimTask(runtimeId)`：选任务、置 `dispatched`、**只 hydrate 选中的任务**
 （MUL-389 的原样保留），把今天 claim 响应的内容（含 `auth_token`）作为 `task.offer` 载荷推出。
@@ -356,6 +371,10 @@ daemon 断线期间：queued 留在队列；dispatched 未 accept 的按 §3.1 �
 服务端对账：DB 已终态而 daemon 仍在跑的推 `task.cancelled`；DB 为 running 而 daemon 没列出的
 走 `recoverOrphans`（原 `POST /recover-orphans` 路由删除，逻辑移到这里）。
 
+`hello` 与 `runtime.ready` 的 `active_task_ids` 共用同一个来源：正在跑的任务，加上本 runtime
+的 outbox 中还有未送达终态帧的任务；blocked 分区不计入。断线期间已完成、等待重放的任务因此
+不会被提前判成孤儿。daemon 对自己未在运行的任务收到 `task.cancelled` 时为空操作，不清 outbox。
+
 ### 3.3 派活延迟怎么测
 
 任务表新增 `offered_at` 与 `accepted_at` 两列，分三段报告：
@@ -372,9 +391,11 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 
 ## 4. heartbeat 与 pending_*
 
-`hb` 上行每 15 s，载荷只含 `active_task_count`、outbox 统计、`drain_ack_generation`。
-服务端只做两件事：更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS` 5 分钟的规则不动，
-platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbeatRuntime` 里 7 类待办的
+`hb` 上行每 15 s，载荷包含 `active_task_count`、outbox 统计、`drain_ack_generation`，
+以及各 runtime 的 `{ runtime_id, capabilities }`。能力字段与 HTTP heartbeat 同名同语义；
+缺失的字段视为不支持，覆盖旧值。服务端更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS`
+5 分钟的规则不动，platform-maintenance 与 ssh-mesh 继续用它）、记录 drain ack，并在能力
+变化时更新 runtime metadata，不因无变化的心跳重写 metadata。`heartbeatRuntime` 里 7 类待办的
 合并轮询（MUL-389）在 v2 服务端不再由心跳触发。
 
 **`hb` 的回复按 runtime 逐条给出，且不关连接。** 服务端用 `res` 回
@@ -411,9 +432,16 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 
 008 的 `rt_fkmqtl` 被分配为飞书 concierge，今天心跳 3 s；出站改推送后这个 3 s 节奏不再需要。
 
-各 `pending_*` 改为**创建即推**：在各自的写入口挂 store 事件，WS 层订阅并推给对应 daemon。
+各 `pending_*` 改为**创建即推**：写入口在提交后发布既有实时事件，经 MUL-462 的进程间扇出
+到 runtime 进程，再调用下行泵的统一 `kick(runtimeId)`。v2 连接层不直接订阅 `store.on*`，
+也不另建进程间通道。进程内的 hello、ack 和 drain 直接调用同一入口。
 状态机为 `pending → sent(seq) → acked(claimed) → result`；未 ack 前断连回到 pending，
 下次 `hello` 快照重推。
+`feishu.outbound` 在 ACK 前仅用现有列固定本轮 `claim_token` 和 presentation checkpoint，
+重连重推保持同一载荷；收到 ACK 才转为 `sending`、开始租约并增加领取次数。过期租约重投产生新 token，
+不增加投递单元或改变数据模型。
+升级成功请求重启时，先等同一 runtime 已接收的其他维护请求收尾，避免独立下行帧的
+并发处理把模型探测或技能导入中止；升级自身不参与这个等待。
 
 | 今天 | v2 |
 |---|---|
@@ -422,7 +450,7 @@ platform-maintenance 与 ssh-mesh 继续用它）和记录 drain ack。`heartbea
 | desired 的 10 分钟强制刷新（ADR 0001 的「revision 定义漏字段」防御） | 保留，改为 WS rpc；不算轮询 |
 | `GET tasks/:id/steer` 2.5 s | 创建即推 `task.steer`，daemon 用 rpc `steer.consume` 标记消费 |
 | `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除 |
-| `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；`human_request.create` / `expire` 走 rpc |
+| `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；读取走 `human_request.get`，创建 / 过期走 rpc |
 | `GET .../gc-check` ×4 与 `workspace/cleaned` | rpc（见 §1.5） |
 | 归档：退役流程要 daemon 打包会话 | 下行 `runtime.archive_sessions` + 上行 `runtime.archive_sessions_result`（见 §4.1）；**不**复用 `pending_command` |
 
@@ -683,7 +711,11 @@ concierge 走 WS rpc `trace.fetch`，**不保留** daemon 侧的 HTTP 读路由�
 
 ```
 daemon → hello   { protocol: 2, daemon_id, cli_version, launched_by,
-                   runtimes: [{ runtime_id, provider, max_concurrency, active_task_ids }],
+                   runtimes: [{ runtime_id, provider, max_concurrency, active_task_ids,
+                                capabilities: { supports_batch_import, supports_directory_scan,
+                                  supports_skill_directory, supports_bot_menu,
+                                  agent_plugin_protocol, feishu_concierge_protocol,
+                                  feishu_decision_card, feishu_issue_decision_card } }],
                    caps: ["offer", "steer.push", "trace.read", "trace.subscribe"] }
 server → welcome { protocol: 2, server_version, min_cli_version, session_id,
                    hb_interval_ms: 15000,
@@ -692,6 +724,10 @@ server → welcome { protocol: 2, server_version, min_cli_version, session_id,
 server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
                    min_cli_version, hint }   然后 close(4426)
 ```
+
+服务端在首次派活或推送前写入 `hello` 的 runtime 能力；重连时重新声明。连上后能力变化由下一次
+`hb` 更新。上述能力缺失均按 false/0 处理，不能沿用数据库里的旧值。`feishu_concierge_protocol`
+达到服务端支持版本时同时表示 `supportsFeishuBotConfig`。
 
 服务端在 `hello` 时按 `protocol` 与 `cli_version` 双重判定。`caps` 是加法位：新增帧不升主版本，
 删帧或改语义才升。

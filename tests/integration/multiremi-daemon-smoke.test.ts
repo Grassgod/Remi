@@ -9,7 +9,11 @@ import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "@multiremi/api.js";
+import * as relayHttp from "@shared/relay-http.js";
+import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
+import { bindReportFrames } from "../fixtures/report-session.js";
+import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
+import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiRuntimeReregisterGate,
@@ -18,23 +22,28 @@ import {
   runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
-import { TestMultiremiDaemon, injectDaemonHeartbeatInput } from "../fixtures/daemon-protocol.js";
-import { bindReportFrames } from "../fixtures/report-session.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { traceEventToTaskMessage, type TraceEvent } from "@multiremi/contracts/trace.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
-import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
-
 let db: Database | null = null;
 let workDir: string | null = null;
-const daemons = new Set<TestMultiremiDaemon>();
+const testDaemons: TestMultiremiDaemon[] = [];
+const testServers: ReturnType<typeof startFixtureServer>[] = [];
+const testLayers: DaemonProtocolLayer[] = [];
+
 class MultiremiDaemon extends TestMultiremiDaemon {
-  constructor(options: ConstructorParameters<typeof TestMultiremiDaemon>[0]) {
-    super(options); daemons.add(this);
-  }
+  constructor(options: MultiremiDaemonOptions) { super(options); testDaemons.push(this); }
+}
+
+function startMultiremiServer(options: Parameters<typeof startFixtureServer>[0]) {
+  const server = startFixtureServer({ ...options, onDaemonProtocol: layer => {
+    testLayers.push(layer); options?.onDaemonProtocol?.(layer);
+  } });
+  testServers.push(server);
+  return server;
 }
 
 /**
@@ -63,8 +72,12 @@ afterAll(() => {
 });
 
 afterEach(async () => {
-  for (const daemon of daemons) await daemon.stopAndDrainTestWork();
-  daemons.clear();
+  // Bun can time out a test without reaching its local finally block.
+  for (const daemon of testDaemons) daemon.stop();
+  for (const daemon of testDaemons.splice(0)) await daemon.stopAndDrainTestWork();
+  for (const layer of testLayers) { layer.closeAll(); await layer.drain(); }
+  for (const server of testServers.splice(0)) server.stop(true);
+  for (const layer of testLayers.splice(0)) await layer.drain();
   db?.close();
   db = null;
   if (workDir) {
@@ -1672,7 +1685,11 @@ describe("Bun Multiremi daemon smoke", () => {
       };
     };
     const repoCacheRoot = join(workDir, ".repo-cache");
-    const runDaemonOnce = () => new MultiremiDaemon({
+    const actualNow = Date.now.bind(Date);
+    let elapsedCooldown = 0;
+    const now = spyOn(Date, "now").mockImplementation(() => actualNow() + elapsedCooldown);
+    const runDaemonOnce = async () => {
+      const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       runtimeName: "chat-no-git-runtime",
@@ -1683,7 +1700,13 @@ describe("Bun Multiremi daemon smoke", () => {
       workspacesRoot: join(workDir, "workspaces"),
       repoCacheRoot,
       providerFactory,
-    }).start();
+      });
+      try { await daemon.start(); }
+      finally { await daemon.stopAndDrainTestWork(); }
+      // The queued Issue can be rejected by the outgoing once instance. Advance
+      // its real 30s runtime cooldown without stretching this test's timeout.
+      elapsedCooldown += 30_001;
+    };
 
     try {
       await runDaemonOnce();
@@ -1712,6 +1735,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(prompts[2]).toContain(sourceRepo);
       expect(store.getIssueWorkspace(issue.id)?.repos[0]).toMatchObject({ status: "ready" });
     } finally {
+      now.mockRestore();
       server.stop(true);
     }
   });
@@ -1959,9 +1983,11 @@ describe("Bun Multiremi daemon smoke", () => {
       for (let turn = 0; turn < 2; turn++) {
         const task = store.sendChatMessage(chat.id, { body: "Progress?" }).task;
         expect(task).toMatchObject({ issueId: issue.id, issueSessionId: null, holdsWorkspace: false });
-        await new MultiremiDaemon({ serverUrl: `http://127.0.0.1:${server.port}`, token: token.token,
+        const daemon = new MultiremiDaemon({ serverUrl: `http://127.0.0.1:${server.port}`, token: token.token,
           runtimeName: "bound-chat", provider: "claude", workspaceId: "local", once: true, daemonPort: 0,
-          workspacesRoot, repoCacheRoot: join(workDir, ".repo-cache"), providerFactory }).start();
+          workspacesRoot, repoCacheRoot: join(workDir, ".repo-cache"), providerFactory });
+        try { await daemon.start(); }
+        finally { await daemon.stopAndDrainTestWork(); }
         expect(store.getTask(task.id)).toMatchObject({ status: "completed", sessionId: "bound-chat-provider",
           workDir: join(workspacesRoot, "chats", chat.id) });
       }
@@ -2045,7 +2071,15 @@ describe("Bun Multiremi daemon smoke", () => {
             }),
       };
     };
-    const runDaemonOnce = () => new MultiremiDaemon({
+    const queuedRetries = new Map<string, ReturnType<typeof store.getTask>>();
+    const unsubscribeRetries = store.onTaskEnqueued(task => {
+      if (task.parentTaskId && !queuedRetries.has(task.id)) queuedRetries.set(task.id, structuredClone(task));
+    });
+    const actualNow = Date.now.bind(Date);
+    let elapsedCooldown = 0;
+    const now = spyOn(Date, "now").mockImplementation(() => actualNow() + elapsedCooldown);
+    const runDaemonOnce = async () => {
+      const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
       runtimeName: "chat-resume-runtime",
@@ -2058,7 +2092,11 @@ describe("Bun Multiremi daemon smoke", () => {
       workspacesRoot,
       repoCacheRoot: join(workDir!, ".repo-cache"),
       providerFactory,
-    }).start();
+      });
+      try { await daemon.start(); }
+      finally { await daemon.stopAndDrainTestWork(); }
+      elapsedCooldown += 30_001;
+    };
 
     try {
       await runDaemonOnce();
@@ -2152,7 +2190,8 @@ describe("Bun Multiremi daemon smoke", () => {
         sessionExecutionFingerprint: null,
       });
       const retry = store.listTasks().find((task) => task.parentTaskId === stale.task.id)!;
-      expect(retry).toMatchObject({ attempt: 2, sessionId: null, workDir: null, runtimeId: null });
+      // Observe the fresh retry before the offer pump chooses its runtime.
+      expect(queuedRetries.get(retry.id)).toMatchObject({ attempt: 2, sessionId: null, workDir: null, runtimeId: null });
 
       await runDaemonOnce();
       expect(store.getTask(retry.id)).toMatchObject({
@@ -2182,6 +2221,7 @@ describe("Bun Multiremi daemon smoke", () => {
         latestTaskId: retry.id,
       });
     } finally {
+      unsubscribeRetries(); now.mockRestore();
       server.stop(true);
     }
   });
@@ -2339,8 +2379,14 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     let providerOptions: AcpProviderOptions | null = null;
+    let daemon: MultiremiDaemon | null = null;
+    const request = relayHttp.publicRelayHttpRequest;
+    const catalog = spyOn(relayHttp, "publicRelayHttpRequest").mockImplementation(async (url, init, options) => {
+      if (new URL(url).hostname === "ai.openremi.fun") return { status: 401, text: "{}" };
+      return request(url, init, options);
+    });
     try {
-      const daemon = new MultiremiDaemon({
+      daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
         runtimeName: "codex-home-runtime",
@@ -2380,7 +2426,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(captured?.codexHome).toBe(expectedHome);
       expect(existsSync(join(expectedHome, "auth.json"))).toBe(false);
       expect(existsSync(join(expectedHome, ".multiremi-session-home.json"))).toBe(true);
+      expect(catalog).toHaveBeenCalled();
     } finally {
+      await daemon?.stopAndDrainTestWork();
+      catalog.mockRestore();
       server.stop(true);
     }
   });
@@ -2587,14 +2636,10 @@ describe("Bun Multiremi daemon smoke", () => {
       await waitForCondition(() => store.listRuntimes().length > 0, 5_000);
       const runtime = store.listRuntimes()[0]!;
       const scan = store.createRuntimeLocalSkillListRequest(runtime.id, { root: selectedRoot });
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitForCondition(() => store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)?.status === "completed", 10_000);
       const discovered = store.getRuntimeLocalSkillListRequest(runtime.id, scan.id)!;
       expect(discovered.skills.map((candidate) => candidate.key)).toEqual(["helper"]);
       const request = store.createRuntimeLocalSkillImportRequest(runtime.id, { scan_request_id: scan.id, skill_key: "helper" });
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon);
       await waitForCondition(() => ["completed", "failed"].includes(store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)?.status ?? ""), 10_000);
       const imported = store.getRuntimeLocalSkillImportRequest(runtime.id, request.id)!;
       expect(imported.error).toBeNull();
@@ -2712,9 +2757,6 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
-      // MUL-419: 换回真实 v2 下发
-      bindReportFrames((daemon as any).client, store);
-      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(updateTargets).toEqual(["v9.9.9"]);
@@ -2852,8 +2894,6 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       void daemon.start();
       await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
@@ -2923,8 +2963,6 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       void daemon.start();
       await waitForCondition(() => store.getRuntimeModelListRequest(runtimeId, request.id)?.status === "failed", 5_000);
 
@@ -2978,8 +3016,6 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       });
 
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       desktopDaemon = daemon;
       desktopRun = daemon.start();
       await waitForCondition(() => store.getRuntimeUpdateRequest(runtimeId, updateRequest.id)?.status === "failed", 5_000);
@@ -3135,8 +3171,11 @@ describe("Bun Multiremi daemon smoke", () => {
     });
     const originalHeartbeat = store.heartbeatRuntime.bind(store);
     let injectedRuntimeGone = false;
+    let v2HeartbeatCalls = 0;
     store.heartbeatRuntime = ((runtimeId, options) => {
-      if (!injectedRuntimeGone) {
+      // Hello now declares capabilities through heartbeatRuntime. Lose the row
+      // on the following WS heartbeat so the runtime_gone ack drives recovery.
+      if (options?.claimPending === false && ++v2HeartbeatCalls === 2) {
         injectedRuntimeGone = true;
         // Simulate the server losing the row unexpectedly. The product delete
         // path intentionally protects a daemon's last Runtime and therefore is
@@ -3171,8 +3210,6 @@ describe("Bun Multiremi daemon smoke", () => {
         }),
       });
 
-      // MUL-419: 换回真实 v2 下发
-      await injectDaemonHeartbeatInput(daemon, { onNextRegistration: true });
       await daemon.start();
 
       expect(injectedRuntimeGone).toBe(true);
@@ -3206,6 +3243,7 @@ describe("Bun Multiremi daemon smoke", () => {
     let cleanupCalls = 0;
     let releaseCleanup!: () => void;
     const cleanupBlocked = new Promise<void>((resolveCleanup) => { releaseCleanup = resolveCleanup; });
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
@@ -3232,6 +3270,7 @@ describe("Bun Multiremi daemon smoke", () => {
       },
       terminalAuthorityCleanupRetryDelaysMs: [10],
       authorityProbeDelaysMs: [10],
+      protocolClientOptions: { clock: protocolClock },
     });
     let settled = false;
     const daemonRun = daemon.start().finally(() => { settled = true; });
@@ -3239,6 +3278,7 @@ describe("Bun Multiremi daemon smoke", () => {
     try {
       const port = await waitForLocalPort(daemon);
       await waitForRunningHealth(port);
+      await waitForCondition(() => daemon.daemonProtocolClient().connectionState() === "connected", 5_000);
       const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-cleanup");
       expect(store.retireDaemon(
         "local",
@@ -3246,6 +3286,7 @@ describe("Bun Multiremi daemon smoke", () => {
         retirementPlan.snapshot,
         "local",
       )).toMatchObject({ status: "retired" });
+      protocolClock.advance(15_000);
       await waitForCondition(() => cleanupCalls === 2, 5_000);
       await Bun.sleep(20);
       expect(settled).toBe(false);
@@ -3295,6 +3336,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(((message: unknown) => {
       lines.push(`WARN ${String(message)}`);
     }) as never);
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
@@ -3316,10 +3358,12 @@ describe("Bun Multiremi daemon smoke", () => {
       },
       terminalAuthorityCleanupRetryDelaysMs: [10],
       authorityProbeDelaysMs: [10, 10, 10],
+      protocolClientOptions: { clock: protocolClock },
     });
     const daemonRun = daemon.start();
     try {
       await waitForLocalPort(daemon);
+      await waitForCondition(() => daemon.daemonProtocolClient().connectionState() === "connected", 5_000);
       const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-log");
       expect(store.retireDaemon(
         "local",
@@ -3327,6 +3371,7 @@ describe("Bun Multiremi daemon smoke", () => {
         retirementPlan.snapshot,
         "local",
       )).toMatchObject({ status: "retired" });
+      protocolClock.advance(15_000);
 
       await waitForCondition(
         () => lines.filter((line) => line.startsWith("WARN") && line.includes("authority probe")).length >= 2,
@@ -3377,6 +3422,7 @@ describe("Bun Multiremi daemon smoke", () => {
     let cleanupCalls = 0;
     let claimCalls = 0;
     let claimCallsAtCleanup = -1;
+    const protocolClock = new ManualDaemonProtocolClock();
     const daemon = new MultiremiDaemon({
       serverUrl: `http://127.0.0.1:${server.port}`,
       token: daemonToken.token,
@@ -3402,14 +3448,12 @@ describe("Bun Multiremi daemon smoke", () => {
         },
       },
       terminalAuthorityCleanupRetryDelaysMs: [10],
+      protocolClientOptions: { clock: protocolClock },
     });
-    const daemonClient = (daemon as unknown as {
-      client: { claimTask: (runtimeId: string) => Promise<unknown> };
-    }).client;
-    const originalClaimTask = daemonClient.claimTask.bind(daemonClient);
-    daemonClient.claimTask = async (runtimeId) => {
+    const originalClaimTask = store.claimTask.bind(store);
+    store.claimTask = (runtimeId) => {
       claimCalls++;
-      return await originalClaimTask(runtimeId);
+      return originalClaimTask(runtimeId);
     };
     let settled = false;
     const daemonRun = daemon.start().finally(() => { settled = true; });
@@ -3417,6 +3461,7 @@ describe("Bun Multiremi daemon smoke", () => {
     try {
       const port = await waitForLocalPort(daemon);
       await waitForRunningHealth(port);
+      await waitForCondition(() => daemon.daemonProtocolClient().connectionState() === "connected", 5_000);
       const retirementPlan = store.getDaemonRetirementPlan("local", "daemon-authority-cleanup-failure");
       expect(store.retireDaemon(
         "local",
@@ -3424,6 +3469,7 @@ describe("Bun Multiremi daemon smoke", () => {
         retirementPlan.snapshot,
         "local",
       )).toMatchObject({ status: "retired" });
+      protocolClock.advance(15_000);
       await waitForCondition(() => cleanupCalls >= 3, 5_000);
       const claimsAfterTerminal = claimCalls;
       await Bun.sleep(30);

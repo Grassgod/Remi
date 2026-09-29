@@ -1,3 +1,4 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -83,7 +84,7 @@ describe("assembled task prompt audit", () => {
     });
     const first = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Bootstrap" });
 
-    const firstClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const firstClaim = await taskOfferResponse(store, runtime.id);
     expect(firstClaim.status).toBe(200);
     expect((await firstClaim.json()).task.issue_session_results.map((result: any) => result.id)).toEqual([oldResult.id]);
 
@@ -114,7 +115,7 @@ describe("assembled task prompt audit", () => {
     ]);
 
     const second = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Continue" });
-    const secondClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const secondClaim = await taskOfferResponse(store, runtime.id);
     expect(secondClaim.status).toBe(200);
     const claimed = (await secondClaim.json()).task;
     expect(claimed.id).toBe(second.id);

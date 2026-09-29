@@ -1,3 +1,5 @@
+import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
+import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // HTTP surface the daemon itself calls: install commands and token minting,
 // claim/start/complete, task reports, orphan recovery, GC checks, task history.
@@ -397,12 +399,9 @@ describe("Multiremi API — daemon endpoints", () => {
     const runtimeId = registeredBody.runtimes[0].id;
     expect(store.getAccessToken(credential.tokenId)?.daemonId).toBe(credential.daemonId);
 
-    const desired = await app.request(
-      `/api/daemon/runtimes/${runtimeId}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${credential.token}` } },
-    );
-    expect(desired.status).toBe(200);
-    expect(await desired.json()).toMatchObject({ runtime_id: runtimeId, plugins: [] });
+    const desired = await requestRuntimeRpc(store, runtimeId, "plugin.desired", {}, credential.token);
+    expect(desired.ok).toBe(true);
+    expect(desired).toMatchObject({ runtime_id: runtimeId, plugins: [] });
 
     const heartbeat = await app.request("/api/daemon/heartbeat", {
       method: "POST",
@@ -426,10 +425,7 @@ describe("Multiremi API — daemon endpoints", () => {
       runtimeId,
       prompt: "claim with provisioned daemon",
     });
-    const claim = await app.request(`/api/daemon/runtimes/${runtimeId}/tasks/claim`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${credential.token}` },
-    });
+    const claim = await taskOfferResponse(store, runtimeId, { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(claim.status).toBe(200);
     expect((await claim.json()).task.id).toBe(task.id);
   });
@@ -467,10 +463,7 @@ describe("Multiremi API — daemon endpoints", () => {
       purpose: "daemon",
       daemonId: "daemon-legacy-register",
     });
-    expect((await app.request(
-      `/api/daemon/runtimes/${registerRuntimeId}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${legacyRegisterToken.token}` } },
-    )).status).toBe(200);
+    expect((await requestRuntimeRpc(store, registerRuntimeId, "plugin.desired", {}, legacyRegisterToken.token)).ok).toBe(true);
 
     const rollingRuntime = store.registerRuntime({
       id: "rt_legacy_heartbeat",
@@ -501,10 +494,7 @@ describe("Multiremi API — daemon endpoints", () => {
       purpose: "daemon",
       daemonId: "daemon-legacy-heartbeat",
     });
-    expect((await app.request(
-      `/api/daemon/runtimes/${rollingRuntime.id}/agent-plugins/desired`,
-      { headers: { Authorization: `Bearer ${legacyHeartbeatToken.token}` } },
-    )).status).toBe(200);
+    expect((await requestRuntimeRpc(store, rollingRuntime.id, "plugin.desired", {}, legacyHeartbeatToken.token)).ok).toBe(true);
 
     const memberCliToken = await store.createAccessToken({
       name: "Member old daemon",
@@ -1070,16 +1060,13 @@ describe("Multiremi API — daemon endpoints", () => {
     const runtime = store.registerRuntime({ name: "local", provider: "claude" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     expect((await claim.json()).task.id).toBe(task.id);
 
-    const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+    expect(store.getTask(task.id)?.acceptedAt).toBeString();
     const lease = await app.request(`/api/daemon/tasks/${task.id}/dispatch-lease`, { method: "POST" });
-    expect(lease.status).toBe(200);
-    expect(await lease.json()).toEqual({ status: "dispatched" });
-    expect(Date.parse(store.getTask(task.id)!.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
+    expect(lease.status).toBe(404);
     expect(store.claimTask(runtime.id)).toBeNull();
 
     const start = await reportFrame(store, "task.start", { task_id: task.id,  }, { headers: undefined, authToken: "" });
@@ -1197,7 +1184,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const app = createMultiremiApp({ store });
 
     const claims = await Promise.all(Array.from({ length: 8 }, () =>
-      app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })
+      taskOfferResponse(store, runtime.id)
     ));
     expect(claims.every((response) => response.status === 200)).toBe(true);
     const bodies = await Promise.all(claims.map((response) => response.json()));
@@ -1209,7 +1196,7 @@ describe("Multiremi API — daemon endpoints", () => {
       runtimeId: runtime.id,
     });
 
-    const emptyClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const emptyClaim = await taskOfferResponse(store, runtime.id);
     expect(emptyClaim.status).toBe(200);
     expect(await emptyClaim.json()).toEqual({ task: null });
   });
@@ -1231,9 +1218,9 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(waiting.id);
     store.markTaskWaitingLocalDirectory(waiting.id, "/tmp/project");
 
-    const recovered = await app.request(`/api/daemon/runtimes/${runtime.id}/recover-orphans`, { method: "POST" });
-    expect(recovered.status).toBe(200);
-    expect(await recovered.json()).toEqual({ orphaned: 2, retried: 2 });
+    await reconcileRuntimeReady(store, runtime.id);
+    expect([running, waiting].filter(task => store.getTask(task.id)?.status === "failed")).toHaveLength(2);
+    expect(store.listTasks().filter(task => task.parentTaskId === running.id || task.parentTaskId === waiting.id)).toHaveLength(2);
     expect(store.getTask(running.id)?.failureReason).toBe("runtime_recovery");
     expect(store.getTask(running.id)?.completedAt).toBe(store.getTask(running.id)?.failedAt);
     expect(store.getTask(waiting.id)?.waitReason).toBeNull();
@@ -1262,7 +1249,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const waitingTask = store.createTask({ agentId: agent.id, prompt: "wait for checkout" });
     const app = createMultiremiApp({ store });
 
-    expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(task.id);
+    expect((await (await taskOfferResponse(store, runtime.id)).json()).task.id).toBe(task.id);
 
     const session = await reportFrame(store, "task.session_pin", { task_id: task.id, session_id: "sess-live", work_dir: "/tmp/live" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(session.ok).toBe(true);
@@ -1347,7 +1334,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(terminalProgress.ok).toBe(true);
     expect(terminalProgress).toEqual({ ok: true });
 
-    expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(waitingTask.id);
+    expect((await (await taskOfferResponse(store, runtime.id)).json()).task.id).toBe(waitingTask.id);
     store.markTaskWaitingLocalDirectory(waitingTask.id, "/tmp/repo");
     const skippedSession = await reportFrame(store, "task.session_pin", { task_id: waitingTask.id, session_id: "sess-should-not-stick", work_dir: "/tmp/waiting" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(skippedSession.ok).toBe(true);

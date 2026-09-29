@@ -1,6 +1,7 @@
+import { taskOfferResponse, receiveTaskOffer } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { MultiremiDaemonClient, normalizeDaemonClaimTask } from "@multiremi/client.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import { createStore, db, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -614,7 +615,7 @@ describe("Bun Multiremi project docs API", () => {
     store.createProjectDoc(project.id, { kind: "wiki", title: "Architecture", summary: "Hub and spoke" });
     store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "go" });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const claimed = (await claim.json()).task;
     expect(claimed.project_docs).toBeUndefined();
@@ -627,7 +628,7 @@ describe("Bun Multiremi project docs API", () => {
       const parsed = new URL(url);
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
-    const normalized = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
+    const normalized = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
     expect(normalized?.projectDocs).toBeNull();
   });
 
@@ -642,7 +643,7 @@ describe("Bun Multiremi project docs API", () => {
     projectKnowledge.hydrateTaskKnowledge = async () => { throw new Error("planned OpenViking outage"); };
     const app = createMultiremiApp({ store, projectKnowledge });
 
-    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claim = await taskOfferResponse(store, runtime.id, { projectKnowledge });
     expect(claim.status).toBe(200);
     const claimed = (await claim.json()).task;
     expect(claimed.knowledge_warnings[0]).toContain("Project Wiki loading failed");

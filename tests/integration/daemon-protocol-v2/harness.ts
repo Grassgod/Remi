@@ -10,9 +10,11 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 import type { DaemonProtocolLayer, DaemonProtocolRpcHandler } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
-import type { MultiremiDaemon, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
+import { registerDaemonReportHandlers } from "@multiremi/api/daemon-protocol/report-handlers.js";
+import type { MultiremiDaemon, MultiremiDaemonOptions, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import type { PeerChannel } from "../../../packages/server/src/api/peer/peer-channel.js";
 
 export interface LedgerEntry {
   sessionId: string;
@@ -80,6 +82,9 @@ export class DaemonProtocolHarness {
   private runError: unknown;
   private createDaemons!: () => MultiremiDaemon[];
   private apiRole: "all" | "runtime" = "all";
+  private peerChannel: PeerChannel | null = null;
+  private peerSecret = "";
+  private onRoundCard: ((taskId: string) => void) | null = null;
   get client() { return this.daemons[0]!.daemonProtocolClient(); }
   get daemon() { return this.daemons[0]!; }
   get url() { return `http://127.0.0.1:${this.server.port}`; }
@@ -87,6 +92,7 @@ export class DaemonProtocolHarness {
   static async create(options: {
     providers?: string[];
     runtimeId?: string;
+    daemonOptions?: Pick<MultiremiDaemonOptions, "once" | "onceOfferTimeoutMs" | "maxConcurrency" | "providerFactory" | "requestTimeoutMs">;
     runtimeIds?: string[];
     outboxBackoffMs?: number[];
     providerFactory?: MultiremiDaemonProviderFactory;
@@ -95,14 +101,20 @@ export class DaemonProtocolHarness {
     cliVersion?: string;
     updateRunner?: (version: string) => Promise<string>;
     apiRole?: "all" | "runtime";
+    peerChannel?: PeerChannel;
+    peerSecret?: string;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
+    onRoundCard?: (taskId: string) => void;
   } = {}): Promise<DaemonProtocolHarness> {
     const h = new DaemonProtocolHarness();
     try {
       h.store.ensureLocalWorkspace();
       const daemonId = options.omitDaemonId ? "protocol-fixture-device" : "dmn_fixture";
       h.apiRole = options.apiRole ?? "all";
+      h.peerChannel = options.peerChannel ?? null;
+      h.peerSecret = options.peerSecret ?? "";
+      h.onRoundCard = options.onRoundCard ?? null;
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
       h.createDaemons = () => {
@@ -131,6 +143,7 @@ export class DaemonProtocolHarness {
               return socket;
             },
           },
+          ...options.daemonOptions,
         })));
         for (const daemon of daemons) {
           // Inert providers have no installed CLI or ACP bridge to inspect.
@@ -155,8 +168,12 @@ export class DaemonProtocolHarness {
     this.server = startMultiremiServer({
       store: this.store, scheduler: null, backgroundJobs: false, hostname: "127.0.0.1", port,
       authToken: "fixture-master", apiRole: this.apiRole,
+      peerChannel: this.peerChannel, peerSecret: this.peerSecret,
       onDaemonProtocol: layer => {
         this.layer = layer;
+        if (this.onRoundCard) {
+          registerDaemonReportHandlers(layer, this.store, undefined, taskId => this.onRoundCard?.(taskId));
+        }
         // Observe persisted business fields after successful handlers, not ingress or ACK receipt.
         const handlers = (layer as any).eventHandlers as Map<string, DaemonProtocolRpcHandler>;
         for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {
@@ -243,6 +260,11 @@ export class DaemonProtocolHarness {
     if (this.layer) await waitFor(() => this.layer.registry.size === 0, "server socket close callbacks");
   }
 
+  async waitForDaemonExit(): Promise<void> {
+    await Promise.all(this.runs);
+    if (this.runError) throw this.runError;
+  }
+
   async restartDaemon(): Promise<void> { await this.stopDaemon(); await this.startDaemon(); }
 
   async recreateDaemon(): Promise<void> {
@@ -287,6 +309,7 @@ export class DaemonProtocolHarness {
       try {
         this.teardownSteps.push("drain background");
         while (this.serverWork.size) await Promise.allSettled([...this.serverWork]);
+        await this.layer?.drain();
         if (this.server) await waitFor(() => this.server.pendingRequests === 0, "server requests to drain");
       } finally {
         try {

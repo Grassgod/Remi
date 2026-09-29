@@ -1,7 +1,9 @@
+import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // Runtime metadata/usage, console scoping, delete cascade, and the async request
 // queues (model list, update, local skill list/import) plus register/deregister.
 import { afterEach, describe, expect, it } from "bun:test";
+import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -232,7 +234,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     });
     expect((await updatedModels.json()).models[0].id).toBe("gpt-5.4");
 
-    const claim = await app.request("/api/daemon/runtimes/rt_api/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_api");
     expect((await claim.json()).task.id).toBe(task.id);
     await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "codex", model: "gpt-5", input_tokens: 11, output_tokens: 5, cache_read_tokens: 2 }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
@@ -365,7 +367,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "legacy usage" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request("/api/daemon/runtimes/rt_total_only/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_total_only");
     expect((await claim.json()).task.id).toBe(task.id);
 
     // Exactly what a pre-0.2.49 daemon posts: a total, no splits.
@@ -415,7 +417,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "modern usage" });
     const app = createMultiremiApp({ store });
 
-    const claim = await app.request("/api/daemon/runtimes/rt_split/tasks/claim", { method: "POST" });
+    const claim = await taskOfferResponse(store, "rt_split");
     expect((await claim.json()).task.id).toBe(task.id);
     const report = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{
           provider: "claude",
@@ -1354,7 +1356,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(store.listSkills("local").some((skill) => skill.name === "Late Import")).toBe(false);
   });
 
-  it("serves original daemon heartbeat pending request protocol", async () => {
+  it("keeps HTTP heartbeat upgrade-only while v2 delivers pending requests", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_heartbeat_flow", name: "Heartbeat runtime", provider: "codex" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
@@ -1394,12 +1396,15 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     });
     const camelBatchBody = await camelBatchHeartbeat.json();
     expect(camelBatchHeartbeat.status).toBe(200);
-    expect(camelBatchBody.pending_local_skill_import).toMatchObject({ id: camelBatchImportOne.id, skill_key: "camel-one" });
+    expect(camelBatchBody.pending_local_skill_import).toBeUndefined();
     expect(camelBatchBody.pending_local_skill_imports).toBeUndefined();
+    // The legacy selector still caps a non-batch claim at one entity.
+    expect(store.claimRuntimeLocalSkillImportRequests(camelBatchRuntime.id, 1))
+      .toEqual([expect.objectContaining({ id: camelBatchImportOne.id, skillKey: "camel-one" })]);
     expect(store.getRuntimeLocalSkillImportRequest(camelBatchRuntime.id, camelBatchImportOne.id)?.status).toBe("running");
     expect(store.getRuntimeLocalSkillImportRequest(camelBatchRuntime.id, camelBatchImportTwo.id)?.status).toBe("pending");
 
-    const taskClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const taskClaim = await taskOfferResponse(store, runtime.id);
     expect(taskClaim.status).toBe(200);
     expect(store.getRuntimeModelListRequest(runtime.id, modelRequest.id)?.status).toBe("pending");
     expect(store.getRuntimeUpdateRequest(runtime.id, updateRequest.id)?.status).toBe("pending");
@@ -1409,18 +1414,22 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runtime_id: runtime.id, supports_batch_import: true }),
     });
-    const heartbeatBody = await heartbeat.json();
+    const httpAck = await heartbeat.json();
+    expect(httpAck.pending_model_list).toBeUndefined();
+    expect(httpAck.pending_local_skills).toBeUndefined();
+    expect(httpAck.pending_local_skill_import).toBeUndefined();
+    const heartbeatBody = await receiveRuntimeInputs(store, runtime.id);
 
     expect(heartbeat.status).toBe(200);
+    expect(httpAck.pending_update).toMatchObject({ id: updateRequest.id, target_version: "v9.9.9" });
     expect(heartbeatBody).toMatchObject({
       status: "ok",
-      pending_update: { id: updateRequest.id, target_version: "v9.9.9" },
       pending_model_list: { id: modelRequest.id },
       pending_local_skills: { id: localSkillRequest.id },
       pending_local_skill_import: { id: importOne.id, skill_key: "review-helper" },
     });
-    expect(heartbeatBody.runtime_id).toBeUndefined();
-    expect(heartbeatBody.pending_local_skill_imports.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
+    expect(heartbeatBody.runtime_id).toBe(runtime.id);
+    expect(heartbeatBody.pending_local_skill_imports!.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
     expect(store.getRuntimeModelListRequest(runtime.id, modelRequest.id)?.status).toBe("running");
     expect(store.getRuntimeUpdateRequest(runtime.id, updateRequest.id)?.status).toBe("running");
     expect(store.getRuntimeLocalSkillListRequest(runtime.id, localSkillRequest.id)?.status).toBe("running");
@@ -1438,9 +1447,11 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(legacyHeartbeat.status).toBe(200);
     expect(legacyHeartbeatBody).toMatchObject({
       status: "ok",
-      pending_local_skill_import: { id: legacyImportOne.id, skill_key: "legacy-one" },
     });
+    expect(legacyHeartbeatBody.pending_local_skill_import).toBeUndefined();
     expect(legacyHeartbeatBody.pending_local_skill_imports).toBeUndefined();
+    expect(store.claimRuntimeLocalSkillImportRequests(legacyRuntime.id, 1))
+      .toEqual([expect.objectContaining({ id: legacyImportOne.id, skillKey: "legacy-one" })]);
     expect(store.getRuntimeLocalSkillImportRequest(legacyRuntime.id, legacyImportOne.id)?.status).toBe("running");
     expect(store.getRuntimeLocalSkillImportRequest(legacyRuntime.id, legacyImportTwo.id)?.status).toBe("pending");
 
