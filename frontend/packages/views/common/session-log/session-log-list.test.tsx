@@ -312,6 +312,12 @@ describe("SessionLogList", () => {
     const capped = view.container.querySelector("[data-session-log-new-messages]");
     expect(capped!.textContent).toContain("99+");
     expect(capped!.getAttribute("aria-label")).toContain("123");
+    act(() => {
+      fireEvent.click(capped!);
+      raf.runFrame();
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("returning");
+    expect(view.container.querySelector("[data-session-log-new-messages]")).toBeNull();
     view.restore();
   });
 

@@ -11,7 +11,7 @@ behavior is covered as follows; the old fold controls are intentionally absent.
 | loads older timeline rows from the top while preserving the logical anchor | `issue-log.test.ts`: locates a deep-link window and extends sparse ends; `issue-log-check.ts --step2`: expands both ends without displacement |
 | decides follow-the-latest from the stick hook, not Virtuoso's 120px band | `use-stick-to-bottom.test.ts`: does not fight the user after release and honours `pinThresholdPx` |
 | returns to following once the reader scrolls back to the end | `use-stick-to-bottom.test.ts`: releases on user scroll and re-pins on return |
-| offers a jump-to-latest chip when scrolled away from the newest entry | `session-log-list.test.tsx`: counts new messages while released and returns on click; shows no chip while pinned |
+| offers a jump-to-latest chip when scrolled away from the newest entry | `frontend/packages/views/common/session-log/session-log-list.test.tsx:319`: clicking the chip enters `returning` and removes it; shows no chip while pinned. Mutation: `session-log-list.tsx:119` `onClick` replaced with a no-op -> this test fails (`released` instead of `returning`). |
 | sends back-to-latest through the stick hook, not the virtualizer | `use-stick-to-bottom.test.ts`: walks released, returning, pinned through `returnToBottom` |
 | collapses non-trailing activity blocks and expands the last one by default | `issue-detail.test.tsx`: renders all system log rows in seq order without folding |
 | truncates the trailing activity block to the most recent 8 entries with a show-more toggle | `issue-detail.test.tsx`: renders all 10 system rows without truncation; `session-log-list.test.tsx` covers the shared DOM cap |
