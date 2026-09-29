@@ -416,6 +416,24 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/daemon/runtimes/:runtimeId/tasks/claim", // Session projection; C-2/data.
   "GET /api/multiremi/tasks", // Hydrated task rows; C-2 bounded reads/data.
 
+  // QA r1: Messaging Core SELECT * reads unbounded message text/raw and source
+  // allowlists/conversation names. C-2 needs bounded projections plus reply data.
+  "GET /api/workspaces/:workspaceId/messaging/messages", // MessagingRepo.listMessages.
+  "GET /api/workspaces/:workspaceId/feishu/messages", // Compat listMessages.
+  "GET /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId", // getMessage.
+  "GET /api/workspaces/:workspaceId/messaging/conversations", // listSources/conversations.
+  "GET /api/workspaces/:workspaceId/feishu/chats", // Compat listSources/conversations.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/resolve", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/notify", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/draft-reply", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/propose-issue", // requireMessage.
+  "POST /api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId/create-issue", // requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/resolve", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/notify", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/draft-reply", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/propose-issue", // Compat requireMessage.
+  "POST /api/workspaces/:workspaceId/feishu/messages/:messageId/create-issue", // Compat requireMessage.
+
   // Audit: full message/session/comment collections. C-2/MUL-402 + byte data.
   "GET /api/multiremi/tasks/:id/messages",
   "GET /api/daemon/tasks/:taskId/messages",

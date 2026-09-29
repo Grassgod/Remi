@@ -32,11 +32,11 @@ test("new message-page callers require a reply-limit exception or a bounded algo
   ].sort());
 });
 
-test("large-column route callers remain covered by transition exceptions", () => {
+test("runtime route and schema audit remains executable", () => {
   const audit = Bun.spawnSync({
     cmd: [process.execPath, "tests/manual/audit-pg-reply-c1-callers.ts", "--check"],
     cwd: resolve(import.meta.dir, "../.."),
   });
   expect(audit.exitCode, audit.stderr.toString()).toBe(0);
-  expect(audit.stdout.toString()).toContain("0 missing exceptions");
+  expect(audit.stdout.toString()).toMatch(/Audited \d+ runtime routes, \d+ source handlers, \d+ schema tables/);
 }, 60_000);

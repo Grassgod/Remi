@@ -357,7 +357,9 @@ function dbReplyMaxBytes(): number {
 export function postgresReplyMaxBytes(): number {
   const limit = dbReplyMaxBytes();
   const { method, route } = currentDbReplyOrigin();
-  if (DB_REPLY_TRANSITION_EXCEPTIONS.has(`${method} ${route}`)) return RESULT_BUFFER_BYTES;
+  // Hono dispatches HEAD through GET handlers; the origin keeps the wire method for logs.
+  const dispatchedMethod = method === "HEAD" ? "GET" : method;
+  if (DB_REPLY_TRANSITION_EXCEPTIONS.has(`${dispatchedMethod} ${route}`)) return RESULT_BUFFER_BYTES;
   return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
 }
 

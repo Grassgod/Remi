@@ -70,13 +70,21 @@ describe("MUL-398 C-1 effective reply limit", () => {
         const [method, pattern] = key.split(" ") as [string, string];
         const app = new Hono();
         app.use("*", createRequestMetricsMiddleware(metrics));
-        app.on(method, pattern, c => c.json({
-          origin: currentDbReplyOrigin(), bytes: postgresReplyMaxBytes(), rows: taskMessagePageRows(pgMarker),
-        }));
+        app.on(method, pattern, c => {
+          c.header("X-Reply-Limit", String(postgresReplyMaxBytes()));
+          return c.json({
+            origin: currentDbReplyOrigin(), bytes: postgresReplyMaxBytes(), rows: taskMessagePageRows(pgMarker),
+          });
+        });
         const response = await app.request(pattern.replace(/:[^/]+/g, "fixture"), { method });
         expect(await response.json(), key).toEqual({
           origin: { method, route: pattern }, bytes: 64 * MIB, rows: 8,
         });
+        if (method === "GET") {
+          const head = await app.request(pattern.replace(/:[^/]+/g, "fixture"), { method: "HEAD" });
+          expect(head.status, key).toBe(200);
+          expect(head.headers.get("X-Reply-Limit"), key).toBe(String(64 * MIB));
+        }
       }
     } finally { db.close(); }
   });
@@ -125,6 +133,61 @@ if (adminUrl) {
 }
 
 describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
+  it("keeps canonical and Feishu message reads above 8 MiB available", async () => {
+    defaultLimit();
+    const admin = new Bun.SQL(adminUrl!, { max: 1 });
+    const name = `mul398_c1_messaging_${process.pid}`;
+    let db: PostgresSyncDatabase | undefined;
+    try {
+      await admin.unsafe(`CREATE DATABASE ${name}`);
+      const url = new URL(adminUrl!); url.pathname = `/${name}`;
+      db = new PostgresSyncDatabase(url.toString());
+      const store = new MultiremiStore(db);
+      store.ensureLocalWorkspace();
+      store.messaging.upsertConnection({
+        id: "mconn_c1", workspaceId: "local", provider: "feishu", channel: "feishu",
+        name: "Fixture", status: "ready",
+      });
+      store.messaging.upsertSource({
+        id: "msrc_c1", workspaceId: "local", connectionId: "mconn_c1", name: "Fixture",
+        allowlist: [{ externalConversationId: "conversation_c1", addedAt: "2026-09-29T00:00:00.000Z" }],
+      });
+      store.messaging.ingestMessages({ connectionId: "mconn_c1", sourceId: "msrc_c1", messages: [{
+        externalMessageId: "message_c1", externalConversationId: "conversation_c1",
+        conversationName: "Fixture", conversationKind: "group", externalThreadId: null,
+        externalRootId: null, externalParentId: null,
+        sender: { externalSenderId: "sender_c1", displayName: "Fixture", kind: "user", isSelf: false },
+        text: "fixture", attachments: [], mentions: [], reactions: [], url: null,
+        sentAt: "2026-09-29T00:01:00.000Z", editedAt: null, recalled: false, raw: {},
+      }] });
+      db.prepare("UPDATE multiremi_message_messages SET searchable_text = repeat('x', ?) WHERE external_message_id = ?")
+        .run(9 * MIB, "message_c1");
+      const app = createMultiremiApp({ store, authToken: "c1-fixture", backgroundJobs: false });
+      const headers = { Authorization: "Bearer c1-fixture" };
+      for (const path of [
+        "/api/workspaces/local/messaging/messages",
+        "/api/workspaces/local/feishu/messages",
+        "/api/workspaces/local/messaging/connections/mconn_c1/messages/message_c1",
+      ]) {
+        const get = await app.request(path, { headers });
+        expect(get.status, path).toBe(200);
+        expect((await get.text()).length, path).toBeGreaterThan(8 * MIB);
+        const head = await app.request(path, { method: "HEAD", headers });
+        expect(head.status, path).toBe(200);
+      }
+      db.prepare("UPDATE multiremi_message_sources SET allowlist = ? WHERE id = ?")
+        .run(JSON.stringify([{ externalConversationId: "x".repeat(9 * MIB), addedAt: "2026-09-29T00:00:00.000Z" }]), "msrc_c1");
+      for (const path of ["/api/workspaces/local/messaging/conversations", "/api/workspaces/local/feishu/chats"]) {
+        expect((await app.request(path, { headers })).status, path).toBe(200);
+        expect((await app.request(path, { method: "HEAD", headers })).status, path).toBe(200);
+      }
+    } finally {
+      db?.close();
+      await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await admin.end();
+    }
+  });
+
   it("allows exception replies and rejects ordinary replies before parse at the same effective limit", async () => {
     defaultLimit();
     const db = new PostgresSyncDatabase(adminUrl!);
@@ -151,6 +214,8 @@ describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
           const exception = await app.request(path);
           expect(exception.status).toBe(200);
           expect(await exception.json()).toEqual({ bytes: 24 * MIB });
+          const head = await app.request(path, { method: "HEAD" });
+          expect(head.status, path).toBe(200);
         }
         expect(lines.some(line => JSON.parse(line).event === "api_db_reply_rejected")).toBe(false);
         const ordinary = await app.request("/api/c1/nonexception");
