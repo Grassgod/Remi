@@ -41,20 +41,26 @@ it("Q418-http15: real v2 model and GC timers produce no idle HTTP in an accelera
     requests.length = 0;
     const gcBefore = gc.mock.calls.length;
     const discoveriesBefore = modelDiscoveries;
+    const desiredBefore = h.ledger.filter(entry => entry.type === "plugin.desired").length;
+    (h.daemon as unknown as { nextPluginDesiredAt: number }).nextPluginDesiredAt = Date.now() + intervalMs;
+    h.daemon.wakeClaim();
     await Bun.sleep(intervalMs + 100);
+    await waitFor(() => h.ledger.filter(entry => entry.type === "plugin.desired").length > desiredBefore,
+      "ten-minute plugin desired RPC", 5_000);
     await h.layer.drain();
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const modelsPath = `/api/daemon/runtimes/${runtimeId}/models`;
     const models = requests.filter(request => request.method === "PUT" && request.path === modelsPath);
     expect(gc.mock.calls.length).toBeGreaterThan(gcBefore);
     expect(modelDiscoveries).toBeGreaterThan(discoveriesBefore);
+    expect(h.ledger.filter(entry => entry.type === "plugin.desired").length).toBeGreaterThan(desiredBefore);
     expect(models.length).toBeLessThanOrEqual(1);
     expect(requests, "idle model reports and GC must use v2 frames, not HTTP").toEqual([]);
     for (const path of ["/api/daemon/heartbeat", `/api/daemon/runtimes/${runtimeId}/tasks/claim`,
       `/api/daemon/runtimes/${runtimeId}/agent-plugins/desired`, "/api/daemon/tasks/any/status"]) {
       expect(requests.some(request => request.path === path)).toBe(false);
     }
-    console.info(`[Q418-http15] accelerated=${intervalMs}ms model_discoveries=${modelDiscoveries - discoveriesBefore} gc_rpc_cycles=${gc.mock.calls.length - gcBefore} requests=${JSON.stringify(requests)}`);
+    console.info(`[Q418-http15] accelerated=${intervalMs}ms model_discoveries=${modelDiscoveries - discoveriesBefore} gc_rpc_cycles=${gc.mock.calls.length - gcBefore} desired_rpcs=${h.ledger.filter(entry => entry.type === "plugin.desired").length - desiredBefore} requests=${JSON.stringify(requests)}`);
   } finally {
     gc.mockRestore();
     fetchSpy.mockRestore();
