@@ -75,7 +75,7 @@ describe("MUL-398 C-1 effective reply limit", () => {
   it("warns once per resolution with only the invalid override as variable data", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      for (const value of ["bad", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "bad\nvalue"]) {
+      for (const value of ["bad", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "bad\nvalue", "1\n", "\n1", "0x10", "1e3"]) {
         warn.mockClear();
         expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: value })).toBe(8 * MIB);
         expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify(value)]]);

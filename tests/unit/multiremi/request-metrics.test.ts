@@ -378,7 +378,10 @@ describe("MUL-386 bridge reply limit — environment resolution", () => {
     expect(resolveDbReplyMaxBytes({})).toBe(8_388_608);
     expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "" })).toBe(8_388_608);
     expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: "   " })).toBe(8_388_608);
-    for (const invalid of ["abc", "-1", "-8388608", "8mb", "NaN", "Infinity", "1.5"]) {
+    for (const invalid of [
+      "abc", "-1", "-8388608", "8mb", "NaN", "Infinity", "1.5",
+      "1\n", "\n1", " 1\n", "1\t", "0x10", "1e3", "+1",
+    ]) {
       expect(resolveDbReplyMaxBytes({ MULTIREMI_PG_REPLY_MAX_BYTES: invalid }), invalid).toBe(8_388_608);
     }
   });

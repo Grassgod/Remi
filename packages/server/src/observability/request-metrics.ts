@@ -852,14 +852,16 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
 
 /**
  * Unset/empty means 8 MiB; explicit 0 is the emergency disable switch.
+ * Only one space-padded decimal integer is valid: `Number()` alone would also
+ * take "1\n", "0x10" or "1e3" and arm a limit nobody meant to set.
  * Invalid values warn once when the bridge caches this resolution, with only
  * the raw override as variable information, and fall back to the default.
  */
 export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES?.trim();
-  if (!raw) return DEFAULT_DB_REPLY_MAX_BYTES;
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+  const raw = env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  if (!raw?.trim()) return DEFAULT_DB_REPLY_MAX_BYTES;
+  const parsed = /^ *\d+ *$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(parsed)) {
     console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_MAX_BYTES", JSON.stringify(env.MULTIREMI_PG_REPLY_MAX_BYTES));
     return DEFAULT_DB_REPLY_MAX_BYTES;
   }
