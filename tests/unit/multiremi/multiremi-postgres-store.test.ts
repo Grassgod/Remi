@@ -1585,7 +1585,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // MUL-476 refuses moving an Issue that still has a child, so the parent can
     // only be in B as a legacy row from before that rule, which is not migrated.
     expect(() => store.updateIssue(parent.id, { workspaceId: workspaceB }))
-      .toThrow("Detach parent, child and dependency relationships, and cancel or finish its tasks, before moving an issue to another workspace");
+      .toThrow("Detach parent, child and dependency relationships, cancel or finish its tasks, and clean or abandon its Issue workspace before moving an issue to another workspace");
     expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceA);
     db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [workspaceB, parent.id]);
     expect(store.getIssue(parent.id)?.workspaceId).toBe(workspaceB);
