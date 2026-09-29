@@ -396,6 +396,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect((bridge.metadata as Record<string, unknown>).result_comment_id).toBeNull();
     }));
 
+    // Cold PG migrations plus five complete HTTP/task lifecycles take 4.94-5.26s
+    // locally; retain every assertion while allowing this fixture to finish.
     it("drains five child reports into one round and marks the lane cursor covered", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
       const app = createMultiremiApp({ store, authToken: "test-root" });
@@ -445,7 +447,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         .filter((event) => event.kind === "delegation_report");
       expect(bridges).toHaveLength(5);
       expect(new Set(bridges.map((event) => event.taskId))).toEqual(new Set(childTasks.map((task) => task.id)));
-    }));
+    }), backend === "postgres" ? 15_000 : 5_000);
 
     it("reproduces the MUL-383 HTTP path step by step", async () => withStore(backend, async (store) => {
       const f = fiveChildFixture(store);
