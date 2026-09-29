@@ -18,7 +18,8 @@
  * registry — a and b below catch it.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import {
@@ -58,7 +59,7 @@ afterEach(() => {
 });
 
 function memoryStore(): { store: MultiremiStore; db: Database } {
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   return { store: new MultiremiStore(db), db };
 }
 

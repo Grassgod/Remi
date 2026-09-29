@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,7 +15,7 @@ const root = mkdtempSync(join(tmpdir(), "multiremi-agent-plugin-live-"));
 const cwd = join(root, "repo");
 mkdirSync(cwd, { recursive: true });
 
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 const server = startMultiremiServer({
   store,

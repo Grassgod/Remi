@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,10 +68,10 @@ export async function createStatusPagesHarness(pgUrl?: string) {
   } else {
     const directory = mkdtempSync(join(tmpdir(), "mul395-status-pages-"));
     const path = join(directory, "fixture.sqlite");
-    const sqlite = new Database(path);
+    const sqlite = openSqliteDatabase(path);
     sqlite.exec("PRAGMA journal_mode = WAL");
     db = sqlite as unknown as SqlDatabase;
-    writer = () => new Database(path) as unknown as SqlDatabase;
+    writer = () => openSqliteDatabase(path) as unknown as SqlDatabase;
     cleanup = async () => { rmSync(directory, { recursive: true, force: true }); };
   }
   const probe = new StatusPagesProbe(db);

@@ -8,7 +8,8 @@
 //   4. a batch import claims ten rows in one write;
 //   5. the CLI-scope update drain branch still refuses to hand the update out.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
@@ -300,7 +301,7 @@ describe("idle heartbeat — pending-table statement count", () => {
     statements: string[];
   } {
     const statements: string[] = [];
-    const raw = new Database(":memory:");
+    const raw = openSqliteDatabase(":memory:");
     const proxy = new Proxy(raw, {
       get(target, key) {
         const value = Reflect.get(target, key, target);

@@ -18,8 +18,10 @@
  * same technique `mul405-lock-order.test.ts` uses for its interleave.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { PostgresSyncDatabase, type SqlDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { resolveSqlDialect } from "@multiremi/store/migrations.js";
 import { classifyLockOrderStatement, type LockOrderClass } from "@multiremi/store/lock-order-sentinel.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
@@ -35,6 +37,10 @@ class LockRecordingDatabase implements SqlDatabase {
   readonly frames: Array<LockRecordingDatabase["trace"]> = [];
   private depth = 0;
   constructor(private readonly inner: SqlDatabase) {}
+
+  get dialect(): SqlDatabase["dialect"] {
+    return this.inner.dialect;
+  }
 
   get currentDepth(): number {
     return this.depth;
@@ -137,9 +143,10 @@ function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase 
     const url = new URL(adminUrl);
     url.pathname = `/${name}`;
     db = new PostgresSyncDatabase(url.toString());
-  } else db = new Database(":memory:");
+  } else db = openSqliteDatabase(":memory:");
   openDbs.push(db);
   const recorder = new LockRecordingDatabase(db);
+  expect(recorder.dialect).toBe(db instanceof PostgresSyncDatabase ? "postgres" : "sqlite");
   // Reuse QA's native-PG proxy: preserve instanceof/dialect and afterCommit.
   const recordedMethods = new Set(["query", "prepare", "run", "exec", "transaction", "advisoryXactLock"]);
   const recordedDb = db instanceof PostgresSyncDatabase ? new Proxy(db, {
@@ -149,6 +156,7 @@ function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase 
       return typeof value === "function" ? value.bind(owner) : value;
     },
   }) : recorder;
+  expect(resolveSqlDialect(recordedDb)).toBe(db instanceof PostgresSyncDatabase ? "postgres" : "sqlite");
   const store = new MultiremiStore(recordedDb);
   store.ensureLocalWorkspace();
   return { store, recorder };
@@ -660,6 +668,7 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
       return typeof value === "function" ? value.bind(owner) : value;
     },
   });
+  expect(resolveSqlDialect(recordedPg)).toBe("postgres");
   try {
     const store = new MultiremiStore(recordedPg);
     store.ensureLocalWorkspace();

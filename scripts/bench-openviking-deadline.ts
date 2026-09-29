@@ -11,7 +11,7 @@
  * Omitted timeout/retries leave the env unset, so the code defaults apply.
  * Prints one JSON line per run.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createProjectKnowledgeServiceFromEnv } from "@multiremi/project-knowledge/service.js";
@@ -85,7 +85,7 @@ if (maxRetries) process.env.MULTIREMI_OPENVIKING_MAX_RETRIES = maxRetries;
 
 // Declare the backend so migrations cannot be misread as Postgres when the
 // surrounding shell exports MULTIREMI_DATABASE_URL (MUL-407).
-const store = new MultiremiStore(Object.assign(new Database(":memory:"), { dialect: "sqlite" as const }));
+const store = new MultiremiStore(openSqliteDatabase(":memory:"));
 const app = createMultiremiApp({ store, projectKnowledge: createProjectKnowledgeServiceFromEnv(store), backgroundJobs: false });
 const project = store.createProject({ title: "MUL-388 bench" });
 const headers = { "Content-Type": "application/json" };

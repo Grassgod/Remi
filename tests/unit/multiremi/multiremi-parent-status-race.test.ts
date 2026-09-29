@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,7 +65,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         database = new PostgresSyncDatabase(location);
       } else {
         location = join(directory, "race.sqlite");
-        database = new Database(location);
+        database = openSqliteDatabase(location);
         database.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 0");
       }
       store = new MultiremiStore(database);

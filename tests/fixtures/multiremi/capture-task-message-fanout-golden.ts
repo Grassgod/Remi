@@ -14,7 +14,7 @@
  * `mul474-daemon-task-poll-count.test.ts` reads
  * `task-message-fanout-golden.json` and fails on any difference.
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { notifyBrowserTaskMessages } from "@multiremi/api/realtime.js";
@@ -27,7 +27,7 @@ import {
 const OUT_PATH = join(import.meta.dir, "task-message-fanout-golden.json");
 
 const restoreClock = installDeterministicFanoutClock();
-const db = Object.assign(new Database(":memory:"), { dialect: "sqlite" as const });
+const db = openSqliteDatabase(":memory:");
 try {
   const store = fanoutFixtureStore(db);
   const frames = driveTaskMessageFanout(store, notifyBrowserTaskMessages);
