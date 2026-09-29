@@ -248,7 +248,7 @@ describe("request-scoped read cache", () => {
     });
 
     it("drains native commit callbacks after the instrumented runner returns", () => {
-      const raw = new Database(":memory:");
+      const raw = openSqliteDatabase(":memory:");
       const callbacks: Array<() => void> = [];
       let runnerActive = false;
       const native = new Proxy(raw, {

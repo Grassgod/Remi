@@ -171,12 +171,15 @@ describe("CLI capabilities manifest", () => {
     // machine-to-server protocol, so they raise the exempt count with the total.
     // MUL-483 combines main with C5's daemon decision-card read, B1's two log
     // reads, B5's two trace reads, and B4's fourteen daemon archive routes:
-    // 777 + 1 + 2 + 2 + 14 = 796.
+    // 777 + 1 + 2 + 2 + 14 = 796 (the trace socket is already in the baseline).
     expect(cliCoverageReport(manifest)).toEqual({
       mapped: 684,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
+      // MUL-438 adds the browser trace socket (`GET /api/trace/ws`), exempt under
+      // the existing `websocket_transport` rule: a long-lived stream is not a CLI
+      // command surface.
       //
       // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server

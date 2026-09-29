@@ -1,22 +1,12 @@
 /**
  * Transport seam for the Live Hub (MUL-403 §1, ADR 0007 decision 1).
  *
- * Today there is exactly one API process and one adapter, `local`: the hub fans
- * out straight from memory to whoever subscribed in this process. The
- * deployment guarantee for that single process is C1's `pg_try_advisory_lock`
- * guard, not this file.
- *
- * The seam exists so that C2's re-evaluation of per-role processes can add a
- * `LISTEN/NOTIFY` (or other cross-process) adapter without changing a single
- * subscription call site. Adding an adapter means: publish every frame that
- * entered a ring, and deliver every remote frame to the local ring first, so
- * ordering stays the hub's job rather than the bus's.
- *
- * C0 ships the interface plus the local adapter and nothing else. No production
- * module imports this file yet.
+ * Local fan-out stays in the hub. The peer adapter publishes only log head
+ * pointers and human-request transitions over MUL-462's shared channel.
  */
 
 import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
+import type { HumanRequestEvent } from "./live-hub.js";
 
 /**
  * Every transport adapter that exists today. A cross-process bus (C2's
@@ -27,7 +17,7 @@ import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
  * package must be able to name itself without editing this list. The census is
  * the thing that is checked, not the type.
  */
-export const HUB_TRANSPORT_KINDS = ["local"] as const;
+export const HUB_TRANSPORT_KINDS = ["local", "peer"] as const;
 
 export type HubTransportKind = (typeof HUB_TRANSPORT_KINDS)[number];
 
@@ -37,6 +27,15 @@ export type HubClock = () => number;
 export interface HubTransportPublishInput {
   key: HubStreamKey;
   frames: readonly HubFrame[];
+  head?: number;
+}
+
+export type HubPeerLossReason = "first_epoch" | "epoch_change" | "sequence_gap";
+export type HubPeerLink = "disabled" | "healthy" | "stale";
+
+export interface HubPeerStatus {
+  peer_link: HubPeerLink;
+  duplicate_dropped: number;
 }
 
 export interface HubTransport {
@@ -60,6 +59,13 @@ export interface HubTransport {
    * ring, because a remote publisher may be ahead.
    */
   subscribe(handler: (input: HubTransportPublishInput) => void): { unsubscribe(): void };
+
+  /** Peer adapters deliver pointers, never log row bodies or trace frames. */
+  onRemoteHead?(handler: (key: HubStreamKey, head: number, logVersion: number | null, changedSeq?: number) => Promise<void>): { unsubscribe(): void };
+  onHumanRequest?(handler: (event: HumanRequestEvent) => void): { unsubscribe(): void };
+  publishHumanRequest?(event: HumanRequestEvent): void;
+  onPossibleLoss?(handler: (reason: HubPeerLossReason) => Promise<void>): { unsubscribe(): void };
+  peerStatus?(): HubPeerStatus;
 
   /** Optional readiness probe for `/health`; `local` is always ready. */
   healthy?(): boolean;

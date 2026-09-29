@@ -29,6 +29,7 @@ import {
 } from "@multiremi/store/db/read-pool.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { maskSqlLiterals, scanSqlFunctionCalls } from "@multiremi/store/db/sql-calls.js";
+import { resolveStartupApiRole } from "@multiremi/config/startup-env.js";
 import {
   SQL_CONTEXTUAL_KEYWORD_HEADS,
   SQL_UNCONDITIONAL_KEYWORD_HEADS,
@@ -546,6 +547,17 @@ describe("read pool: SQLite degradation", () => {
     expect(pool).toBeInstanceOf(PostgresReadPool);
     expect(pool.postgres).toBe(true);
     await pool.close();
+  });
+
+  it("uses each process's resolved role for capacity, independent of ambient role", async () => {
+    const url = "postgres://placeholder:placeholder@127.0.0.1:1/none";
+    const ui = createReadPool({ databaseUrl: url, role: resolveStartupApiRole({ MULTIREMI_API_ROLE: "ui" }).role });
+    const runtime = createReadPool({ databaseUrl: url, role: resolveStartupApiRole({ MULTIREMI_API_ROLE: "runtime" }).role });
+    const defaultPool = createReadPool({ databaseUrl: url });
+    expect((ui as PostgresReadPool).capacity).toEqual({ maxConnections: 4, queueLimit: 64 });
+    expect((runtime as PostgresReadPool).capacity).toEqual({ maxConnections: 2, queueLimit: 16 });
+    expect((defaultPool as PostgresReadPool).capacity).toEqual({ maxConnections: 4, queueLimit: 64 });
+    await Promise.all([ui.close(), runtime.close(), defaultPool.close()]);
   });
 });
 

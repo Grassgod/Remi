@@ -730,7 +730,10 @@ describe("realtime fanout — two servers over one database", () => {
     const database = openSqliteDatabase(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
-    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    const server = startMultiremiServer({
+      store, scheduler: null, port: 0, hostname: "127.0.0.1",
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
     try {
       // QA item 2: with nothing configured this body must be exactly what main
       // returned, key set included — no `role`, no `peer_healthy`.
