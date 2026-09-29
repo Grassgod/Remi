@@ -3426,6 +3426,10 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    this.issues.replayDependencyAutoStart(event);
+  }
+
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -3467,6 +3471,7 @@ runMigrations(this.db);
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
@@ -3477,6 +3482,7 @@ runMigrations(this.db);
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -3514,7 +3520,7 @@ runMigrations(this.db);
     issue: MultiremiIssue,
     parentTaskId: string | null,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; dependencyCheckEventId?: string | null; seen?: Set<string> } = {},
   ): void {
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
@@ -4506,7 +4512,7 @@ runMigrations(this.db);
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
     return this.autopilots.enqueueIssueStatusChangedEvent(input);
   }
 
