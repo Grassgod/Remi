@@ -3,11 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
+import { WorkspaceSlugProvider } from "@multiremi/core/paths";
 import type { Issue } from "@multiremi/core/types";
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import enIssues from "../../locales/en/issues.json";
 import enChat from "../../locales/en/chat.json";
 import enUI from "../../locales/en/ui.json";
+import { NavigationProvider } from "../../navigation";
 
 const mocks = vi.hoisted(() => ({ patch: vi.fn(), retitle: vi.fn(), upload: vi.fn(), reaction: vi.fn(), toast: vi.fn(), attachments: [] as unknown[] }));
 vi.mock("@multiremi/core/api", () => ({ api: { patchIssue: mocks.patch, retitleIssue: mocks.retitle, listAttachments: async () => [] } }));
@@ -38,7 +40,11 @@ const entry = SessionLogEntrySchema.parse({ session_id: "s", id: "head", seq: 0,
   body_md: "Original description", body_html: "<p>Original description</p>", render_version: "v" });
 function wrap(child: React.ReactNode) {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, ui: enUI } }}>{child}</I18nProvider>
+    <WorkspaceSlugProvider slug="test-workspace">
+      <NavigationProvider value={{ push: vi.fn(), replace: vi.fn(), back: vi.fn(), pathname: "/test-workspace/issues/i", searchParams: new URLSearchParams(), getShareableUrl: path => path }}>
+        <I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, ui: enUI } }}>{child}</I18nProvider>
+      </NavigationProvider>
+    </WorkspaceSlugProvider>
   </QueryClientProvider>);
 }
 beforeEach(() => { vi.clearAllMocks(); mocks.patch.mockResolvedValue({}); mocks.upload.mockResolvedValue({ id: "att", url: "/file", filename: "file.txt" }); });

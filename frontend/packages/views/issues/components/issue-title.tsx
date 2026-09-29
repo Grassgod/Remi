@@ -6,15 +6,18 @@ import { Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useWorkspacePaths } from "@multiremi/core/paths";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import type { Issue, UpdateIssueRequest } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
+import { AppLink } from "../../navigation";
 
 export function IssueTitle({ issue, onUpdateField }: { issue: Issue; onUpdateField: (patch: Partial<UpdateIssueRequest>) => void }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [retitling, setRetitling] = useState(false);
@@ -40,7 +43,7 @@ export function IssueTitle({ issue, onUpdateField }: { issue: Issue; onUpdateFie
     finally { setRetitling(false); }
   };
   return <div className="flex min-w-0 flex-1 items-center gap-1" data-issue-title>
-    <span className="shrink-0 font-medium">{issue.identifier}</span>
+    <AppLink href={paths.issueDetail(issue.id)} className="shrink-0 font-medium">{issue.identifier}</AppLink>
     {editing ? <input autoFocus aria-label={t($ => $.detail.title_placeholder)} defaultValue={issue.title}
       className="min-w-0 flex-1 bg-transparent px-1 outline-none" onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = issue.title; event.currentTarget.blur(); } }}
       onBlur={event => { const title = event.currentTarget.value.trim(); if (title && title !== issue.title) onUpdateField({ title }); setEditing(false); }} />

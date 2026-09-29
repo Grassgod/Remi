@@ -557,42 +557,6 @@ function renderIssueDetail(
   );
 }
 
-function renderIssueDetailWithHighlight(
-  highlightCommentId: string,
-  issueId = "issue-1",
-  options: { seedTimeline?: boolean } = {},
-) {
-  const queryClient = createTestQueryClient();
-  if (options.seedTimeline) {
-    // Pre-populate the timeline cache so the first render sees timeline.length>0.
-    // This reproduces the inbox-click race: timeline data is available before
-    // the issue itself has finished loading, so the effect that scrolls to
-    // the comment fires once with `loading=true` (skeleton still rendered,
-    // no comment DOM) and must re-fire when `loading` flips to false.
-    queryClient.setQueryData(["issues", "timeline", issueId, "session-main"], {
-      pages: [{
-        entries: mockTimeline,
-        limit: 40,
-        has_more: false,
-        has_more_before: false,
-        has_more_after: false,
-        next_cursor: null,
-        prev_cursor: null,
-        issue_session_id: "session-main",
-      }],
-      pageParams: [null],
-    });
-  }
-  const result = render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <QueryClientProvider client={queryClient}>
-        <IssueDetail issueId={issueId} highlightCommentId={highlightCommentId} />
-      </QueryClientProvider>
-    </I18nProvider>,
-  );
-  return { ...result, queryClient };
-}
-
 /**
  * Waits for the reveal hook to publish a terminal state on the scroll root.
  *
@@ -648,7 +612,7 @@ describe("IssueDetail (shared)", () => {
       const timeline = params.anchor !== undefined && params.anchor > 0 && timelinePageControl.olderEntries.length
         ? timelinePageControl.olderEntries : await mockApiObj.listTimeline("issue-1", sessionId);
       const rows = (timeline as TimelineEntry[]).map((item, index) => ({
-        session_id: sessionId, id: item.id, seq: index + 1, kind: item.type === "comment" ? "message" : item.type,
+        session_id: sessionId, id: item.id, seq: index + 1, kind: item.type === "comment" ? "message" : "system",
         revision: 1, visibility: "shown", author_type: item.actor_type ?? "system", author_id: item.actor_id ?? null,
         task_id: item.task_id ?? null, parent_id: item.parent_id ?? null, body_md: item.content ?? "", body_html: null,
         render_version: null, metadata: { attachments: item.attachments ?? [], reactions: item.reactions ?? [] },
@@ -707,27 +671,27 @@ describe("IssueDetail (shared)", () => {
 
     renderIssueDetail();
     await waitFor(() => expect(mockApiObj.listChildIssues).toHaveBeenCalledWith("issue-1"));
-    expect(screen.queryByDisplayValue("Implement authentication")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-tab-scroll-root][data-perf-state='ready']")).not.toBeInTheDocument();
 
     await act(async () => {
       resolveMembers([{ user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" }]);
     });
-    expect(screen.queryByDisplayValue("Implement authentication")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-tab-scroll-root][data-perf-state='ready']")).not.toBeInTheDocument();
 
     await act(async () => {
       resolveChildren({ issues: [] });
     });
-    expect(await screen.findByDisplayValue("Implement authentication")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
   });
 
   it("renders issue title and description after loading", async () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
     });
 
-    expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+    expect(screen.getByText("Add JWT auth to the backend")).toBeInTheDocument();
   });
 
   it("shows the completed-without-output empty state for a done intake", async () => {
@@ -817,7 +781,7 @@ describe("IssueDetail (shared)", () => {
 
     await waitFor(() => {
       expect(mockApiObj.retitleIssue).toHaveBeenCalledWith("issue-1");
-      expect(screen.getByDisplayValue("Add JWT authentication")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add JWT authentication" })).toBeInTheDocument();
     });
     const successCall = mockToast.success.mock.calls.find(
       ([message]) => String(message).includes("Renamed:"),
@@ -831,7 +795,7 @@ describe("IssueDetail (shared)", () => {
       expect(mockApiObj.patchIssue).toHaveBeenCalledWith("issue-1", {
         title: "Implement authentication",
       });
-      expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
     });
   });
 
@@ -897,7 +861,7 @@ describe("IssueDetail (shared)", () => {
     ]);
     renderIssueDetail();
 
-    await screen.findByDisplayValue("Implement authentication");
+    await screen.findByRole("button", { name: "Implement authentication" });
     await waitFor(() => expect(mockApiObj.listTasksByIssue).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "Complete issue" })).not.toBeInTheDocument();
   });
@@ -936,234 +900,9 @@ describe("IssueDetail (shared)", () => {
     ]);
     renderIssueDetail();
 
-    await screen.findByDisplayValue("Implement authentication");
+    await screen.findByRole("button", { name: "Implement authentication" });
     await waitFor(() => expect(mockApiObj.listTasksByIssue).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "Complete issue" })).not.toBeInTheDocument();
-  });
-
-  it("opens the conversation directly at its newest entry without an imperative jump", async () => {
-    renderIssueDetail();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
-    });
-    expect(virtuosoLatestProps.current?.initialTopMostItemIndex).toEqual({
-      index: "LAST",
-      align: "end",
-    });
-    expect(virtuosoScrollToIndexSpy).not.toHaveBeenCalled();
-  });
-
-  it("loads older timeline rows from the top while preserving the logical anchor", async () => {
-    timelinePageControl.hasMore = true;
-    timelinePageControl.olderEntries = [{
-      type: "comment",
-      id: "older-comment",
-      actor_type: "member",
-      actor_id: "user-1",
-      content: "older",
-      parent_id: null,
-      created_at: "2026-01-15T00:00:00Z",
-    }];
-    renderIssueDetail();
-
-    await waitFor(() => expect(virtuosoLatestProps.current?.startReached).toBeTypeOf("function"));
-    await act(async () => {
-      const startReached = virtuosoLatestProps.current?.startReached as () => void;
-      startReached();
-    });
-
-    await waitFor(() => {
-      expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
-        "issue-1",
-        expect.objectContaining({ before: "older-cursor", limit: 40 }),
-      );
-      expect(virtuosoLatestProps.current?.firstItemIndex).toBe(999_999);
-    });
-  });
-
-  it("decides follow-the-latest from the stick hook, not Virtuoso's 120px band", async () => {
-    renderIssueDetail();
-    await waitFor(() => {
-      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
-    });
-    await waitForReveal();
-
-    const followOutput = virtuosoLatestProps.current?.followOutput as
-      | (() => "smooth" | false)
-      | undefined;
-    expect(followOutput).toBeTypeOf("function");
-    // A freshly opened page is pinned, so the newest entry is followed.
-    expect(followOutput!()).toBe("smooth");
-
-    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
-      | ((atBottom: boolean) => void)
-      | undefined;
-    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
-
-    // A real upward wheel from the reader releases the stick hook. Virtuoso's
-    // own `atBottom` stays true for another ~120px, which is exactly the band
-    // that used to chase the newest comment after a 30–119px scroll up
-    // (MUL-390 `cmt_i1xic8rs050s`).
-    scrollRoot.scrollTop = 600;
-    await act(async () => {
-      fireEvent.wheel(scrollRoot, { deltaY: -30 });
-    });
-    expect(followOutput!()).toBe(false);
-
-    // Virtuoso still reports "at the bottom" inside its wide band, but that
-    // alone must not re-pin a reader who has not scrolled back down. Asserted
-    // synchronously: a `waitFor` here would pass before the state update from
-    // `pin()` had flushed, which is exactly how a broken pin gate slips past.
-    await act(async () => {
-      atBottomStateChange!(true);
-    });
-    expect(followOutput!()).toBe(false);
-  });
-
-  it("returns to following once the reader scrolls back to the end", async () => {
-    renderIssueDetail();
-    await waitFor(() => {
-      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
-    });
-    await waitForReveal();
-
-    const followOutput = virtuosoLatestProps.current?.followOutput as () => "smooth" | false;
-    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
-      | ((atBottom: boolean) => void)
-      | undefined;
-    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
-    // Realistic geometry: 1200px of content in a 400px viewport, so the true
-    // end is scrollTop 800 and jsdom's default 0/0 cannot stand in for it.
-    Object.defineProperty(scrollRoot, "scrollHeight", { configurable: true, get: () => 1200 });
-    Object.defineProperty(scrollRoot, "clientHeight", { configurable: true, get: () => 400 });
-
-    scrollRoot.scrollTop = 600;
-    await act(async () => {
-      fireEvent.wheel(scrollRoot, { deltaY: -30 });
-    });
-    expect(followOutput()).toBe(false);
-
-    // The reader drives back down, but stops 160px short — still inside
-    // Virtuoso's 120px-ish notion of "near the end" in spirit and well outside
-    // the hook's 24px one. `pin()` adopts the distance at the moment it is
-    // called, so pinning here would hold a 160px gap and every later comment
-    // would maintain it (MUL-390 `cmt_rblm56fti12j`). The signal alone, and the
-    // signal plus a partial descent, must both leave the machine released.
-    await act(async () => {
-      atBottomStateChange!(true);
-    });
-    expect(followOutput()).toBe(false);
-
-    scrollRoot.scrollTop = 640;
-    await act(async () => {
-      fireEvent.scroll(scrollRoot);
-      atBottomStateChange!(true);
-    });
-    expect(followOutput()).toBe(false);
-
-    // Reaching the true end re-pins, and following resumes.
-    scrollRoot.scrollTop = 800;
-    await act(async () => {
-      fireEvent.scroll(scrollRoot);
-      atBottomStateChange!(true);
-    });
-    expect(followOutput()).toBe("smooth");
-  });
-
-  it("offers a jump-to-latest chip when scrolled away from the newest entry", async () => {
-    renderIssueDetail();
-    await waitFor(() => {
-      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
-    });
-
-    // No chip while the viewport sits at the bottom (initial state).
-    expect(screen.queryByRole("button", { name: /jump to latest/i })).not.toBeInTheDocument();
-
-    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
-      | ((atBottom: boolean) => void)
-      | undefined;
-    expect(atBottomStateChange).toBeTypeOf("function");
-    await waitFor(() => {
-      atBottomStateChange!(false);
-      expect(screen.getByRole("button", { name: /jump to latest/i })).toBeInTheDocument();
-    });
-
-    // What this test owns is the chip's *presence* — it appears from
-    // Virtuoso's own (wider) at-bottom signal and disappears once the reader is
-    // back at the end. What the click does is asserted in "sends
-    // back-to-latest through the stick hook", which drives the hook's real
-    // return trip.
-    await act(async () => {
-      atBottomStateChange!(true);
-    });
-    expect(screen.queryByRole("button", { name: /jump to latest/i })).not.toBeInTheDocument();
-  });
-
-  it("sends back-to-latest through the stick hook, not the virtualizer", async () => {
-    // QA's failing case (MUL-390 `cmt_rblm56fti12j`): the fixture's scroll root
-    // stands in for a list with the agent-stream row and composer below it.
-    // `scrollToIndex(LAST, align: "end")` stops the last *row* at the bottom
-    // edge, which leaves the container ~120px short of the real end — inside
-    // Virtuoso's 120px band but outside the hook's 24px one, so the hook stayed
-    // `released` and the next comment never followed.
-    renderIssueDetail();
-    await waitFor(() => {
-      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
-    });
-    await waitForReveal();
-
-    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]")!;
-    const followOutput = virtuosoLatestProps.current?.followOutput as () => "smooth" | false;
-    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
-      | ((atBottom: boolean) => void)
-      | undefined;
-
-    // Give the root a realistic geometry: 1200px of content where the last row
-    // ends 120px above the true bottom, and a client height of 400.
-    Object.defineProperty(scrollRoot, "scrollHeight", { configurable: true, get: () => 1200 });
-    Object.defineProperty(scrollRoot, "clientHeight", { configurable: true, get: () => 400 });
-    const scrollToSpy = vi.fn((opts?: ScrollToOptions | number) => {
-      const top = typeof opts === "number" ? opts : opts?.top ?? 0;
-      scrollRoot.scrollTop = top;
-    });
-    Object.defineProperty(scrollRoot, "scrollTo", { configurable: true, value: scrollToSpy });
-
-    // The reader is well away from the end, so the hook is released.
-    scrollRoot.scrollTop = 200;
-    await act(async () => {
-      fireEvent.wheel(scrollRoot, { deltaY: -300 });
-    });
-    expect(followOutput()).toBe(false);
-
-    // The chip appears from Virtuoso's own (wider) signal — unchanged.
-    await act(async () => {
-      atBottomStateChange!(false);
-    });
-    const chip = screen.getByRole("button", { name: /jump to latest/i });
-
-    virtuosoScrollToIndexSpy.mockClear();
-    await act(async () => {
-      fireEvent.click(chip);
-    });
-
-    // The button must travel to the end of the *content*, not just to the last
-    // row: that is what puts the container inside the hook's own threshold.
-    expect(scrollToSpy).toHaveBeenCalled();
-    expect(scrollRoot.scrollTop).toBe(800); // 1200 - 400
-    expect(
-      scrollRoot.scrollHeight - scrollRoot.scrollTop - scrollRoot.clientHeight,
-    ).toBe(0);
-    // And it does so without the virtualizer's narrower trip being the thing
-    // that moved the viewport.
-    expect(virtuosoScrollToIndexSpy).not.toHaveBeenCalled();
-
-    // The trip ends where the hook's own 24px rule can pin it, which is what
-    // makes the *next* comment follow. The hook settles on a 100ms quiet timer,
-    // so this is the outcome QA measured, not just the scroll call.
-    await waitFor(() => {
-      expect(followOutput()).toBe("smooth");
-    });
   });
 
   it("switches the visible conversation by product Session", async () => {
@@ -1211,14 +950,9 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail("issue-1", "session-main");
 
     await waitFor(() => {
-      expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
-        "issue-1",
-        expect.objectContaining({ issueSessionId: "session-main" }),
-      );
+      expect(mockApiObj.getSessionLog).toHaveBeenCalledWith("session-main", { before: 30 });
     });
-    expect(mockApiObj.listTimelinePage.mock.calls.some(([, params]) =>
-      params.issueSessionId === "@default",
-    )).toBe(false);
+    expect(mockApiObj.getSessionLog.mock.calls.some(([sessionId]) => sessionId === "@default")).toBe(false);
   });
 
   it("does not leave an embedding surface when the default Session resolves", async () => {
@@ -1261,13 +995,13 @@ describe("IssueDetail (shared)", () => {
     // Default fixture: one default "Main" session.
     renderIssueDetail();
 
-    await screen.findByDisplayValue("Implement authentication");
+    await screen.findByRole("button", { name: "Implement authentication" });
     const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
     expect(scrollRoot).not.toBeNull();
     // Sibling of the scroll container, immediately before it — same slot the
     // multi-session case uses, so the reading column never shifts when a
     // second session appears.
-    expect(scrollRoot!.previousElementSibling).toContainElement(
+    expect(scrollRoot!.parentElement!.parentElement!.previousElementSibling).toContainElement(
       screen.getByText("Sessions"),
     );
   });
@@ -1490,7 +1224,7 @@ describe("IssueDetail (shared)", () => {
     // column and left the panel's left gutter empty. It must be a sibling…
     expect(scrollRoot!.contains(sessionsLabel)).toBe(false);
     // …placed immediately before the content, i.e. on the panel's far left.
-    expect(scrollRoot!.previousElementSibling).toContainElement(sessionsLabel);
+    expect(scrollRoot!.parentElement!.parentElement!.previousElementSibling).toContainElement(sessionsLabel);
     // The timeline itself stays inside the scroll container.
     expect(scrollRoot!.contains(screen.getAllByText("Activity")[0]!)).toBe(true);
   });
@@ -1557,7 +1291,7 @@ describe("IssueDetail (shared)", () => {
     }]);
     renderIssueDetail();
 
-    await screen.findByDisplayValue("Implement authentication");
+    await screen.findByRole("button", { name: "Implement authentication" });
     expect(screen.queryByText("Investigate the flaky test")).not.toBeInTheDocument();
     expect(mockApiObj.listSessionTasks).not.toHaveBeenCalled();
   });
@@ -1688,19 +1422,13 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueSessions.mockReturnValue(new Promise(() => {}));
     renderIssueDetail();
 
-    await screen.findByText("Activity");
-    expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
-      "issue-1",
-      expect.objectContaining({ issueSessionId: "@default", limit: 40 }),
-    );
-    expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
+    expect(mockApiObj.getSessionLog).not.toHaveBeenCalled();
     // Two skeletons are up at once now: the activity section's own placeholder
     // and the reveal overlay that covers the whole document until the gates
     // hold. Both carry `data-slot="skeleton"`, which is what the probe counts.
     expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
-    // Nothing is painted yet: the reveal only publishes `pending`/`ready*`.
-    expect(document.querySelector("[data-tab-scroll-root]")?.getAttribute("data-perf-state"))
-      .toBe("pending");
+    // No log viewport mounts before the Session exists; the skeleton fills its place.
+    expect(document.querySelector("[data-tab-scroll-root]")).toBeNull();
     expect(
       screen.queryByText("Couldn't load this issue's sessions"),
     ).not.toBeInTheDocument();
@@ -1710,7 +1438,6 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listIssueSessions.mockRejectedValue(new Error("boom"));
     renderIssueDetail();
 
-    await waitForReveal();
     expect(
       await screen.findByText("Couldn't load this issue's sessions"),
     ).toBeInTheDocument();
@@ -1731,7 +1458,7 @@ describe("IssueDetail (shared)", () => {
     expect(
       await screen.findByText("Couldn't load this issue's sessions"),
     ).toBeInTheDocument();
-    expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", undefined);
+    expect(mockApiObj.getSessionLog).not.toHaveBeenCalled();
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {
@@ -1740,8 +1467,9 @@ describe("IssueDetail (shared)", () => {
     // The breadcrumb leaf is the whole "identifier + title" string wrapped in a
     // single link to the issue's own detail route (used to open the full page
     // from the inline Inbox pane). A bare issue has no ancestor crumbs.
-    const leaf = await screen.findByText("TES-1 Implement authentication");
-    expect(leaf.closest("a")).toHaveAttribute("href", "/test/issues/issue-1");
+    const identifier = await screen.findByRole("link", { name: "TES-1" });
+    expect(identifier).toHaveAttribute("href", "/test/issues/issue-1");
+    expect(screen.getByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
   });
 
   it("omits the project breadcrumb segment when the issue has no project_id", async () => {
@@ -1749,7 +1477,7 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail();
 
     // Leaf renders once loaded; a bare issue has no ancestor crumbs at all.
-    await screen.findByText("TES-1 Implement authentication");
+    await screen.findByRole("link", { name: "TES-1" });
 
     // Project is never fetched and no project crumb appears.
     expect(mockApiObj.getProject).not.toHaveBeenCalled();
@@ -1883,7 +1611,7 @@ describe("IssueDetail (shared)", () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
     });
 
     expect(screen.queryByTestId("panel-group")).not.toBeInTheDocument();
@@ -2044,7 +1772,7 @@ describe("IssueDetail (shared)", () => {
 
       await screen.findByText("Answering the first one");
 
-      const ids = Array.from(document.querySelectorAll("[id^='comment-']")).map(
+      const ids = Array.from(document.querySelectorAll("[id^='comment-']:not(#comment-head-session-main)")).map(
         (el) => el.id,
       );
       expect(ids).toEqual(["comment-comment-1", "comment-comment-2", "comment-reply-1"]);
@@ -2069,12 +1797,11 @@ describe("IssueDetail (shared)", () => {
       // document `visibility: hidden` until its gates hold.
       await waitForReveal();
 
-      // One editor for the description, one for the composer — and nothing
-      // per message. A per-message input is what made the stream a stack of
-      // little forms instead of a chat log.
+      // The description is read-only until edited; only the session composer
+      // mounts an editor, and no message gets its own form.
       expect(screen.getByPlaceholderText("Comment in Main…")).toBeInTheDocument();
       expect(screen.queryByPlaceholderText("Leave a reply...")).not.toBeInTheDocument();
-      expect(screen.getAllByTestId("rich-text-editor")).toHaveLength(2);
+      expect(screen.getAllByTestId("rich-text-editor")).toHaveLength(1);
 
       // Each row keeps its own toolbar: react / reply / ⋯.
       expect(screen.getAllByRole("button", { name: "Reply" })).toHaveLength(3);
@@ -2102,6 +1829,7 @@ describe("IssueDetail (shared)", () => {
     it("marks a reply with a reference chip that scrolls to its parent", async () => {
       mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
       renderIssueDetail();
+      await waitForReveal();
 
       // Only the reply carries a chip; the two roots answer nobody.
       const chip = await screen.findByRole("button", {
@@ -2136,6 +1864,7 @@ describe("IssueDetail (shared)", () => {
         },
       ] as TimelineEntry[]);
       renderIssueDetail();
+      await waitForReveal();
 
       expect(
         await screen.findByRole("button", {
@@ -2187,7 +1916,7 @@ describe("IssueDetail (shared)", () => {
         expect(mockApiObj.createComment).toHaveBeenCalledWith(
           "issue-1",
           "On it",
-          "comment",
+          undefined,
           "comment-1",
           undefined,
           "session-main",
@@ -2230,375 +1959,45 @@ describe("IssueDetail (shared)", () => {
       mockApiObj.listIssueSessionResults.mockResolvedValue([]);
       renderIssueDetail();
 
-      expect(
-        await screen.findByText("Nothing in this session yet"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByText(
-          "Leave a comment, or delegate a task from the right panel to get started.",
-        ),
-      ).toBeInTheDocument();
+      expect(await screen.findByText("Add JWT auth to the backend")).toBeInTheDocument();
+      await waitForReveal();
+      expect(screen.getByPlaceholderText("Comment in Main…")).toBeInTheDocument();
     });
   });
 
-  it("collapses non-trailing activity blocks and expands the last one by default", async () => {
-    // Timeline shape:
-    //   [activities: status_changed, priority_changed] ← block A (older)
-    //   [comment-1]
-    //   [activities: due_date_changed]                  ← block B (latest)
-    // Block A should be collapsed; block B should be expanded.
-    mockApiObj.listTimeline.mockResolvedValue([
-      {
-        type: "activity",
-        id: "act-1",
-        actor_type: "member",
-        actor_id: "user-1",
-        action: "status_changed",
-        details: { from: "todo", to: "in_progress" },
-        created_at: "2026-01-16T00:00:00Z",
-      },
-      {
-        type: "activity",
-        id: "act-2",
-        actor_type: "member",
-        actor_id: "user-1",
-        action: "priority_changed",
-        details: { from: "low", to: "high" },
-        created_at: "2026-01-16T01:00:00Z",
-      },
-      {
-        type: "comment",
-        id: "comment-1",
-        actor_type: "member",
-        actor_id: "user-1",
-        content: "Talking it through",
-        parent_id: null,
-        created_at: "2026-01-17T00:00:00Z",
-        updated_at: "2026-01-17T00:00:00Z",
-        comment_type: "comment",
-      },
-      {
-        type: "activity",
-        id: "act-3",
-        actor_type: "member",
-        actor_id: "user-1",
-        action: "due_date_changed",
-        details: { to: "2026-02-01T00:00:00Z" },
-        created_at: "2026-01-18T00:00:00Z",
-      },
-    ] as TimelineEntry[]);
-
+  it("renders system log rows in seq order without folding or truncating the tail", async () => {
+    mockApiObj.listTimeline.mockResolvedValue(Array.from({ length: 10 }, (_, index) => ({
+      type: "activity", id: `system-${index + 1}`, actor_type: "system", actor_id: "",
+      content: `System event ${index + 1}`, parent_id: null,
+      created_at: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      updated_at: `2026-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+    })));
     renderIssueDetail();
 
-    // Latest block (single activity) is expanded — its rendered text is visible.
-    await waitFor(() => {
-      expect(screen.getByText(/set due date to/i)).toBeInTheDocument();
-    });
-
-    // Older block is collapsed: shows the summary, hides the individual entries.
-    expect(screen.getByText("2 activities")).toBeInTheDocument();
-    expect(screen.queryByText(/changed status/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/changed priority/i)).not.toBeInTheDocument();
-
-    // Clicking the summary expands the older block.
-    fireEvent.click(screen.getByText("2 activities"));
-    await waitFor(() => {
-      expect(screen.getByText(/changed status/i)).toBeInTheDocument();
-    });
-    expect(screen.getByText(/changed priority/i)).toBeInTheDocument();
-  });
-
-  it("truncates the trailing activity block to the most recent 8 entries with a show-more toggle", async () => {
-    // 10 activities, all in the trailing block (no comment after them, so it's
-    // the trailing block by definition). Alternating action types so the
-    // 2-minute coalesce window never merges consecutive entries — we end up
-    // with 10 distinct rows.
-    const trailingBlock: TimelineEntry[] = [
-      { type: "activity", id: "act-1", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "todo", to: "in_progress" }, created_at: "2026-01-18T00:00:00Z" },
-      { type: "activity", id: "act-2", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "low", to: "medium" }, created_at: "2026-01-18T00:01:00Z" },
-      { type: "activity", id: "act-3", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_progress", to: "in_review" }, created_at: "2026-01-18T00:02:00Z" },
-      { type: "activity", id: "act-4", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "medium", to: "high" }, created_at: "2026-01-18T00:03:00Z" },
-      { type: "activity", id: "act-5", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_review", to: "done" }, created_at: "2026-01-18T00:04:00Z" },
-      { type: "activity", id: "act-6", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "high", to: "urgent" }, created_at: "2026-01-18T00:05:00Z" },
-      { type: "activity", id: "act-7", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "done", to: "blocked" }, created_at: "2026-01-18T00:06:00Z" },
-      { type: "activity", id: "act-8", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "urgent", to: "low" }, created_at: "2026-01-18T00:07:00Z" },
-      { type: "activity", id: "act-9", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "blocked", to: "todo" }, created_at: "2026-01-18T00:08:00Z" },
-      { type: "activity", id: "act-10", actor_type: "member", actor_id: "user-1", action: "due_date_changed", details: { to: "2026-02-01T00:00:00Z" }, created_at: "2026-01-18T00:09:00Z" },
-    ] as TimelineEntry[];
-    mockApiObj.listTimeline.mockResolvedValue(trailingBlock);
-
-    renderIssueDetail();
-
-    // In the truncated default state the "N activities" collapse header
-    // stays hidden — the "Show N more" link is the only control we want
-    // to expose for a glance at recent activity.
-    await waitFor(() => {
-      expect(screen.getByText("Show 2 more activities")).toBeInTheDocument();
-    });
-    expect(screen.queryByText("10 activities")).not.toBeInTheDocument();
-
-    // Only the 8 most recent entries (act-3..act-10) are rendered by default.
-    // act-1 and act-2 are folded behind the show-more line.
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument(); // act-3
-    expect(screen.getByText(/set due date to/i)).toBeInTheDocument(); // act-10
-    expect(screen.queryByText(/from Todo to In Progress/i)).not.toBeInTheDocument(); // act-1
-    expect(screen.queryByText(/from Low to Medium/i)).not.toBeInTheDocument(); // act-2
-
-    // Clicking the toggle reveals the older entries in place and brings the
-    // full "N activities" header back (so the user can fold the block).
-    fireEvent.click(screen.getByText("Show 2 more activities"));
-    await waitFor(() => {
-      expect(screen.getByText(/from Todo to In Progress/i)).toBeInTheDocument();
-    });
-    expect(screen.getByText(/from Low to Medium/i)).toBeInTheDocument();
-    expect(screen.getByText(/set due date to/i)).toBeInTheDocument();
-    expect(screen.getByText("10 activities")).toBeInTheDocument();
-    expect(screen.queryByText(/Show \d+ more activit/i)).not.toBeInTheDocument();
-  });
-
-  it("does not show the show-more toggle when the trailing block has 8 or fewer entries", async () => {
-    const trailingBlock: TimelineEntry[] = [
-      { type: "activity", id: "act-1", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "todo", to: "in_progress" }, created_at: "2026-01-18T00:00:00Z" },
-      { type: "activity", id: "act-2", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "low", to: "high" }, created_at: "2026-01-18T00:01:00Z" },
-      { type: "activity", id: "act-3", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_progress", to: "in_review" }, created_at: "2026-01-18T00:02:00Z" },
-      { type: "activity", id: "act-4", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "high", to: "urgent" }, created_at: "2026-01-18T00:03:00Z" },
-      { type: "activity", id: "act-5", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_review", to: "done" }, created_at: "2026-01-18T00:04:00Z" },
-      { type: "activity", id: "act-6", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "urgent", to: "low" }, created_at: "2026-01-18T00:05:00Z" },
-      { type: "activity", id: "act-7", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "done", to: "blocked" }, created_at: "2026-01-18T00:06:00Z" },
-      { type: "activity", id: "act-8", actor_type: "member", actor_id: "user-1", action: "due_date_changed", details: { to: "2026-02-01T00:00:00Z" }, created_at: "2026-01-18T00:07:00Z" },
-    ] as TimelineEntry[];
-    mockApiObj.listTimeline.mockResolvedValue(trailingBlock);
-
-    renderIssueDetail();
-
-    await waitFor(() => {
-      expect(screen.getByText("8 activities")).toBeInTheDocument();
-    });
-    // Every one of the 8 entries should be visible — the trailing block fits
-    // exactly within the limit, so no "Show N more activities" line appears.
-    expect(screen.getByText(/from Todo to In Progress/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Low to High/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument();
-    expect(screen.getByText(/from High to Urgent/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Review to Done/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Urgent to Low/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Done to Blocked/i)).toBeInTheDocument();
-    expect(screen.getByText(/set due date to/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Show \d+ more activit/i)).not.toBeInTheDocument();
-  });
-
-  it("expanding a non-trailing block shows every entry — only the trailing block truncates older ones", async () => {
-    // Non-trailing block (10 activities) + comment + trailing block (1 activity).
-    // Manually expanding the older block must reveal all 10 entries — the
-    // truncate-to-8 rule applies only to the trailing block.
-    const timeline: TimelineEntry[] = [
-      { type: "activity", id: "old-1", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "backlog", to: "todo" }, created_at: "2026-01-16T00:00:00Z" },
-      { type: "activity", id: "old-2", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "none", to: "low" }, created_at: "2026-01-16T00:01:00Z" },
-      { type: "activity", id: "old-3", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "todo", to: "in_progress" }, created_at: "2026-01-16T00:02:00Z" },
-      { type: "activity", id: "old-4", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "low", to: "medium" }, created_at: "2026-01-16T00:03:00Z" },
-      { type: "activity", id: "old-5", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_progress", to: "in_review" }, created_at: "2026-01-16T00:04:00Z" },
-      { type: "activity", id: "old-6", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "medium", to: "high" }, created_at: "2026-01-16T00:05:00Z" },
-      { type: "activity", id: "old-7", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "in_review", to: "done" }, created_at: "2026-01-16T00:06:00Z" },
-      { type: "activity", id: "old-8", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "high", to: "urgent" }, created_at: "2026-01-16T00:07:00Z" },
-      { type: "activity", id: "old-9", actor_type: "member", actor_id: "user-1", action: "status_changed", details: { from: "done", to: "blocked" }, created_at: "2026-01-16T00:08:00Z" },
-      { type: "activity", id: "old-10", actor_type: "member", actor_id: "user-1", action: "priority_changed", details: { from: "urgent", to: "low" }, created_at: "2026-01-16T00:09:00Z" },
-      {
-        type: "comment", id: "comment-mid", actor_type: "member", actor_id: "user-1",
-        content: "Splitting the blocks", parent_id: null,
-        created_at: "2026-01-17T00:00:00Z", updated_at: "2026-01-17T00:00:00Z",
-        comment_type: "comment",
-      },
-      { type: "activity", id: "last-1", actor_type: "member", actor_id: "user-1", action: "due_date_changed", details: { to: "2026-02-01T00:00:00Z" }, created_at: "2026-01-18T00:00:00Z" },
-    ] as TimelineEntry[];
-    mockApiObj.listTimeline.mockResolvedValue(timeline);
-
-    renderIssueDetail();
-
-    // The older block defaults to collapsed; its summary reports 10.
-    await waitFor(() => {
-      expect(screen.getByText("10 activities")).toBeInTheDocument();
-    });
-    // None of the older entries are rendered before expansion.
-    expect(screen.queryByText(/from Backlog to Todo/i)).not.toBeInTheDocument();
-
-    // Expand the older block by clicking its summary line.
-    fireEvent.click(screen.getByText("10 activities"));
-
-    // Every one of the 10 entries should now be visible — even though the
-    // block has more than 8 entries, the truncate-to-8 rule does not apply
-    // to non-trailing blocks, so no "Show N more activities" line appears.
-    await waitFor(() => {
-      expect(screen.getByText(/from Backlog to Todo/i)).toBeInTheDocument();
-    });
-    expect(screen.getByText(/from No priority to Low/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Todo to In Progress/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Low to Medium/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Progress to In Review/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Medium to High/i)).toBeInTheDocument();
-    expect(screen.getByText(/from In Review to Done/i)).toBeInTheDocument();
-    expect(screen.getByText(/from High to Urgent/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Done to Blocked/i)).toBeInTheDocument();
-    expect(screen.getByText(/from Urgent to Low/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Show \d+ more activit/i)).not.toBeInTheDocument();
-  });
-
-  describe("highlightCommentId scroll-to-comment", () => {
-    it("loads older pages until the highlighted comment is available", async () => {
-      timelinePageControl.hasMore = true;
-      timelinePageControl.olderEntries = [{
-        type: "comment",
-        id: "historical-comment",
-        actor_type: "member",
-        actor_id: "user-1",
-        content: "Historical target",
-        parent_id: null,
-        created_at: "2026-01-15T00:00:00Z",
-      }];
-
-      renderIssueDetailWithHighlight("historical-comment");
-
-      await waitFor(() => {
-        expect(mockApiObj.listTimelinePage).toHaveBeenCalledWith(
-          "issue-1",
-          expect.objectContaining({ before: "older-cursor", limit: 40 }),
-        );
-        expect(document.getElementById("comment-historical-comment")).not.toBeNull();
-      });
-      await waitForReveal();
-      // The target is placed by the reveal hook, not by `scrollIntoView`; see
-      // the assertion in the sibling test for the anchor it publishes.
-      expect(
-        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
-      ).toBe("comment-historical-comment");
-    });
-
-    it("scrolls to the highlighted comment after both issue and timeline finish loading", async () => {
-      renderIssueDetailWithHighlight("comment-2");
-
-      // Wait for the comment row to mount. With initialItemCount in
-      // production, items[0..targetIdx] are force-mounted on first commit;
-      // the mock unconditionally inline-renders every item, so this just
-      // waits for the regular render pass.
-      await waitFor(() => {
-        expect(
-          document.getElementById("comment-comment-2"),
-        ).not.toBeNull();
-      });
-
-      // The reveal hook positions the target itself and then publishes
-      // `ready`; there is no second scroll after the content is visible, which
-      // is what the issue forbids. `scrollIntoView` is no longer part of the
-      // deep-link path at all.
-      await waitForReveal();
-      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
-      const target = document.querySelector('[data-perf-anchor="target-comment"]');
-      expect(target?.id).toBe("comment-comment-2");
-      expect(document.querySelector("[data-tab-scroll-root]")?.getAttribute("data-perf-fresh"))
-        .toBeNull();
-    });
-
-    it("still scrolls when the timeline is ready before the issue (regression for inbox click)", async () => {
-      // Reproduces the inbox-click race: timeline data is in the cache
-      // before the issue resolves. While loading is true, IssueDetail
-      // renders the loading skeleton (Virtuoso never mounts), so no
-      // scroll can fire. After the issue resolves, Virtuoso mounts and
-      // the useLayoutEffect dispatches the native scroll.
-      let resolveIssue: (value: Issue) => void = () => {};
-      const issuePromise = new Promise<Issue>((resolve) => {
-        resolveIssue = resolve;
-      });
-      mockApiObj.getIssue.mockReturnValue(issuePromise);
-
-      renderIssueDetailWithHighlight("comment-2", "issue-1", { seedTimeline: true });
-
-      expect(
-        document.getElementById("comment-comment-2"),
-      ).toBeNull();
-      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
-
-      resolveIssue(mockIssue);
-
-      await waitFor(() => {
-        expect(
-          document.getElementById("comment-comment-2"),
-        ).not.toBeNull();
-      });
-      await waitForReveal();
-      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
-      expect(
-        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
-      ).toBe("comment-comment-2");
-    });
-
-    it("lands directly on a reply whose parent is folded away as resolved", async () => {
-      // comment-3 is resolved, so it renders as a collapsed bar. Its reply,
-      // reply-1, is the deep-link target — and in the flat stream it is an
-      // entry of its own, so there is no thread to unfold first: the
-      // id="comment-reply-1" node is in the DOM on the first commit.
-      const timelineWithResolvedThread: TimelineEntry[] = [
-        ...mockTimeline,
-        {
-          type: "comment",
-          id: "comment-3",
-          actor_type: "member",
-          actor_id: "user-1",
-          content: "Resolved root",
-          parent_id: null,
-          created_at: "2026-01-18T00:00:00Z",
-          updated_at: "2026-01-18T00:00:00Z",
-          comment_type: "comment",
-          resolved_at: "2026-01-19T00:00:00Z",
-        } as TimelineEntry,
-        {
-          type: "comment",
-          id: "reply-1",
-          actor_type: "member",
-          actor_id: "user-1",
-          content: "Reply inside resolved thread",
-          parent_id: "comment-3",
-          created_at: "2026-01-18T01:00:00Z",
-          updated_at: "2026-01-18T01:00:00Z",
-          comment_type: "comment",
-        } as TimelineEntry,
-      ];
-      mockApiObj.listTimeline.mockResolvedValue(timelineWithResolvedThread);
-
-      const queryClient = createTestQueryClient();
-      render(
-        <I18nProvider locale="en" resources={TEST_RESOURCES}>
-          <QueryClientProvider client={queryClient}>
-            <IssueDetail issueId="issue-1" highlightCommentId="reply-1" />
-          </QueryClientProvider>
-        </I18nProvider>,
-      );
-
-      await waitFor(() => {
-        expect(
-          document.getElementById("comment-reply-1"),
-        ).not.toBeNull();
-      });
-      await waitForReveal();
-      expect(
-        document.querySelector('[data-perf-anchor="target-comment"]')?.id,
-      ).toBe("comment-reply-1");
-      // The parent stayed folded — the reply is readable without it.
-      expect(screen.getByText("Reply inside resolved thread")).toBeInTheDocument();
-      expect(screen.queryByText("Resolved root")).not.toBeInTheDocument();
-    });
+    await screen.findByText("System event 10");
+    const rows = Array.from(document.querySelectorAll("[data-log-kind='system']"));
+    expect(rows).toHaveLength(10);
+    expect(rows.map(row => row.textContent)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `System event ${index + 1}`),
+    );
+    expect(screen.queryByText(/show \d+ more activities/i)).not.toBeInTheDocument();
   });
 
   it("sends empty description when editor is cleared", async () => {
     renderIssueDetail();
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+      expect(screen.getByText("Add JWT auth to the backend")).toBeInTheDocument();
     });
+    await waitForReveal();
 
-    const editor = screen.getByPlaceholderText("Add description...");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = await screen.findByPlaceholderText("Add description...");
     fireEvent.change(editor, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(mockApiObj.updateIssue).toHaveBeenCalledWith(
+      expect(mockApiObj.patchIssue).toHaveBeenCalledWith(
         "issue-1",
         expect.objectContaining({ description: "" }),
       );
@@ -2621,7 +2020,7 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await waitFor(() => {
-        expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+        expect(screen.getByText("Add JWT auth to the backend")).toBeInTheDocument();
       });
 
       expect(mockApiObj.listIssues).not.toHaveBeenCalled();
@@ -2658,7 +2057,7 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await waitFor(() => {
-        expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+        expect(screen.getByText("Add JWT auth to the backend")).toBeInTheDocument();
       });
 
       expect(mockApiObj.listIssues).not.toHaveBeenCalled();

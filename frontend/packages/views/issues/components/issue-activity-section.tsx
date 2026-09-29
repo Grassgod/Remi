@@ -15,6 +15,7 @@ import { ReadonlyContent } from "../../editor";
 import { useT } from "../../i18n";
 import { useResolvedThreads } from "../hooks/use-resolved-threads";
 import { getSessionDisplayName } from "../utils/session-display";
+import { quotePreview } from "../utils/quote-preview";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -144,7 +145,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
       const parentRow = parent ? SessionLogEntrySchema.parse(parent) : null;
       return <CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentUserId}
         canModerate={canModerateComments} onStartReply={setReplyTo}
-        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: parentRow.body_md.slice(0, 120) } : undefined}
+        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}
         hasReplies={snapshot.entries.some(e => SessionLogEntrySchema.parse(e).parent_id === row.id)}
         onNavigateToParent={id => document.getElementById(`comment-${id}`)?.scrollIntoView({ block: "center" })}
         onEdit={(id, content, attachmentIds) => run(() => update.mutateAsync({ commentId: id, content, attachmentIds }))}
