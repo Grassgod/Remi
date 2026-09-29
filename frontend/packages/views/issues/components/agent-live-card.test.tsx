@@ -6,7 +6,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import type { TimelineItem } from "../../common/task-transcript";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
 
@@ -25,7 +24,6 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 type EventHandler = (payload: unknown) => void;
 const wsHandlers = vi.hoisted(() => new Map<string, Set<EventHandler>>());
 const wsReconnectCallbacks = vi.hoisted(() => new Set<() => void>());
-const transcriptItemsByTask = vi.hoisted(() => new Map<string, TimelineItem[]>());
 
 vi.mock("@multiremi/core/realtime", () => ({
   useWSEvent: (event: string, handler: EventHandler) => {
@@ -69,10 +67,7 @@ vi.mock("../../common/task-transcript", async () => {
   );
   return {
     ...actual,
-    TranscriptButton: ({ task, items }: { task: AgentTask; items: TimelineItem[] }) => {
-      transcriptItemsByTask.set(task.id, items);
-      return <button data-testid="transcript-button">transcript</button>;
-    },
+    TranscriptButton: () => <button data-testid="transcript-button">transcript</button>,
   };
 });
 
@@ -100,7 +95,6 @@ vi.mock("sonner", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-import { countToolCalls } from "../../common/task-transcript";
 import { AgentLiveCard } from "./agent-live-card";
 
 function makeTask(id: string, overrides: Partial<AgentTask> = {}): AgentTask {
@@ -168,7 +162,6 @@ function taskMessage(
 beforeEach(() => {
   wsHandlers.clear();
   wsReconnectCallbacks.clear();
-  transcriptItemsByTask.clear();
   mockApi.getActiveTasksForIssue.mockReset();
   mockApi.listTaskMessages.mockReset();
   mockApi.listTaskMessages.mockResolvedValue([]);
@@ -202,7 +195,7 @@ describe("AgentLiveCard reconcile race", () => {
     await screen.findByText("3 running");
   });
 
-  it("keeps the visible summary and transcript on the complete hydrated message set", async () => {
+  it("keeps the visible tool count on the complete hydrated message set", async () => {
     const hydration = deferred<TaskMessagePayload[]>();
     mockApi.getActiveTasksForIssue.mockResolvedValue({ tasks: [makeTask("task-1")] });
     mockApi.listTaskMessages.mockReturnValue(hydration.promise);
@@ -226,7 +219,7 @@ describe("AgentLiveCard reconcile race", () => {
 
     await waitFor(() => {
       expect(screen.getByText("3 tools")).toBeTruthy();
-      expect(countToolCalls(transcriptItemsByTask.get("task-1") ?? [])).toBe(3);
+      expect(screen.getByTestId("transcript-button")).toBeInTheDocument();
     });
   });
 

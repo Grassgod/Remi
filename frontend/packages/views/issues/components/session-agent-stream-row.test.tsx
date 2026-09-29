@@ -11,16 +11,23 @@ import enIssues from "../../locales/en/issues.json";
 
 const TEST_RESOURCES = { en: { agents: enAgents, common: enCommon, issues: enIssues } };
 
-const { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages } = vi.hoisted(() => ({
+const { getAgent, getTaskPrompt, getTaskTrace, listRuntimes, listTasksByIssue, listTaskMessages } = vi.hoisted(() => ({
   getAgent: vi.fn(),
   getTaskPrompt: vi.fn(),
+  getTaskTrace: vi.fn(),
   listRuntimes: vi.fn(),
   listTasksByIssue: vi.fn(),
   listTaskMessages: vi.fn(),
 }));
 
-vi.mock("@multiremi/core/api", () => ({
-  api: { getAgent, getTaskPrompt, listRuntimes, listTasksByIssue, listTaskMessages },
+vi.mock("@multiremi/core/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(),
+  api: { getAgent, getTaskPrompt, getTaskTrace, listRuntimes, listTasksByIssue, listTaskMessages },
+}));
+
+vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/realtime")>(),
+  useTraceStreamSubscription: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -95,14 +102,16 @@ function renderRow(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  HTMLElement.prototype.scrollTo = vi.fn();
   getAgent.mockResolvedValue({});
   getTaskPrompt.mockResolvedValue(null);
+  getTaskTrace.mockResolvedValue({ events: [], next_after_seq: 0, head: 0, eof: true, closed: false, source: "daemon", state: "ok" });
   listRuntimes.mockResolvedValue([]);
   listTaskMessages.mockResolvedValue([]);
 });
 
 describe("session agent stream row", () => {
-  it("fetches the full 288-message history and shows all 61 tool calls", async () => {
+  it("keeps current-step history separate and reads 61 trace calls only after opening", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
     listTaskMessages.mockResolvedValue(productionMessages());
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -117,8 +126,16 @@ describe("session agent stream row", () => {
 
     const row = await screen.findByText("Agent a1 is working");
     await waitFor(() => expect(listTaskMessages).toHaveBeenCalledWith("tsk_abc123"));
+    expect(getTaskTrace).not.toHaveBeenCalled();
+    getTaskTrace.mockResolvedValue({
+      events: Array.from({ length: 61 }, (_, index) => ({
+        seq: index + 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Bash",
+      })),
+      next_after_seq: 61, head: 61, eof: true, closed: false, source: "daemon", state: "ok",
+    });
     fireEvent.click(row.closest("button")!);
 
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0));
     expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
   });
 

@@ -66,9 +66,9 @@ const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string
  * These are transcriptions of MUL-455 §3.2, so a bug in `isMisdirectedPath` /
  * `isRuntimeAllowedPath` fails this suite instead of defining the answer.
  *
- * `ui` = the page process: it refuses the daemon protocol prefix and serves
- * everything else. `runtime` = the daemon process: an allowlist of prefixes and
- * exact paths; everything else is refused.
+ * `ui` = the page process: it refuses the daemon protocol and B5 trace reads.
+ * `runtime` = the daemon process: an allowlist of prefixes, exact paths and B5
+ * trace reads; everything else is refused.
  */
 const RUNTIME_ALLOWED_PREFIXES = ["/api/daemon/", "/health/", "/internal/"] as const;
 const RUNTIME_ALLOWED_EXACT = [
@@ -85,7 +85,10 @@ const RUNTIME_ALLOWED_EXACT = [
 /** Independent re-implementation of §3.2, used as the oracle. */
 function expectedRefusal(role: ApiRole, pathname: string): boolean {
   if (role === "all") return false;
-  if (role === "ui") return pathname.startsWith("/api/daemon/");
+  const traceRead = /^\/api\/tasks\/[^/]+\/trace$/.test(pathname)
+    || /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/.test(pathname);
+  if (role === "ui") return pathname.startsWith("/api/daemon/") || traceRead;
+  if (traceRead) return false;
   if (RUNTIME_ALLOWED_EXACT.includes(pathname as (typeof RUNTIME_ALLOWED_EXACT)[number])) return false;
   return !RUNTIME_ALLOWED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
@@ -106,7 +109,7 @@ function routeCountHint(role: ApiRole): string {
     "Before touching this number:",
     "  1. Read the new route's path and classify it against the literal rules at the top of this",
     "     file (RUNTIME_ALLOWED_PREFIXES / RUNTIME_ALLOWED_EXACT), NOT against the implementation.",
-    "     /api/daemon/* -> the runtime process serves it and ui answers 421.",
+     "     /api/daemon/* and B5 trace reads -> runtime serves them and ui answers 421.",
     "     /api/daemons/:id (plural) and everything else outside the allowlist -> ui serves it.",
     "  2. Confirm the route really belongs where it was added. A daemon-protocol route registered",
     "     outside /api/daemon/ (or a browser route added under it) is a routing bug, not a count to",
@@ -278,7 +281,7 @@ describe("MUL-461 api role — env resolution", () => {
     expect(isDaemonPath("/api/daemon")).toBe(false);
   });
 
-  it("lets runtime keep exactly the daemon protocol, the health probes and /internal", () => {
+  it("lets runtime keep the daemon protocol, health probes, peer routes and trace reads", () => {
     for (const allowed of [
       "/api/daemon/ws",
       "/api/daemon/heartbeat",
@@ -289,6 +292,8 @@ describe("MUL-461 api role — env resolution", () => {
       "/api/multiremi/health",
       "/internal/peer/events",
       "/internal/peer/health",
+      "/api/tasks/task_1/trace",
+      "/api/shares/share_1/tasks/task_1/trace",
     ]) {
       expect(isRuntimeAllowedPath(allowed), allowed).toBe(true);
       expect(expectedRefusal("runtime", allowed), `oracle ${allowed}`).toBe(false);
@@ -324,6 +329,8 @@ describe("MUL-461 api role — env resolution", () => {
       { path: "/api/cloud-runtime/healthz", ui: false, runtime: true },
       { path: "/internal/peer/events", ui: false, runtime: false },
       { path: "/internal/peer/health", ui: false, runtime: false },
+      { path: "/api/tasks/task_1/trace", ui: true, runtime: false },
+      { path: "/api/shares/share_1/tasks/task_1/trace", ui: true, runtime: false },
     ];
     for (const entry of cases) {
       expect(isMisdirectedPath("ui", entry.path), `ui ${entry.path}`).toBe(entry.ui);
@@ -358,7 +365,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // not enough when the full suite loads the machine in parallel.
   }, 60_000);
 
-  it("refuses /api/daemon/* and nothing else as ui", async () => {
+  it("refuses daemon and trace-read paths as ui", async () => {
     const statuses = await sweep("ui");
     const misdirected: string[] = [];
     for (const [pattern, status] of statuses) {
@@ -368,7 +375,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("ui", path));
       if (status === 421) misdirected.push(pattern);
     }
-    // Fixed counts, derived from the literal rule above (not from the guard).
+    // Fixed counts await the parent merge baseline sync; route-by-route assertions
+    // above already include the B5 trace-read ownership change.
     // 70 of the 766 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
     // so the full-inventory total is 71. Pinning the swept count AND the arithmetic
@@ -383,7 +391,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(misdirected.length + 1, routeCountHint("ui")).toBe(71);
   });
 
-  it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
+  it("refuses paths outside runtime's daemon, health, peer and trace routes", async () => {
     const statuses = await sweep("runtime");
     let refused = 0;
     for (const [pattern, status] of statuses) {

@@ -34,11 +34,8 @@ import { TaskSteerActions } from "./task-steer-actions";
 // ExecutionLogSection — this card is just a header-style anchor that
 // answers "is anyone working on this issue right now?" at a glance.
 //
-// We still maintain per-task raw message state here so the live
-// TranscriptButton on the sticky banner can open the dialog with live
-// items already attached (the dialog stays in sync via WS as messages
-// arrive). The right-panel rows use the lazy mode of TranscriptButton
-// instead — a one-shot fetch when opened. Both modes coexist.
+// Per-task message state still drives the compact tool count. Opening the
+// transcript reads the task's trace; it does not consume these messages.
 
 
 interface TaskState {
@@ -100,8 +97,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile }: A
   // server's active set: tasks no longer active are dropped (this is what
   // self-heals a stale "is working" banner when a task:completed/failed/
   // cancelled event was lost during a WS reconnect window), and tasks
-  // still active keep their accumulated TimelineItems so the live
-  // TranscriptButton doesn't lose history. New tasks get a one-shot
+  // still active keep their messages for the banner's tool count. New tasks get a one-shot
   // listTaskMessages hydration to backfill any messages that landed
   // before the WS subscription saw them.
   const reconcile = useCallback(() => {
@@ -500,8 +496,6 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
           <TranscriptButton
             task={task}
             agentName={agentName}
-            items={items}
-            isLive={task.status === "running"}
             title={t(($) => $.agent_live.transcript_button)}
           />
         )}

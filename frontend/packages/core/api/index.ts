@@ -39,7 +39,9 @@ export type {
   TaskSteerListResponse,
   TaskSteerMessage,
   TaskSteerResponse,
+  TaskTraceRead,
 } from "./schemas/tasks";
+export { TraceEventSchema } from "./schemas/tasks";
 export { WSClient } from "./ws-client";
 
 import type { ApiClient as ApiClientType } from "./client";

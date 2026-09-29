@@ -18,6 +18,7 @@ summary: 浏览器 WebSocket 的 v2 帧、两条流的端点与鉴权、断线�
 两个端点各自**只**承载一种流：`/ws` 收到 `stream.subscribe{stream:"trace"}` 回 `stream.error{code:"wrong_endpoint"}`，`/api/trace/ws` 收到 `stream:"log"` 同样处理。这条规则让「订阅发错进程」变成显式错误，而不是一个永远收不到帧的订阅。
 
 trace 流的家在 runtime 进程（ADR 0007 决策一），因此 [api-role.ts](../../packages/server/src/config/api-role.ts) 把 `/api/trace/ws` 放进 runtime 放行清单：nginx 把该路径交给 runtime（MUL-464），ui 进程收到它是 421，不是 426。
+B5 的 `GET /api/tasks/:id/trace` 和 `GET /api/shares/:token/tasks/:task_id/trace` 也由 runtime 服务；UI 收到这两条读取路由返回 421。运行中和已结束的执行过程都从该端点按 `after_seq` 分页读取，直播仍用 trace socket。
 
 ## 帧
 
