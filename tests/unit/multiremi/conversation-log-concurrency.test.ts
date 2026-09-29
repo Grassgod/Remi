@@ -442,7 +442,7 @@ function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "
     const rejected = completeRound("Rolled back answer");
     expect(store.getTask(rejected.id)?.status).toBe("completed");
     expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
-    // Comment log rows carry no task_id, so count the session's message rows.
+    // Count the session's message rows: a leaked reply shows up here whatever task_id its log row carries.
     expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message")
       .map((entry) => entry.id)).toEqual([reply.id]);
     expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
