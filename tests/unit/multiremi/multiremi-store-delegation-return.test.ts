@@ -4,7 +4,7 @@ import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAgent, MultiremiIssue, MultiremiRuntime, MultiremiTask } from "@multiremi/contracts/types.js";
 import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
-import { inboxReportBody } from "./inbox-test-assertions.js";
+import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 
 const FEISHU_APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 let previousFeishuEncryptionKey: string | undefined;
@@ -272,7 +272,10 @@ describe("task-level agent delegation return", () => {
     });
     const firstReturnId = fixture.store.getTask(fixture.childTask.id)!.delegationReturnTaskId!;
     expect(firstReturnId).toBeTruthy();
-    expect(fixture.store.getTask(firstReturnId)?.prompt).toContain("first result");
+    const firstReturn = fixture.store.getTask(firstReturnId)!;
+    const firstEntry = inboxReportEntry(fixture.store, firstReturn, fixture.childTask.id);
+    expect(firstEntry.body_md).toContain("first result");
+    expect(firstReturn.prompt).toBe(`读收件箱\n\n${firstReturn.issueSessionId}:${firstEntry.seq} (${firstEntry.id})`);
     expect(fixture.store.claimTask(fixture.leaderRuntime.id)?.id).toBe(firstReturnId);
     fixture.store.buildTaskSessionProjection(firstReturnId);
     fixture.store.startTask(firstReturnId);
@@ -295,7 +298,10 @@ describe("task-level agent delegation return", () => {
     const secondReturnId = fixture.store.getTask(continued.id)!.delegationReturnTaskId!;
     expect(secondReturnId).toBeTruthy();
     expect(secondReturnId).not.toBe(firstReturnId);
-    expect(fixture.store.getTask(secondReturnId)?.prompt).toContain("second result");
+    const secondReturn = fixture.store.getTask(secondReturnId)!;
+    const secondEntry = inboxReportEntry(fixture.store, secondReturn, continued.id);
+    expect(secondEntry.body_md).toContain("second result");
+    expect(secondReturn.prompt).toBe(`读收件箱\n\n${secondReturn.issueSessionId}:${secondEntry.seq} (${secondEntry.id})`);
     const duplicate = fixture.store.ensureDelegationWakeup({
       sourceTaskId: continued.id,
       requiredEventSeq: 1,

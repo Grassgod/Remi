@@ -276,6 +276,21 @@ pendingTurnBackendTests("transactional inbox writers", (fixture) => {
     expect(f.queued()).toBe(0);
   });
 
+  it("points a coalesced recovery turn at the arriving envelope without copying its body", () => {
+    const f = setup();
+    const recovery = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, issueSessionId: f.session.id,
+      wakeSource: "re_ring", prompt: `读收件箱\n\n${f.session.id}: (0, 1000000]` });
+    f.db.run("UPDATE multiremi_tasks SET wake_seq = 1000000 WHERE id = ?", [recovery.id]);
+    const delivery = f.send({ source: { taskId: "source_report" } })[0]!;
+    expect(delivery.action).toBe("coalesced");
+    expect(delivery.task!.id).toBe(recovery.id);
+    expect(delivery.entry.metadata.envelope!.source.taskId).toBe("source_report");
+    expect(delivery.entry.body_md).toBe(f.env.body);
+    expect(delivery.task!.prompt).toBe(`读收件箱\n\n${f.session.id}:${delivery.entry.seq} (${delivery.entry.id})`);
+    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(recovery.id).wake_seq)).toBe(1000000);
+    expect(f.queued()).toBe(1);
+  });
+
   it("uses sessionId in dedupe keys and resolves Issue owners and parent owners", () => {
     const f = setup();
     const child = f.store.createIssue({ title: "Child", parentIssueId: f.issue.id });

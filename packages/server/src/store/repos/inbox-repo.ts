@@ -125,6 +125,13 @@ export class InboxRepo {
           },
         });
       if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
+      if (turn.action === "coalesced" && turn.task!.wakeSource === "re_ring") {
+        // Replace the recovery range with the concrete entry that just arrived.
+        this.ctx.db.run("UPDATE multiremi_tasks SET prompt = ? WHERE id = ? AND status = 'queued'", [
+          `读收件箱\n\n${sessionId}:${stored.entry.seq} (${stored.entry.id})`, turn.task!.id,
+        ]);
+        turn.task = this.ctx.tasks().getTask(turn.task!.id)!;
+      }
       deliveries.push({ recipient, entry: stored.entry, deduplicated: stored.deduplicated, ...turn });
     }
     return deliveries;
