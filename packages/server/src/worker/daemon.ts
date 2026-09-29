@@ -2447,6 +2447,9 @@ export class MultiremiDaemon {
         }, nextRetry - Date.now());
         this.pluginLocalRetryTimer.unref?.();
       }
+    } catch (error) {
+      if (this.stopped && error instanceof DaemonProtocolRpcError && error.code === "authority_revoked") return;
+      throw error;
     } finally {
       if (this.agentPluginReconcileAbort === abort) {
         this.agentPluginReconcileAbort = null;

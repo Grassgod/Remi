@@ -11,6 +11,7 @@ import { bindReportFrames } from "../../fixtures/report-session.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
   FEISHU_DECISION_CARD_CAPABILITY,
   FEISHU_DECISION_CARD_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
@@ -1734,7 +1735,13 @@ async function withRealBotHostClient<T>(
   const accessToken = await store.verifyAccessToken(token.token);
   const receive = () => receiveNormalizedRuntimeInputs(store, "rt_bot", { identity: { accessToken, masterToken: false } });
   const client = new MultiremiDaemonClient("http://local", token.token);
-  const drainReports = bindReportFrames(client, store, { headers: { Authorization: `Bearer ${token.token}` } });
+  const drainReports = bindReportFrames(client, store, {
+    headers: { Authorization: `Bearer ${token.token}` },
+    capabilities: {
+      feishu_concierge_protocol: FEISHU_CONCIERGE_PROTOCOL_VERSION,
+      feishu_decision_card: FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+    },
+  });
   try { return await fn(client, receive); }
   finally { await drainReports(); globalThis.fetch = scripted; }
 }
