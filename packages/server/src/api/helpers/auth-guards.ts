@@ -759,23 +759,23 @@ export function isFeishuBotOutboundAttachmentRequest(c: Context): boolean {
     .test(new URL(c.req.url).pathname);
 }
 
-/** Reads the bot host needs to present a Task, plus answering its requests.
+/** Reads the bot host needs to present a Task, plus minting and answering cards.
  * Creating or expiring a human request stays with the executing daemon. */
 function isFeishuBotTaskTransportRequest(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
   return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/(?:status|messages|human-requests\/[^/]+)$/.test(path))
-    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path));
 }
 
 /**
- * MUL-407: the two verbs an Issue topic's host may use on another machine's
+ * The Issue topic host may read, mint a card, and answer another machine's
  * task. Creating and expiring a human request are deliberately absent — the
  * executing daemon stays the only authority for those.
  */
 function isFeishuBotIssueTaskRequestTransport(c: Context): boolean {
   const path = new URL(c.req.url).pathname;
   return (c.req.method === "GET" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+$/.test(path))
-    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/respond$/.test(path));
+    || (c.req.method === "POST" && /^\/api\/daemon\/tasks\/[^/]+\/human-requests\/[^/]+\/(?:respond|card)$/.test(path));
 }
 
 export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
