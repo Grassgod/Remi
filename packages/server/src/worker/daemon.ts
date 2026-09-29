@@ -1752,7 +1752,11 @@ export class MultiremiDaemon {
       await this.refreshWorkspaceRepos(workspaceId);
       this.protocolClient?.runtimesChanged();
       try {
-        if (await this.canRecoverOrphans(this.ensureOutbox())) await this.client.recoverOrphans(newRuntimeId);
+        // The temporary HTTP recovery has no active_task_ids argument. A task
+        // still running locally must be protected by runtime.ready instead.
+        if (this.activeTaskIds.size === 0 && await this.canRecoverOrphans(this.ensureOutbox())) {
+          await this.client.recoverOrphans(newRuntimeId);
+        }
       } catch (error) {
         log.warn(`Recover orphans after runtime_gone failed for ${newRuntimeId}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -3091,6 +3095,7 @@ export class MultiremiDaemon {
 
   private async requestRestartAfterUpdate(): Promise<void> {
     await this.drainRuntimeDownlinks();
+    if (this.options.runtimeId) await this.awaitTaskReportDrain(`rt:${this.options.runtimeId}`);
     this.requestRestart();
   }
 

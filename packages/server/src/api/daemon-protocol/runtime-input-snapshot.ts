@@ -12,7 +12,13 @@ function config(type: string, payload: Record<string, unknown>): DaemonDownlinkE
 export function runtimeInputSnapshot(store: MultiremiStore, runtimeId: string, session?: DaemonProtocolSession): DaemonDownlinkEntity[] {
   const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) return [];
-  const pending: DaemonDownlinkEntity[] = store.pendingRuntimeRequests(runtimeId).map(request => ({
+  const requests = store.pendingRuntimeRequests(runtimeId);
+  // A successful update restarts the daemon; offer it after maintenance that
+  // was pending in the same snapshot so those requests can finish first.
+  const pending: DaemonDownlinkEntity[] = [
+    ...requests.filter(request => request.kind !== "update"),
+    ...requests.filter(request => request.kind === "update"),
+  ].map(request => ({
     key: `runtime.${request.kind}:${request.id}`, type: `runtime.${request.kind}`, payload: request.payload,
     claimed: () => store.claimAcknowledgedRuntimeRequest(runtimeId, request.kind, request.id),
     discard: () => store.discardRuntimePendingRequest(runtimeId, request.kind, request.id),
