@@ -392,7 +392,9 @@ p95 12,159 ms，其中混入了所有 runtime 都忙时的排队等待，不是�
 ## 4. heartbeat 与 pending_*
 
 `hb` 上行每 15 s，载荷包含 `active_task_count`、outbox 统计、`drain_ack_generation`，
-以及各 runtime 的 `{ runtime_id, capabilities }`。能力字段与 HTTP heartbeat 同名同语义；
+以及各 runtime 的 `{ runtime_id, capabilities, ssh_mesh_protocol?, ssh_mesh_status? }`。
+SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议版本 0 按不支持处理，
+旧 v2 daemon 不带字段时不写 Mesh 状态。能力字段与 HTTP heartbeat 同名同语义；
 缺失的字段视为不支持，覆盖旧值。服务端更新 `last_heartbeat_at`（`RUNTIME_HEARTBEAT_STALE_MS`
 5 分钟的规则不动，platform-maintenance 与 ssh-mesh 继续用它）、记录 drain ack，并在能力
 变化时更新 runtime metadata，不因无变化的心跳重写 metadata。`heartbeatRuntime` 里 7 类待办的

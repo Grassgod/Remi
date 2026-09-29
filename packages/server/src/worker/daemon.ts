@@ -1081,6 +1081,8 @@ export class MultiremiDaemon {
         active_task_count: this.activeTaskCount,
         outbox: { pending: this.outboxStats()?.pending ?? 0, unacked: 0 },
         drain_ack_generation: this.appliedDrainGeneration,
+        ssh_mesh_protocol: MULTIREMI_SSH_MESH_PROTOCOL_VERSION,
+        ssh_mesh_status: this.sshMeshManager.getHeartbeatStatus(),
       }),
       onHeartbeatAck: async ack => {
         if (this.stopped || ack.runtime_id !== this.options.runtimeId) return;

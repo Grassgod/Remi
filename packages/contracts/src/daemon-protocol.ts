@@ -36,7 +36,7 @@
  */
 
 import type { TraceEvent } from "./trace.js";
-import type { MultiremiDaemonHeartbeatAck } from "./types.js";
+import type { MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 
@@ -479,7 +479,13 @@ export interface DaemonHeartbeatPayload {
   outbox?: DaemonHeartbeatOutboxStats;
   /** Drain generation this daemon has applied; absent means "none observed yet". */
   drain_ack_generation?: number;
-  runtimes?: Array<{ runtime_id: string; capabilities?: DaemonRuntimeCapabilities }>;
+  runtimes?: Array<{
+    runtime_id: string;
+    capabilities?: DaemonRuntimeCapabilities;
+    /** Omitted by older v2 daemons; zero explicitly reports no mesh support. */
+    ssh_mesh_protocol?: number;
+    ssh_mesh_status?: MultiremiDaemonSshMeshStatus;
+  }>;
 }
 
 /**
