@@ -82,6 +82,38 @@ function assertHostedCapabilities(h: DaemonProtocolHarness, type: "hello" | "hb"
 }
 
 describe("v2 runtime capability advertisement", () => {
+  it("preserves registration metadata across hello and changing capability heartbeats", async () => {
+    const h = await fixture();
+    await h.startDaemon();
+    await h.settleHeartbeat();
+    const id = runtimeId(h);
+    const metadata = h.store.getRuntime(id)!.metadata;
+    const registrationFields = {
+      parallel_agent_execution: 1,
+      cli_version: expect.any(String),
+      version: expect.any(String),
+      runtime_workspaces: 1,
+      launched_by: "manual",
+    };
+    expect(metadata).toMatchObject(registrationFields);
+    const stable = { parallel_agent_execution: metadata.parallel_agent_execution,
+      cli_version: metadata.cli_version, version: metadata.version,
+      runtime_workspaces: metadata.runtime_workspaces, launched_by: metadata.launched_by };
+
+    for (let count = 2; count <= 3; count++) {
+      h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+      await waitFor(() => h.ledger.filter(entry => entry.type === "hb").length >= count, `capability heartbeat ${count}`);
+      await h.settleHeartbeat();
+      expect(h.store.getRuntime(id)!.metadata).toMatchObject(stable);
+    }
+    attachHost(h);
+    h.clock.advance(DAEMON_HEARTBEAT_INTERVAL_MS);
+    await waitFor(() => h.ledger.filter(entry => entry.type === "hb").length >= 4, "changed capability heartbeat");
+    await h.settleHeartbeat();
+    expect(h.store.getRuntime(id)!.metadata).toMatchObject({ ...stable,
+      feishu_concierge_config_v1: true, feishu_issue_decision_card: 1 });
+  });
+
   it("declares all host capabilities in hello and hb, creates an Issue decision delivery, and recovers its card", async () => {
     const h = await fixture();
     attachHost(h);

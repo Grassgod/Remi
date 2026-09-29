@@ -10,6 +10,7 @@ import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.
 import type { DaemonProtocolLayer, DaemonProtocolRpcHandler } from "@multiremi/api/daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { daemonFrameText } from "@multiremi/api/daemon-protocol/frames.js";
+import { registerDaemonReportHandlers } from "@multiremi/api/daemon-protocol/report-handlers.js";
 import type { MultiremiDaemon, MultiremiDaemonOptions, MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
@@ -83,6 +84,7 @@ export class DaemonProtocolHarness {
   private apiRole: "all" | "runtime" = "all";
   private peerChannel: PeerChannel | null = null;
   private peerSecret = "";
+  private onRoundCard: ((taskId: string) => void) | null = null;
   get client() { return this.daemons[0]!.daemonProtocolClient(); }
   get daemon() { return this.daemons[0]!; }
   get url() { return `http://127.0.0.1:${this.server.port}`; }
@@ -103,6 +105,7 @@ export class DaemonProtocolHarness {
     peerSecret?: string;
     beforeSend?: (frame: Record<string, any>, socket: InjectedSocket, harness: DaemonProtocolHarness) => boolean | void;
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
+    onRoundCard?: (taskId: string) => void;
   } = {}): Promise<DaemonProtocolHarness> {
     const h = new DaemonProtocolHarness();
     try {
@@ -111,6 +114,7 @@ export class DaemonProtocolHarness {
       h.apiRole = options.apiRole ?? "all";
       h.peerChannel = options.peerChannel ?? null;
       h.peerSecret = options.peerSecret ?? "";
+      h.onRoundCard = options.onRoundCard ?? null;
       const token = await h.store.createAccessToken({ name: "protocol fixture", type: "daemon", workspaceId: "local", daemonId });
       h.startServer();
       h.createDaemons = () => {
@@ -167,6 +171,9 @@ export class DaemonProtocolHarness {
       peerChannel: this.peerChannel, peerSecret: this.peerSecret,
       onDaemonProtocol: layer => {
         this.layer = layer;
+        if (this.onRoundCard) {
+          registerDaemonReportHandlers(layer, this.store, undefined, taskId => this.onRoundCard?.(taskId));
+        }
         // Observe persisted business fields after successful handlers, not ingress or ACK receipt.
         const handlers = (layer as any).eventHandlers as Map<string, DaemonProtocolRpcHandler>;
         for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {
