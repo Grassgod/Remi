@@ -19,9 +19,11 @@
  * must leave the outer transaction usable, so the caller can still commit.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { resolveSqlDialect } from "@multiremi/store/migrations.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
@@ -81,8 +83,10 @@ function sqliteBackend(): Backend {
   return {
     name: "sqlite",
     makeStore() {
-      handle = new Database(":memory:");
+      handle = openSqliteDatabase(":memory:");
       opened = handle;
+      expect((handle as SqlDatabase).dialect).toBe("sqlite");
+      expect(resolveSqlDialect(handle as SqlDatabase)).toBe("sqlite");
       return new MultiremiStore(handle as unknown as SqlDatabase);
     },
     db: () => handle as unknown as SqlDatabase,
@@ -287,6 +291,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const url = new URL(PG_ADMIN_URL);
         url.pathname = `/${TEST_DB}`;
         pgDb = new PostgresSyncDatabase(url.toString());
+        expect(resolveSqlDialect(pgDb)).toBe("postgres");
         return new MultiremiStore(pgDb);
       },
       db: () => pgDb as unknown as SqlDatabase,

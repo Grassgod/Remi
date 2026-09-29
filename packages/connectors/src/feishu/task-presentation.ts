@@ -10,6 +10,7 @@ import { sendCardFeishu, updateCardFeishu } from "./send.js";
 import { FeishuCotTransport, feishuTransportError, type CotSample } from "./native-cot.js";
 import { FeishuCotTimeline } from "./cot-timeline.js";
 import { buildTaskInteractionCard, registerTaskInteraction } from "./task-interaction.js";
+import { questionCardIdempotencyKey } from "@shared/feishu-task-card.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
@@ -291,10 +292,15 @@ export class FeishuTaskPresentation {
     if (!entry && request.status !== "pending") return; // historical request already answered on web
     const recipientOpenId = this.state.interactionOpenId;
     if (!entry) {
-      const card = buildTaskInteractionCard(request, { agentName: this.execution.agentName, sessionId: this.sessionId, recipientOpenId });
-      const sent = await this.retry(() => sendCardFeishu(this.client, this.chatId, card, {
-        replyToMessageId: this.options.replyToMessageId, idempotencyKey: stableId(`${this.options.idempotencyKey}:${this.meta.taskId}:request:${requestId}`),
-      }), true);
+      const deliveryKey = stableId(`${this.options.idempotencyKey}:${this.meta.taskId}:request:${requestId}`);
+      const sent = await this.retry(async () => {
+        const card = recipientOpenId && this.meta.prepareHumanRequestCard
+          ? await this.meta.prepareHumanRequestCard(requestId, recipientOpenId)
+          : buildTaskInteractionCard(request!, { agentName: this.execution.agentName, sessionId: this.sessionId, recipientOpenId });
+        return sendCardFeishu(this.client, this.chatId, card, {
+          replyToMessageId: this.options.replyToMessageId, idempotencyKey: questionCardIdempotencyKey(card, deliveryKey),
+        });
+      }, true);
       entry = this.state.interactions[requestId] = { messageId: sent.messageId };
       await this.save();
     }
@@ -305,17 +311,8 @@ export class FeishuTaskPresentation {
       }
     };
     if (entry.receiptStatus === request.status) { await finishWaiting(); await this.save(); return; }
-    const registered = registerTaskInteraction({ appId: this.options.appId, chatId: this.chatId, messageId: entry.messageId,
-      recipientOpenId, request, agentName: this.execution.agentName, sessionId: this.sessionId,
-      submit: async response => {
-        this.signal.throwIfAborted();
-        try { return await this.meta.respondHumanRequest(requestId, response); }
-        catch (error) {
-          const latest = await this.meta.getHumanRequest?.(requestId);
-          if (latest && latest.status !== "pending") return latest;
-          throw error;
-        }
-      } });
+    const registered = registerTaskInteraction({ appId: this.options.appId, messageId: entry.messageId,
+      agentName: this.execution.agentName, sessionId: this.sessionId });
     try {
       // Register the existing card callback before awaiting native transport;
       // a slow CoT update must not leave newly visible buttons unresponsive.

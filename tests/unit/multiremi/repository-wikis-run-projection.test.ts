@@ -10,7 +10,7 @@
 //   - the response contract (`source_revision`, `published`, observability
 //     counters) and the blocked-Wiki alert path are unchanged.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
@@ -77,7 +77,7 @@ function insertRun(
  */
 function createRecordingStore(): { store: MultiremiStore; sql: string[]; raw: RunWriter } {
   const sql: string[] = [];
-  const raw = new Database(":memory:");
+  const raw = openSqliteDatabase(":memory:");
   const db: SqlDatabase = new Proxy(raw as unknown as SqlDatabase, {
     get(target, property) {
       const value = target[property as keyof SqlDatabase];

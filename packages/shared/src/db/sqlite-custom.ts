@@ -2,6 +2,7 @@
  * Must be imported BEFORE any module that creates a bun:sqlite Database instance.
  * macOS ships a proprietary SQLite that disables loadExtension().
  * This swaps it for a vanilla build from Homebrew or Miniconda.
+ * It only calls Database.setCustomSQLite and never creates a handle (see tests/arch/sqlite-handle-entry.test.ts).
  */
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";

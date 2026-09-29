@@ -3328,6 +3328,15 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     UNIQUE(workspace_id, kind, unit_key));
     CREATE INDEX IF NOT EXISTS idx_feishu_outbound_operations_pending
       ON multiremi_feishu_bot_outbound_operations(workspace_id, status, available_at, leased_until);`);
+  runMigrationOnce(db, "20260929_human_request_tokens", () => {
+    for (const table of ["multiremi_task_human_requests", "multiremi_issue_decisions"]) {
+      addColumnIfMissing(db, table, "token_hash TEXT");
+      addColumnIfMissing(db, table, "token_recipient TEXT");
+      addColumnIfMissing(db, table, "token_consumed_at TEXT");
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_token_hash
+        ON ${table}(token_hash) WHERE token_hash IS NOT NULL`);
+    }
+  });
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_expiry
     ON multiremi_task_human_requests(status, expires_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_outbound_kind

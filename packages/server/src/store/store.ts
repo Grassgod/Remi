@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -122,6 +123,7 @@ import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
   type StrictRuntimeDeleteResult,
+  type RuntimeDeleteOptions,
 } from "@multiremi/store/repos/runtimes-repo.js";
 import {
   DaemonProfilesRepo,
@@ -3069,15 +3071,16 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
-    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
+  deleteRuntimeWithArchivedAgentCleanup(id: string, options: RuntimeDeleteOptions = {}): StrictRuntimeDeleteResult {
+    return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id, options);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
+    options: RuntimeDeleteOptions = {},
   ): ArchiveAgentsAndDeleteRuntimeResult {
-    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
+    return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds, options);
   }
 
   mergeRuntimeInto(
@@ -3444,6 +3447,10 @@ runMigrations(this.db);
 
   getIssueWorkspace(issueId: string): MultiremiIssueWorkspace | null {
     return this.issueWorkspaces.get(issueId);
+  }
+
+  abandonIssueWorkspace(issueId: string, workspaceId: string) {
+    return this.issueWorkspaces.abandon(issueId, workspaceId);
   }
 
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
@@ -5272,13 +5279,17 @@ runMigrations(this.db);
     return this.tasks.getTaskHumanRequest(requestId);
   }
 
+  prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
+    return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
+  }
+
   listTaskHumanRequests(taskId: string): MultiremiTaskHumanRequest[] {
     return this.tasks.listTaskHumanRequests(taskId);
   }
 
   respondTaskHumanRequest(
     requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null },
+    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);

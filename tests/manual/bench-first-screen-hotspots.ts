@@ -23,7 +23,8 @@
  * falls back to in-memory SQLite and records that plus `"simulated"` bridge
  * bytes in the report.
  */
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -229,7 +230,7 @@ async function main(): Promise<void> {
   }> = [];
 
   for (const sessions of SCALE) {
-    let raw: SqlDatabase = new Database(":memory:");
+    let raw: SqlDatabase = openSqliteDatabase(":memory:");
     if (ADMIN_URL && await postgresReachable(ADMIN_URL)) {
       const { PostgresSyncDatabase } = await import("../../packages/server/src/store/db/postgres.js");
       dbName = `multiremi_mul473_${process.pid}_${Math.floor(Math.random() * 1e6)}`;

@@ -1,18 +1,16 @@
 /**
- * MUL-336 — the Agent's default fallback model.
+ * MUL-336 / MUL-478 — the Agent's default fallback model.
  *
- * When the primary model's gateway reports resource exhaustion the CURRENT task
+ * When the primary model's gateway reports resource exhaustion or unavailability the CURRENT task
  * must move to the Agent's fallback model and carry on, exactly once, without
- * touching the Agent's own configuration or any other task. Everything that is
- * not a resource failure must keep its previous behaviour — in particular it
- * must never spend the switch, because doing so would hide a real
- * misconfiguration behind a working model.
+ * touching the Agent's own configuration or any other task. MUL-478 includes
+ * model lookup and server failures while retaining auth/configuration exclusions.
  *
  * These tests drive the real store (claim -> fail -> retry -> claim) instead of
  * the policy helpers, because the contract is about what the recovery chain
  * does to the task, to the Agent and to the surrounding surfaces.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { daemonTaskClaimResponse, taskCompatibilityResponse } from "@multiremi/api/wire/tasks.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { classifyDaemonTaskFailure, TaskFailureReason } from "@multiremi/task-failure.js";
@@ -235,7 +233,6 @@ describe("MUL-336 model fallback recovery chain", () => {
 
   it.each([
     ["an auth failure", "API Error: 401 Unauthorized", TaskFailureReason.AgentProviderAuthOrAccess],
-    ["a model access failure", "Error: model primary-gpt not found in this workspace", TaskFailureReason.AgentModelNotFoundOrUnavailable],
     ["a tool/business failure", "agent exit status 1", TaskFailureReason.AgentProcessFailure],
     ["a context overflow", "prompt is too long: maximum context length exceeded", TaskFailureReason.AgentContextOverflow],
   ])("never spends the switch on %s", (_label, error, reason) => {
@@ -251,6 +248,113 @@ describe("MUL-336 model fallback recovery chain", () => {
     if (retry) {
       expect(retry).toMatchObject({ executionModel: null, fallbackSwitched: false, switchReason: null });
     }
+  });
+
+  it.each([
+    ["Error: model primary-gpt not found in this workspace", TaskFailureReason.AgentModelNotFoundOrUnavailable],
+    ["Compacting failed: unexpected status 503", TaskFailureReason.AgentProviderServerError],
+  ])("switches once on unavailable model/server errors: %s", (error, reason) => {
+    const { store, runtime, agent, issue } = fixture();
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Recover availability" });
+    failClaimed(store, runtime.id, task.id, error);
+    expect(store.getTask(task.id)).toMatchObject({ status: "failed", failureReason: reason });
+    const retry = successor(store, task.id)!;
+    expect(retry).toMatchObject({ executionModel: FALLBACK, fallbackSwitched: true, sessionId: null });
+    expect(retry.switchReason).toBe(`gateway_resource:${reason};provider_session_reset`);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+    failClaimed(store, runtime.id, retry.id, "HTTP 503");
+    expect(successor(store, retry.id)).toBeNull();
+    expect(store.getIssue(issue.id)?.status).toBe("blocked");
+  });
+
+  it.each([
+    "Error: model primary-gpt not found",
+    "unexpected status 503",
+  ])("blocks without a configured fallback: %s", (error) => {
+    const { store, runtime, agent, issue } = fixture({ fallback: false });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Report failure" });
+    failClaimed(store, runtime.id, task.id, error);
+    expect(successor(store, task.id)).toBeNull();
+    expect(store.getIssue(issue.id)?.status).toBe("blocked");
+  });
+
+  it("switches capability-starved queued tasks at five minutes through the recovery chain", () => {
+    const { store, runtime, agent, issue } = fixture();
+    store.updateRuntimeModels(runtime.id, [model(FALLBACK)]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Queued availability" });
+    const created = Date.parse(task.createdAt);
+    store.refreshQueuedCapabilityWaitReasons(created + 4 * 60_000);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.getTask(task.id)?.waitReason).toContain("等待模型能力恢复");
+    expect(successor(store, task.id)).toBeNull();
+    store.refreshQueuedCapabilityWaitReasons(created + 5 * 60_000);
+    expect(store.getTask(task.id)).toMatchObject({
+      status: "failed", failureReason: TaskFailureReason.QueuedModelUnavailable, waitReason: null,
+    });
+    const retry = successor(store, task.id)!;
+    expect(retry).toMatchObject({ status: "queued", executionModel: FALLBACK, fallbackSwitched: true, attempt: 2 });
+    expect(retry.switchReason).toBe(`gateway_resource:${TaskFailureReason.QueuedModelUnavailable};provider_session_reset`);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+    store.refreshQueuedCapabilityWaitReasons(created + 15 * 60_000);
+    expect(store.listTasks().filter((candidate) => candidate.parentTaskId === task.id)).toHaveLength(1);
+    expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
+  });
+
+  it("keeps queued fallback creation atomic and publishes events only after commit", () => {
+    const { store, runtime, agent, issue } = fixture();
+    store.updateRuntimeModels(runtime.id, [model(FALLBACK)]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Atomic queue switch" });
+    const events: string[] = [];
+    store.onTaskEnqueued((retry) => events.push(`queued:${retry.id}`));
+    store.onTaskEvent(({ type, task: updated }) => {
+      if (type !== "task:failed" || updated.id !== task.id) return;
+      expect(successor(store, task.id)?.status).toBe("queued");
+      events.push(`failed:${updated.id}`);
+    });
+    const repo = (store as any).tasks;
+    const insert = spyOn(repo, "createTaskWithinWorkspaceLock").mockImplementation(() => {
+      throw new Error("retry insert rejected");
+    });
+    const now = Date.parse(task.createdAt) + 5 * 60_000;
+    try {
+      expect(() => store.refreshQueuedCapabilityWaitReasons(now)).toThrow("retry insert rejected");
+    } finally {
+      insert.mockRestore();
+    }
+    expect(store.getTask(task.id)).toMatchObject({ status: "queued", failureReason: null, error: null });
+    expect(successor(store, task.id)).toBeNull();
+    expect(events).toEqual([]);
+    store.refreshQueuedCapabilityWaitReasons(now);
+    expect(events).toEqual([`queued:${successor(store, task.id)!.id}`, `failed:${task.id}`]);
+  });
+
+  it("switches on a pinned Runtime only when that same Runtime supports the fallback", () => {
+    const { store, runtime, agent, issue } = fixture();
+    store.updateRuntimeModels(runtime.id, [model(FALLBACK)]);
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: runtime.id, prompt: "Pinned availability" });
+    store.refreshQueuedCapabilityWaitReasons(Date.parse(task.createdAt) + 5 * 60_000);
+    expect(store.getTask(task.id)?.failureReason).toBe(TaskFailureReason.QueuedModelUnavailable);
+    const retry = successor(store, task.id)!;
+    expect(retry).toMatchObject({ executionModel: FALLBACK, fallbackSwitched: true });
+    expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
+  });
+
+  it.each(["no fallback", "already switched", "attempt limit", "pinned runtime"])("keeps capability waits when switching is ineligible: %s", (scenario) => {
+    const { store, runtime, agent, issue } = fixture({ fallback: scenario !== "no fallback" });
+    store.updateRuntimeModels(runtime.id, scenario === "pinned runtime" ? [model(PRIMARY, false)] : [model(FALLBACK)]);
+    if (scenario === "pinned runtime") {
+      store.registerRuntime({ name: "Other gateway", provider: "claude", models: [model(FALLBACK)] });
+    }
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, prompt: "Bounded queue policy",
+      ...(scenario === "already switched" ? { fallbackSwitched: true } : {}),
+      ...(scenario === "attempt limit" ? { attempt: 3, maxAttempts: 3 } : {}),
+      ...(scenario === "pinned runtime" ? { runtimeId: runtime.id } : {}),
+    });
+    const result = store.refreshQueuedCapabilityWaitReasons(Date.parse(task.createdAt) + 15 * 60_000);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(successor(store, task.id)).toBeNull();
+    expect(result.alerted).toBe(1);
   });
 
   it("defers a throttled retry on the same model and honours Retry-After", () => {

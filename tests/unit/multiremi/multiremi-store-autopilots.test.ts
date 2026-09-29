@@ -1,7 +1,7 @@
 // Autopilot run state, cron scheduling and trigger claiming, the failure-rate
 // auto-pause, analytics, and webhook delivery.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -397,8 +397,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("claims due schedule triggers atomically across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-schedule-claim-"));
     const path = join(dir, "multiremi.db");
-    const dbA = new Database(path);
-    const dbB = new Database(path);
+    const dbA = openSqliteDatabase(path);
+    const dbB = openSqliteDatabase(path);
     try {
       const storeA = new MultiremiStore(dbA);
       const storeB = new MultiremiStore(dbB);
@@ -939,8 +939,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("claims each pending system event once across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-system-event-claim-"));
     const path = join(dir, "multiremi.db");
-    const dbA = new Database(path);
-    const dbB = new Database(path);
+    const dbA = openSqliteDatabase(path);
+    const dbB = openSqliteDatabase(path);
     try {
       const storeA = new MultiremiStore(dbA);
       const storeB = new MultiremiStore(dbB);

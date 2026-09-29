@@ -2568,6 +2568,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.workspace.abandon": {
+      "command": "remi issue workspace abandon",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.workspace.abandon",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "issue.decision.request": {
       "command": "remi issue decision request",
       "auth": [

@@ -289,6 +289,10 @@
     "visibility_toast_updated": "공개 범위를 {{visibility}}(으)로 설정했습니다",
     "visibility_toast_failed": "공개 범위를 업데이트하지 못했습니다",
     "delete_dialog": {
+      "workspaces": {
+        "warning": "다음 Issue의 작업 공간이 이 Runtime에 남아 있습니다. 확인 후 계속하세요.",
+        "checkbox": "이 작업 공간을 포기합니다. 로컬 파일은 유지되며 이후 작업이 새 작업 공간을 사용할 수 있음을 이해합니다."
+      },
       "light": {
         "title": "런타임을 삭제할까요?",
         "description": "\"{{name}}\"을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.",

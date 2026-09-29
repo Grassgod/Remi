@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 
 async function setup() {
-  const store = new MultiremiStore(new Database(":memory:"));
+  const store = new MultiremiStore(openSqliteDatabase(":memory:"));
   store.ensureLocalWorkspace();
   store.upsertRelayConfig("local", "claude", {
     fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://ai.openremi.fun" } }),
