@@ -5077,7 +5077,13 @@ runMigrations(this.db);
     return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
-  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").PendingTurnResult {
+  createTaskWithinWorkspaceLock(
+    ...args: Parameters<TasksRepo["createTaskWithinWorkspaceLock"]>
+  ): MultiremiTask {
+    return this.tasks.createTaskWithinWorkspaceLock(...args);
+  }
+
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult {
     return this.tasks.ensurePendingTurnWithinTransaction(input);
   }
 

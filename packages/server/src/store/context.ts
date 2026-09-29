@@ -542,7 +542,9 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
-  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").PendingTurnResult;
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
+  createTaskWithinWorkspaceLock(input: CreateTaskInput, childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue, gateIssueBeforeReplacement?: MultiremiIssue | null, executionScopeOverride?: string): MultiremiTask;
   createTask(input: CreateTaskInput): MultiremiTask;
   /**
    * Internal primitive for a caller that already owns a database transaction.

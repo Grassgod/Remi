@@ -64,7 +64,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
         const result = await output;
         expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
         const returned = JSON.parse(result.stdout);
-        expect(returned.created).toBe(true);
+        expect(returned.action).toBe("created");
         expect(f.db.query("SELECT seq, body_md FROM multiremi_conversation_log WHERE session_id = ? AND id = ?").all(session.id, returned.entryId))
           .toEqual([{ seq: beforeHead + 1, body_md: envelope.body }]);
       } finally {
@@ -106,8 +106,8 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       await blocker.begin(async tx => {
         await tx`UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ${agent.workspaceId}`;
         for (const [i, child] of children.entries()) {
-          child.stdin.write(JSON.stringify({ agentId: agent.id, issueSessionId: session.id,
-            entryId: entry.id, entrySeq: 10 + i * 10, reason: "concurrent" }));
+          child.stdin.write(JSON.stringify({ lane: { kind: "issue", agentId: agent.id, issueSessionId: session.id, executionScope: "" },
+            wake: { seq: 10 + i * 10, reason: "concurrent" } }));
           child.stdin.end();
         }
         await waitFor(async () => {
@@ -120,7 +120,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       expect(results.map(result => ({ code: result.code, stderr: result.stderr })))
         .toEqual([{ code: 0, stderr: "" }, { code: 0, stderr: "" }]);
       const returned = results.map(result => JSON.parse(result.stdout));
-      expect(returned.map(result => result.created).sort()).toEqual([false, true]);
+      expect(returned.map(result => result.action).sort()).toEqual(["coalesced", "created"]);
       expect(returned[0].taskId).toBe(returned[1].taskId);
       expect(returned.map(result => result.depth)).toEqual([1, 1]);
       const rows = f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE issue_session_id = ? AND agent_id = ? AND status = 'queued'")

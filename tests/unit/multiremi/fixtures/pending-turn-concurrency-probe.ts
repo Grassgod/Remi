@@ -19,10 +19,12 @@ try {
       entryId = delivery.entry.id;
       return delivery;
     }
-    return store.ensurePendingTurnWithinTransaction({
-      ...input, childStatusChanges: [], deferredEvents: createCommitEventQueue(),
-    });
+    return store.ensurePendingTurnWithinTransaction({ ...input, create: () => store.createTaskWithinTransaction({
+      agentId: input.lane.agentId, issueSessionId: input.lane.issueSessionId,
+      issueId: store.getIssueSession(input.lane.issueSessionId)?.issueId,
+      prompt: "Read the inbox", wakeSource: input.wake.reason, preserveIssueStatus: true,
+    }, [], createCommitEventQueue()) });
   })();
-  console.log(JSON.stringify({ taskId: result.task?.id, created: result.created, depth: db.maxTransactionDepth,
+  console.log(JSON.stringify({ taskId: result.task?.id, action: result.action, depth: db.maxTransactionDepth,
     entryId }));
 } finally { db.close(); }

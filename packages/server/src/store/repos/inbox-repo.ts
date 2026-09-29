@@ -4,7 +4,7 @@ import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log
 import { createId } from "@multiremi/ids.js";
 import type { CommitEventQueue, StoreContext } from "@multiremi/store/context.js";
 import { afterCommit } from "@multiremi/store/db/postgres.js";
-import type { ChildStatusChangeCollector, PendingTurnResult } from "./tasks-repo.js";
+import type { ChildStatusChangeCollector, EnsurePendingTurnResult, PendingTurnLane } from "./tasks-repo.js";
 
 export interface EnvelopeRecipient {
   workspaceId: string;
@@ -15,7 +15,7 @@ export interface EnvelopeRecipient {
   executionScope: string;
 }
 
-export interface EnvelopeDelivery extends PendingTurnResult {
+export interface EnvelopeDelivery extends EnsurePendingTurnResult {
   recipient: EnvelopeRecipient;
   entry: ConversationLogEntry;
   deduplicated: boolean;
@@ -87,21 +87,29 @@ export class InboxRepo {
         }
         entries.set(sessionId, stored);
       }
-      const turn = stored.deduplicated || env.wake === "inbox_only"
-        ? { task: null, created: false }
+      const lane: PendingTurnLane = recipient.issueSessionId
+        ? { kind: "issue", issueSessionId: recipient.issueSessionId, agentId: recipient.agentId,
+          executionScope: recipient.executionScope }
+        : { kind: "chat", chatSessionId: recipient.chatSessionId!, agentId: recipient.agentId, issueId: recipient.issueId };
+      const reason = env.to.role === "relay" ? "relay" : `envelope:${env.kind}`;
+      const turn: EnsurePendingTurnResult = stored.deduplicated || env.wake === "inbox_only"
+        ? { task: null, action: "none" }
         : this.ctx.tasks().ensurePendingTurnWithinTransaction({
-          agentId: recipient.agentId,
-          issueSessionId: recipient.issueSessionId,
-          chatSessionId: recipient.chatSessionId,
-          executionScope: recipient.executionScope,
-          entryId: stored.entry.id,
-          entrySeq: stored.entry.seq,
-          reason: `envelope:${env.kind}`,
-          wake: env.wake,
-          triggerCommentId: recipient.issueSessionId ? stored.entry.id : null,
-          childStatusChanges: collector,
-          deferredEvents,
+          lane,
+          wake: { reason, seq: stored.entry.seq, commentId: recipient.issueSessionId ? stored.entry.id : null, mode: env.wake },
+          steerBody: body,
+          create: () => {
+            return this.ctx.tasks().createTaskWithinWorkspaceLock({
+              agentId: recipient.agentId, issueId: recipient.issueId, issueSessionId: recipient.issueSessionId,
+              chatSessionId: recipient.chatSessionId, workspaceId: recipient.workspaceId,
+              prompt: `读收件箱\n\n${sessionId}:${stored!.entry.seq} (${stored!.entry.id})`,
+              parentTaskId: null, wakeSource: reason, preserveIssueStatus: true,
+              triggerCommentId: recipient.issueSessionId ? stored!.entry.id : null,
+              ...(lane.kind === "chat" ? { holdsWorkspace: false, requestingUserName: "Multiremi" } : {}),
+            }, collector, deferredEvents, undefined, recipient.executionScope);
+          },
         });
+      if (turn.action === "created") deferredEvents.enqueuedTasks.push(turn.task!);
       deliveries.push({ recipient, entry: stored.entry, deduplicated: stored.deduplicated, ...turn });
     }
     return deliveries;
@@ -142,19 +150,7 @@ export class InboxRepo {
         if (!session) throw new Error("Envelope Issue session not found");
         return [this.issueRecipient(session.issueId, address.agentId, session.id)];
       }
-      case "chat": {
-        const initial = this.ctx.chat().getChatSession(address.chatSessionId);
-        if (!initial) throw new Error("Envelope Chat session not found");
-        this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-        const chat = this.ctx.chat().getChatSession(initial.id);
-        const agent = this.ctx.agents().getAgent(address.agentId);
-        if (!chat || chat.status === "archived" || chat.agentId !== address.agentId || !agent
-          || agent.archivedAt || chat.workspaceId !== agent.workspaceId || chat.workspaceId !== initial.workspaceId) {
-          throw new Error("Envelope Chat recipient is unavailable");
-        }
-        return [{ workspaceId: chat.workspaceId, agentId: agent.id, issueId: null,
-          issueSessionId: null, chatSessionId: chat.id, executionScope: "" }];
-      }
+      case "chat": return [this.chatRecipient(address.chatSessionId, address.agentId)];
       case "delegator": {
         const sourceId = env.source.taskId ?? (this.ctx.db.query(`SELECT id FROM multiremi_tasks
           WHERE delegation_id = ? AND delegated_from_issue_session_id IS NOT NULL
@@ -179,8 +175,24 @@ export class InboxRepo {
           FROM multiremi_feishu_bot_chat_bindings b JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
           WHERE b.issue_id = ? AND b.workspace_id = ? AND c.workspace_id = ? AND c.status <> 'archived'
           ORDER BY c.id`).all(issue.id, issue.workspaceId, issue.workspaceId) as Array<{ id: string; agent_id: string }>;
-        return bindings.map(binding => this.issueRecipient(issue.id, binding.agent_id, undefined, `relay:${binding.id}`));
+        return bindings.map(binding => this.chatRecipient(binding.id, binding.agent_id, issue.id));
       }
     }
+  }
+
+  private chatRecipient(chatSessionId: string, agentId: string, expectedIssueId?: string): EnvelopeRecipient {
+    const initial = this.ctx.chat().getChatSession(chatSessionId);
+    if (!initial) throw new Error("Envelope Chat session not found");
+    this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+    const chat = this.ctx.chat().getChatSession(initial.id);
+    const agent = this.ctx.agents().getAgent(agentId);
+    const issueId = this.ctx.feishuBot().getFeishuIssueIdForChatSession(initial.id);
+    if (!chat || chat.status === "archived" || chat.agentId !== agentId || !agent || agent.archivedAt
+      || chat.workspaceId !== agent.workspaceId || chat.workspaceId !== initial.workspaceId
+      || (expectedIssueId !== undefined && issueId !== expectedIssueId)) {
+      throw new Error("Envelope Chat recipient is unavailable");
+    }
+    return { workspaceId: chat.workspaceId, agentId: agent.id, issueId,
+      issueSessionId: null, chatSessionId: chat.id, executionScope: "" };
   }
 }

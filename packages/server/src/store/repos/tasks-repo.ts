@@ -567,23 +567,26 @@ export interface ChildStatusChange {
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
 
+export type PendingTurnLane =
+  | { kind: "issue"; issueSessionId: string; agentId: string; executionScope: string }
+  | { kind: "chat"; chatSessionId: string; agentId: string; issueId: string | null };
+
 export interface EnsurePendingTurnInput {
-  agentId: string;
-  issueSessionId?: string | null;
-  chatSessionId?: string | null;
-  executionScope?: string;
-  entryId: string;
-  entrySeq: number;
-  reason: string;
-  triggerCommentId?: string | null;
-  wake?: EnvelopeWake;
-  childStatusChanges: ChildStatusChangeCollector;
-  deferredEvents: CommitEventQueue;
+  lane: PendingTurnLane;
+  wake: {
+    reason: string;
+    seq: number | null;
+    commentId?: string | null;
+    /** Defaults to now; preserves the envelope's next_turn policy. */
+    mode?: EnvelopeWake;
+  };
+  create: () => MultiremiTask;
+  steerBody?: string;
 }
 
-export interface PendingTurnResult {
+export interface EnsurePendingTurnResult {
   task: MultiremiTask | null;
-  created: boolean;
+  action: "created" | "coalesced" | "steered" | "none";
 }
 
 type DependencyForceInput = NonNullable<CreateTaskInput["dependencyForce"]>;
@@ -1371,69 +1374,77 @@ export class TasksRepo {
     return this.createTaskWithinWorkspaceLock(input, childStatusChanges, deferredEvents);
   }
 
-  ensurePendingTurnWithinTransaction(input: EnsurePendingTurnInput): PendingTurnResult {
+  ensurePendingTurnWithinTransaction(input: EnsurePendingTurnInput): EnsurePendingTurnResult {
     if (!this.ctx.db.inTransaction) throw new Error("ensurePendingTurnWithinTransaction requires an open transaction");
-    if (!Number.isSafeInteger(input.entrySeq) || input.entrySeq < 1 || !input.entryId || !input.reason) {
-      throw new Error("A pending turn requires an entry pointer and reason");
+    const { lane, wake } = input;
+    if ((wake.seq !== null && (!Number.isSafeInteger(wake.seq) || wake.seq < 1)) || !wake.reason) {
+      throw new Error("A pending turn requires a valid wake sequence and reason");
     }
-    const initialAgent = this.ctx.agents().getAgent(input.agentId);
-    if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
+    const initialAgent = this.ctx.agents().getAgent(lane.agentId);
+    if (!initialAgent) throw new Error(`Agent not found: ${lane.agentId}`);
     this.ctx.lockWorkspaceRuntimeLifecycle(initialAgent.workspaceId);
-    const agent = this.ctx.agents().getAgent(input.agentId);
+    const agent = this.ctx.agents().getAgent(lane.agentId);
     if (!agent || agent.archivedAt || agent.workspaceId !== initialAgent.workspaceId) {
       throw new Error("Pending turn agent is unavailable");
     }
-    const session = input.issueSessionId ? this.ctx.issueSessions().getIssueSession(input.issueSessionId) : null;
-    const chat = input.chatSessionId ? this.ctx.chat().getChatSession(input.chatSessionId) : null;
-    if (input.issueSessionId && (!session || session.workspaceId !== agent.workspaceId)) {
+    const session = lane.kind === "issue" ? this.ctx.issueSessions().getIssueSession(lane.issueSessionId) : null;
+    const chat = lane.kind === "chat" ? this.ctx.chat().getChatSession(lane.chatSessionId) : null;
+    if (lane.kind === "issue" && (!session || session.workspaceId !== agent.workspaceId)) {
       throw new Error("Pending turn Issue session is unavailable in this workspace");
     }
-    if (input.chatSessionId && (!chat || chat.workspaceId !== agent.workspaceId || chat.agentId !== agent.id || chat.status === "archived")) {
+    if (lane.kind === "chat" && (!chat || chat.workspaceId !== agent.workspaceId || chat.agentId !== agent.id || chat.status === "archived")) {
       throw new Error("Pending turn Chat session is unavailable for this agent");
     }
-    if (!session && !chat) throw new Error("Pending turn requires a recipient session");
-    if (input.wake === "inbox_only") return { task: null, created: false };
-    const scope = input.executionScope ?? "";
-    const predicate = session
-      ? "issue_session_id = ? AND execution_scope = ?"
-      : "chat_session_id = ? AND issue_session_id IS NULL";
-    const key = session ? [session.id, scope] : [chat!.id];
-    const rows = this.ctx.db.query(`SELECT id, status FROM multiremi_tasks
-      WHERE workspace_id = ? AND agent_id = ? AND ${predicate} AND status IN ('queued', 'running')
-      ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC, id ASC`)
-      .all(agent.workspaceId, agent.id, ...key) as Array<{ id: string; status: string }>;
-    if (input.wake === "next_turn" && rows.length > 0) {
-      return { task: this.getTask(rows[0]!.id), created: false };
+    if (wake.mode === "inbox_only") return { task: null, action: "none" };
+    let pending: MultiremiTask | null;
+    if (lane.kind === "issue") {
+      if (wake.mode === "next_turn" && this.ctx.db.query(`SELECT id FROM multiremi_tasks
+        WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ?
+          AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human') LIMIT 1`)
+        .get(lane.issueSessionId, lane.agentId, lane.executionScope)) return { task: null, action: "none" };
+      const row = this.ctx.db.query(`SELECT id FROM multiremi_tasks
+        WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ? AND status = 'queued'
+        ORDER BY created_at ASC, id ASC LIMIT 1`).get(lane.issueSessionId, lane.agentId, lane.executionScope) as { id: string } | null;
+      pending = row ? this.getTask(row.id) : null;
+    } else {
+      pending = this.ctx.chat().getPendingChatTask(lane.chatSessionId);
+      if (pending && (pending.issueId !== lane.issueId || pending.workspaceId !== agent.workspaceId
+        || pending.agentId !== lane.agentId)) pending = null;
+      if (pending && pending.status !== "queued") {
+        this.createTaskSteerMessageWithinTransaction({ taskId: pending.id, kind: "steer",
+          content: input.steerBody ?? "", authorType: "system", authorId: null });
+        return { task: pending, action: "steered" };
+      }
     }
-    const queued = rows.find(row => row.status === "queued");
-    if (queued) {
-      this.ctx.db.run(`UPDATE multiremi_tasks SET updated_at = ?,
+    if (pending) {
+      const seq = wake.seq ?? 0;
+      const updated = this.ctx.db.run(`UPDATE multiremi_tasks SET updated_at = ?,
         wake_seq = CASE WHEN wake_seq < ? THEN ? ELSE wake_seq END
-        WHERE id = ? AND status = 'queued'`, [nowIso(), input.entrySeq, input.entrySeq, queued.id]);
-      const task = this.getTask(queued.id)!;
-      appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_coalesced", {
-        entry_seq: input.entrySeq, reason: input.reason,
-      });
-      return { task, created: false };
+        WHERE id = ? AND status = 'queued'`, [nowIso(), seq, seq, pending.id]);
+      if (updated.changes === 1) {
+        const task = this.getTask(pending.id)!;
+        appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_coalesced", {
+          seq: wake.seq, reason: wake.reason, commentId: wake.commentId ?? null,
+        });
+        return { task, action: "coalesced" };
+      }
     }
-    const task = this.createTaskWithinWorkspaceLock({
-      agentId: agent.id,
-      issueId: session?.issueId ?? null,
-      issueSessionId: session?.id ?? null,
-      chatSessionId: chat?.id ?? null,
-      prompt: `读收件箱\n\n${session?.id ?? chat!.id}:${input.entrySeq} (${input.entryId})`,
-      parentTaskId: null,
-      wakeSource: input.reason,
-      preserveIssueStatus: true,
-      triggerCommentId: input.triggerCommentId ?? null,
-    }, input.childStatusChanges, input.deferredEvents, undefined, scope);
-    this.ctx.db.run("UPDATE multiremi_tasks SET wake_seq = ? WHERE id = ?", [input.entrySeq, task.id]);
+    if (wake.mode === "next_turn") return { task: null, action: "none" };
+    const task = input.create();
+    const matchesLane = lane.kind === "issue"
+      ? task.issueSessionId === lane.issueSessionId && task.execution_scope === lane.executionScope
+      : task.chatSessionId === lane.chatSessionId && task.issueSessionId == null && task.issueId === lane.issueId;
+    if (task.status !== "queued" || task.agentId !== lane.agentId || task.workspaceId !== agent.workspaceId || !matchesLane) {
+      throw new Error("Pending turn create callback returned a task outside its queued lane");
+    }
+    const seq = wake.seq ?? 0;
+    this.ctx.db.run(`UPDATE multiremi_tasks SET wake_seq = CASE WHEN wake_seq < ? THEN ? ELSE wake_seq END
+      WHERE id = ?`, [seq, seq, task.id]);
     const stored = this.getTask(task.id)!;
     appendPendingTurnAuditWithinTransaction(this.ctx.db, stored, "pending_turn_created", {
-      entry_seq: input.entrySeq, reason: input.reason,
+      seq: wake.seq, reason: wake.reason, commentId: wake.commentId ?? null,
     });
-    input.deferredEvents.enqueuedTasks.push(stored);
-    return { task: stored, created: true };
+    return { task: stored, action: "created" };
   }
 
   /** Caller holds the task workspace row lock in an open transaction. */
@@ -1483,7 +1494,7 @@ export class TasksRepo {
     );
   }
 
-  private createTaskWithinWorkspaceLock(
+  createTaskWithinWorkspaceLock(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
