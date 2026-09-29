@@ -825,8 +825,6 @@ export class MultiremiDaemon {
   private readonly taskDownlinks: DaemonTaskDownlinks;
   private readonly drainRuntimeDownlinks: () => Promise<void>;
   private readonly authorityProbeDelaysMs: number[];
-  /** Ten-minute RPC fallback for incomplete plugin revision definitions. */
-  private nextPluginDesiredAt = 0;
   private pluginLocalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private onceTaskAccepted = false;
   private onceOfferTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1384,7 +1382,6 @@ export class MultiremiDaemon {
       }
 
       this.protocolClient?.startLane(this.protocolLane);
-      this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
       this.onceTaskAccepted = false;
       while (!this.stopped) {
         try {
@@ -1393,11 +1390,6 @@ export class MultiremiDaemon {
             await sleep(Math.max(10, Math.min(this.options.pollIntervalMs, 100)));
             continue;
           }
-          if (Date.now() >= this.nextPluginDesiredAt) {
-            this.nextPluginDesiredAt = Date.now() + PLUGIN_DESIRED_FORCED_REFRESH_MS;
-            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!, null, { force: true });
-          }
-
           await this.waitForNextTick();
         } catch (err) {
           // A transient server/network blip (e.g. the server restarting) must not
@@ -1414,12 +1406,10 @@ export class MultiremiDaemon {
           }
           if (this.stopped) break;
           if (this.options.once) throw err;
-          // A failed claim or Plugin refresh delays the next attempt so a hard
-          // outage cannot turn the poll loop into a tight retry spin.
+          // A transient failure must not turn event-driven wakeups into a tight retry spin.
           const retryMs = Math.max(this.options.pollIntervalMs, DAEMON_HEARTBEAT_INTERVAL_MS);
-          this.nextPluginDesiredAt = Date.now() + retryMs;
           log.warn(`daemon poll loop error, retrying in ${retryMs}ms: ${err instanceof Error ? err.message : String(err)}`);
-          await this.waitForNextTick();
+          await this.waitForNextTick(retryMs);
         }
       }
     } catch (error) {
@@ -1478,20 +1468,20 @@ export class MultiremiDaemon {
   }
 
 
-  /** Business pushes wake this wait; its timer only forces the ten-minute snapshot. */
-  private async waitForNextTick(): Promise<void> {
+  /** Business pushes wake this wait; only the error path schedules a retry. */
+  private async waitForNextTick(retryMs?: number): Promise<void> {
     if (this.stopped) return;
-    const delayMs = Math.max(0, this.nextPluginDesiredAt - Date.now());
     await new Promise<void>(resolveWait => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
         if (this.waitWake === finish) this.waitWake = null;
         resolveWait();
       };
-      const timer = setTimeout(finish, delayMs);
+      if (retryMs !== undefined) timer = setTimeout(finish, retryMs);
       this.waitWake = finish;
       if (this.stopped) finish();
     });
