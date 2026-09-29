@@ -4,7 +4,9 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 
 const url = process.env.MULTIREMI_TEST_DATABASE_URL!;
-if (new URL(url).hostname !== "127.0.0.1") throw new Error("Probe requires the local test server");
+if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)) {
+  throw new Error("Probe requires the local test server");
+}
 const db = new PostgresSyncDatabase(url);
 try {
   const store = new MultiremiStore(db);
