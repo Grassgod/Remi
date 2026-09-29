@@ -986,7 +986,39 @@ function sessionLaneResetReason(input: {
 }
 
 export class TasksRepo {
+  private readonly acceptedOfferLeases = new Set<string>();
   constructor(private ctx: StoreContext) {}
+
+  recordTaskOffered(taskId: string, runtimeId: string, at = nowIso()): boolean {
+    return Boolean(this.ctx.db.query(
+      `UPDATE multiremi_tasks SET offered_at = ?, accepted_at = NULL
+       WHERE id = ? AND runtime_id = ? AND status = 'dispatched' RETURNING id`,
+    ).get(at, taskId, runtimeId));
+  }
+
+  acceptTaskOffer(taskId: string, runtimeId: string, at = nowIso()): boolean {
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_tasks SET accepted_at = COALESCE(accepted_at, ?)
+       WHERE id = ? AND runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory') RETURNING id`,
+    ).get(at, taskId, runtimeId);
+    if (row) this.acceptedOfferLeases.add(taskId);
+    return Boolean(row);
+  }
+
+  releaseTaskOfferLease(taskId: string): void {
+    this.acceptedOfferLeases.delete(taskId);
+  }
+
+  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
+    this.acceptedOfferLeases.delete(taskId);
+    const row = this.ctx.db.query(
+      `UPDATE multiremi_tasks SET status = 'queued', dispatched_at = NULL,
+         offered_at = NULL, accepted_at = NULL, updated_at = ?
+       WHERE id = ? AND runtime_id = ? AND status = 'dispatched' AND started_at IS NULL RETURNING *`,
+    ).get(nowIso(), taskId, runtimeId) as Row | null;
+    if (row) this.ctx.notifyTaskEnqueued(toTask(row));
+    return Boolean(row);
+  }
 
   refreshQueuedCapabilityWaitReasons(now = Date.now()): { updated: number; alerted: number } {
     const rows = this.ctx.db.query(
@@ -1981,6 +2013,7 @@ export class TasksRepo {
           AND (status = 'queued' OR (status = 'dispatched' AND started_at IS NULL
             AND dispatched_at IS NOT NULL AND dispatched_at < ?))`).all(chat.id, cutoff) as Row[];
       for (const task of tasks) {
+        if (this.acceptedOfferLeases.has(String(task.id))) continue;
         const source = { executionFingerprint: nullableString(task.execution_fingerprint),
           workDir: nullableString(task.work_dir), runtimeId: nullableString(task.runtime_id) };
         if (chatWorkspaceLineageCurrent(this.ctx, chat, source) && !workspace.changed) continue;
@@ -2678,6 +2711,15 @@ export class TasksRepo {
         failed_count: failedCount,
       };
     });
+  }
+
+  taskOfferRetryDeadlines(runtimeId: string): Array<{ taskId: string; runtimeId: string | null; at: string }> {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime) return [];
+    const rows = this.ctx.db.query(`SELECT id, runtime_id, next_retry_at FROM multiremi_tasks
+      WHERE workspace_id = ? AND status = 'queued' AND next_retry_at IS NOT NULL
+        AND (runtime_id = ? OR runtime_id IS NULL)`).all(runtime.workspaceId ?? "local", runtimeId) as Row[];
+    return rows.map(row => ({ taskId: String(row.id), runtimeId: nullableString(row.runtime_id), at: String(row.next_retry_at) }));
   }
 
   claimTask(runtimeId: string, options: ClaimTaskOptions = {}): MultiremiTaskWithAgent | null {
@@ -3472,6 +3514,7 @@ ${routing.sql}
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string, excludedAgentIds: string[] = []): MultiremiTaskWithAgent | null {
+    const leases = [...this.acceptedOfferLeases];
     const cutoff = new Date(Date.now() - CLAIM_RESPONSE_RECOVERY_MS).toISOString();
     const now = nowIso();
     const row = this.ctx.db.query(
@@ -3485,6 +3528,7 @@ ${routing.sql}
            AND started_at IS NULL
            AND dispatched_at IS NOT NULL
            AND dispatched_at < ?
+           ${leases.length ? `AND id NOT IN (${leases.map(() => "?").join(", ")})` : ""}
            ${excludedAgentIds.length ? `AND agent_id NOT IN (${excludedAgentIds.map(() => "?").join(", ")})` : ""}
          ORDER BY priority DESC, dispatched_at ASC
          LIMIT 1
@@ -3492,7 +3536,7 @@ ${routing.sql}
        AND status = 'dispatched'
        AND started_at IS NULL
        RETURNING *`,
-    ).get(now, now, runtimeId, cutoff, ...excludedAgentIds) as Row | null;
+    ).get(now, now, runtimeId, cutoff, ...leases, ...excludedAgentIds) as Row | null;
     if (!row) return null;
     const task = this.getTaskWithAgent(String(row.id));
     // The re-claim above matches only on runtime_id, so a task whose agent or
@@ -3920,6 +3964,7 @@ ${placementAfter.sql}
     if (transitionedTask) this.ctx.notifyTaskEvent("task:awaiting_human", transitionedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -3959,6 +4004,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -3982,6 +4028,7 @@ ${placementAfter.sql}
     if (resumedTask) this.ctx.notifyTaskEvent("task:running", resumedTask);
     this.runChildStatusChanges(childStatusChanges);
     this.ctx.emitCommitEvents(deferredEvents);
+    if (request) this.publishTaskInputChanged(request.taskId);
     return request;
   }
 
@@ -4017,7 +4064,7 @@ ${placementAfter.sql}
 
   /**
    * Record a mid-run user directive for a live task. The daemon's steer
-   * watcher polls unconsumed rows and injects them into the executing
+   * push inbox receives unconsumed rows and injects them into the executing
    * provider session; the row doubles as the audit record. Rejects terminal
    * tasks — there is no run left to steer.
    */
@@ -4028,7 +4075,7 @@ ${placementAfter.sql}
     const id = input.id ?? createId("steer");
     const initial = this.getTask(input.taskId);
     if (!initial) throw new Error(`Task not found: ${input.taskId}`);
-    return this.ctx.db.transaction(() => {
+    const message = this.ctx.db.transaction(() => {
       // Serialize against completeTask/cancelTask on their workspace→session
       // lock order. On Postgres two connections could otherwise each observe
       // "running" / "no pending steer" and commit both the steer insert and
@@ -4061,6 +4108,15 @@ ${placementAfter.sql}
       }
       return this.getTaskSteerMessage(id)!;
     })();
+    this.publishTaskInputChanged(input.taskId);
+    return message;
+  }
+
+  private publishTaskInputChanged(taskId: string): void {
+    const task = this.getTaskIdentity(taskId);
+    if (!task) return;
+    this.ctx.emitWorkspaceEvent({ type: "daemon:task_input", workspaceId: task.workspaceId,
+      actorType: "system", actorId: null, payload: { runtime_id: task.runtimeId, task_id: taskId } });
   }
 
   private withSteerAttachments(row: Row): MultiremiTaskSteerMessage {
@@ -4571,7 +4627,7 @@ ${placementAfter.sql}
     return this.getTask(taskId)!;
   }
 
-  recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
+  recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {
     const initialRuntime = this.ctx.runtimes().getRuntime(runtimeId);
     if (!initialRuntime) throw new Error(`Runtime not found: ${runtimeId}`);
     const workspaceId = initialRuntime.workspaceId ?? "local";
@@ -4583,8 +4639,10 @@ ${placementAfter.sql}
         throw new Error(`Runtime not found: ${runtimeId}`);
       }
       const orphanRows = this.ctx.db.query(
-        "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
-      ).all(runtimeId) as Row[];
+        `SELECT * FROM multiremi_tasks WHERE runtime_id = ?
+         AND status IN (${activeTaskIds ? "'running', 'waiting_local_directory', 'awaiting_human'" : "'dispatched', 'running', 'waiting_local_directory', 'awaiting_human'"})
+         ${activeTaskIds?.length ? `AND id NOT IN (${activeTaskIds.map(() => "?").join(", ")})` : ""}`,
+      ).all(runtimeId, ...(activeTaskIds ?? [])) as Row[];
       if (!orphanRows.length) {
         return {
           failedTasks: [] as MultiremiTask[],
@@ -6578,6 +6636,8 @@ function toTask(row: Row): MultiremiTask {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
     dispatchedAt: nullableString(row.dispatched_at),
+    offeredAt: nullableString(row.offered_at),
+    acceptedAt: nullableString(row.accepted_at),
     startedAt: nullableString(row.started_at),
     completedAt: nullableString(row.completed_at),
     failedAt: nullableString(row.failed_at),

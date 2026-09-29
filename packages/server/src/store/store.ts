@@ -707,15 +707,28 @@ runMigrations(this.db);
   }
 
   beginPlatformDrain(input: { operationId: string; reason?: string | null; ttlMs?: number }): MultiremiPlatformMaintenance {
-    return this.platformMaintenance.beginDrain(input);
+    const maintenance = this.platformMaintenance.beginDrain(input);
+    this.publishPlatformMaintenanceChanged(maintenance);
+    return maintenance;
   }
 
   renewPlatformDrain(operationId: string, ttlMs?: number): MultiremiPlatformMaintenance | null {
-    return this.platformMaintenance.renewDrain(operationId, ttlMs);
+    const maintenance = this.platformMaintenance.renewDrain(operationId, ttlMs);
+    if (maintenance) this.publishPlatformMaintenanceChanged(maintenance);
+    return maintenance;
   }
 
   releasePlatformDrain(operationId: string): MultiremiPlatformMaintenance {
-    return this.platformMaintenance.releaseDrain(operationId);
+    const maintenance = this.platformMaintenance.releaseDrain(operationId);
+    this.publishPlatformMaintenanceChanged(maintenance);
+    return maintenance;
+  }
+
+  private publishPlatformMaintenanceChanged(maintenance: MultiremiPlatformMaintenance): void {
+    for (const workspace of this.listWorkspaces()) this.ctx.emitWorkspaceEvent({
+      type: "daemon:maintenance_changed", workspaceId: workspace.id,
+      actorType: "system", actorId: null, payload: { mode: maintenance.mode, generation: maintenance.generation },
+    });
   }
 
   recordRuntimeDrainAck(runtimeId: string, generation: number, activeTasks: number | null): void {
@@ -842,7 +855,7 @@ runMigrations(this.db);
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
-    return this.db.transaction(() => {
+    const updated = this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
       const agent = this.agents.updateAgent(id, input);
@@ -851,6 +864,8 @@ runMigrations(this.db);
       }
       return agent;
     })();
+    this.publishDaemonDispatchConditionsChanged(updated.workspaceId);
+    return updated;
   }
 
   setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {
@@ -882,7 +897,9 @@ runMigrations(this.db);
   }
 
   restoreAgent(id: string): MultiremiAgent {
-    return this.agents.restoreAgent(id);
+    const agent = this.agents.restoreAgent(id);
+    this.publishDaemonDispatchConditionsChanged(agent.workspaceId);
+    return agent;
   }
 
   cancelAgentTasks(agentId: string): number {
@@ -1053,7 +1070,9 @@ runMigrations(this.db);
     versionId: string,
     input: ReportAgentPluginRuntimeStateInput,
   ): MultiremiAgentPluginRuntimeState {
-    return this.agentPlugins.reportAgentPluginRuntimeState(runtimeId, versionId, input);
+    const state = this.agentPlugins.reportAgentPluginRuntimeState(runtimeId, versionId, input);
+    this.publishDaemonDispatchConditionsChanged(state.workspaceId, runtimeId);
+    return state;
   }
 
   reportAgentPluginRuntimeStateResult(
@@ -1061,7 +1080,9 @@ runMigrations(this.db);
     versionId: string,
     input: ReportAgentPluginRuntimeStateInput,
   ): { state: MultiremiAgentPluginRuntimeState; changed: boolean } {
-    return this.agentPlugins.reportAgentPluginRuntimeStateResult(runtimeId, versionId, input);
+    const result = this.agentPlugins.reportAgentPluginRuntimeStateResult(runtimeId, versionId, input);
+    if (result.changed) this.publishDaemonDispatchConditionsChanged(result.state.workspaceId, runtimeId);
+    return result;
   }
 
   /** Internal cross-domain primitive; caller owns workspace lifecycle + Plugin locks. */
@@ -1336,6 +1357,10 @@ runMigrations(this.db);
       }
       return ack;
     });
+  }
+
+  sshMeshDirectiveForRuntime(runtimeId: string): MultiremiSshMeshHeartbeatAck | null {
+    return this.sshMesh.directiveForRuntime(runtimeId);
   }
 
   recordControlPlaneSshMeshHeartbeat(
@@ -2037,6 +2062,23 @@ runMigrations(this.db);
     return this.feishuBot.claimOutbound(workspaceId, runtimeId, now, supportsTaskStream, supportsNativeCot, supportsAttachments);
   }
 
+  pendingFeishuBotOutbound(workspaceId: string, runtimeId: string): MultiremiFeishuBotOutboundDelivery | null {
+    return this.feishuBot.claimOutbound(workspaceId, runtimeId, undefined, true, true, true, "peek");
+  }
+
+  nextFeishuBotOutboundWakeAt(runtimeId: string): number | null {
+    const workspaceId = this.runtimes.getRuntimeLite(runtimeId)?.workspaceId;
+    return workspaceId ? this.feishuBot.nextOutboundWakeAt(workspaceId, runtimeId) : null;
+  }
+
+  claimAcknowledgedFeishuBotOutbound(workspaceId: string, runtimeId: string, id: string, claimToken: string): void {
+    this.feishuBot.claimOutbound(workspaceId, runtimeId, undefined, true, true, true, { id, claimToken });
+  }
+
+  discardPendingFeishuBotOutbound(workspaceId: string, runtimeId: string, id: string): void {
+    this.feishuBot.discardPendingOutbound(workspaceId, runtimeId, id);
+  }
+
   getFeishuBotOutboundAttachment(
     workspaceId: string,
     runtimeId: string,
@@ -2379,6 +2421,10 @@ runMigrations(this.db);
     return this.accessTokens.getAccessToken(id);
   }
 
+  isAccessTokenStillValid(token: MultiremiAccessToken): boolean {
+    return this.accessTokens.isAccessTokenStillValid(token);
+  }
+
   bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
     const normalizedDaemonId = daemonId.trim();
     if (!normalizedDaemonId) return null;
@@ -2605,7 +2651,7 @@ runMigrations(this.db);
     dedicated: boolean,
     updatedBy: string | null,
   ): DaemonProfile {
-    return this.db.transaction(() => {
+    const profile = this.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       const runtime = this.listRuntimes().find((candidate) => (
         (candidate.workspaceId ?? "local") === workspaceId && candidate.daemonId === daemonId
@@ -2620,6 +2666,8 @@ runMigrations(this.db);
         updatedBy,
       );
     })();
+    this.publishDaemonDispatchConditionsChanged(workspaceId);
+    return profile;
   }
 
   getDaemonRetirementPlan(workspaceId: string, daemonId: string): DaemonRetirementPlan {
@@ -2718,10 +2766,13 @@ runMigrations(this.db);
   }
 
   private withSshMeshLifecycleLock<T>(workspaceId: string, operation: () => T): T {
-    return this.db.transaction(() => {
+    const result = this.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       return operation();
     })();
+    this.ctx.emitWorkspaceEvent({ type: "daemon:ssh_mesh_changed", workspaceId,
+      actorType: "system", actorId: null, payload: {} });
+    return result;
   }
 
   private assertNoDaemonRetirementRekeyInProgress(workspaceId: string): void {
@@ -2791,7 +2842,9 @@ runMigrations(this.db);
   }
 
   setRuntimeCodexProfile(id: string, input: unknown, apiKey?: unknown) {
-    return this.runtimes.setRuntimeCodexProfile(id, input, apiKey);
+    const profile = this.runtimes.setRuntimeCodexProfile(id, input, apiKey);
+    this.publishDaemonDispatchConditionsChanged(this.getRuntimeLite(id)?.workspaceId ?? "local", id);
+    return profile;
   }
 
   getRuntimeCodexProfileKey(runtimeId: string, credentialId: string) {
@@ -2807,7 +2860,9 @@ runMigrations(this.db);
   }
 
   setRuntimeClaudeProfile(id: string, input: unknown, apiKey?: unknown) {
-    return this.runtimes.setRuntimeClaudeProfile(id, input, apiKey);
+    const profile = this.runtimes.setRuntimeClaudeProfile(id, input, apiKey);
+    this.publishDaemonDispatchConditionsChanged(this.getRuntimeLite(id)?.workspaceId ?? "local", id);
+    return profile;
   }
 
   getRuntimeClaudeProfileKey(runtimeId: string, credentialId: string) {
@@ -2827,7 +2882,9 @@ runMigrations(this.db);
   }
 
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
-    return this.runtimes.updateRuntime(id, input);
+    const runtime = this.runtimes.updateRuntime(id, input);
+    this.publishDaemonDispatchConditionsChanged(runtime.workspaceId ?? "local");
+    return runtime;
   }
 
   setRuntimeOffline(id: string): MultiremiRuntime | null {
@@ -2972,7 +3029,9 @@ runMigrations(this.db);
   }
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
-    return this.runtimes.reportRuntimeUpdateResult(runtimeId, requestId, input);
+    const request = this.runtimes.reportRuntimeUpdateResult(runtimeId, requestId, input);
+    this.publishDaemonDispatchConditionsChanged(this.getRuntimeLite(runtimeId)?.workspaceId ?? "local");
+    return request;
   }
 
   createRuntimeCommandRequest(runtimeId: string, input: CreateRuntimeCommandInput): MultiremiRuntimeCommandRequest {
@@ -3156,6 +3215,14 @@ runMigrations(this.db);
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
 
+  pendingRuntimeRequests(runtimeId: string) { return this.runtimes.pendingRuntimeRequests(runtimeId); }
+  claimAcknowledgedRuntimeRequest(runtimeId: string, kind: string, id: string): void {
+    this.runtimes.claimAcknowledgedRuntimeRequest(runtimeId, kind, id);
+  }
+  discardRuntimePendingRequest(runtimeId: string, kind: string, id: string): void {
+    this.runtimes.discardRuntimePendingRequest(runtimeId, kind, id);
+  }
+
   createIssue(input: CreateIssueInput, transaction?: {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: import("./context.js").CommitEventQueue;
@@ -3224,11 +3291,15 @@ runMigrations(this.db);
   }
 
   reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
-    return this.issueWorkspaces.report(input);
+    const workspace = this.issueWorkspaces.report(input);
+    this.publishDaemonDispatchConditionsChanged(workspace.workspaceId);
+    return workspace;
   }
 
   markIssueWorkspaceCleaned(input: MarkIssueWorkspaceCleanedInput): MultiremiIssueWorkspace {
-    return this.issueWorkspaces.markCleaned(input);
+    const workspace = this.issueWorkspaces.markCleaned(input);
+    this.publishDaemonDispatchConditionsChanged(workspace.workspaceId);
+    return workspace;
   }
 
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null {
@@ -3993,7 +4064,9 @@ runMigrations(this.db);
   }
 
   updateProject(id: string, input: UpdateProjectInput, writeContext: ProjectInstructionsWriteContext = {}): MultiremiProject {
-    return this.projects.updateProject(id, input, writeContext);
+    const project = this.projects.updateProject(id, input, writeContext);
+    this.publishDaemonDispatchConditionsChanged(project.workspaceId);
+    return project;
   }
 
   archiveProject(id: string): MultiremiProject {
@@ -4001,7 +4074,9 @@ runMigrations(this.db);
   }
 
   restoreProject(id: string): MultiremiProject {
-    return this.projects.restoreProject(id);
+    const project = this.projects.restoreProject(id);
+    this.publishDaemonDispatchConditionsChanged(project.workspaceId);
+    return project;
   }
 
   listPinnedItems(workspaceId?: string | null, userId?: string | null): MultiremiPinnedItem[] {
@@ -4033,15 +4108,21 @@ runMigrations(this.db);
   }
 
   createProjectDevice(projectId: string, input: CreateProjectDeviceInput): MultiremiProjectDevice {
-    return this.projects.createProjectDevice(projectId, input);
+    const device = this.projects.createProjectDevice(projectId, input);
+    this.publishDaemonDispatchConditionsChanged(this.projects.getProject(projectId)!.workspaceId);
+    return device;
   }
 
   deleteProjectDevice(projectId: string, daemonId: string): void {
-    return this.projects.deleteProjectDevice(projectId, daemonId);
+    this.projects.deleteProjectDevice(projectId, daemonId);
+    const project = this.projects.getProject(projectId);
+    if (project) this.publishDaemonDispatchConditionsChanged(project.workspaceId);
   }
 
   replaceProjectDevices(projectId: string, input: ReplaceProjectDevicesInput): MultiremiProjectDevice[] {
-    return this.projects.replaceProjectDevices(projectId, input);
+    const devices = this.projects.replaceProjectDevices(projectId, input);
+    this.publishDaemonDispatchConditionsChanged(this.projects.getProject(projectId)!.workspaceId);
+    return devices;
   }
 
   listProjectsForDaemon(workspaceId: string, daemonId: string): MultiremiProject[] {
@@ -4603,7 +4684,9 @@ runMigrations(this.db);
   }
 
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession {
-    return this.chat.updateChatSession(id, input);
+    const session = this.chat.updateChatSession(id, input);
+    this.publishDaemonDispatchConditionsChanged(session.workspaceId);
+    return session;
   }
 
   deleteChatSession(id: string): boolean {
@@ -4771,6 +4854,13 @@ runMigrations(this.db);
     return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
   }
 
+  taskOfferRetryDeadlines(runtimeId: string) { return this.tasks.taskOfferRetryDeadlines(runtimeId); }
+
+  private publishDaemonDispatchConditionsChanged(workspaceId: string, runtimeId?: string): void {
+    this.ctx.emitWorkspaceEvent({ type: "daemon:dispatch_conditions_changed", workspaceId,
+      actorType: "system", actorId: null, payload: runtimeId ? { runtime_id: runtimeId } : {} });
+  }
+
   /** MUL-474: the `status` route's projection, without the prompt column. */
   getTaskStatusSnapshot(id: string): TaskStatusSnapshot | null {
     return this.tasks.getTaskStatusSnapshot(id);
@@ -4840,6 +4930,20 @@ runMigrations(this.db);
 
   claimTask(runtimeId: string, options?: ClaimTaskOptions): MultiremiTaskWithAgent | null {
     return this.tasks.claimTask(runtimeId, options);
+  }
+
+  recordTaskOffered(taskId: string, runtimeId: string, at?: string): boolean {
+    return this.tasks.recordTaskOffered(taskId, runtimeId, at);
+  }
+
+  acceptTaskOffer(taskId: string, runtimeId: string, at?: string): boolean {
+    return this.tasks.acceptTaskOffer(taskId, runtimeId, at);
+  }
+
+  releaseTaskOfferLease(taskId: string): void { this.tasks.releaseTaskOfferLease(taskId); }
+
+  requeueTaskOffer(taskId: string, runtimeId: string): boolean {
+    return this.tasks.requeueTaskOffer(taskId, runtimeId);
   }
 
   startTask(taskId: string): MultiremiTask {
@@ -5122,7 +5226,7 @@ runMigrations(this.db);
     return this.tasks.reportTaskUsage(taskId, usage);
   }
 
-  recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
-    return this.tasks.recoverOrphans(runtimeId);
+  recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {
+    return this.tasks.recoverOrphans(runtimeId, activeTaskIds);
   }
 }

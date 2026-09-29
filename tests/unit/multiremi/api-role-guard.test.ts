@@ -355,22 +355,10 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // A-5 removes 24 daemon HTTP patterns, including the Feishu result route;
-    // A-6 removes POST messages. The 47 remaining daemon HTTP patterns are
-    // refused here; `GET /api/daemon/ws` is the
-    // upgrade-only route this sweep cannot drive — the websocket block asserts it —
-    // so the full-inventory total is 48. Pinning the swept count AND the arithmetic
-    // means a route cannot be reclassified without one of the numbers moving.
-    // Unchanged by MUL-410's five /api/issues/:id/decisions routes and by MUL-457's
-    // four /api[/multiremi]/issues/:id/parent-done-grant routes: all nine are browser
-    // traffic, so this process serves them and the count stands.
+    // Every daemon route is checked above; the upgrade-only route is checked below.
     expect(GOLDEN.routes).not.toContain("POST /api/daemon/tasks/:id/messages");
-    // MUL-412's two /api/daemon/issues/:issueId/decisions routes are runtime
-    // protocol traffic, so they move the swept/full totals from 45/46 to 47/48.
-    // MUL-462 adds two /internal/peer/* routes. Both roles serve /internal, so
-    // the swept inventory grows while these refusal totals stay put.
-    expect(misdirected, routeCountHint("ui")).toHaveLength(47);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(48);
+    expect(misdirected, routeCountHint("ui")).toHaveLength(44);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(45);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
@@ -381,7 +369,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 692 of the 746 swept patterns are refused; the two browser upgrade routes
+    // The two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
     // total is 694. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare

@@ -746,6 +746,61 @@ describe("realtime fanout — two servers over one database", () => {
     }
   });
 
+  it("delivers each queued task once through the real server fanout, across 20 subscribe-ack barriers", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "multiremi-fanout-once-"));
+    const database = new Database(join(directory, "single.sqlite"), { create: true });
+    const store = new MultiremiStore(database);
+    store.ensureLocalWorkspace();
+    const server = startMultiremiServer({ store, scheduler: null, backgroundJobs: false, port: 0, hostname: "127.0.0.1" });
+    let socket: WebSocket | null = null;
+    try {
+      const agent = store.createAgent({ name: "Single-delivery agent", provider: "codex" });
+      const runtime = store.registerRuntime({ id: "rt_single_delivery", name: "Single-delivery runtime", provider: "codex" });
+      const token = await store.createAccessToken({ name: "Single-delivery browser", type: "pat", workspaceId: "local" });
+      socket = openBrowserSocket(server.port, token.token);
+      await authenticateBrowserSocket(socket, token.token);
+
+      const durations: number[] = [];
+      for (let round = 0; round < 20; round++) {
+        const received: Record<string, any>[] = [];
+        let taskId = "";
+        let acknowledge!: () => void;
+        const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+        const onMessage = (event: MessageEvent) => {
+          const frame = JSON.parse(String(event.data)) as Record<string, any>;
+          received.push(frame);
+          if (frame.type === "subscribe_ack" && frame.payload?.scope === "task" && frame.payload?.id === taskId) {
+            acknowledge();
+          }
+        };
+        socket.addEventListener("message", onMessage);
+        const startedAt = performance.now();
+        try {
+          const task = store.createTask({ agentId: agent.id, prompt: `single delivery ${round}`, runtimeId: runtime.id });
+          taskId = task.id;
+          socket.send(JSON.stringify({ type: "subscribe", payload: { scope: "task", id: taskId } }));
+          await ack;
+          expect(received.filter(frame => frame.type === "task:queued" && frame.payload?.task_id === taskId), `round ${round}`)
+            .toHaveLength(1);
+          durations.push(performance.now() - startedAt);
+        } finally {
+          socket.removeEventListener("message", onMessage);
+        }
+      }
+      const sorted = durations.toSorted((a, b) => a - b);
+      console.info(`[fanout-once] rounds=20 min=${sorted[0]!.toFixed(1)}ms p50=${sorted[9]!.toFixed(1)}ms p95=${sorted[18]!.toFixed(1)}ms max=${sorted[19]!.toFixed(1)}ms`);
+    } finally {
+      if (socket) {
+        const closing = new Promise<void>(resolve => socket!.addEventListener("close", () => resolve(), { once: true }));
+        socket.close();
+        await closing;
+      }
+      server.stop(true);
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("keeps the main flow moving while the peer is unreachable, drops the oldest, and catches up", async () => {
     // A tiny queue so overflow is reachable here; the accounting is the same one
     // the peer-channel unit cases pin at the real 10 000 cap.

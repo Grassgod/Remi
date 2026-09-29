@@ -10273,7 +10273,22 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "GET /api/daemon/autopilot-runs/:runId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/chat-sessions/:sessionId/gc-check": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "GET /api/daemon/issues/:issueId/decisions/:decisionId": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
+    "GET /api/daemon/issues/:issueId/gc-check": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10284,11 +10299,6 @@
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "GET /api/daemon/runtimes/:id/codex-profile-key": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -10318,27 +10328,17 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/runtimes/:runtimeId/tasks/pending": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "GET /api/daemon/ssh-mesh/config": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "GET /api/daemon/tasks/:taskId/human-requests/:requestId": {
+    "GET /api/daemon/tasks/:taskId/gc-check": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
     "GET /api/daemon/tasks/:taskId/status": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "GET /api/daemon/tasks/:taskId/steer": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
@@ -11377,6 +11377,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/issues/:issueId/workspace/cleaned": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/register": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11457,11 +11462,6 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/runtimes/:runtimeId/tasks/claim": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
@@ -11477,27 +11477,12 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/dispatch-lease": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/human-requests": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
-    "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire": {
-      "cli_exempt": true,
-      "category": "daemon_internal_protocol",
-      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
-    },
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
-    "POST /api/daemon/tasks/:taskId/steer/consume": {
+    "POST /api/daemon/tasks/:taskId/start": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."

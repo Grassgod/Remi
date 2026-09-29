@@ -135,7 +135,9 @@ describe("daemon protocol v2 client", () => {
     b.sockets[1]!.handshake();
     expect(b.urls).toEqual(["wss://api.example/api/daemon/ws?protocol=2", "wss://api.example/api/daemon/ws?protocol=2"]);
     expect(b.sockets[1]!.sent[0]!.p.runtimes.map((rt: any) => rt.runtime_id)).toEqual(["rt_unit", "rt_second"]);
-    expect(b.sockets[1]!.sent[1]!.p).toEqual({ active_task_count: 2, outbox: { pending: 6, unacked: 4 }, drain_ack_generation: 4 });
+    expect(b.sockets[1]!.sent[1]!.p).toEqual({ active_task_count: 2,
+      outbox: { pending: 6, unacked: 4 }, drain_ack_generation: 4,
+      runtimes: [{ runtime_id: "rt_unit" }, { runtime_id: "rt_second" }] });
     b.client.stopLane(b.lane);
     expect(b.client.diagnostics().sockets).toBe(1);
     b.client.stopLane(second);

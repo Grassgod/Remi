@@ -1,3 +1,4 @@
+import { receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
 /**
  * Coverage for the Postgres backend of the Multiremi store.
  *
@@ -680,7 +681,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       ]);
   });
 
-  it("discovers Feishu senders and checks their live allowlist across Chat and task ancestry", () => {
+  it("discovers Feishu senders and checks their live allowlist across Chat and task ancestry", async () => {
     const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     try {
@@ -689,6 +690,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const runtimeId = `rt_feishu_allowlist_${wsCounter}`;
       store.registerRuntime({ id: runtimeId, name: "PG bot", provider: "codex", workspaceId, daemonId: `pg_bot_${wsCounter}` });
       store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
+      (await receiveRuntimeInputs(store, runtimeId));
       const config = store.upsertFeishuBotConfig(workspaceId, {
         agentId: agent.id, runtimeId, appId: "cli_pg_allowlist", domain: "feishu", enabled: true,
         senderAccessPolicy: "allowlist",
@@ -2337,13 +2339,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   // requires every branch to agree on a column type (the `housekeeping` column used to be integer
   // `0` in six branches and boolean `EXISTS` in the command branch), and `UPDATE ... RETURNING`
   // plus `IN (SELECT ... LIMIT n)` have to be accepted by the real planner.
-  it("runs the merged heartbeat probe and the rewritten request-queue statements on Postgres", () => {
+  it("runs the merged heartbeat probe and the rewritten request-queue statements on Postgres", async () => {
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({ name: "rt-pg-probe", provider: "claude", workspaceId: ws, daemonId: `pg_probe_${wsCounter}` });
     const capabilities = { supportsBatchImport: true, supportsDirectoryScan: true, supportsSkillDirectory: true, supportsBotMenu: true };
 
     // Idle: one probe row per family, nothing to claim.
-    const idle = store.heartbeatRuntime(runtime.id, capabilities);
+    const idle = (await receiveRuntimeInputs(store, runtime.id));
     expect(idle.status).toBe("ok");
     expect(idle.pending_update).toBeUndefined();
 
@@ -2357,7 +2359,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: `pg-${index}` }));
     const scan = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp", maxDepth: 2 });
 
-    const claimed = store.heartbeatRuntime(runtime.id, capabilities);
+    const claimed = (await receiveRuntimeInputs(store, runtime.id));
     expect(claimed.status).toBe("ok");
     expect(claimed.pending_update).toMatchObject({ id: update.id, target_version: "9.9.9" });
     expect(claimed.pending_model_list).toMatchObject({ id: modelList.id });

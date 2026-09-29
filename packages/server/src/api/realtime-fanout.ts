@@ -18,8 +18,8 @@
  *
  * Events that arrive *from* the peer take the local-delivery path only and are
  * never forwarded again — that is what stops two processes echoing one event.
- * A peer-delivered `task_enqueued` calls the same daemon hook as a local event.
- * MUL-419 connects that hook to its v2 offer pump; it is empty until then.
+ * Peer-delivered task and workspace events call the same daemon hooks as local
+ * events, so the runtime process can wake offers and DB-derived downlinks.
  *
  * `MULTIREMI_PEER_URL` unset means `peer` is null: local delivery only, and no
  * envelope is even built — exactly the pre-split behaviour.
@@ -80,8 +80,10 @@ export interface RealtimeFanoutOptions {
   registries: RealtimeFanoutRegistries;
   /** Absent/null means "no peer": local delivery only, nothing is forwarded. */
   peer?: PeerChannel | null;
-  /** Receives queued/waiting tasks on runtime/all, from either store or peer. */
+  /** Receives task changes on runtime/all, from either store or peer. */
   onDaemonTask?: (event: { type: string; task: MultiremiTask }) => void;
+  /** Receives workspace changes on runtime/all, from either store or peer. */
+  onDaemonWorkspaceEvent?: (event: PeerWorkspaceEvent) => void;
 }
 
 export interface RealtimeFanout {
@@ -96,7 +98,6 @@ export interface RealtimeFanout {
 export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFanout {
   const { role, store, registries } = options;
   const peer = options.peer ?? null;
-  // MUL-419: 接 kick
   const onDaemonTask = options.onDaemonTask ?? (() => {});
 
   const deliversToBrowser = role === "ui" || role === "all";
@@ -112,9 +113,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   };
 
   const deliverTaskEvent = (event: { type: string; task: MultiremiTask }): void => {
-    if (deliversToDaemon && event.type === "task:waiting_local_directory") {
-      onDaemonTask(event);
-    }
+    if (deliversToDaemon) onDaemonTask(event);
     if (deliversToBrowser) {
       notifyBrowserTaskEvent(registries.browser, registries.browserScope, event.type, event.task);
     }
@@ -132,6 +131,7 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
   };
 
   const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): void => {
+    if (deliversToDaemon) options.onDaemonWorkspaceEvent?.(event);
     if (!deliversToBrowser) return;
     notifyBrowserWorkspaceEvent(
       registries.browser,

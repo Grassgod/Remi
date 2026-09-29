@@ -898,7 +898,7 @@ export interface CreateWorkspaceRuntimeProvisionInput {
 
 export type UpdateWorkspaceRuntimeProvisionInput = Partial<CreateWorkspaceRuntimeProvisionInput>;
 
-export interface MultiremiDaemonHeartbeatAck {
+export interface MultiremiDaemonRuntimeInput {
   runtime_id: string;
   status: "ok" | "runtime_gone";
   runtime_gone?: boolean;
@@ -961,6 +961,10 @@ export interface MultiremiDaemonHeartbeatAck {
   /** Platform maintenance directive: daemons must pause task claims while draining. */
   drain?: MultiremiDaemonDrainDirective;
 }
+
+/** The v1 compatibility heartbeat only delivers the mandatory upgrade and drain. */
+export type MultiremiDaemonHeartbeatAck = Pick<MultiremiDaemonRuntimeInput,
+  "runtime_id" | "status" | "runtime_gone" | "pending_update" | "drain">;
 
 /** Server → daemon drain instruction carried in every heartbeat ack. */
 export interface MultiremiDaemonDrainDirective {
@@ -1656,6 +1660,8 @@ export interface MultiremiTask {
   createdAt: string;
   updatedAt: string;
   dispatchedAt: string | null;
+  offeredAt?: string | null;
+  acceptedAt?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   failedAt: string | null;

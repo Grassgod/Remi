@@ -1181,7 +1181,7 @@ export const buildSnapshotApp = buildApp;
 // families
 // ---------------------------------------------------------------------------
 
-type Flow = (rec: Recorder, refs: SeedRefs) => Promise<void>;
+type Flow = (rec: Recorder, refs: SeedRefs, store: MultiremiStore) => Promise<void>;
 
 const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 
@@ -1544,7 +1544,7 @@ flow("daemon-retirement", async (rec, refs) => {
 });
 
 // -- daemon -----------------------------------------------------------------
-flow("daemon", async (rec, refs) => {
+flow("daemon", async (rec, refs, store) => {
   await rec.json("POST", "/api/daemon/register", {
     workspace_id: refs.workspaceId,
     daemon_id: "dmn_flow",
@@ -1553,7 +1553,7 @@ flow("daemon", async (rec, refs) => {
     runtimes: [{ name: "flow-runtime", type: "claude", version: "9.9.9", status: "online", maxConcurrency: 1 }],
   });
   await rec.json("POST", "/api/daemon/heartbeat", { runtime_id: refs.runtimeId });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
+  store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
   await rec.report("runtime.model_list_result", { runtime_id: refs.runtimeId,
     models: [{ id: "claude-sonnet-4", label: "Claude Sonnet 4" }],
   });
@@ -1586,11 +1586,11 @@ flow("daemon", async (rec, refs) => {
     stderr: "",
     duration_ms: 1,
   });
-  await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/recover-orphans`, {});
+  store.recoverOrphans(refs.runtimeId, []);
   await rec.json("POST", "/api/daemon/deregister", { runtime_ids: [refs.runtimeId] });
 });
 
-flow("daemon-task-lifecycle", async (rec, refs) => {
+flow("daemon-task-lifecycle", async (rec, refs, store) => {
   const task = await rec.json("POST", "/api/multiremi/tasks", {
     agentId: refs.agentId,
     issueId: refs.issueId,
@@ -1599,8 +1599,8 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   const id = task.body?.id ?? task.body?.task?.id ?? refs.taskId;
   // The seeded chat session has its own queued task, so claim until ours lands.
   for (let attempt = 0; attempt < 6; attempt++) {
-    const claim = await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
-    if ((claim.body?.task?.id ?? claim.body?.id) === id) break;
+    const claim = store.claimTask(refs.runtimeId, { supportsBinarySkillFiles: true });
+    if (claim?.id === id) break;
   }
   // waiting_local_directory only applies to a dispatched task, so it runs
   // before start (startTask accepts dispatched and waiting_local_directory).
@@ -1616,24 +1616,12 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   await rec.call("GET", `/api/tasks/${id}/prompt`);
   await rec.report("task.session_pin", { task_id: id, session_id: "ses_snapshot", work_dir: "/snapshot/work" });
   await rec.report("task.usage", { task_id: id, usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
-  const human = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Bash" },
-  });
-  const requestId = human.body?.id ?? human.body?.request_id ?? human.body?.request?.id ?? refs.humanRequestId;
+  const requestId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Bash" } }).id;
   await rec.json("POST", `/api/multiremi/tasks/${id}/human-requests/${requestId}/respond`, { outcome: "approved" });
-  const second = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Read" },
-  });
-  const secondId = second.body?.id ?? second.body?.request_id ?? second.body?.request?.id ?? requestId;
+  const secondId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Read" } }).id;
   await rec.json("POST", `/api/tasks/${id}/human-requests/${secondId}/respond`, { outcome: "approved" });
-  const third = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {
-    kind: "permission",
-    payload: { tool: "Write" },
-  });
-  const thirdId = third.body?.id ?? third.body?.request_id ?? third.body?.request?.id ?? secondId;
-  await rec.json("POST", `/api/daemon/tasks/${id}/human-requests/${thirdId}/expire`, { status: "timeout" });
+  const thirdId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Write" } }).id;
+  store.expireTaskHumanRequest(thirdId, "timeout");
   await rec.report("task.complete", { task_id: id, result: "done", summary: "complete" });
   await rec.report("task.fail", { task_id: refs.taskId, error: "boom" });
 });
@@ -1928,7 +1916,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
       resetDeterministicState();
       const boot = await buildApp();
       const recorder = new Recorder(boot.app, routes, name, boot.store);
-      await run(recorder, boot.refs);
+      await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);
       boot.db.close();

@@ -21,10 +21,17 @@ import {
   DAEMON_PROTOCOL_VERSION,
   type DaemonHeartbeatReplyPayload,
   type DaemonProtocolCap,
+  type DaemonRuntimeCapabilities,
 } from "@multiremi/contracts/daemon-protocol.js";
 import { createId } from "@multiremi/ids.js";
 import { multiremiVersion } from "@multiremi/version.js";
-import type { MultiremiAccessToken, MultiremiDaemonHeartbeatAck } from "@multiremi/contracts/types.js";
+import {
+  FEISHU_CONCIERGE_PROTOCOL_VERSION,
+  FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+  FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+  type MultiremiAccessToken,
+  type MultiremiDaemonHeartbeatAck,
+} from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import {
   startWsFrameMetricsSummary,
@@ -38,9 +45,28 @@ import {
   setDaemonProtocolDbCounters,
   type DaemonProtocolSocket,
   type DaemonSessionHeartbeat,
+  type DaemonSessionHello,
   type DaemonSessionRuntimeAuthorization,
 } from "./session.js";
-import type { DaemonParsedFrame } from "./frames.js";
+import { readPayload, type DaemonParsedFrame } from "./frames.js";
+
+function runtimeCapabilityOptions(capabilities: DaemonRuntimeCapabilities | undefined) {
+  const reported = capabilities ?? {};
+  const version = (value: unknown) => {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+  };
+  return {
+    supportsBatchImport: reported.supports_batch_import === true,
+    supportsDirectoryScan: reported.supports_directory_scan === true,
+    supportsSkillDirectory: reported.supports_skill_directory === true,
+    supportsBotMenu: reported.supports_bot_menu === true,
+    agentPluginProtocol: version(reported.agent_plugin_protocol),
+    supportsFeishuBotConfig: version(reported.feishu_concierge_protocol) >= FEISHU_CONCIERGE_PROTOCOL_VERSION,
+    supportsDecisionCard: version(reported.feishu_decision_card) >= FEISHU_DECISION_CARD_PROTOCOL_VERSION,
+    supportsIssueDecisionCard: version(reported.feishu_issue_decision_card) >= FEISHU_ISSUE_DECISION_CARD_PROTOCOL_VERSION,
+  };
+}
 
 /** How a v2 connection's identity is established before `hello` is read. */
 export interface DaemonProtocolIdentity {
@@ -54,6 +80,16 @@ export type DaemonProtocolRpcHandler = (
   frame: DaemonParsedFrame,
   session: DaemonProtocolSession,
 ) => Promise<unknown | null> | unknown | null;
+
+export interface DaemonProtocolSessionHooks {
+  stop?(): void;
+  hello?(session: DaemonProtocolSession, hello: DaemonSessionHello): void;
+  heartbeat?(session: DaemonProtocolSession, heartbeat: DaemonSessionHeartbeat): void;
+  reply?(session: DaemonProtocolSession, frame: DaemonParsedFrame): void;
+  ack?(session: DaemonProtocolSession, ack: number): void;
+  drain?(session: DaemonProtocolSession): void;
+  close?(session: DaemonProtocolSession): void;
+}
 
 export interface DaemonProtocolLayerOptions {
   store: MultiremiStore;
@@ -77,6 +113,8 @@ export class DaemonProtocolLayer {
   private readonly metrics: WsFrameMetricsRuntime | null;
   /** RPC handlers registered by later sub-issues, keyed by frame type. */
   private readonly rpcHandlers = new Map<string, DaemonProtocolRpcHandler>();
+  private readonly sessionHooks = new Set<DaemonProtocolSessionHooks>();
+  private readonly background = new Set<Promise<unknown>>();
   private readonly eventHandlers = new Map<string, DaemonProtocolRpcHandler>();
   private readonly bestEffortHandlers = new Map<string, DaemonProtocolRpcHandler>();
   private readonly replyListeners = new Set<(frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
@@ -95,8 +133,11 @@ export class DaemonProtocolLayer {
     this.metrics?.flush();
   }
 
+  recordOfferSweepRecovery(): void { this.metrics?.recordOfferSweepRecovery(); }
+
   stop(): void {
     this.metrics?.stop();
+    for (const hooks of this.sessionHooks) hooks.stop?.();
   }
 
 
@@ -113,16 +154,31 @@ export class DaemonProtocolLayer {
       onHello: hello => {
         for (const runtimeId of session.runtimeIds) {
           this.store.recordDaemonProtocol(runtimeId, hello.daemonId, DAEMON_PROTOCOL_VERSION, hello.cliVersion);
+          const runtime = hello.runtimes.find(entry => entry.runtimeId === runtimeId);
+          this.store.heartbeatRuntime(runtimeId, { claimPending: false, ...runtimeCapabilityOptions(runtime?.capabilities) });
         }
+        for (const hooks of this.sessionHooks) hooks.hello?.(session, hello);
       },
-      onHeartbeat: (heartbeat) => this.handleHeartbeat(heartbeat),
+      onHeartbeat: heartbeat => {
+        const reply = this.handleHeartbeat(heartbeat);
+        for (const hooks of this.sessionHooks) hooks.heartbeat?.(session, heartbeat);
+        return reply;
+      },
       onFrame: (sample) => this.metrics?.record(sample),
-      onRpc: (frame) => this.rpcHandlers.get(frame.type)?.(frame, session) ?? null,
-      onEvent: (frame) => this.eventHandlers.get(frame.type)?.(frame, session) ?? null,
-      onBestEffort: (frame) => this.bestEffortHandlers.get(frame.type)?.(frame, session) ?? null,
+      onRpc: frame => this.dispatchRpc(frame, session),
+      onEvent: frame => this.eventHandlers.get(frame.type)?.(frame, session) ?? null,
+      onBestEffort: frame => this.bestEffortHandlers.get(frame.type)?.(frame, session) ?? null,
       traceHeads: () => this.traceHeads(session),
-      onReply: frame => { for (const listener of this.replyListeners) listener(frame, session); },
-      onClose: () => { for (const listener of this.closeListeners) listener(session); },
+      onReply: frame => {
+        for (const hooks of this.sessionHooks) hooks.reply?.(session, frame);
+        for (const listener of this.replyListeners) listener(frame, session);
+      },
+      onAck: ack => { for (const hooks of this.sessionHooks) hooks.ack?.(session, ack); },
+      onDrain: () => { for (const hooks of this.sessionHooks) hooks.drain?.(session); },
+      onClose: () => {
+        for (const hooks of this.sessionHooks) hooks.close?.(session);
+        for (const listener of this.closeListeners) listener(session);
+      },
     });
     return session;
   }
@@ -216,6 +272,17 @@ export class DaemonProtocolLayer {
     this.rpcHandlers.set(frameType, handler);
   }
 
+  registerSessionHooks(hooks: DaemonProtocolSessionHooks): void { this.sessionHooks.add(hooks); }
+
+  trackBackground(run: Promise<unknown>): void {
+    this.background.add(run);
+    void run.finally(() => this.background.delete(run)).catch(() => {});
+  }
+
+  async drain(): Promise<void> {
+    while (this.background.size) await Promise.allSettled([...this.background]);
+  }
+
   registerEventHandler(frameType: string, handler: DaemonProtocolRpcHandler): void {
     this.eventHandlers.set(frameType, handler);
   }
@@ -239,6 +306,11 @@ export class DaemonProtocolLayer {
     for (const session of this.registry.listSessions()) session.closeForServerShutdown();
   }
 
+  private async dispatchRpc(frame: DaemonParsedFrame, session: DaemonProtocolSession): Promise<unknown | null> {
+    const handler = this.rpcHandlers.get(frame.type);
+    if (!handler) return null;
+    return handler(frame, session);
+  }
   /**
    * Per-runtime authorization, reusing the HTTP daemon identity rules
    * applies to a v1 socket's runtime list.
@@ -412,9 +484,7 @@ export class DaemonProtocolLayer {
    * it would make this machine look alive for a runtime it does not own.
    */
   private handleHeartbeat(heartbeat: DaemonSessionHeartbeat): DaemonHeartbeatReplyPayload {
-    // Membership is re-checked here, not only at the handshake: a credential can
-    // outlive its owner's place in the workspace, and the terminal close code
-    // exists so the daemon stops reconnecting instead of retrying forever.
+    // Recheck daemon-wide authority before stamping any runtime heartbeat.
     if (this.heartbeatOwnerCheck(heartbeat)) return { runtime_acks: [] };
     // Reading the maintenance row also enforces the drain lease TTL lazily, so a
     // crashed updater cannot leave the platform draining forever. The row itself
@@ -424,6 +494,7 @@ export class DaemonProtocolLayer {
 
     const ackGeneration = readNonNegativeInteger(heartbeat.payload.drain_ack_generation);
     const activeTaskCount = readNonNegativeInteger(heartbeat.payload.active_task_count);
+    const reportedRuntimes = Array.isArray(heartbeat.payload.runtimes) ? heartbeat.payload.runtimes.map(readPayload) : [];
 
     // Keyed by runtime id so the reply can be assembled in the order the `hello`
     // advertised, which is the order the daemon reads it in.
@@ -431,7 +502,9 @@ export class DaemonProtocolLayer {
     for (const runtimeId of heartbeat.runtimeIds) {
       // `claimPending: false` because the v2 server does not sweep the pending
       // families on a heartbeat (MUL-389's merged poll): those become pushes in A-4.
-      const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false });
+      const reported = reportedRuntimes.find(entry => entry.runtime_id === runtimeId);
+      const ack = this.store.heartbeatRuntime(runtimeId, { claimPending: false,
+        ...runtimeCapabilityOptions(readPayload(reported?.capabilities) as DaemonRuntimeCapabilities) });
       if (ack.status === "runtime_gone") {
         // The row vanished between the handshake and now. Same report as a
         // handshake-time exclusion: tell the daemon, do not close the socket, and
@@ -462,8 +535,7 @@ export class DaemonProtocolLayer {
   }
 
   /**
-   * Re-check the daemon owner's membership on each heartbeat and close 4401 when
-   * it is gone.
+   * Re-check retirement, credential validity and owner membership on each hb.
    *
    * The v1 path made this check per message; v2 keeps the property without paying
    * it per frame, because the only thing a stale credential can still do before
@@ -474,6 +546,14 @@ export class DaemonProtocolLayer {
     if (!session || !(session instanceof DaemonProtocolSession)) return false;
     const token = session.ownerAccessToken;
     if (!token || token.type !== "daemon") return false;
+    if (this.store.isDaemonRetired(token.workspaceId, heartbeat.daemonId)) {
+      session.closeWithCode(DAEMON_PROTOCOL_CLOSE_CODES.daemon_retired, "daemon_retired");
+      return true;
+    }
+    if (!this.store.isAccessTokenStillValid(token)) {
+      session.closeWithCode(DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked, "authority_revoked");
+      return true;
+    }
     if (isOwnerStillMember(this.store, token)) return false;
     session.closeWithCode(
       DAEMON_PROTOCOL_CLOSE_CODES.authority_revoked,
