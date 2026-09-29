@@ -12,9 +12,10 @@ import {
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
-import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
+import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
+import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
 
 const log = createLogger("multiremi-store");
 const SCM_CONNECTION_ORIGIN_MIGRATION = "20260822_scm_connection_origins";
@@ -45,9 +46,9 @@ const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
-const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
 const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
+const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
 const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
 
@@ -3429,10 +3430,11 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
   migrateLegacyGithubProjection(db, legacyGithubTables);
-  ensureIssueNumberUniqueness(db, legacyGithubTables);
   runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
     backfillConversationLogWithinTransaction(db);
   });
+  migrateTaskExecutionScope(db);
+  ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
 /**
@@ -4223,6 +4225,14 @@ function parseLegacyJsonRecord(value: unknown): Record<string, unknown> {
 
 function stringOrNull(value: unknown): string | null {
   return value === null || value === undefined || value === "" ? null : String(value);
+}
+
+export function migrateTaskExecutionScope(db: SqlDatabase): void {
+  runMigrationOnce(db, TASK_EXECUTION_SCOPE_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_tasks", "execution_scope TEXT NOT NULL DEFAULT ''");
+    addColumnIfMissing(db, "multiremi_tasks", "wake_seq INTEGER NOT NULL DEFAULT 0");
+    db.run(`UPDATE multiremi_tasks SET execution_scope = ${executionScopeSql("multiremi_tasks")}`);
+  });
 }
 
 function runMigrationOnce(db: SqlDatabase, id: string, migrate: () => void): void {

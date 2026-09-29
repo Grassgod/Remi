@@ -55,6 +55,8 @@ export interface SqlDatabase {
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
+  /** Isolate an optional operation inside the current transaction without owning a new transaction. */
+  savepoint?<T>(fn: () => T): T;
   /**
    * Cross-process mutex keyed by `key`, held for the duration of `fn` and
    * released on every exit path, including a thrown callback.
@@ -147,6 +149,12 @@ export function advisoryLock<T>(db: SqlDatabase, key: string, fn: () => T): T {
  */
 export function advisoryXactLock(db: SqlDatabase, key: string): void {
   db.advisoryXactLock?.call(db, key);
+}
+
+export function withSavepoint<T>(db: SqlDatabase, fn: () => T): T {
+  if (!db.inTransaction) return fn();
+  if (db.savepoint) return db.savepoint(fn);
+  return db.transaction(fn)();
 }
 
 /**
@@ -489,7 +497,7 @@ class PgStatement implements SqlStatement {
  * outside a transaction can be executed inside one.
  */
 class SentinelPgStatement extends PgStatement {
-  constructor(execute: (sql: string, params: unknown[]) => { rows: any[]; count: number }, sql: string, private readonly sourceSql: string) {
+  constructor(execute: ConstructorParameters<typeof PgStatement>[0], sql: string, private readonly sourceSql: string) {
     super(execute, sql);
   }
   get(...params: unknown[]): any {
@@ -532,6 +540,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
   private afterCommitFrames: Array<Array<() => void>> = [];
   private peakTransactionDepth = 0;
   private failedAtDepth: number | null = null;
+  private savepointSequence = 0;
   constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
     this.bridge = new PgBridge(url, resultBufferBytes);
   }
@@ -631,6 +640,7 @@ export class PostgresSyncDatabase implements SqlDatabase {
     return (...args: any[]): T => {
       const outermost = this.transactionDepth === 0;
       const savepoint = outermost ? null : `multiremi_sp_${this.transactionDepth}`;
+      const previousFailure = this.failedAtDepth;
       if (outermost) this.execute("BEGIN", []);
       else this.execute(`SAVEPOINT ${savepoint}`, []);
       this.transactionDepth += 1;
@@ -644,37 +654,55 @@ export class PostgresSyncDatabase implements SqlDatabase {
         if (this.failedAtDepth != null) {
           throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
         }
-        if (outermost) {
-          const commit = this.execute("COMMIT", []);
-          if (commit.command?.toUpperCase() === "ROLLBACK") {
-            throw new Error("Postgres rolled back an aborted transaction at COMMIT");
-          }
-        } else this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+        const resultFrame = this.execute(outermost ? "COMMIT" : `RELEASE SAVEPOINT ${savepoint}`, []);
+        if (resultFrame.command?.toUpperCase() === "ROLLBACK") {
+          throw new Error("Postgres rolled back an aborted transaction at COMMIT");
+        }
         committed = true;
         return result;
       } catch (err) {
         try {
-          if (outermost) this.execute("ROLLBACK", []);
-          else {
-            this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`, []);
-            if (this.failedAtDepth != null && this.failedAtDepth >= this.transactionDepth) this.failedAtDepth = null;
-            this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
-          }
+          this.execute(outermost ? "ROLLBACK" : `ROLLBACK TO SAVEPOINT ${savepoint}`, []);
+          this.failedAtDepth = outermost ? null : previousFailure;
+          if (!outermost) this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
         } catch {
           // connection already aborted the transaction
         }
         throw err;
       } finally {
         this.transactionDepth -= 1;
+        if (outermost) this.failedAtDepth = null;
         const frame = this.afterCommitFrames.pop()!;
         if (committed) {
           if (outermost) runAfterCommitCallbacks(frame);
           else this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
         }
         if (outermost) lockOrderSentinelTransactionEnd();
-        if (outermost) this.failedAtDepth = null;
       }
     };
+  }
+  savepoint<T>(fn: () => T): T {
+    if (!this.inTransaction) throw new Error("savepoint requires an open transaction");
+    const name = `multiremi_optional_${++this.savepointSequence}`;
+    const previousFailure = this.failedAtDepth;
+    this.execute(`SAVEPOINT ${name}`, []);
+    this.afterCommitFrames.push([]);
+    let released = false;
+    try {
+      const result = fn();
+      if (this.failedAtDepth != null) throw new Error("Postgres savepoint contains an unrecovered statement failure");
+      this.execute(`RELEASE SAVEPOINT ${name}`, []);
+      released = true;
+      return result;
+    } catch (error) {
+      this.execute(`ROLLBACK TO SAVEPOINT ${name}`, []);
+      this.failedAtDepth = previousFailure;
+      this.execute(`RELEASE SAVEPOINT ${name}`, []);
+      throw error;
+    } finally {
+      const frame = this.afterCommitFrames.pop()!;
+      if (released) this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
+    }
   }
   /**
    * Queue \`fn\` until the OUTERMOST transaction on this connection commits, and

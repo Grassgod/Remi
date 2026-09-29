@@ -165,7 +165,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const started = activities(dependent, "dependency_auto_started");
       expect(started).toHaveLength(1);
       const data = JSON.parse(started[0]!.data);
-      if (replayed) expect(data).toMatchObject({ replayed: true, replayEventId: event.id, replay_event_id: event.id });
+      expect(data).toMatchObject({ dependencyCheckEventId: event.id, dependency_check_event_id: event.id });
+      if (replayed) expect(data).toMatchObject({ replayed: true });
       else expect(data.replayed).toBeUndefined();
       expect(activities(dependent, "issue_assigned")).toHaveLength(1);
       expect(activities(dependent, "dependency_auto_start_skipped")).toEqual([]);
@@ -326,6 +327,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         restartStore();
         assertWaiting(dependent);
         expect(activities(dependent, "dependency_auto_start_skipped")).toHaveLength(1);
+        expect(JSON.parse(activities(dependent, "dependency_auto_start_skipped")[0]!.data))
+          .toMatchObject({ dependency_check_event_id: check.id });
         expect(store.getSystemEvent(check.id)?.status).toBe("processed");
       }, 60_000);
     }

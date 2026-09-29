@@ -89,25 +89,21 @@ export interface EnvelopeMetadata {
 export type EnvelopePriorityEntry = Pick<Envelope, "kind" | "wake" | "outcome"> & {
   /** Source author, before an envelope is persisted as a system log entry. */
   senderType?: string;
-  /** Lifecycle event name when it is not represented by outcome. */
+  /** Only terminal task events escalate a lifecycle notice; outcome does not. */
   lifecycleEvent?: string;
 };
 
 export function envelopePriority(entry: EnvelopePriorityEntry): EnvelopePriority {
   if (entry.wake === "inbox_only") return 4;
-  if (entry.kind === "decision_needed" ||
-    (entry.kind === "request" && entry.senderType === "member")) return 1;
-  if (
-    (entry.kind === "report" || entry.kind === "final" || entry.kind === "lifecycle") &&
-    (entry.outcome === "failed" || entry.outcome === "blocked" || entry.outcome === "cancelled")
-  ) return 2;
-  if (
-    entry.kind === "lifecycle" &&
-    (entry.lifecycleEvent === "task_failed" || entry.lifecycleEvent === "task_cancelled")
-  ) return 2;
-  if (
-    entry.kind === "report" || entry.kind === "final" ||
-    entry.kind === "reply" || entry.kind === "request"
-  ) return 3;
+  switch (entry.kind) {
+    case "decision_needed": return 1;
+    case "request": return entry.senderType === "member" ? 1 : 3;
+    case "lifecycle":
+      return entry.lifecycleEvent === "task_failed" || entry.lifecycleEvent === "task_cancelled" ? 2 : 4;
+    case "report":
+    case "final":
+      return entry.outcome === "failed" || entry.outcome === "blocked" || entry.outcome === "cancelled" ? 2 : 3;
+    case "reply": return 3;
+  }
   return 4;
 }

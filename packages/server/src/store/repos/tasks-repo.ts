@@ -3,6 +3,8 @@
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
+import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
+import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
@@ -549,6 +551,7 @@ export interface ChildStatusChange {
   taskId: string;
   /** Terminal status of the task that produced the transition, when it was terminal. */
   taskTerminalStatus?: "completed" | "failed" | "cancelled";
+  dependencyCheckEventId?: string | null;
 }
 
 /**
@@ -563,6 +566,28 @@ export interface ChildStatusChange {
  * makes the compiler ask every call site which transaction owns the write.
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
+
+export type PendingTurnLane =
+  | { kind: "issue"; issueSessionId: string; agentId: string; executionScope: string }
+  | { kind: "chat"; chatSessionId: string; agentId: string; issueId: string | null };
+
+export interface EnsurePendingTurnInput {
+  lane: PendingTurnLane;
+  wake: {
+    reason: string;
+    seq: number | null;
+    commentId?: string | null;
+    /** Defaults to now; preserves the envelope's next_turn policy. */
+    mode?: EnvelopeWake;
+  };
+  create: () => MultiremiTask;
+  steerBody?: string;
+}
+
+export interface EnsurePendingTurnResult {
+  task: MultiremiTask | null;
+  action: "created" | "coalesced" | "steered" | "none";
+}
 
 type DependencyForceInput = NonNullable<CreateTaskInput["dependencyForce"]>;
 
@@ -661,17 +686,11 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  */
 export class TaskSteerPendingError extends Error {}
 
-function executionScopeSql(alias: string): string {
-  return `(CASE WHEN ${alias}.delegated_by_agent_id IS NOT NULL
-    AND ${alias}.agent_id <> ${alias}.delegated_by_agent_id
-    THEN COALESCE(${alias}.delegation_id, '') ELSE '' END)`;
-}
-
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
     OR (${active}.agent_id = ${queued}.agent_id AND (
     (${queued}.issue_session_id IS NOT NULL AND ${active}.issue_session_id = ${queued}.issue_session_id
-      AND ${executionScopeSql(queued)} = ${executionScopeSql(active)})
+      AND ${queued}.execution_scope = ${active}.execution_scope)
     OR (${queued}.chat_session_id IS NOT NULL AND ${active}.chat_session_id = ${queued}.chat_session_id)
     OR (${queued}.issue_id IS NOT NULL AND ${queued}.issue_session_id IS NULL
       AND ${active}.issue_id = ${queued}.issue_id AND ${active}.issue_session_id IS NULL)
@@ -1355,6 +1374,79 @@ export class TasksRepo {
     return this.createTaskWithinWorkspaceLock(input, childStatusChanges, deferredEvents);
   }
 
+  ensurePendingTurnWithinTransaction(input: EnsurePendingTurnInput): EnsurePendingTurnResult {
+    if (!this.ctx.db.inTransaction) throw new Error("ensurePendingTurnWithinTransaction requires an open transaction");
+    const { lane, wake } = input;
+    if ((wake.seq !== null && (!Number.isSafeInteger(wake.seq) || wake.seq < 1)) || !wake.reason) {
+      throw new Error("A pending turn requires a valid wake sequence and reason");
+    }
+    const initialAgent = this.ctx.agents().getAgent(lane.agentId);
+    if (!initialAgent) throw new Error(`Agent not found: ${lane.agentId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(initialAgent.workspaceId);
+    const agent = this.ctx.agents().getAgent(lane.agentId);
+    if (!agent || agent.archivedAt || agent.workspaceId !== initialAgent.workspaceId) {
+      throw new Error("Pending turn agent is unavailable");
+    }
+    const session = lane.kind === "issue" ? this.ctx.issueSessions().getIssueSession(lane.issueSessionId) : null;
+    const chat = lane.kind === "chat" ? this.ctx.chat().getChatSession(lane.chatSessionId) : null;
+    if (lane.kind === "issue" && (!session || session.workspaceId !== agent.workspaceId)) {
+      throw new Error("Pending turn Issue session is unavailable in this workspace");
+    }
+    if (lane.kind === "chat" && (!chat || chat.workspaceId !== agent.workspaceId || chat.agentId !== agent.id || chat.status === "archived")) {
+      throw new Error("Pending turn Chat session is unavailable for this agent");
+    }
+    if (wake.mode === "inbox_only") return { task: null, action: "none" };
+    let pending: MultiremiTask | null;
+    if (lane.kind === "issue") {
+      if (wake.mode === "next_turn" && this.ctx.db.query(`SELECT id FROM multiremi_tasks
+        WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ?
+          AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human') LIMIT 1`)
+        .get(lane.issueSessionId, lane.agentId, lane.executionScope)) return { task: null, action: "none" };
+      const row = this.ctx.db.query(`SELECT id FROM multiremi_tasks
+        WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ? AND status = 'queued'
+        ORDER BY created_at ASC, id ASC LIMIT 1`).get(lane.issueSessionId, lane.agentId, lane.executionScope) as { id: string } | null;
+      pending = row ? this.getTask(row.id) : null;
+    } else {
+      pending = this.ctx.chat().getPendingChatTask(lane.chatSessionId);
+      if (pending && (pending.issueId !== lane.issueId || pending.workspaceId !== agent.workspaceId
+        || pending.agentId !== lane.agentId)) pending = null;
+      if (pending && pending.status !== "queued") {
+        this.createTaskSteerMessageWithinTransaction({ taskId: pending.id, kind: "steer",
+          content: input.steerBody ?? "", authorType: "system", authorId: null });
+        return { task: pending, action: "steered" };
+      }
+    }
+    if (pending) {
+      const seq = wake.seq ?? 0;
+      const updated = this.ctx.db.run(`UPDATE multiremi_tasks SET updated_at = ?,
+        wake_seq = CASE WHEN wake_seq < ? THEN ? ELSE wake_seq END
+        WHERE id = ? AND status = 'queued'`, [nowIso(), seq, seq, pending.id]);
+      if (updated.changes === 1) {
+        const task = this.getTask(pending.id)!;
+        appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_coalesced", {
+          seq: wake.seq, reason: wake.reason, commentId: wake.commentId ?? null,
+        });
+        return { task, action: "coalesced" };
+      }
+    }
+    if (wake.mode === "next_turn") return { task: null, action: "none" };
+    const task = input.create();
+    const matchesLane = lane.kind === "issue"
+      ? task.issueSessionId === lane.issueSessionId && task.execution_scope === lane.executionScope
+      : task.chatSessionId === lane.chatSessionId && task.issueSessionId == null && task.issueId === lane.issueId;
+    if (task.status !== "queued" || task.agentId !== lane.agentId || task.workspaceId !== agent.workspaceId || !matchesLane) {
+      throw new Error("Pending turn create callback returned a task outside its queued lane");
+    }
+    const seq = wake.seq ?? 0;
+    this.ctx.db.run(`UPDATE multiremi_tasks SET wake_seq = CASE WHEN wake_seq < ? THEN ? ELSE wake_seq END
+      WHERE id = ?`, [seq, seq, task.id]);
+    const stored = this.getTask(task.id)!;
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, stored, "pending_turn_created", {
+      seq: wake.seq, reason: wake.reason, commentId: wake.commentId ?? null,
+    });
+    return { task: stored, action: "created" };
+  }
+
   /** Caller holds the task workspace row lock in an open transaction. */
   /**
    * MUL-400 E3 gate 3: no first task for an issue that is still waiting.
@@ -1402,11 +1494,12 @@ export class TasksRepo {
     );
   }
 
-  private createTaskWithinWorkspaceLock(
+  createTaskWithinWorkspaceLock(
     input: CreateTaskInput,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
     gateIssueBeforeReplacement?: MultiremiIssue | null,
+    executionScopeOverride?: string,
   ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -1614,7 +1707,11 @@ export class TasksRepo {
     // owns the ACP lineage. If a local-directory constraint points elsewhere,
     // or the provider/runtime drifted, abandon the cache atomically and cold
     // bootstrap from the canonical event log.
-    const executionScope = taskExecutionScope(input);
+    const executionScope = executionScopeOverride ?? taskExecutionScope({
+      agentId: input.agentId,
+      delegatedByAgentId: input.delegatedByAgentId ?? input.delegated_by_agent_id,
+      delegationId: input.delegationId ?? input.delegation_id,
+    });
     let issueLane: MultiremiSessionAgentLane | null = null;
     let inheritIssueLane = false;
     if (issueSession) {
@@ -1740,11 +1837,11 @@ export class TasksRepo {
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at,
-        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at
+        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at, execution_scope
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?
       )`,
       [
         runtimeWorkspaceId,
@@ -1826,6 +1923,7 @@ export class TasksRepo {
         normalizeExecutionFlag(input.fallbackSwitched ?? input.fallback_switched),
         cleanOptionalString(input.switchReason ?? input.switch_reason),
         cleanOptionalString(input.nextRetryAt ?? input.next_retry_at),
+        executionScope,
       ],
     );
     if (chatSession) {
@@ -5407,7 +5505,7 @@ ${placementAfter.sql}
       `SELECT * FROM multiremi_tasks
        WHERE agent_id = ? AND issue_session_id = ?
          AND status = 'queued' AND projection_to_seq IS NULL
-         AND ${executionScopeSql("multiremi_tasks")} = ''
+         AND execution_scope = ''
        ORDER BY created_at DESC, id DESC
        LIMIT 1`,
     ).get(delegatorId, issueSessionId) as Row | null;
@@ -6028,6 +6126,7 @@ ${placementAfter.sql}
         return null;
       }
       const parent = task.triggerCommentId ? this.ctx.getLogIssueComment(task.triggerCommentId) : null;
+      const deferredEvents = createCommitEventQueue();
       const comment = this.ctx.db.transaction(() => {
         const created = this.ctx.issues().createIssueComment(task.issueId!, {
           issueSessionId: task.issueSessionId,
@@ -6037,10 +6136,11 @@ ${placementAfter.sql}
           taskId: task.id,
           parentId: parent && parent.issueId === task.issueId ? parent.id : null,
           body,
-        });
+        }, { withinTransaction: true, deferredEvents });
         this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { finalEntryId: created.id });
         return created;
       })();
+      this.ctx.emitCommitEvents(deferredEvents);
       return { id: comment.id };
     } catch (err) {
       // Task completion must never fail because the reply couldn't be posted.
@@ -6181,6 +6281,7 @@ ${placementAfter.sql}
             next,
             {
               taskTerminalStatus: change.taskTerminalStatus,
+              dependencyCheckEventId: change.dependencyCheckEventId,
               seen,
             },
           );
@@ -6258,7 +6359,7 @@ ${placementAfter.sql}
     );
     const updatedIssue = this.ctx.issues().getIssue(task.issueId);
     if (updatedIssue) {
-      this.ctx.autopilots().enqueueIssueStatusChangedEvent({
+      const { dependencyCheckEventId } = this.ctx.autopilots().enqueueIssueStatusChangedEvent({
         issue: updatedIssue,
         previousStatus: issue.status,
         actorType: "agent",
@@ -6276,6 +6377,7 @@ ${placementAfter.sql}
         previous: issue,
         issue: updatedIssue,
         taskId: task.id,
+        dependencyCheckEventId,
         taskTerminalStatus: task.status === "completed" || task.status === "failed" || task.status === "cancelled"
           ? task.status
           : undefined,
@@ -6556,6 +6658,7 @@ function toTask(row: Row): MultiremiTask {
   return {
     id: String(row.id),
     taskKind: row.task_kind === "quick_create" ? "quick_create" : "direct",
+    execution_scope: String(row.execution_scope ?? ""),
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
     runtimeWorkspaceId: nullableString(row.runtime_workspace_id),

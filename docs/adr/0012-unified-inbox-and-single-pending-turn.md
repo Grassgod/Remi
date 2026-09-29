@@ -1,4 +1,4 @@
-# ADR 0010: Unified inbox on the conversation log, one pending turn per lane, wakes commit with state
+# ADR 0012: Unified inbox on the conversation log, one pending turn per lane, wakes commit with state
 
 - Status: accepted (MUL-404, 2026-09-28; supersedes the per-path coalescing in ADR 0005 decisions 3–6 and amends ADR 0003 decision 8)
 - Deciders: 贺华杰 (scope), Senior大哥 (design), 带头大哥 (split)
@@ -38,14 +38,18 @@ notification wakes to this decision.
    `ensurePendingTurnWithinTransaction`. The five wake paths (E2, E3 failure
    notice, E3 readiness notice, E4, delegation return, mention) call it and
    nothing else. Message content is never appended to a task prompt.
-3. **The pending turn is the queued `multiremi_tasks` row, one per lane.**
-   `multiremi_tasks.execution_scope` becomes a stored column. Two partial unique
-   indexes enforce at most one `status = 'queued'` row per
-   `(issue_session_id, agent_id, execution_scope)` and per
-   `(chat_session_id, agent_id)`. The key equals the lane primary key on purpose:
-   the lane says how far the agent has read, the pending turn says that it will
-   read again. Writers still look before they insert under the workspace row
-   lock; the index is the invariant, not the control flow.
+3. **The pending turn the platform plants is the queued `multiremi_tasks` row
+   with a non-null `wake_source`, one per lane.** `multiremi_tasks.execution_scope`
+   becomes a stored column. Two partial unique indexes enforce at most one
+   `status = 'queued' AND wake_source IS NOT NULL AND continued_from_task_id IS NULL`
+   row per `(issue_session_id, agent_id, execution_scope)` and per
+   `(chat_session_id, agent_id)`. Rows a person plants - a Chat message, a
+   member's comment round, `remi task create`, an API continuation - keep
+   `wake_source` NULL, stay outside the indexes, and keep their queue semantics
+   (Chat edit / reorder / remove, one round per human comment under Q-B answer 2).
+   `ensurePendingTurn` still looks for *any* queued row in the lane before it
+   creates one, so a platform wake rides a human round when one is queued; the
+   index is the invariant for platform-planted rows, not the control flow.
 4. **Wakes commit with the state change.** `ensurePendingTurn` asserts it is
    inside the caller's transaction. ADR 0003 decision 8 ("every guarded path runs
    at transaction depth 1") stands; what changes is what may remain post-commit:
@@ -57,6 +61,9 @@ notification wakes to this decision.
    with such entries still unread, ring again (re-ring). `next_turn`: no turn is
    created while one is queued or running; the entry rides along and never
    re-rings. `inbox_only`: never rings; it appears in the table of contents only.
+   On a Chat lane there is no cursor and no re-ring: `now` rides a queued
+   task, steers a running one in the same transaction, or creates a
+   `wake_source = 'relay'` row; `next_turn` never creates.
 6. **Receipts are best effort and coarse.** At claim time the turn card receives
    `metadata.inbox.delivered_to_seq`, written after the claim commit; failure
    is logged and does not affect the message. "Delivered" for a single entry is
@@ -73,9 +80,15 @@ notification wakes to this decision.
 - Four coalescing implementations and their prompt-append helpers are deleted.
   Skip/coalesce audit moves to `pending_turn_created | pending_turn_coalesced |
   pending_turn_skipped`; the lineage reasons in `DelegationSkipReason` stay.
-- A human mention while a round is queued no longer creates a second queued
-  task; it is read by the queued round. A continuation task is the pending turn
-  for its lane like any other queued task.
+- Under Q-B answer 1 (`HUMAN_COMMENT_JOINS_QUEUED_ROUND = true`) a human comment
+  or mention while a round is queued for that lane joins it instead of creating
+  a second queued task; editing the round's trigger comment cancels the round
+  and, if other comments had joined, plants a `re_ring` turn in the same
+  transaction. Under answer 2 every human comment keeps its own round, as
+  today. Chat message queues are unchanged either way.
+- A continuation task inherits `wake_source` from the task it continues and is
+  excluded from the indexes by `continued_from_task_id IS NULL`; two queued
+  continuations on one lane remain legal, as today.
 - Delegation reports and decision answers become visible system comments in the
   recipient session.
 - The migration collapses existing duplicate queued rows (keeps the oldest,

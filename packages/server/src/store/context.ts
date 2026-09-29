@@ -10,7 +10,7 @@
 // facade's constructor and resolved at call time.
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { afterCommit, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, withSavepoint, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
@@ -243,6 +243,10 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
+  createSystemIssueCommentWithinTransaction(
+    issueId: string, body: string, data: Record<string, unknown>, deferredEvents: CommitEventQueue,
+    taskId?: string | null, issueSessionId?: string | null, entryId?: string,
+  ): MultiremiIssueComment;
   createIssue(input: CreateIssueInput, transaction?: {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
@@ -296,6 +300,7 @@ export interface IssuesSurface {
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   };
   /** Post-COMMIT half of {@link updateIssueWithinTransaction}. */
   runIssueUpdatePostCommit(
@@ -304,6 +309,7 @@ export interface IssuesSurface {
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -368,6 +374,7 @@ export interface IssuesSurface {
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     options: {
       taskTerminalStatus?: "completed" | "failed" | "cancelled";
+      dependencyCheckEventId?: string | null;
       /** Replay chain de-duplication; see runCollectedChildStatusChanges. */
       seen?: Set<string>;
     },
@@ -527,7 +534,7 @@ export interface AutopilotsSurface {
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null;
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null };
 }
 
 export interface AccessTokensSurface {
@@ -535,6 +542,9 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").EnsurePendingTurnResult;
+  createTaskWithinWorkspaceLock(input: CreateTaskInput, childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue, gateIssueBeforeReplacement?: MultiremiIssue | null, executionScopeOverride?: string): MultiremiTask;
   createTask(input: CreateTaskInput): MultiremiTask;
   /**
    * Internal primitive for a caller that already owns a database transaction.
@@ -630,7 +640,10 @@ export interface ChatSurface {
     workspaceId?: string | null,
     options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
   ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string, options?: {
+    id?: string;
+    metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata;
+  }): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   };
@@ -1337,7 +1350,7 @@ export class StoreContext {
       ],
     );
     try {
-      const queueUpdate = () => this.host.queueAgentIssueUpdate({
+      withSavepoint(this.db, () => this.host.queueAgentIssueUpdate({
         activityId: id,
         issueId,
         actorType: input.actorType,
@@ -1346,9 +1359,7 @@ export class StoreContext {
         body: input.body ?? null,
         data: input.data ?? null,
         createdAt: now,
-      });
-      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
-      else queueUpdate();
+      }));
     } catch (err) {
       log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1359,10 +1370,7 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
-      const workspaceId = this.db.inTransaction
-        ? this.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      const workspaceId = withSavepoint(this.db, () => this.issueWorkspaceId(issueId));
       if (!workspaceId) return;
       const event: WorkspaceEvent = {
         type: "activity:created",

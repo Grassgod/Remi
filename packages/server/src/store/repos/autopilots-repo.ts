@@ -866,8 +866,8 @@ export class AutopilotsRepo {
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
-    if (input.previousStatus === input.issue.status) return null;
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
+    if (input.previousStatus === input.issue.status) return { event: null, dependencyCheckEventId: null };
     const id = createId("sev");
     const now = nowIso();
     const payload = {
@@ -889,14 +889,16 @@ export class AutopilotsRepo {
       ) VALUES (?, ?, 'issue', 'status_changed', ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
       [id, input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson(payload), now, now],
     );
+    let dependencyCheckEventId: string | null = null;
     if (input.issue.status === "done") {
+      dependencyCheckEventId = createId("sev");
       // Give recovery its own lease and retry budget, committed with `done`.
       this.ctx.db.run(
         `INSERT INTO multiremi_system_events (
           id, workspace_id, resource, event, resource_id, project_id, payload,
           status, attempt_count, available_at, lease_until, last_error, created_at, processed_at
         ) VALUES (?, ?, 'issue', 'dependency_auto_start_check', ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, NULL)`,
-        [createId("sev"), input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson({
+        [dependencyCheckEventId, input.issue.workspaceId, input.issue.id, input.issue.projectId, toJson({
           issue_id: input.issue.id,
           issue_key: input.issue.key,
           workspace_id: input.issue.workspaceId,
@@ -906,7 +908,7 @@ export class AutopilotsRepo {
         }), new Date(Date.parse(now) + DEPENDENCY_AUTO_START_REPLAY_DELAY_MS).toISOString(), now],
       );
     }
-    return this.getSystemEvent(id);
+    return { event: this.getSystemEvent(id), dependencyCheckEventId };
   }
 
   getSystemEvent(id: string): MultiremiSystemEvent | null {

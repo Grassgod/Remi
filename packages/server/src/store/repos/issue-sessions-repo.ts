@@ -54,6 +54,7 @@ export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
 
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    if (this.ctx.db.inTransaction) return this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
     return this.ctx.db.transaction(() => this.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById))();
   }
 
@@ -132,10 +133,7 @@ export class IssueSessionsRepo {
       if (!parent) throw new Error(`Parent session not found: ${parentSessionId}`);
       if (parent.issueId !== issueId) throw new Error("Parent session must belong to the same issue");
       if (parent.inheritMode !== "none") throw new Error("Cannot inherit from a side session (chained forks are not supported)");
-      const max = this.ctx.db.query(
-        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
-      ).get(parentSessionId) as { seq: number } | null;
-      inheritCutoffSeq = Number(max?.seq ?? 0);
+      inheritCutoffSeq = this.parentMaxSeq(parentSessionId);
       if (withCode) {
         const lane = this.ctx.db.query(
           `SELECT lane.runtime_id FROM multiremi_session_agent_lanes lane
@@ -400,6 +398,7 @@ export class IssueSessionsRepo {
   appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
     const session = this.getIssueSession(sessionId);
     if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
     // One allocator for both tables (MUL-426): the heads row hands out the next
     // seq with an atomic `head_seq = head_seq + 1 … RETURNING`, so two server
     // processes cannot take the same number and the log stays on
@@ -830,8 +829,12 @@ export class IssueSessionsRepo {
 
   private parentMaxSeq(sessionId: string): number {
     const row = this.ctx.db.query(
-      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0",
-    ).get(sessionId) as { seq: number };
+      `SELECT COALESCE(MAX(seq), 0) AS seq FROM (
+        SELECT seq FROM multiremi_conversation_log WHERE session_id = ? AND kind <> 'head' AND seq > 0
+        UNION ALL
+        SELECT seq FROM multiremi_session_events WHERE session_id = ? AND kind = 'delegation_report'
+      ) parent_entries`,
+    ).get(sessionId, sessionId) as { seq: number };
     return Number(row.seq);
   }
 
