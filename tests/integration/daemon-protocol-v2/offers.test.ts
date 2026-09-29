@@ -26,7 +26,8 @@ describe("A-3 real task offers", () => {
 
   for (const fault of ["disconnect", "daemon restart", "server restart"] as const) {
     it(`accepts every task exactly once through 20 ${fault} injections`, async () => {
-      const h = await DaemonProtocolHarness.create(); harnesses.push(h);
+      // All 20 injections can leave terminal reports in flight; keep capacity independent of host CPU count.
+      const h = await DaemonProtocolHarness.create({ daemonOptions: { maxConcurrency: 20 } }); harnesses.push(h);
       await h.startDaemon(); await h.settleHeartbeat();
       const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
       const agent = h.store.createAgent({ name: "injected no-op", provider: "claude", runtimeId, workspaceId: "local" });
