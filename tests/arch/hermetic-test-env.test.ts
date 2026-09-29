@@ -72,9 +72,10 @@ describe("hermetic test environment", () => {
     for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
       expect(process.env[name], `${name} must be set by the preload`).toBe(value);
     }
-    // MUL-398 C-1: production and the hermetic suite must use the same default.
+    // MUL-398 C-1: threshold agrees; CI enforces while production observes.
     expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_MAX_BYTES)
       .toBe(String(DEFAULT_DB_REPLY_MAX_BYTES));
+    expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_ENFORCE).toBe("1");
   });
 
   test("the scrub list covers the auth-relevant variables", () => {

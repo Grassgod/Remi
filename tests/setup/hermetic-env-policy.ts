@@ -71,8 +71,10 @@ export const SCRUBBED_ENV_KEYS = [
  * empty.
  *
  * `MULTIREMI_PG_REPLY_MAX_BYTES` is here on purpose (MUL-398 C-1): production
- * and the suite both default to 8 MiB, keeping the guard armed so an
- * unbounded read fails in CI the way it failed for `/tasks/pending`. The value is
+ * and the suite both use an 8 MiB threshold. Production defaults ENFORCE to 0
+ * to preserve existing HTTP behavior; tests explicitly preload ENFORCE=1 so an
+ * unbounded read fails in CI. C-2 needs fresh authorization to flip production.
+ * The threshold value is
  * duplicated from the source constant rather than imported, so this preload stays
  * dependency-free; `tests/arch/hermetic-test-env.test.ts` asserts the two agree.
  *
@@ -87,6 +89,7 @@ export const SCRUBBED_ENV_KEYS = [
  */
 export const HERMETIC_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   MULTIREMI_PG_REPLY_MAX_BYTES: String(8 * 1_048_576),
+  MULTIREMI_PG_REPLY_ENFORCE: "1",
   // MUL-405 whole-suite lock-order sentinel. On by default in tests (it is a
   // check, not a fixture), refused under NODE_ENV=production inside the module,
   // and a single cached boolean when off. See

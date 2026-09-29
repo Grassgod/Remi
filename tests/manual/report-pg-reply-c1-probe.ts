@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 type Row = { method: string; route: string; status: number | null; reason: string; bytes: number; maxReplyBytes: number };
 type Scenario = { column: string; routeCount: number; rows: Row[] };
 const directory = resolve(import.meta.dir, "../../reports/performance");
-const load = (version: string): Scenario[] => JSON.parse(readFileSync(`${directory}/MUL-398-c1-r1-${version}-matrix.json`, "utf8"));
+const load = (version: string): Scenario[] => JSON.parse(readFileSync(`${directory}/MUL-398-c1-b-${version}-matrix.json`, "utf8"));
 const baseline = load("main");
-const current = load("head");
+const current = load("enforced");
 const success = (status: number | null): boolean => status !== null && status >= 200 && status < 300;
 const readers: Record<string, string> = {
   multiremi_workspaces: "WorkspacesRepo.getWorkspace/listWorkspaces",
@@ -64,7 +64,23 @@ const pairs = baseline.map((scenario, index) => {
       head: { status: head.status, bytes: head.bytes, maxReplyBytes: head.maxReplyBytes, reason: head.reason } };
   }) };
 });
-writeFileSync(`${directory}/MUL-398-c1-r1-route-matrix.json`, JSON.stringify(pairs, null, 2) + "\n");
+const full = Object.fromEntries(["main", "observe", "enforced"].map(version => [version,
+  JSON.parse(readFileSync(`${directory}/MUL-398-c1-b-${version}-routes.json`, "utf8")) as { routeCount: number; rows: Row[] },
+])) as Record<string, { routeCount: number; rows: Row[] }>;
+const fullPairs = full.main!.rows.map((main, index) => {
+  const observe = full.observe!.rows[index]!;
+  const enforced = full.enforced!.rows[index]!;
+  if (main.route !== observe.route || main.method !== observe.method || main.route !== enforced.route || main.method !== enforced.method) {
+    throw new Error("Unpaired full-fixture routes");
+  }
+  return { method: main.method, route: main.route,
+    main: { status: main.status, bytes: main.bytes, maxReplyBytes: main.maxReplyBytes, reason: main.reason },
+    observe: { status: observe.status, bytes: observe.bytes, maxReplyBytes: observe.maxReplyBytes, reason: observe.reason },
+    enforced: { status: enforced.status, bytes: enforced.bytes, maxReplyBytes: enforced.maxReplyBytes, reason: enforced.reason } };
+});
+const observeChanges = fullPairs.filter(row => row.main.status !== row.observe.status);
+if (observeChanges.length) throw new Error(`Observe mode changed ${observeChanges.length} statuses`);
+writeFileSync(`${directory}/MUL-398-c1-b-route-matrix.json`, JSON.stringify({ completeFixture: fullPairs, isolatedColumns: pairs }, null, 2) + "\n");
 const groups = pairs.map(scenario => ({
   column: scenario.column,
   reader: readers[scenario.column.split(".")[0]!] ?? "See static audit",
@@ -75,10 +91,52 @@ const groups = pairs.map(scenario => ({
 const affected = new Set(groups.flatMap(group => group.regressions.map(row => row.route)));
 const requests = pairs.reduce((sum, scenario) => sum + scenario.rows.length, 0);
 const regressions = groups.reduce((sum, group) => sum + group.regressions.length, 0);
+if (groups.some(group => group.maxReplyBytes < 9 * 1_048_576)) throw new Error("A payload category was not read at >=9 MiB");
+const coverage = (rows: Row[]) => ({
+  requested: rows.filter(row => row.status !== null).length,
+  successful: rows.filter(row => success(row.status)).length,
+  skipped: rows.filter(row => row.status === null).length,
+  statuses: Object.fromEntries([...new Set(rows.map(row => row.status))].map(status => [String(status), rows.filter(row => row.status === status).length])),
+});
+const fullRegressions = fullPairs.filter(row => success(row.main.status) && row.enforced.status !== null && row.enforced.status >= 500);
+const writerArchive = readFileSync(`${directory}/MUL-398-c1-r1-route-probe.md`, "utf8");
+const writerTable = writerArchive.slice(writerArchive.indexOf("| Root column(s) |"), writerArchive.indexOf("\n## Limits of this pass"));
 const content = [
-  "## Isolated Column Matrix",
+  "## Probe Results",
   "",
-  `${pairs.length} isolated column scenarios, ${requests} GET/HEAD requests per version (${requests * 2} total). Across scenarios: ${regressions} main 2xx -> head 5xx observations, ${affected.size} distinct patterns. The raw paired JSON has every route's status, maximum single reply size and skip/error reason for both versions. A path appearing under several roots is deliberately retained in each root group.`,
+  `Complete runtime fixture: ${full.main!.routeCount} GET patterns, GET plus HEAD = ${fullPairs.length} requests per run. Main versus observe: **${observeChanges.length} status differences**. Main versus enforced: ${fullPairs.filter(row => row.main.status !== row.enforced.status).length} status differences, including ${fullRegressions.length} main 2xx -> 5xx requests (${new Set(fullRegressions.map(row => row.route)).size} patterns).`,
+  "",
+  "| Full fixture mode | Requested | 2xx | Skipped | Status counts |",
+  "|---|---:|---:|---:|---|",
+  ...Object.entries(full).map(([mode, run]) => {
+    const counts = coverage(run.rows);
+    return `| ${mode} | ${counts.requested} | ${counts.successful} | ${counts.skipped} | ${JSON.stringify(counts.statuses)} |`;
+  }),
+  "",
+  "All runtime GET patterns were requested. Non-2xx rows were exercised, not silently skipped; they are not claims of successful fixture coverage. Each reason and each route's maximum single reply is retained in the raw attachment. Baseline Lark-login 503 is expected without integration configuration.",
+  "",
+  "### Transcript Floor",
+  "",
+  "| Pattern | Method | Main / observe | Largest main / observe single reply bytes |",
+  "|---|---|---|---:|",
+  ...fullPairs.filter(row => /\/tasks\/.+\/messages$|^\/api\/shares\/:token$|\/sessions\/.+\/events$|^\/api\/chat\/sessions\/.+\/messages$/.test(row.route))
+    .map(row => `| \`${row.route}\` | ${row.method} | ${row.main.status} / ${row.observe.status} | ${row.main.maxReplyBytes} / ${row.observe.maxReplyBytes} |`),
+  "",
+  "### Non-Success Coverage And Reasons",
+  "",
+  "| Pattern | Method | Main / observe / enforced | Reason on main |",
+  "|---|---|---|---|",
+  ...fullPairs.filter(row => !success(row.main.status)).map(row => `| \`${row.route}\` | ${row.method} | ${row.main.status} / ${row.observe.status} / ${row.enforced.status} | ${row.main.reason} |`),
+  "",
+  "### Full-Fixture Status Differences With Enforcement",
+  "",
+  "| Pattern | Method | Main -> enforced | Largest main / enforced single reply bytes |",
+  "|---|---|---|---:|",
+  ...fullPairs.filter(row => row.main.status !== row.enforced.status).map(row => `| \`${row.route}\` | ${row.method} | ${row.main.status} -> ${row.enforced.status} | ${row.main.maxReplyBytes} / ${row.enforced.maxReplyBytes} |`),
+  "",
+  "### Isolated Column Matrix",
+  "",
+  `${pairs.length} isolated column scenarios, ${requests} GET/HEAD requests per version (${requests * 2} total). Across scenarios: ${regressions} main 2xx -> enforced 5xx observations, ${affected.size} distinct patterns. These are C-2 candidates, not exception additions. A path appearing under several roots remains in each root group.`,
   "",
   "| Root column | Reader | GET patterns with main 2xx -> head 5xx | Observed maximum reply bytes |",
   "|---|---|---|---:|",
@@ -86,20 +144,25 @@ const content = [
   "",
   ...groups.filter(group => group.regressions.length).flatMap(group => [
     `### ${group.column}`, "", `Read path: ${group.reader}.`, "",
-    "| Pattern | main GET/HEAD | head GET/HEAD | Largest main/head reply bytes |",
+    "| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |",
     "|---|---|---|---:|",
     ...[...new Set(group.regressions.map(row => row.route))].map(route => {
       const rows = group.regressions.filter(row => row.route === route);
       return `| \`${route}\` | ${rows.map(row => row.main.status).join("/")} | ${rows.map(row => row.head.status).join("/")} | ${Math.max(...rows.map(row => row.main.maxReplyBytes))}/${Math.max(...rows.map(row => row.head.maxReplyBytes))} |`;
     }), "",
   ]),
+  "## Writer Bounds",
+  "",
+  "The CLI forwards these text fields to their API guards. Limits below were reviewed read-only; SQL seeding bypasses writer caps. Uncapped workspace context is writable through ordinary API/CLI calls within the transport's body limit. Polling message ingest also bypasses the webhook-only 256 KiB ingress cap.",
+  "",
+  writerTable,
 ];
-const report = `${directory}/MUL-398-c1-r1-route-probe.md`;
-const original = readFileSync(report, "utf8").split("\n## Isolated Column Matrix")[0]!;
+const report = `${directory}/MUL-398-c1-b.md`;
+const original = readFileSync(report, "utf8").split("\n## Probe Results")[0]!;
 const markdown = `${original}\n${content.join("\n")}\n`;
 writeFileSync(report, markdown);
 const escape = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-writeFileSync(`${directory}/MUL-398-c1-r1-route-probe.html`, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MUL-398 C-1 Route Probe</title><style>body{margin:24px;background:#fff;color:#202124;font:14px/1.5 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,monospace;max-width:1280px;margin:auto}</style><body><pre>${escape(markdown)}</pre></body></html>\n`);
+writeFileSync(`${directory}/MUL-398-c1-b.html`, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MUL-398 C-1 Ruling B</title><style>body{margin:24px;background:#fff;color:#202124;font:14px/1.5 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,monospace;max-width:1280px;margin:auto}</style><body><pre>${escape(markdown)}</pre></body></html>\n`);
 console.log(JSON.stringify({ scenarios: pairs.length, requestsPerVersion: requests,
   regressionObservations: regressions, affectedPatterns: affected.size,
   groups: groups.filter(group => group.regressions.length).map(group => ({ column: group.column, patterns: new Set(group.regressions.map(row => row.route)).size })) }));

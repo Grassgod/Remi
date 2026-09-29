@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { createMultiremiApp } from "@multiremi/api/server.js";
 import {
   createRequestMetricsMiddleware, currentDbReplyOrigin, DB_REPLY_TRANSITION_EXCEPTIONS,
-  DEFAULT_DB_REPLY_MAX_BYTES, resetRequestMetricsForTest, resolveDbReplyMaxBytes, resolveRequestMetricsOptions,
+  DEFAULT_DB_REPLY_MAX_BYTES, resetRequestMetricsForTest, resolveDbReplyEnforce, resolveDbReplyMaxBytes, resolveRequestMetricsOptions,
 } from "@multiremi/observability/request-metrics.js";
 import {
   PostgresReplyTooLargeError, PostgresSyncDatabase, postgresReplyMaxBytes,
@@ -15,6 +15,7 @@ import { taskMessagePageRows } from "@multiremi/store/task-message-pagination.js
 
 const MIB = 1_048_576;
 const originalLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+const originalEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
 const metrics = {
   enabled: true, slowRequestMs: 500, summaryIntervalMs: 60_000,
   summaryTopRoutes: 10, bufferCapacity: 256, role: "all" as const,
@@ -29,11 +30,48 @@ function defaultLimit(): void {
 afterEach(() => {
   if (originalLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = originalLimit;
+  if (originalEnforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+  else process.env.MULTIREMI_PG_REPLY_ENFORCE = originalEnforce;
   resetDbReplyLimitForTest();
   resetRequestMetricsForTest();
 });
 
 describe("MUL-398 C-1 effective reply limit", () => {
+  it("defaults enforcement off and warns with only the raw invalid switch", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const value of [undefined, "", "0", "1"]) {
+        expect(resolveDbReplyEnforce({ MULTIREMI_PG_REPLY_ENFORCE: value })).toBe(value === "1");
+        expect(warn).not.toHaveBeenCalled();
+      }
+      for (const value of ["2", "-1", "true", "1.0", " ", "1\n"]) {
+        warn.mockClear();
+        expect(resolveDbReplyEnforce({ MULTIREMI_PG_REPLY_ENFORCE: value })).toBe(false);
+        expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_ENFORCE", JSON.stringify(value)]]);
+      }
+      warn.mockClear();
+      process.env.MULTIREMI_PG_REPLY_ENFORCE = "bad\nvalue";
+      resetDbReplyLimitForTest();
+      expect(postgresReplyMaxBytes()).toBe(64 * MIB);
+      expect(postgresReplyMaxBytes()).toBe(64 * MIB);
+      expect(warn.mock.calls).toEqual([["[pg-bridge] invalid MULTIREMI_PG_REPLY_ENFORCE", JSON.stringify("bad\nvalue")]]);
+    } finally { warn.mockRestore(); }
+  });
+
+  it("uses eight-row readback everywhere in observe mode and clamps enforced values to the buffer", async () => {
+    defaultLimit();
+    const app = new Hono();
+    app.use("*", createRequestMetricsMiddleware(metrics));
+    app.get("/api/c1/nonexception", c => c.json({ bytes: postgresReplyMaxBytes(), rows: taskMessagePageRows(pgMarker) }));
+    delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+    resetDbReplyLimitForTest();
+    expect(await (await app.request("/api/c1/nonexception")).json()).toEqual({ bytes: 64 * MIB, rows: 8 });
+    process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
+    process.env.MULTIREMI_PG_REPLY_MAX_BYTES = String(80 * MIB);
+    resetDbReplyLimitForTest();
+    expect(await (await app.request("/api/c1/nonexception")).json()).toEqual({ bytes: 64 * MIB, rows: 8 });
+  });
+
   it("warns once per resolution with only the invalid override as variable data", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -133,6 +171,46 @@ if (adminUrl) {
 }
 
 describe.skipIf(!pgAvailable)("MUL-398 C-1 real PostgreSQL", () => {
+  it("observes ordinary 9 MiB replies by default and rejects the same SQL only when enforced", async () => {
+    defaultLimit();
+    const db = new PostgresSyncDatabase(adminUrl!);
+    const lines: Array<Record<string, unknown>> = [];
+    const log = spyOn(console, "log").mockImplementation(line => {
+      try { lines.push(JSON.parse(String(line))); } catch { /* Only structured guardrails matter. */ }
+    });
+    try {
+      for (const enabled of [true, false]) {
+        const app = new Hono();
+        app.use("*", createRequestMetricsMiddleware({ ...metrics, enabled }));
+        app.get("/api/c1/nonexception", c => {
+          const row = db.prepare("SELECT repeat('x', ?) AS body").get(9 * MIB) as { body: string };
+          return c.json({ bytes: row.body.length });
+        });
+        app.onError((error, c) => c.json({ error: error.message }, 500));
+        for (const enforce of [undefined, "", "0", "1"]) {
+          if (enforce === undefined) delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
+          else process.env.MULTIREMI_PG_REPLY_ENFORCE = enforce;
+          resetDbReplyLimitForTest();
+          for (const method of ["GET", "HEAD"]) {
+            lines.length = 0;
+            const reply = await app.request("/api/c1/nonexception", { method });
+            expect(reply.status, `${method} enforce=${String(enforce)} metrics=${enabled}`).toBe(enforce === "1" ? 500 : 200);
+            if (enforce === "1") {
+              expect(lines.filter(line => line.event === "api_db_reply_rejected")).toHaveLength(1);
+              if (enabled) expect(reply.headers.get("Server-Timing")).toContain("dbp;dur=0.0");
+            } else {
+              expect(lines.filter(line => line.event === "api_db_reply_rejected")).toHaveLength(0);
+              expect(lines.find(line => line.event === "api_large_db_reply")).toMatchObject({
+                method, route: "/api/c1/nonexception", exempt: false, enforced: false, limit_bytes: 8 * MIB,
+              });
+              if (method === "GET") expect(await reply.json()).toEqual({ bytes: 9 * MIB });
+            }
+          }
+        }
+      }
+    } finally { log.mockRestore(); db.close(); }
+  });
+
   it("keeps canonical and Feishu message reads above 8 MiB available", async () => {
     defaultLimit();
     const admin = new Bun.SQL(adminUrl!, { max: 1 });

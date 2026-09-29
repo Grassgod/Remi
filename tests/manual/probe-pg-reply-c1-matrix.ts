@@ -35,6 +35,7 @@ for (const [index, column] of selected.entries()) {
   const temporary = `${output}.part`;
   const cmd = [process.execPath, probe, "--scenario", column, "--out", temporary];
   if (rootIndex >= 0) cmd.push("--root", process.argv[rootIndex + 1]!);
+  if (process.argv.includes("--enforce")) cmd.push("--enforce");
   const child = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
   const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   if (status !== 0) {
@@ -46,6 +47,7 @@ for (const [index, column] of selected.entries()) {
   const previous = results.findIndex(row => row.column === column);
   if (previous < 0) results.push({ column, ...result });
   else results[previous] = { column, ...result };
+  writeFileSync(output, JSON.stringify(results, null, 2) + "\n");
   console.log(`${index + 1}/${selected.length} ${column}: ${stdout.trim().split("\n").at(-1)}`);
 }
 results.sort((a, b) => columns.indexOf(a.column) - columns.indexOf(b.column));

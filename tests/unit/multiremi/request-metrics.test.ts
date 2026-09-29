@@ -737,7 +737,8 @@ describe.skipIf(!pgAvailable)("MUL-386 bridge reply guardrails", () => {
         .find((line) => line.event === "api_large_db_reply");
       expect(event).toBeDefined();
       // Exact key set: no SQL text, no params, no real path, no query string.
-      expect(Object.keys(event!).sort()).toEqual(["bytes", "event", "method", "route", "ts"]);
+      expect(Object.keys(event!).sort()).toEqual(["bytes", "enforced", "event", "exempt", "limit_bytes", "method", "route", "ts"]);
+      expect(event).toMatchObject({ limit_bytes: 8_388_608, exempt: false, enforced: true });
       expect(event!.route).toBe("/api/leaky/:id/reply");
       expect(event!.method).toBe("GET");
       expect(Number(event!.bytes)).toBeGreaterThan(1_048_576);

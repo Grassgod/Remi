@@ -12,13 +12,13 @@
 import { getDb } from "@shared/db/index.js";
 import { markSqliteDialect } from "./sqlite.js";
 import {
-  currentDbReplyOrigin,
-  DB_REPLY_TRANSITION_EXCEPTIONS,
+  currentDbReplyPolicy,
   emitDbReplyRejected,
   emitLargeDbReply,
   recordDbParse,
   recordDbQuery,
-  resolveDbReplyMaxBytes,
+  resetDbReplyPolicyForTest,
+  type DbReplyPolicy,
 } from "../../observability/request-metrics.js";
 import {
   lockOrderSentinelNoteNumberLock,
@@ -347,26 +347,19 @@ export class PostgresReplyTooLargeError extends Error {
  * `process.env` lookups are not free on that path. Tests that change the limit
  * call `resetDbReplyLimitForTest`.
  */
-let cachedReplyMaxBytes: number | null = null;
-
-function dbReplyMaxBytes(): number {
-  if (cachedReplyMaxBytes === null) cachedReplyMaxBytes = resolveDbReplyMaxBytes();
-  return cachedReplyMaxBytes;
+function effectiveReplyMaxBytes(policy: DbReplyPolicy): number {
+  if (policy.exempt || !policy.enforced || policy.limitBytes === 0) return RESULT_BUFFER_BYTES;
+  return Math.min(policy.limitBytes, RESULT_BUFFER_BYTES);
 }
 
 /** The effective ceiling shared by the bridge and bounded-read callers. */
 export function postgresReplyMaxBytes(): number {
-  const limit = dbReplyMaxBytes();
-  const { method, route } = currentDbReplyOrigin();
-  // Hono dispatches HEAD through GET handlers; the origin keeps the wire method for logs.
-  const dispatchedMethod = method === "HEAD" ? "GET" : method;
-  if (DB_REPLY_TRANSITION_EXCEPTIONS.has(`${dispatchedMethod} ${route}`)) return RESULT_BUFFER_BYTES;
-  return limit > 0 ? Math.min(limit, RESULT_BUFFER_BYTES) : RESULT_BUFFER_BYTES;
+  return effectiveReplyMaxBytes(currentDbReplyPolicy());
 }
 
 /** Test seam: drop the cached limit so the next query re-reads the environment. */
 export function resetDbReplyLimitForTest(): void {
-  cachedReplyMaxBytes = null;
+  resetDbReplyPolicyForTest();
 }
 
 class PgBridge {
@@ -405,12 +398,13 @@ class PgBridge {
       // TextDecoder + JSON.parse cost, and the warning line exists so the size is
       // visible in logs without turning the request into a failure.
       if (measured) {
-        const limit = postgresReplyMaxBytes();
+        const policy = currentDbReplyPolicy();
+        const limit = effectiveReplyMaxBytes(policy);
         if (len > limit) {
-          emitDbReplyRejected(len, limit);
+          if (policy.enforced) emitDbReplyRejected(len, limit);
           throw new PostgresReplyTooLargeError(len, limit);
         }
-        emitLargeDbReply(len);
+        emitLargeDbReply(len, policy);
       }
       const parseStartedAt = performance.now();
       try {

@@ -80,19 +80,20 @@ Server-Timing: total;dur=12.3, db;dur=4.5, dbp;dur=0.2, dbq;desc="7", dbb;desc="
 
 **PG 桥回包护栏**（MUL-386 C.1）。同步桥的单次回包体积直接决定主线程被阻塞多久，所以除了慢请求日志之外，桥本身对超体积回包有两条独立规则：
 
-- 单次回包 `len > 1 MB` 时输出一行 `api_large_db_reply`，只带路由模式、方法与字节数：
+- 单次回包 `len > 1 MiB` 时输出一行 `api_large_db_reply`，不新增事件、不限频；带路由模式、方法、字节数以及配置阈值、例外与拒绝模式：
 
 ```json
-{"event":"api_large_db_reply","ts":"2026-09-26T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257}
+{"event":"api_large_db_reply","ts":"2026-09-29T09:12:03.771Z","method":"GET","route":"/api/knowledge/submissions","bytes":12085257,"limit_bytes":8388608,"exempt":true,"enforced":false}
 ```
 
-- 单次回包超过硬上限时在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出一行 `api_db_reply_rejected`（字段同上，另加 `max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。
-- **默认 8 MiB，已执行翻转**（MUL-398 C-1，依据 2026-09-28 贺华杰的授权）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置或为空时是 `8388608`；显式 `0` 是关闭可配置上限的应急开关。非整数、负数或不安全整数回落到默认值，并在缓存解析时输出一行告警；除 env 原值外不带可变信息。显式非负整数继续按字节解释。物理共享缓冲仍为 64 MiB，`0` 不扩大它。
-- `bun test` preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）剥离宿主 `MULTIREMI_*` 后仍设置 `MULTIREMI_PG_REPLY_MAX_BYTES=8388608`。生产默认与测试默认现在相等；[hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 和架构守卫断言相等，不能删除守卫。
-- 过渡例外集中在 [request-metrics.ts](../../packages/server/src/observability/request-metrics.ts) 的 `DB_REPLY_TRANSITION_EXCEPTIONS`，键为 `METHOD route-pattern`，与 `currentDbReplyOrigin()` 一致；命中时有效上限为 `postgres.ts` 的 `RESULT_BUFFER_BYTES`（64 MiB）。表外 HTTP 请求默认 8 MiB。`postgresReplyMaxBytes()` 和桥拒绝判断使用同一个有效值，MUL-462 分页也使用它；env 解析缓存不变，每次只增加一次上下文读取和一次 Set 查找。关闭 request metrics 仍保留路由上下文，不会把 HTTP 请求误当后台。
+- 只有拒绝模式下，单次回包超过有效上限才在 `TextDecoder`/`JSON.parse` **之前**抛错，并输出 `api_db_reply_rejected`（`event/ts/method/route/bytes/max_bytes`）。消息形如 `postgres reply of N bytes exceeds M bytes bridge limit; paginate or project columns`。64 MiB 物理缓冲限制始终保留，worker 对超物理上限的错误不等于配置阈值拒绝。
+- **阈值默认 8 MiB，拒绝默认关闭**（MUL-398 C-1，2026-09-28 贺华杰授权及 Senior 裁决 B `cmt_q2m2lomd48pm`）：`MULTIREMI_PG_REPLY_MAX_BYTES` 未设置或为空时是 `8388608`；显式 `0` 关闭配置阈值。非整数、负数或不安全整数回落默认，在缓存解析时输出一行告警；除 env 原值外不带可变信息。显式非负整数按字节解释。
+- `MULTIREMI_PG_REPLY_ENFORCE` 未设置、空或 `0` 时只告警；`1` 才拒绝表外超阈值回包。非法值回落到只告警，并输出一行只带原值的告警。C-2 翻转代码默认值需贺华杰当次授权，C-1 不在生产强制任何 HTTP 子集。
+- `bun test` preload（[hermetic-env.ts](../../tests/setup/hermetic-env.ts)）剥离宿主 `MULTIREMI_*` 后设置 `MAX_BYTES=8388608`、`ENFORCE=1`，让无界读在 CI 暴露。阈值默认两边相等，拒绝模式测试显式开启；[hermetic-env-policy.ts](../../tests/setup/hermetic-env-policy.ts) 和架构守卫分别断言这两项，不能删除守卫。
+- 过渡例外集中在 [request-metrics.ts](../../packages/server/src/observability/request-metrics.ts) 的 `DB_REPLY_TRANSITION_EXCEPTIONS`，键为 `METHOD route-pattern`，HEAD 按 Hono 分发使用 GET key，日志仍保留 HEAD。`exempt` 表示命中集中表（含独立 `<background>` 项），`enforced` 表示开关模式，`limit_bytes` 始终是配置阈值。有效上限：`exempt || !enforced || limit_bytes == 0` 时为 64 MiB，否则为 `min(limit_bytes, 64 MiB)`。`postgresReplyMaxBytes()`、桥拒绝和 MUL-462 分页共用该值；生产只告警时每页保持 8 行。配置缓存，每次查询只读一次上下文并查一次 Set；关闭指标仍保留路由上下文。
 - 两条日志与 `api_slow_request` 共用同一套脱敏口径：只有路由模式、方法、字节数，没有 SQL 文本、参数、原始 path 或 query。没有请求上下文的后台任务记为 `<background>`。
 - 硬上限的错误消息会向上冒泡，可能进入 HTTP 响应体，因此 `PgBridge.exec` 不为它拼接 SQL 片段（其它错误仍会追加 SQL 前 400 字符用于排查）。
-- 原来「等待 MUL-402 和一周观测后翻转」的条件已被上述授权替换，C-1 代码启用默认并保留过渡例外；C-2 负责逐条收回，D 的 Bun UA shim 不属于 C-1。209 发布当前冻结在 v0.2.83，C-1 待发布恢复后的首个版本上线，不能把代码默认值当作生产现状。
+- 原来「等待 MUL-402 和一周观测后做 C」已被授权替换。C-1 执行阈值翻转和观测机制，拒绝默认翻转挪到 C-2：读路径投影或写入限界后，生产单次数据至少三天（含工作日高峰）满足 <6 MiB，再申请贺华杰当次授权。D 的 Bun UA shim 不属于 C-1。发布冻结在 v0.2.83，不把代码默认值当作生产现状。
 
 **例外来源与收回**：Explorer 的 MUL-398 `cmt_5ncm70lxe805` 确认 209 为 v0.2.83，没有单次回包埋点。零条事件不能作为安全证据。例外来源是 **18 条慢请求总 DB 字节 ≥6 MiB 的保守超集 ∪ 代码审计 ∪ `<background>` ∪ daemon POST messages / HTTP peer**。慢请求只覆盖 >500ms，`db_bytes` 是所有 SQL 回包的总和，不能当作单次回包；快请求由审计兜住。发布冻结期间合入前以 v0.2.83 慢请求总量再核对，含单次埋点的版本实际部署后再按路由逐条收回。
 
@@ -107,11 +108,11 @@ repository-wikis 的 A/A2（`d905961b`、`d6714966`）已在 main、晚于 v0.2.
 
 `advanceScheduledTargetRuns` 也可由 canonical trigger、三个 multiremi run/trigger 别名及 repository wiki build 触发；这些 HTTP 例外的收回也要求 queued 读有界。请求内未等待完成的异步工作会继承该请求的 ALS 上下文，同一函数由 timer 触发时则为 `<background>`；C-2 要按触发方看数据。后台收回清单还包括 SCM/issue-title/messaging scheduler、outbound-dispatcher sweep、task-capability-monitor、repository-wiki storage job、WS 消息处理和启动迁移，不能只修 queued run 就移除整个后台例外。归档/trace 正文在外部文件存储；SQL 归档 metadata 无字节上限，相关归档读与回读同样保守进表。
 
-回滚 C-1 合并用 `git revert -m 1 <merge>`；应急可设 `MULTIREMI_PG_REPLY_MAX_BYTES=0`，209 配置变更由贺华杰决定。
+回滚 C-1 合并用 `git revert -m 1 <merge>`；若有人显式开启拒绝，应急设 `MULTIREMI_PG_REPLY_ENFORCE=0` 或 `MULTIREMI_PG_REPLY_MAX_BYTES=0`。物理上限仍为 64 MiB，209 配置变更由贺华杰决定。
 
 新增路由可能通过鉴权、回读或调用链触及项目/agent 指令、skill 正文等大列，慢请求日志不能覆盖快请求。变更这些路径时运行 `env -u MULTIREMI_TOKEN bun tests/manual/audit-pg-reply-c1-callers.ts --list-missing`；脚本从运行时 Hono 路由和 schema 扫描出保守候选。分类尚未完成，架构测试目前只守卫清单与扫描可执行，候选差异只输出报告；不得把绿灯当作例外完整性证明。真实 PG 全路由 GET/HEAD 对照入口是 `tests/manual/probe-pg-reply-c1-routes.ts`。Hono 的 HEAD 复用 GET handler，例外查找也按 GET key 计算有效上限。静态分析与合成样本都不能代替 C-2 的生产单次回包数据。
 
-MUL-479 的 context-window 写路由会经 `gatewayReasoningLevels` 读取 `multiremi_gateway_models.models` JSON 快照；该单行没有 SQL 字节上限。同步 main 后将 `getGatewayModels` 纳入审计种子，新增路由及九条既有调用路径共十条进过渡表。QA r1 又授权补入 15 条 messaging/Feishu 路由，当前为 418 条 HTTP + 独立 `<background>`；逐条依据见常量注释及 [同步审计](../../reports/performance/MUL-398-c1-main-sync-2026-09-29.md)。全路由实测仍发现表外拒绝，策略待 Senior 裁决；不把手动检查或 CI 绿灯当作现有页面无回归的证明。写入路径限制、逐列状态/单次字节数和实测范围见 [存档报告](../../reports/performance/MUL-398-c1-r1-route-probe.md)。C-2 在快照读有界且取得单次回包数据后收回。
+MUL-479 的 context-window 写路由会经 `gatewayReasoningLevels` 读取无 SQL 字节上限的 `multiremi_gateway_models.models`。其调用路径和 QA r1 授权的 15 条 messaging/Feishu 已入表；表冻结在 `84101310` 的 418 条 HTTP + 独立 `<background>`。21 条 workspace context、8 条 source allowlist 以及 MUL-487 的 human request card 整行读均不再扩表，作为 C-2 的列级风险。推荐 repo 投影掉不需要的大列或给写入限界。全路由门禁运行两遍：默认只告警与 main GET/HEAD 状态码差异须为 0；`ENFORCE=1` 输出按根因列分组的拦截清单，作为 C-2 种子，不是例外表。脚本、最大单次字节、非成功/跳过原因和写入限制见 [实测报告](../../reports/performance/MUL-398-c1-r1-route-probe.md)。
 
 **环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 关闭指标采集、指标日志和响应头；PG 回包护栏与其日志仍独立生效）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 8388608 = 8 MiB**；未设置/空串使用默认，非法值告警后回落；显式 `0` 关闭可配置上限，集中例外保留 64 MiB）。
 

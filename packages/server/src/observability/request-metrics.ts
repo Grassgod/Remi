@@ -377,14 +377,15 @@ export function recordDbParse(parseMs: number): void {
 export const DB_REPLY_WARN_BYTES = 1_048_576;
 
 /**
- * Production and test default since MUL-398 C-1 (2026-09-28 authorization).
- * Transition exceptions retain the existing 64-MiB buffer ceiling until C-2.
- * An explicit environment override of 0 disables the configurable guard.
+ * Production and test threshold since MUL-398 C-1 (2026-09-28 authorization).
+ * Production observes this threshold; the hermetic suite explicitly enforces it.
+ * C-2 needs fresh authorization before changing the enforcement default.
+ * An explicit override of 0 disables the configurable threshold.
  */
 export const DEFAULT_DB_REPLY_MAX_BYTES = 8_388_608;
 
 /**
- * Kept for callers and the hermetic preload: recommendation and default agree.
+ * Recommendation and production/test threshold agree; enforcement is separate.
  */
 export const RECOMMENDED_DB_REPLY_MAX_BYTES = DEFAULT_DB_REPLY_MAX_BYTES;
 
@@ -865,6 +866,39 @@ export function resolveDbReplyMaxBytes(env: Record<string, string | undefined> =
   return parsed;
 }
 
+/** Production observes replies until C-2 is authorized to enable rejection. */
+export function resolveDbReplyEnforce(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = env.MULTIREMI_PG_REPLY_ENFORCE;
+  if (raw === undefined || raw === "" || raw === "0") return false;
+  if (raw === "1") return true;
+  console.warn("[pg-bridge] invalid MULTIREMI_PG_REPLY_ENFORCE", JSON.stringify(raw));
+  return false;
+}
+
+export interface DbReplyPolicy {
+  limitBytes: number;
+  exempt: boolean;
+  enforced: boolean;
+}
+
+// Resolve configuration once; only origin and exception membership vary per SQL.
+let cachedDbReplyConfig: { limitBytes: number; enforced: boolean } | null = null;
+
+export function currentDbReplyPolicy(): DbReplyPolicy {
+  const config = cachedDbReplyConfig ??= {
+    limitBytes: resolveDbReplyMaxBytes(), enforced: resolveDbReplyEnforce(),
+  };
+  const { method, route } = currentDbReplyOrigin();
+  // Hono dispatches HEAD through GET; keep the wire method in observability logs.
+  const dispatchedMethod = method === "HEAD" ? "GET" : method;
+  return { ...config, exempt: DB_REPLY_TRANSITION_EXCEPTIONS.has(`${dispatchedMethod} ${route}`) };
+}
+
+/** Test seam: re-resolve configuration after a test changes the environment. */
+export function resetDbReplyPolicyForTest(): void {
+  cachedDbReplyConfig = null;
+}
+
 /**
  * Where the reply that is being measured came from.
  *
@@ -881,15 +915,19 @@ export function currentDbReplyOrigin(): { method: string; route: string } {
  * One line per oversized bridge reply. Never includes SQL text, parameters, the
  * real path, or the query string — only the route pattern, the verb, and a size.
  */
-export function emitLargeDbReply(bytes: number): void {
+export function emitLargeDbReply(bytes: number, policy?: DbReplyPolicy): void {
   if (!(bytes > DB_REPLY_WARN_BYTES)) return;
   const { method, route } = currentDbReplyOrigin();
+  const { limitBytes, exempt, enforced } = policy ?? currentDbReplyPolicy();
   emitJsonLine({
     event: "api_large_db_reply",
     ts: new Date().toISOString(),
     method,
     route,
     bytes,
+    limit_bytes: limitBytes,
+    exempt,
+    enforced,
   });
 }
 

@@ -12,6 +12,8 @@ if (!output || !adminUrl || !["127.0.0.1", "localhost", "[::1]"].includes(new UR
   throw new Error("A loopback PostgreSQL target and --out are required");
 }
 delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+if (process.argv.includes("--enforce")) process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
+else delete process.env.MULTIREMI_PG_REPLY_ENFORCE;
 
 const { createMultiremiApp } = await import(`${sourceRoot}/packages/server/src/api/server.ts`);
 const { MultiremiStore } = await import(`${sourceRoot}/packages/server/src/store/store.ts`);
@@ -299,6 +301,8 @@ try {
             : response.status === 401 || response.status === 403 ? "requires scoped actor"
             : response.status === 400 ? "fixture lacks required request fields"
             : response.status === 405 ? "route does not accept this method"
+            : response.status === 426 ? "requires a WebSocket upgrade"
+            : response.status === 503 ? "integration configuration absent"
             : response.status >= 500 ? activeRejected ? "PG reply rejected" : "handler error in fixture"
             : response.status >= 300 ? "route redirects or has another non-2xx result" : "requested",
           bytes });
@@ -306,6 +310,7 @@ try {
         rows.push({ method, route, status: null, reason: "request failed or timed out", bytes: 0, maxReplyBytes: activeMaxReplyBytes });
       }
     }
+    if (rows.length % 64 === 0) originalLog(JSON.stringify({ requested: rows.length, total: keys.length * 2 }));
   }
   console.log = originalLog;
   writeFileSync(output, JSON.stringify({ routeCount: keys.length, rows }, null, 2) + "\n");
