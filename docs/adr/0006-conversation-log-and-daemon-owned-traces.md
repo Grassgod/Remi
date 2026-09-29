@@ -192,7 +192,11 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    of the blob, so the GC and hard-delete barriers are unchanged. Archives gain a
    subject (`issue`, `chat`, `task`) and a `format`; ingest validates the index
    against the central directory and writes the task pointers in the same
-   transaction that marks the row `ready`. The writer uses `lstat`-based
+   transaction that marks the row `ready`. A pointer moves by the rule of its
+   source and never across sources: within a source a larger or equal `head`
+   wins, a daemon archive replaces a backfilled one whatever the heads, and a
+   backfilled archive never replaces a daemon one, because old-table seqs and
+   daemon trace seqs are different axes (MUL-432). The writer uses `lstat`-based
    traversal so macOS daemons can archive.
 7. **v1 rows are left untouched.** Backfilled trace archives are additional
    `ready` rows (`metadata.kind = "trace_backfill"`), not supersessions, because

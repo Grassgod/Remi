@@ -158,7 +158,8 @@ function task(id: string, extra: Partial<Parameters<typeof insertSyntheticTask>[
  * All four subject kinds and the edges the plan has to classify: sparse seq,
  * a content row larger than the live writer would keep, a truncated input, a
  * NUL escape in meta, a task with no rows, a running task, a deleting Issue, a
- * Chat that no longer exists, a `lost` pointer and a newer daemon archive.
+ * Chat that no longer exists, a `lost` pointer and two tasks a daemon archive
+ * already owns: the cross-switch tasks `WORLD_CROSS_SWITCH` acknowledges.
  */
 function seedWorld(db: SqlDatabase): void {
   seedBase(db);
@@ -207,6 +208,9 @@ function seedWorld(db: SqlDatabase): void {
   insertSyntheticMessages(db, "tsk_gone", rows([1]));
 }
 
+/** `tsk_old_a` and `tsk_old_b`, whose pointers are at a daemon archive. */
+const WORLD_CROSS_SWITCH = 2;
+
 interface World {
   opened: OpenedStore;
   db: SqlDatabase;
@@ -216,7 +220,12 @@ interface World {
   run(overrides?: Partial<TraceBackfillRunOptions>): ReturnType<typeof runTraceBackfill>;
 }
 
-async function withWorld(backend: StoreBackend, seed: (db: SqlDatabase) => void, body: (world: World) => Promise<void>) {
+async function withWorld(
+  backend: StoreBackend,
+  seed: (db: SqlDatabase) => void,
+  body: (world: World) => Promise<void>,
+  defaults: Partial<TraceBackfillRunOptions> = seed === seedWorld ? { crossSwitchAck: WORLD_CROSS_SWITCH } : {},
+) {
   const opened = await backend.open();
   const root = await mkdtemp(join(tmpdir(), "m432-bf-"));
   try {
@@ -236,6 +245,7 @@ async function withWorld(backend: StoreBackend, seed: (db: SqlDatabase) => void,
         store: opened.store,
         service,
         log: (line) => logs.push(line),
+        ...defaults,
         ...overrides,
       }),
     };
@@ -334,7 +344,17 @@ for (const backend of backends) {
         expect(report.mode).toBe("dry-run");
         expect(report.execution).toBeNull();
         const plan = report.plan;
-        expect(plan.stops).toEqual([]);
+        // The only stop is the one an operator acknowledges with --cross-switch-ack.
+        expect(plan.stops).toEqual([expect.objectContaining({
+          code: "cross_switch_tasks", count: 2, samples: ["tsk_old_a", "tsk_old_b"],
+        })]);
+        expect(plan.cross_switch).toEqual({
+          cutoff_evaluated: true,
+          count: 2,
+          by_reason: { ended_at_or_after_cutoff: 0, ended_at_unknown: 0, daemon_archive_pointer: 2 },
+          task_ids: ["tsk_old_a", "tsk_old_b"],
+          ack: null,
+        });
         expect(plan.groups.chat).toMatchObject({ subjects: 1, traced_tasks: 1, rows: 3, none_tasks: 1 });
         expect(plan.groups.task).toMatchObject({ subjects: 2, traced_tasks: 2, rows: 5, none_tasks: 0 });
         expect(plan.groups.issue_without_archive).toMatchObject({ subjects: 1, traced_tasks: 2, rows: 5, none_tasks: 1 });
@@ -390,13 +410,21 @@ for (const backend of backends) {
         expect(report.execution!.issue_without_archive).toMatchObject({
           subjects: 1, written: 1, archives_created: 1, pointers: 1, none_pointers: 1,
         });
-        // tsk_old_b stays on the daemon archive, which reaches further.
-        expect(report.execution!.issue_with_archive).toMatchObject({ subjects: 1, archives_created: 1, pointers: 1 });
+        // tsk_old_a and tsk_old_b stay on the daemon archive whatever the heads (1 and 9
+        // against 2): a backfill member never replaces a daemon archive. Their members
+        // are still written, as a prefix backup, and their cards are left alone.
+        expect(report.execution!.issue_with_archive).toMatchObject({
+          subjects: 1, archives_created: 1, pointers: 0, pointers_kept: { daemon_owned: 2 },
+          turn_cards_skipped_cross_switch: 2,
+        });
+        expect(world.logs).toContain("pointer kept: tsk_old_a stays on archive/daemon sar_daemon_old (daemon_owned)");
         for (const group of TRACE_BACKFILL_GROUPS) {
           expect(report.reconcile[group]).toMatchObject({ ok: true, mismatch_total: 0 });
         }
         expect(report.reconcile.issue_without_archive!.informational.pointer_kept_lost).toBe(1);
-        expect(report.reconcile.issue_with_archive!.informational.pointer_moved_to_newer_archive).toBe(1);
+        expect(report.reconcile.issue_with_archive!.informational).toMatchObject({
+          cross_switch_daemon_owned: 2, turn_card_skipped_cross_switch: 2,
+        });
 
         const { store } = world.opened;
         const [chatArchive] = backfillArchives(world, "chat", "chs_bf");
@@ -415,10 +443,11 @@ for (const backend of backends) {
         expect(store.getTaskTrace("tsk_chat_b")).toMatchObject({ location: "none" });
         expect(store.getTaskTrace("tsk_issue_none")).toMatchObject({ location: "none" });
         expect(store.getTaskTrace("tsk_issue_b")).toMatchObject({ location: "lost" });
-        expect(store.getTaskTrace("tsk_old_a")).toMatchObject({
-          location: "archive", archiveId: backfillArchives(world, "issue", "iss_old")[0]!.id, headSeq: 2,
-        });
-        expect(store.getTaskTrace("tsk_old_b")).toMatchObject({ location: "archive", archiveId: "sar_daemon_old" });
+        expect(store.getTaskTrace("tsk_old_a")).toMatchObject({ location: "archive", archiveId: "sar_daemon_old", headSeq: 1 });
+        expect(store.getTaskTrace("tsk_old_b")).toMatchObject({ location: "archive", archiveId: "sar_daemon_old", headSeq: 9 });
+        expect(store.listTraceBackfillTasks("issue", "iss_old").map((row) => [row.taskId, row.crossSwitch])).toEqual([
+          ["tsk_old_a", true], ["tsk_old_b", true],
+        ]);
         expect(store.getTaskTrace("tsk_issue_run")).toBeNull();
         expect(store.getTaskTrace("tsk_gone")).toBeNull();
 
@@ -574,23 +603,27 @@ for (const backend of backends) {
         await world.run();
         world.db.run("UPDATE multiremi_task_messages SET content = ? WHERE task_id = ? AND seq = ?", "edited", "tsk_chat_a", 2);
         world.db.run("DELETE FROM multiremi_task_messages WHERE task_id = ? AND seq = ?", "tsk_old_a", 2);
+        world.db.run("DELETE FROM multiremi_task_messages WHERE task_id = ? AND seq = ?", "tsk_one", 3);
         world.db.run("UPDATE multiremi_task_traces SET location = 'daemon' WHERE task_id = ?", "tsk_issue_none");
         const report = await reconcileTraceBackfill(world.db, { archiveRoot: world.root, oldTableStoppedAt: CUTOFF });
         expect(report.ok).toBe(false);
-        // The deleted row moves tsk_old_a's head and count, so its trailer, index entry and
-        // pointer disagree too; both subjects' task and subject digests are stale.
+        // Each deleted row moves its task's head and count, so the trailer and index entry
+        // disagree too: tsk_old_a's backfill member is checked although the daemon owns the
+        // task, and tsk_one's pointer disagrees as well. Three subjects' task and subject
+        // digests are stale.
         expect(report.mismatches).toEqual({
-          seq_set: 1,
+          seq_set: 2,
           line_digest: 1,
-          event_count: 1,
+          event_count: 2,
           header: 0,
-          trailer: 1,
-          index: 1,
+          trailer: 2,
+          index: 2,
           pointer: 2,
+          pointer_owned_by_daemon_unexpected: 0,
           member_missing: 0,
           member_unreadable: 0,
           archive_missing: 0,
-          progress: 4,
+          progress: 6,
           turn_card: 0,
         });
         expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
@@ -598,6 +631,9 @@ for (const backend of backends) {
         }));
         expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
           category: "pointer", task_id: "tsk_issue_none", expected: "none", actual: "daemon",
+        }));
+        expect(report.samples.mismatch).toContainEqual(expect.objectContaining({
+          category: "pointer", task_id: "tsk_one", reason: "pointer disagrees with the index entry",
         }));
       });
     }, TIMEOUT);

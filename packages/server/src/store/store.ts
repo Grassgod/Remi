@@ -111,10 +111,13 @@ import {
   type SessionArchiveWorkspaceUsage,
   type TraceBackfillCommitInput,
   type TraceBackfillCommitResult,
+  type TracePointerCompletionResult,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
   TaskTracesRepo,
   type TaskTraceArchivePointer,
+  type TaskTracePointerSource,
+  type TaskTracePointerWriteResult,
 } from "@multiremi/store/repos/task-traces-repo.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
 import {
@@ -883,7 +886,7 @@ runMigrations(this.db);
     attemptCount: number,
     uploadedSizeBytes: number,
     pointers: readonly TaskTraceArchivePointer[],
-  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+  ): TracePointerCompletionResult | null {
     return this.sessionArchives.completeWithTracePointers(
       id,
       runtimeId,
@@ -938,8 +941,11 @@ runMigrations(this.db);
     return this.taskTraces.listForArchive(archiveId);
   }
 
-  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number {
-    return this.taskTraces.writeArchivePointers(pointers);
+  writeTaskTraceArchivePointers(
+    pointers: readonly TaskTraceArchivePointer[],
+    source: TaskTracePointerSource,
+  ): TaskTracePointerWriteResult {
+    return this.taskTraces.writeArchivePointers(pointers, source);
   }
 
   clearTaskTraceArchivePointers(archiveId: string): number {

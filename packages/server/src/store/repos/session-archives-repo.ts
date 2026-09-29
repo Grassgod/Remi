@@ -16,7 +16,10 @@ import {
   type SessionArchiveRetryPolicy,
 } from "@multiremi/session-archive/retry-policy.js";
 import type { StoreContext } from "@multiremi/store/context.js";
-import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type {
+  TaskTraceArchivePointer,
+  TaskTracePointerRejection,
+} from "@multiremi/store/repos/task-traces-repo.js";
 
 type Row = Record<string, unknown>;
 
@@ -26,6 +29,23 @@ export class SessionArchiveTraceOwnershipError extends Error {
   constructor(taskId: string) {
     super(`trace task ${taskId} does not belong to this archive subject and Runtime`);
     this.name = "SessionArchiveTraceOwnershipError";
+  }
+}
+
+/**
+ * A daemon member was refused by something other than a longer daemon archive
+ * or a `lost` pointer. The per-source swap rule lets a daemon member replace a
+ * `trace_backfill` archive unconditionally, so this means the rule itself was
+ * bypassed; the completion is rolled back instead of leaving the backfill's
+ * prefix in front of the daemon's trace.
+ */
+export class SessionArchivePointerInvariantError extends Error {
+  constructor(readonly rejections: readonly TaskTracePointerRejection[]) {
+    super(`daemon trace pointers refused by the swap rule: ${rejections
+      .map((rejection) => `${rejection.taskId} (${rejection.reason}, current ${rejection.currentLocation}`
+        + `${rejection.currentSource ? `/${rejection.currentSource}` : ""})`)
+      .join(", ")}`);
+    this.name = "SessionArchivePointerInvariantError";
   }
 }
 
@@ -62,8 +82,17 @@ export interface TraceBackfillCommitInput {
 
 export interface TraceBackfillCommitResult {
   archive: MultiremiSessionArchive | null;
-  /** Pointers the swap rule accepted; a newer daemon archive keeps its own. */
+  /** Pointers the swap rule accepted; a daemon archive keeps its own. */
   pointerCount: number;
+  /** Every member the swap rule refused, with the pointer it kept. */
+  rejectedPointers: TaskTracePointerRejection[];
+}
+
+/** A daemon upload that went `ready`; refused members stay on their pointer. */
+export interface TracePointerCompletionResult {
+  archive: MultiremiSessionArchive;
+  pointerCount: number;
+  rejectedPointers: TaskTracePointerRejection[];
 }
 
 function parseMetadata(value: unknown): Record<string, unknown> {
@@ -535,6 +564,12 @@ export class SessionArchivesRepo {
    * a `ready` archive whose pointer table is missing, and a pointer must never
    * outlive the archive that backs it. The archive row is the transaction's
    * guard, so a superseded attempt writes neither half.
+   *
+   * A member refused by a longer daemon archive or a `lost` pointer leaves the
+   * archive `ready` and comes back in `rejectedPointers`. A refusal by a
+   * `trace_backfill` archive (or any other state) cannot happen under the swap
+   * rule, so it throws {@link SessionArchivePointerInvariantError} and rolls the
+   * whole completion back.
    */
   completeWithTracePointers(
     id: string,
@@ -542,7 +577,7 @@ export class SessionArchivesRepo {
     attemptCount: number,
     uploadedSizeBytes: number,
     pointers: readonly TaskTraceArchivePointer[],
-  ): { archive: MultiremiSessionArchive; pointerCount: number } | null {
+  ): TracePointerCompletionResult | null {
     return this.withWritableArchive(id, runtimeId, () => {
       const now = nowIso();
       const result = this.ctx.db.run(
@@ -588,8 +623,11 @@ export class SessionArchivesRepo {
           throw new SessionArchiveTraceOwnershipError(pointer.taskId);
         }
       }
-      const pointerCount = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers);
-      return { archive, pointerCount };
+      const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(pointers, "daemon");
+      const violations = written.rejected.filter((rejection) =>
+        rejection.reason !== "newer_head_same_source" && rejection.reason !== "lost");
+      if (violations.length > 0) throw new SessionArchivePointerInvariantError(violations);
+      return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
     });
   }
 
@@ -620,9 +658,9 @@ export class SessionArchivesRepo {
       } else if (input.pointers.length > 0) {
         throw new TraceBackfillSubjectError("trace pointers need an archive");
       }
-      const pointerCount = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers);
+      const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
       for (const taskId of input.noneTaskIds) this.ctx.taskTraces().markTaskTraceNone(taskId);
-      return { archive, pointerCount };
+      return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
     })();
   }
 

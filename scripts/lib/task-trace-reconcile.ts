@@ -11,6 +11,12 @@
  * card, when it has one, must carry the event count, tool call count,
  * `(type, tool)` histogram and model its rows produce.
  *
+ * The pointer is judged by its source, never by comparing heads (MUL-432 P1):
+ * a backfill pointer must name the subject's latest backfill archive, and that
+ * is the member compared; a daemon archive may own only a task acknowledged as
+ * cross-switch, whose backfill member is still compared as a prefix backup and
+ * whose card is left to the daemon.
+ *
  * Nothing here writes: raw SELECTs only, no `MultiremiStore` (its constructor
  * migrates), archives opened read-only without following symlinks.
  */
@@ -62,6 +68,7 @@ export type TraceReconcileMismatch =
   | "trailer"
   | "index"
   | "pointer"
+  | "pointer_owned_by_daemon_unexpected"
   | "member_missing"
   | "member_unreadable"
   | "archive_missing"
@@ -70,7 +77,7 @@ export type TraceReconcileMismatch =
 
 export const TRACE_RECONCILE_MISMATCHES: readonly TraceReconcileMismatch[] = [
   "seq_set", "line_digest", "event_count", "header", "trailer", "index", "pointer",
-  "member_missing", "member_unreadable", "archive_missing", "progress", "turn_card",
+  "pointer_owned_by_daemon_unexpected", "member_missing", "member_unreadable", "archive_missing", "progress", "turn_card",
 ];
 
 export interface TraceReconcileOptions {
@@ -218,10 +225,14 @@ interface BackfillTaskRow {
   row_count: number;
   head_seq: number;
   digest: string;
+  /** Acknowledged as cross-switch when the backfill ran (`--cross-switch-ack`). */
+  cross_switch: boolean;
 }
 
 interface PointerRow {
   location: string;
+  /** Which writer produced an `archive` pointer; NULL on an archive pointer means daemon. */
+  source: "daemon" | "trace_backfill" | null;
   archive_id: string | null;
   member_path: string | null;
   data_offset: number | null;
@@ -235,14 +246,16 @@ interface PointerRow {
 
 function readPointer(db: SqlDatabase, taskId: string): PointerRow | null {
   const raw = db.query(
-    `SELECT location, archive_id, member_path, data_offset, compressed_size, uncompressed_size,
+    `SELECT location, source, archive_id, member_path, data_offset, compressed_size, uncompressed_size,
             sha256, event_count, head_seq, closed
      FROM multiremi_task_traces WHERE task_id = ?`,
   ).get(taskId) as Record<string, unknown> | null;
   if (!raw) return null;
   const n = (value: unknown) => (value == null ? null : Number(value));
+  const location = String(raw.location);
   return {
-    location: String(raw.location),
+    location,
+    source: location !== "archive" ? null : raw.source === "trace_backfill" ? "trace_backfill" : "daemon",
     archive_id: raw.archive_id == null ? null : String(raw.archive_id),
     member_path: raw.member_path == null ? null : String(raw.member_path),
     data_offset: n(raw.data_offset),
@@ -400,9 +413,10 @@ export async function reconcileTraceBackfill(
       skipped_issue_deleting_rows: assignment.source.skipped.issue_deleting.rows,
       none_unchecked_without_cutoff: 0,
       none_kept_existing_location: 0,
-      pointer_moved_to_newer_archive: 0,
+      cross_switch_daemon_owned: 0,
       pointer_kept_lost: 0,
       turn_card_missing: 0,
+      turn_card_skipped_cross_switch: 0,
     },
     samples: { mismatch: [], informational: [] },
     ok: true,
@@ -490,7 +504,7 @@ async function reconcileSubject(
   }
   const taskRows = new Map(
     (db.query(
-      `SELECT task_id, archive_id, row_count, head_seq, digest FROM multiremi_trace_backfill_tasks
+      `SELECT task_id, archive_id, row_count, head_seq, digest, cross_switch FROM multiremi_trace_backfill_tasks
        WHERE subject_kind = ? AND subject_id = ?`,
     ).all(subject.kind, subject.id) as Array<Record<string, unknown>>).map((raw): [string, BackfillTaskRow] => [
       String(raw.task_id),
@@ -500,6 +514,7 @@ async function reconcileSubject(
         row_count: Number(raw.row_count),
         head_seq: Number(raw.head_seq),
         digest: String(raw.digest),
+        cross_switch: Number(raw.cross_switch ?? 0) !== 0,
       },
     ]),
   );
@@ -555,7 +570,10 @@ async function reconcileSubject(
       const expectedEnd = { status: end.status, head, event_count: sourceSeqs.length, ended_at: end.endedAt };
       const expectedDigest = sourceDigest.finish(expectedEnd);
       taskDigests.push({ taskId, digest: expectedDigest });
-      checkTurnCard(db, summary.finish(), context, detail);
+      // A cross-switch task's card describes its whole run, which the daemon
+      // reports; the backfill leaves it alone, so the old rows are no yardstick.
+      if (backfillRow?.cross_switch) context.info("turn_card_skipped_cross_switch", detail);
+      else checkTurnCard(db, summary.finish(), context, detail);
       if (!backfillRow) {
         context.mismatch("progress", { ...detail, reason: "no backfill task row" });
         continue;
@@ -564,15 +582,21 @@ async function reconcileSubject(
         context.mismatch("progress", { ...detail, reason: "task digest stale" });
       }
 
-      const archive = await openArchive(backfillRow.archive_id);
+      // Check what a reader reads: a backfill pointer is followed to the member
+      // it names. Under any other owner the backfill member is still checked, as
+      // the prefix backup of a cross-switch task.
+      const pointer = readPointer(db, taskId);
+      const backfillPointer = checkPointerOwner(pointer, backfillRow, progress, context, detail);
+      const archiveId = backfillPointer ? pointer!.archive_id! : backfillRow.archive_id;
+      const archive = await openArchive(archiveId);
       if (archive instanceof Error) {
-        context.mismatch("archive_missing", { ...detail, archive_id: backfillRow.archive_id, reason: archive.message });
+        context.mismatch("archive_missing", { ...detail, archive_id: archiveId, reason: archive.message });
         continue;
       }
       const memberPath = `${SESSION_ARCHIVE_TRACES_PREFIX}${taskId}${SESSION_ARCHIVE_TRACE_SUFFIX}`;
       const entry = archive.index.members.find((member) => member.path === memberPath);
       if (!entry) {
-        context.mismatch("member_missing", { ...detail, archive_id: backfillRow.archive_id });
+        context.mismatch("member_missing", { ...detail, archive_id: archiveId });
         continue;
       }
       const central = archive.directory.get(memberPath);
@@ -634,7 +658,7 @@ async function reconcileSubject(
           ...detail, head, rows: sourceSeqs.length, index: { head: entry.head, event_count: entry.event_count, closed: entry.closed },
         });
       }
-      checkPointer(db, taskId, backfillRow.archive_id, entry, head, sourceSeqs.length, context, detail);
+      if (backfillPointer) checkPointerEntry(pointer!, entry, head, sourceSeqs.length, context, detail);
     }
 
     for (const taskId of noneIds) {
@@ -650,7 +674,9 @@ async function reconcileSubject(
     }
 
     if (context.full && progress) {
-      const digest = traceSubjectDigest(subject.kind, subject.id, taskDigests, subject.noneTaskIds);
+      const digest = traceSubjectDigest(
+        subject.kind, subject.id, taskDigests, subject.noneTaskIds, subject.crossSwitchTaskIds,
+      );
       if (digest !== progress.digest) context.mismatch("progress", { ...where, reason: "subject digest stale" });
     }
   } finally {
@@ -661,45 +687,71 @@ async function reconcileSubject(
   context.counted(renderIds.length, rowsChecked, noneIds.length);
 }
 
-function checkPointer(
-  db: SqlDatabase,
-  taskId: string,
-  archiveId: string,
+/**
+ * Who owns a task with rows, by the pointer's source (the swap rule never
+ * compares heads across sources, so neither does this):
+ * - a `trace_backfill` archive must be the subject's latest backfill archive,
+ *   the one its progress row and task row name; returns `true` so the caller
+ *   reads that member and compares the pointer with its index entry;
+ * - a daemon archive is expected only for a task acknowledged as cross-switch;
+ * - `lost` is kept as it is and counted;
+ * - `missing`, `none`, `daemon` or `backfilling` means the backfill never took it.
+ */
+function checkPointerOwner(
+  pointer: PointerRow | null,
+  backfillRow: BackfillTaskRow,
+  progress: ProgressRow | null,
+  context: SubjectContext,
+  detail: Record<string, unknown>,
+): boolean {
+  if (pointer?.location === "archive" && pointer.source === "trace_backfill" && pointer.archive_id) {
+    if (pointer.archive_id !== progress?.archive_id || pointer.archive_id !== backfillRow.archive_id) {
+      context.mismatch("pointer", {
+        ...detail,
+        reason: "backfill pointer is not at the subject's latest backfill archive",
+        archive_id: pointer.archive_id,
+        expected: progress?.archive_id ?? backfillRow.archive_id,
+      });
+    }
+    return true;
+  }
+  if (pointer?.location === "archive") {
+    if (backfillRow.cross_switch) {
+      context.info("cross_switch_daemon_owned", { ...detail, archive_id: pointer.archive_id });
+    } else {
+      context.mismatch("pointer_owned_by_daemon_unexpected", { ...detail, archive_id: pointer.archive_id });
+    }
+    return false;
+  }
+  if (pointer?.location === "lost") {
+    // The swap rule never moves a `lost` pointer; the rows are in the archive regardless.
+    context.info("pointer_kept_lost", { ...detail, archive_id: backfillRow.archive_id });
+    return false;
+  }
+  context.mismatch("pointer", {
+    ...detail, expected: backfillRow.archive_id, location: pointer?.location ?? "absent", archive_id: pointer?.archive_id ?? null,
+  });
+  return false;
+}
+
+/** A backfill pointer must carry exactly its member's index entry. */
+function checkPointerEntry(
+  pointer: PointerRow,
   entry: SessionArchiveMemberIndexEntry,
   head: number,
   rows: number,
   context: SubjectContext,
   detail: Record<string, unknown>,
 ): void {
-  const pointer = readPointer(db, taskId);
-  if (pointer?.location === "archive" && pointer.archive_id === archiveId) {
-    const same = pointer.member_path === entry.path
-      && pointer.data_offset === entry.data_offset
-      && pointer.compressed_size === entry.compressed_size
-      && pointer.uncompressed_size === entry.uncompressed_size
-      && pointer.sha256 === entry.sha256
-      && pointer.event_count === rows
-      && pointer.head_seq === head
-      && pointer.closed;
-    if (!same) context.mismatch("pointer", { ...detail, reason: "pointer disagrees with the index entry" });
-    return;
-  }
-  if (pointer?.location === "lost") {
-    // The swap rule never moves a `lost` pointer; the rows are in the archive regardless.
-    context.info("pointer_kept_lost", { ...detail, archive_id: archiveId });
-    return;
-  }
-  if (pointer?.location === "archive" && pointer.archive_id) {
-    // The swap rule lets a newer ready archive with at least this head take over.
-    const other = readArchiveRow(db, pointer.archive_id);
-    if (other?.status === "ready" && (pointer.head_seq ?? -1) >= head) {
-      context.info("pointer_moved_to_newer_archive", { ...detail, archive_id: pointer.archive_id });
-      return;
-    }
-  }
-  context.mismatch("pointer", {
-    ...detail, expected: archiveId, location: pointer?.location ?? "absent", archive_id: pointer?.archive_id ?? null,
-  });
+  const same = pointer.member_path === entry.path
+    && pointer.data_offset === entry.data_offset
+    && pointer.compressed_size === entry.compressed_size
+    && pointer.uncompressed_size === entry.uncompressed_size
+    && pointer.sha256 === entry.sha256
+    && pointer.event_count === rows
+    && pointer.head_seq === head
+    && pointer.closed;
+  if (!same) context.mismatch("pointer", { ...detail, reason: "pointer disagrees with the index entry" });
 }
 
 /**

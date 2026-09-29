@@ -39,6 +39,12 @@ export interface TraceBackfillTaskDigest {
   rowCount: number;
   headSeq: number;
   digest: string;
+  /**
+   * The run treated the task as cross-switch under the operator's
+   * acknowledgement: its rows are a prefix backup, a daemon's trace may own the
+   * pointer and its `turn` card was left alone.
+   */
+  crossSwitch?: boolean;
 }
 
 export interface TraceBackfillTaskRecord extends TraceBackfillTaskDigest {
@@ -103,6 +109,7 @@ function hydrateTask(row: Row): TraceBackfillTaskRecord {
     rowCount: Number(row.row_count ?? 0),
     headSeq: Number(row.head_seq ?? 0),
     digest: String(row.digest),
+    crossSwitch: Number(row.cross_switch ?? 0) !== 0,
     updatedAt: String(row.updated_at),
   };
 }
@@ -196,8 +203,8 @@ export class TraceBackfillProgressRepo {
     for (const task of tasks) {
       this.ctx.db.run(
         `INSERT INTO multiremi_trace_backfill_tasks (
-           task_id, subject_kind, subject_id, archive_id, row_count, head_seq, digest, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           task_id, subject_kind, subject_id, archive_id, row_count, head_seq, digest, cross_switch, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(task_id) DO UPDATE SET
            subject_kind = excluded.subject_kind,
            subject_id = excluded.subject_id,
@@ -205,8 +212,12 @@ export class TraceBackfillProgressRepo {
            row_count = excluded.row_count,
            head_seq = excluded.head_seq,
            digest = excluded.digest,
+           cross_switch = excluded.cross_switch,
            updated_at = excluded.updated_at`,
-        [task.taskId, subjectKind, subjectId, archiveId, task.rowCount, task.headSeq, task.digest, now],
+        [
+          task.taskId, subjectKind, subjectId, archiveId, task.rowCount, task.headSeq, task.digest,
+          task.crossSwitch ? 1 : 0, now,
+        ],
       );
     }
   }

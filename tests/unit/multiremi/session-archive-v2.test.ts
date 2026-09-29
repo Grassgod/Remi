@@ -140,6 +140,7 @@ describe("Session archive v2 subject migration", () => {
       "head_seq",
       "closed",
       "updated_at",
+      "source",
     ]);
   });
 });
@@ -1170,8 +1171,21 @@ describe("Session archive QA round 1", () => {
       headSeq: 2,
       closed: true,
       runtimeId: runtime.id,
-    }]);
-    expect(refused).toBe(0);
+    }], "daemon");
+    expect(refused).toEqual({
+      written: 0,
+      rejected: [{
+        taskId: "tsk_concurrent",
+        archiveId: short.id,
+        incomingSource: "daemon",
+        incomingHeadSeq: 2,
+        reason: "newer_head_same_source",
+        currentLocation: "archive",
+        currentSource: "daemon",
+        currentArchiveId: long.id,
+        currentHeadSeq: 7,
+      }],
+    });
     expect(store.getTaskTrace("tsk_concurrent")).toMatchObject({
       archiveId: long.id,
       headSeq: 7,

@@ -2840,6 +2840,10 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, TASK_TRACE_POINTERS_MIGRATION, () => {
     createTaskTracePointers(db);
   });
+  // MUL-432 P1: which writer produced an archive pointer ('daemon' or
+  // 'trace_backfill'); the swap rule only compares head_seq within one source.
+  // NULL on an existing archive pointer means daemon, the only writer before this.
+  addColumnIfMissing(db, "multiremi_task_traces", "source TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
@@ -5686,7 +5690,8 @@ function createTaskTracePointers(db: SqlDatabase): void {
  * `done` is written in the transaction that makes the archive `ready`.
  *
  * `multiremi_trace_backfill_tasks` holds the per-task digests of the last
- * completed run, replaced in that same transaction.
+ * completed run, replaced in that same transaction; `cross_switch` marks the
+ * tasks that run acknowledged as cross-switch (MUL-432 P1).
  */
 function createTraceBackfillProgress(db: SqlDatabase): void {
   db.exec(`
@@ -5710,6 +5715,7 @@ function createTraceBackfillProgress(db: SqlDatabase): void {
       row_count BIGINT NOT NULL,
       head_seq BIGINT NOT NULL,
       digest TEXT NOT NULL,
+      cross_switch INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
 

@@ -17,7 +17,11 @@ import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
-import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import type {
+  TaskTraceArchivePointer,
+  TaskTracePointerSource,
+  TaskTracePointerWriteResult,
+} from "@multiremi/store/repos/task-traces-repo.js";
 import type {
   AddSessionParticipantInput,
   CreateChatSessionInput,
@@ -753,7 +757,10 @@ export interface TaskTracesSurface {
   markTaskTraceNone(taskId: string): void;
   markTaskTraceLost(taskId: string): void;
   /** Must be called inside the caller's transaction. */
-  writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
+  writeTaskTraceArchivePointers(
+    pointers: readonly TaskTraceArchivePointer[],
+    source: TaskTracePointerSource,
+  ): TaskTracePointerWriteResult;
   clearTaskTraceArchivePointers(archiveId: string): number;
 }
 
