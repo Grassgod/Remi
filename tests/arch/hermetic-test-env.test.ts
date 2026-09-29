@@ -12,7 +12,7 @@ import {
   SCRUBBED_ENV_PREFIXES,
   isScrubbedEnvKey,
 } from "../setup/hermetic-env-policy.js";
-import { RECOMMENDED_DB_REPLY_MAX_BYTES } from "@multiremi/observability/request-metrics.js";
+import { DEFAULT_DB_REPLY_MAX_BYTES } from "@multiremi/observability/request-metrics.js";
 
 /**
  * The backend suite must not read this repo's configuration out of the host shell.
@@ -72,10 +72,10 @@ describe("hermetic test environment", () => {
     for (const [name, value] of Object.entries(HERMETIC_ENV_DEFAULTS)) {
       expect(process.env[name], `${name} must be set by the preload`).toBe(value);
     }
-    // MUL-386 ruling: production defaults the bridge limit to off, the suite arms
-    // it. Pin both halves so moving one without the other is a test failure.
+    // MUL-398 C-1: threshold agrees; CI enforces while production observes.
     expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_MAX_BYTES)
-      .toBe(String(RECOMMENDED_DB_REPLY_MAX_BYTES));
+      .toBe(String(DEFAULT_DB_REPLY_MAX_BYTES));
+    expect(HERMETIC_ENV_DEFAULTS.MULTIREMI_PG_REPLY_ENFORCE).toBe("1");
   });
 
   test("the scrub list covers the auth-relevant variables", () => {
