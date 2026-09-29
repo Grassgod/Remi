@@ -4592,9 +4592,12 @@ export class IssuesRepo {
   ): MultiremiIssueComment {
     const rawBody = input.body ?? input.content ?? "";
     if (!rawBody.trim()) throw new Error("Comment body is required");
+    // Take W in the first statement: a prior SELECT could leave SQLite with
+    // a stale read snapshot that cannot be upgraded while another writer commits.
+    this.ctx.db.run(`UPDATE multiremi_workspaces SET updated_at = updated_at
+      WHERE id = (SELECT workspace_id FROM multiremi_issues WHERE id = ?)`, [issueId]);
     const workspaceId = this.ctx.issueWorkspaceId(issueId);
     if (!workspaceId) throw new Error(`Issue not found: ${issueId}`);
-    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     // Lock before reading Issue/session state so concurrent first comments can
     // both reach the shared seq allocator on SQLite's deferred transactions.
     if (this.ctx.db.run("UPDATE multiremi_issues SET id = id WHERE id = ?", [issueId]).changes === 0) {
@@ -4606,6 +4609,7 @@ export class IssuesRepo {
     }
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    if (issue.workspaceId !== workspaceId) throw new Error("Issue moved to another workspace during comment creation");
     const parentId = input.parentId ?? input.parent_id ?? null;
     const parent = parentId ? this.getIssueComment(parentId) : null;
     if (parentId) {
