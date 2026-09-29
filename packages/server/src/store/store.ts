@@ -121,7 +121,13 @@ import {
   type TaskTracePointerSource,
   type TaskTracePointerWriteResult,
 } from "@multiremi/store/repos/task-traces-repo.js";
+import {
+  SessionArchiveRequestsRepo,
+  type SessionArchiveRequestReportOutcome,
+  type SessionArchiveRequestSubject,
+} from "@multiremi/store/repos/session-archive-requests-repo.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { SessionArchiveRequest } from "@multiremi/contracts/trace-file.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import {
   TraceBackfillProgressRepo,
@@ -551,6 +557,7 @@ export class MultiremiStore {
   private issueWorkspaces: IssueWorkspacesRepo;
   private sessionArchives: SessionArchivesRepo;
   private taskTraces: TaskTracesRepo;
+  private sessionArchiveRequests: SessionArchiveRequestsRepo;
   private traceBackfillProgress: TraceBackfillProgressRepo;
   readonly runtimeWorkspaces: RuntimeWorkspacesRepo;
   private runtimes: RuntimesRepo;
@@ -622,6 +629,7 @@ export class MultiremiStore {
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.sessionArchives = new SessionArchivesRepo(this.ctx);
     this.taskTraces = new TaskTracesRepo(this.ctx, options.taskTraceQuery);
+    this.sessionArchiveRequests = new SessionArchiveRequestsRepo(this.ctx);
     this.traceBackfillProgress = new TraceBackfillProgressRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.runtimeWorkspaces = new RuntimeWorkspacesRepo(this.ctx);
@@ -961,6 +969,74 @@ runMigrations(this.db);
 
   markTaskTraceLost(taskId: string): void {
     this.taskTraces.markLost(taskId);
+  }
+
+  /**
+   * Ask the Runtime's daemon to archive each subject, reusing a subject's open
+   * request. Takes the workspace Runtime lifecycle lock so a request is never
+   * written for a Runtime that retirement is removing, and wakes the Runtime's
+   * downlinks once a request is written.
+   */
+  requestSessionArchives(
+    runtimeId: string,
+    subjects: readonly SessionArchiveRequestSubject[],
+    createdBy: string,
+  ): SessionArchiveRequest[] {
+    const runtime = this.getRuntimeLite(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    const workspaceId = runtime.workspaceId ?? "local";
+    let created = false;
+    const requests = this.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const current = this.getRuntimeLite(runtimeId);
+      if (!current || (current.workspaceId ?? "local") !== workspaceId) {
+        throw new Error(`Runtime not found: ${runtimeId}`);
+      }
+      this.sessionArchiveRequests.expireAcked([runtimeId]);
+      return subjects.map((subject) => {
+        const result = this.sessionArchiveRequests.ensureOpenWithinTransaction(runtimeId, subject, createdBy);
+        created ||= result.created;
+        return result.request;
+      });
+    })();
+    if (created) {
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId, actorType: "system",
+        actorId: null, payload: { runtime_id: runtimeId } });
+    }
+    return requests;
+  }
+
+  getSessionArchiveRequest(runtimeId: string, id: string): SessionArchiveRequest | null {
+    return this.sessionArchiveRequests.get(runtimeId, id);
+  }
+
+  /** The requests to offer the Runtime's connected daemon; `pending` ones become `sent`. */
+  dispatchSessionArchiveRequests(runtimeId: string): SessionArchiveRequest[] {
+    return this.sessionArchiveRequests.dispatch(runtimeId);
+  }
+
+  acknowledgeSessionArchiveRequest(runtimeId: string, id: string): boolean {
+    return this.sessionArchiveRequests.acknowledge(runtimeId, id);
+  }
+
+  failSessionArchiveRequest(runtimeId: string, id: string): boolean {
+    return this.sessionArchiveRequests.fail(runtimeId, id);
+  }
+
+  reportSessionArchiveRequestResult(
+    runtimeId: string,
+    id: string,
+    status: "completed" | "failed",
+  ): SessionArchiveRequestReportOutcome {
+    return this.sessionArchiveRequests.report(runtimeId, id, status);
+  }
+
+  expireSessionArchiveRequests(runtimeIds: readonly string[], now?: number): number {
+    return this.sessionArchiveRequests.expireAcked(runtimeIds, now);
+  }
+
+  listLatestSessionArchiveRequests(runtimeIds: readonly string[]): SessionArchiveRequest[] {
+    return this.sessionArchiveRequests.listLatestForRuntimes(runtimeIds);
   }
 
   listTaskTracesForArchive(archiveId: string): MultiremiTaskTrace[] {

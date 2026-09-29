@@ -153,6 +153,7 @@ import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
 import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
 import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "./daemon-protocol/report-handlers.js";
+import { registerSessionArchiveRequestHandlers, sessionArchiveRequestSnapshot } from "./daemon-protocol/session-archive-requests.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
@@ -979,6 +980,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const downlinks: DaemonDownlinks = new DaemonDownlinks({ layer: daemonProtocol,
     nextWakeAt: rt => store.nextFeishuBotOutboundWakeAt(rt),
     snapshot: (rt, session, activeIds) => [...runtimeInputSnapshot(store, rt, session),
+      ...sessionArchiveRequestSnapshot(store, rt),
       ...taskInputSnapshot(store, rt, activeIds, id => downlinks.forgetTask(rt, id))] });
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
@@ -996,6 +998,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       }
     });
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
+  registerSessionArchiveRequestHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const browserScopeWebSockets: BrowserScopeWebSocketRegistry = new Map();

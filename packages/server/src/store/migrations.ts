@@ -3431,6 +3431,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // `runMigrationOnce`, for the same clock-read reason as the MUL-407 (E5) block
   // above. Ordered after the MUL-427 conversation backfill.
   createTraceBackfillProgress(db);
+  // MUL-432 segment 2 (ADR 0006 decision 8): on-demand session archive
+  // requests. Plain idempotent DDL, same reason as above.
+  createSessionArchiveRequests(db);
   ensureIssueNumberUniqueness(db, legacyGithubTables);
 }
 
@@ -5859,6 +5862,31 @@ function createTraceBackfillProgress(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_trace_backfill_tasks_subject
       ON multiremi_trace_backfill_tasks(subject_kind, subject_id);
+  `);
+}
+
+/**
+ * One row per request asking a daemon to archive one session subject, delivered
+ * as the `runtime.archive_sessions` frame. `status` only moves forward:
+ * pending → sent → acked → completed | failed.
+ */
+function createSessionArchiveRequests(db: SqlDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_session_archive_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      subject_kind TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_runtime
+      ON multiremi_session_archive_requests(runtime_id, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_subject
+      ON multiremi_session_archive_requests(runtime_id, subject_kind, subject_id);
   `);
 }
 

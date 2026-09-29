@@ -58,7 +58,8 @@ import {
 import { registerDaemonOfferHandler } from "./daemon-offers.js";
 import { DaemonTaskDownlinks } from "./daemon-downlinks.js";
 import { registerDaemonRuntimeDownlinks } from "./daemon-runtime-downlinks.js";
-import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+import { registerDaemonSessionArchiveRequests } from "./daemon-session-archive-requests.js";
+import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonArchiveSubject, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -829,6 +830,7 @@ export class MultiremiDaemon {
   private readonly protocolLane: DaemonProtocolLane;
   private readonly taskDownlinks: DaemonTaskDownlinks;
   private readonly drainRuntimeDownlinks: () => Promise<void>;
+  private readonly drainSessionArchiveRequests: () => Promise<void>;
   private readonly authorityProbeDelaysMs: number[];
   /** Ten-minute RPC fallback for incomplete plugin revision definitions. */
   private nextPluginDesiredAt = 0;
@@ -1076,6 +1078,9 @@ export class MultiremiDaemon {
     this.taskDownlinks = new DaemonTaskDownlinks(this.protocolClient, () => this.options.runtimeId ?? undefined);
     this.drainRuntimeDownlinks = registerDaemonRuntimeDownlinks(this.protocolClient, () => this.options.runtimeId,
       (rt, input) => this.handleHeartbeatAck(rt, input), (rt, revision) => this.reconcileRuntimeAgentPlugins(rt, revision));
+    this.drainSessionArchiveRequests = registerDaemonSessionArchiveRequests(this.protocolClient, () => this.options.runtimeId,
+      (subject) => this.archiveRequestedSession(subject),
+      (rt, requestId, result) => this.client.reportSessionArchiveRequestResult(rt, requestId, result));
     this.protocolLane = {
       runtime: () => this.options.runtimeId && !this.stopped ? {
         runtime_id: this.options.runtimeId,
@@ -2979,6 +2984,34 @@ export class MultiremiDaemon {
     return true;
   }
 
+  /**
+   * Archive one subject a `runtime.archive_sessions` request names, through the
+   * same barriers workspace GC uses, and return the ready archive id.
+   *
+   * An Issue archive reads every `.runtime` root of the Issue; the first root
+   * doubles as its staging and receipt directory, under that root's excluded
+   * `.multiremi/`. The Issue lifecycle lock keeps GC from collecting the roots
+   * meanwhile. A Chat or one-shot Task archives its own `.runtime/<id>` root.
+   */
+  private async archiveRequestedSession(subject: DaemonArchiveSubject): Promise<string | null> {
+    const workspacesRoot = this.options.workspacesRoot;
+    if (subject.kind === "issue") {
+      const sessionRoot = workspacesRoot ? listIssueSessionRuntimeRoots(workspacesRoot, subject.id)[0]?.root : undefined;
+      if (!sessionRoot) throw new Error("no local Session state for the Issue");
+      const binding = await this.issueWorkspaceLifecycleLocks.runExclusive(subject.id, async () => {
+        this.assertWorkspaceRootOwner();
+        return await this.ensureIssueSessionArchive(subject.id, sessionRoot, false);
+      });
+      return binding?.archiveId ?? null;
+    }
+    const binding = await this.ensureSubjectSessionArchive(
+      { kind: subject.kind, id: subject.id },
+      subjectRuntimeStateRoot(workspacesRoot, subject.id),
+      false,
+    );
+    return binding?.archiveId ?? null;
+  }
+
   /** Serialize the GC barrier and the task-end archive of one Chat / one-shot Task. */
   private ensureSubjectSessionArchive(
     subject: SubjectSessionArchiveSubject,
@@ -3120,6 +3153,7 @@ export class MultiremiDaemon {
 
   private async requestRestartAfterUpdate(): Promise<void> {
     await this.drainRuntimeDownlinks();
+    await this.drainSessionArchiveRequests();
     if (this.options.runtimeId) await this.awaitTaskReportDrain(`rt:${this.options.runtimeId}`);
     this.requestRestart();
   }

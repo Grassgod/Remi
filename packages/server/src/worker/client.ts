@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
 import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
+import type { DaemonArchiveSessionsResultPayload } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
@@ -886,6 +887,14 @@ export class MultiremiDaemonClient {
     error?: string;
   }): Promise<void> {
     await this.report("runtime.command_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
+  }
+
+  async reportSessionArchiveRequestResult(
+    runtimeId: string,
+    requestId: string,
+    result: Omit<DaemonArchiveSessionsResultPayload, "request_id">,
+  ): Promise<void> {
+    await this.report("runtime.archive_sessions_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
