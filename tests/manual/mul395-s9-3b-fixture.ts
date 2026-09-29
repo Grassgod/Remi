@@ -1,10 +1,10 @@
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "../../packages/server/src/store/store";
 import { startMultiremiServer } from "../../packages/server/src/api/server";
 
 const marker = process.env.MUL395_S9_3B_FIXTURE_AUTH;
 if (!marker) throw new Error("Local fixture authentication must be supplied in memory");
-const db = new Database(":memory:");
+const db = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(db);
 const workspace = store.ensureLocalWorkspace();
 const user = store.getCurrentUser();

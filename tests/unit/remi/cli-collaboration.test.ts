@@ -63,7 +63,7 @@ describe("native collaboration CLI contracts", () => {
   it("issue grouped filters assignee types through the real route with the archive opt-in", async () => {
     useCliEnv();
     process.env.MULTIREMI_WORKSPACE_ID = "local";
-    const database = new Database(":memory:");
+    const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();
