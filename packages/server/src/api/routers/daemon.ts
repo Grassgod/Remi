@@ -1,4 +1,7 @@
 import type { Hono } from "hono";
+import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
@@ -32,6 +35,7 @@ import {
   promoteLegacyCliPatForDaemonHeartbeat,
   promoteLegacyCliPatForDaemonRegistration,
   localAttachmentFileResponse,
+  log,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -86,6 +90,19 @@ import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.
 /** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
 const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
 import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
+
+function daemonCompletionTraceEventCount(trace: unknown, taskId: string): number | undefined {
+  if (trace === undefined) return undefined;
+  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
+    const eventCount = (trace as Record<string, unknown>).event_count;
+    if (eventCount === undefined) return undefined;
+    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
+      return eventCount;
+    }
+  }
+  log.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
+  return undefined;
+}
 
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
@@ -1247,7 +1264,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ output?: string; pr_url?: string; session_id?: string; work_dir?: string }>(c);
+    const body = await readJsonStrict<{
+      output?: string; pr_url?: string; session_id?: string; work_dir?: string;
+      trace?: DaemonTaskCompletionFields["trace"];
+    }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1263,6 +1283,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         branchName: body.pr_url ?? null,
         sessionId: body.session_id ?? null,
         workDir: body.work_dir ?? null,
+        traceEventCount: daemonCompletionTraceEventCount(body.trace, taskId),
       });
     } catch (err) {
       // Unconsumed steer messages won the race against completion: tell the
@@ -1276,7 +1297,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ error?: string; session_id?: string; work_dir?: string; failure_reason?: string }>(c);
+    const body = await readJsonStrict<{
+      error?: string; session_id?: string; work_dir?: string; failure_reason?: string;
+      trace?: DaemonTaskCompletionFields["trace"];
+    }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1290,6 +1314,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       sessionId: body.session_id ?? null,
       workDir: body.work_dir ?? null,
       failureReason: body.failure_reason ?? null,
+      traceEventCount: daemonCompletionTraceEventCount(body.trace, taskId),
     });
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });

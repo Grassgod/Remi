@@ -840,6 +840,9 @@ export interface KnowledgeSurface {
 /** Trace pointer reads and writes, exposed by the store facade. */
 export interface TaskTracesSurface {
   getTaskTrace(taskId: string): MultiremiTaskTrace | null;
+  markTaskTraceDaemon(taskId: string, runtimeId: string): void;
+  markTaskTraceNone(taskId: string): void;
+  markTaskTraceLost(taskId: string): void;
   /** Must be called inside the caller's transaction. */
   writeTaskTraceArchivePointers(pointers: readonly TaskTraceArchivePointer[]): number;
   clearTaskTraceArchivePointers(archiveId: string): number;

@@ -133,6 +133,9 @@ import {
   withFeedbackRequestMetadata,
 } from "./helpers.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
+import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
+import { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { organizerTurnStats } from "./helpers/organizer.js";
 import {
   createRequestMetricsMiddleware,
   resolveRequestMetricsOptions,
@@ -254,6 +257,8 @@ export interface MultiremiApiOptions {
   projectKnowledge?: ProjectKnowledgeServiceContract;
   repositoryWiki?: RepositoryWikiServiceContract;
   sessionArchives?: SessionArchiveService;
+  daemonTraceReader?: import("./trace/daemon-trace-reader.js").DaemonTraceReader;
+  getOrganizerTurnStats?: (taskId: string) => import("./helpers/organizer.js").OrganizerTurnStats | null;
   /** Absolute API origin advertised to daemons for direct archive uploads. */
   daemonDirectBaseUrl?: string | null;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
@@ -373,6 +378,13 @@ function createAppForRole(options: MultiremiApiOptions): Hono {
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
+  const traceReader = new TraceReader({
+    store,
+    daemon: options.daemonTraceReader ?? {
+      read: async ({ runtimeId }) => ({ ok: false, code: "daemon_unreachable", runtime_id: runtimeId }),
+    },
+    archive: new SessionArchiveReader({ store, root: sessionArchives.config.root }),
+  });
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   // MUL-461: the process's ONE effective role. The guard middleware, the health
   // payloads, the realtime fanout and the metrics lines all read this value, so
@@ -434,6 +446,8 @@ function createAppForRole(options: MultiremiApiOptions): Hono {
     projectKnowledge,
     repositoryWiki,
     sessionArchives,
+    traceReader,
+    getOrganizerTurnStats: options.getOrganizerTurnStats ?? ((taskId) => organizerTurnStats(store, taskId)),
     messagingProviders,
     daemonDirectBaseUrl,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),

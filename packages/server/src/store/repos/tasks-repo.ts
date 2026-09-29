@@ -2791,6 +2791,7 @@ export class TasksRepo {
       // once here and carried through the snapshot into the response.
       const hydrated = this.withHydratedAgent(candidate);
       const task = this.snapshotTaskExecution(hydrated, lockedRuntime, deferredEvents);
+      this.ctx.taskTraces().markTaskTraceDaemon(task.id, runtimeId);
       // Check the actual hydrated payload, including both linked and legacy
       // inline skills. Older daemons ignore encoding and would write base64
       // as text. Unknown encodings also require the newer daemon's validator.
@@ -3832,6 +3833,7 @@ ${placementAfter.sql}
       );
       if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
       const started = this.getTask(taskId)!;
+      if (started.runtimeId) this.ctx.taskTraces().markTaskTraceDaemon(taskId, started.runtimeId);
       // The card moves queued -> running in place and bumps `revision`; no marker
       // row, because the seq axis must keep `cursor_seq` meanings intact.
       this.ctx.conversationLog().updateTurnCardWithinTransaction(taskId, { status: "running" });
@@ -4321,8 +4323,14 @@ ${placementAfter.sql}
     };
   }
 
+  private markEmptyTraceAtTerminal(taskId: string, reportedEventCount?: number): void {
+    // Missing counts cannot prove emptiness once the daemon stops dual-writing.
+    if (reportedEventCount === 0) this.ctx.taskTraces().markTaskTraceNone(taskId);
+  }
+
   completeTask(taskId: string, input: {
     output: string;
+    traceEventCount?: number;
     branchName?: string | null;
     sessionId?: string | null;
     workDir?: string | null;
@@ -4365,6 +4373,7 @@ ${placementAfter.sql}
         [storedResult, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      this.markEmptyTraceAtTerminal(taskId, input.traceEventCount);
       const completed = this.getTask(taskId)!;
       const followUps = this.afterTaskTerminal(completed, "completed", input.output, true, false, childStatusChanges, deferredEvents);
       return { task: completed, followUps };
@@ -4383,6 +4392,7 @@ ${placementAfter.sql}
 
   failTask(taskId: string, input: {
     error: string;
+    traceEventCount?: number;
     sessionId?: string | null;
     workDir?: string | null;
     failureReason?: string | null;
@@ -4416,6 +4426,7 @@ ${placementAfter.sql}
         [input.error, failureReason, input.sessionId ?? null, input.workDir ?? null, now, now, now, taskId],
       );
       if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      this.markEmptyTraceAtTerminal(taskId, input.traceEventCount);
       const failed = this.getTask(taskId)!;
       const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges, deferredEvents);
       return { task: failed, followUps };

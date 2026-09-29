@@ -634,6 +634,19 @@ function shareCommandSpecs(): CommandSpec[] {
       if (token !== stringOption(invocation, "share")) throw new CliError("usage", "the share path token must match --share");
       await getAndRender(invocation, `/api/shares/${encodePath(token)}`);
     }),
+    nativeSpec("share.trace.read", ["share", "trace", "read"], "Read a task trace through a signed issue share", "read", ["human", "share"], [refPositional("task"), optionalPositional("token")], [
+      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
+      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
+    ], async (invocation) => {
+      const token = positionalOrOption(invocation, 1, "token", "share");
+      if (!stringOption(invocation, "share") || token !== stringOption(invocation, "share")) {
+        throw new CliError("usage", "share trace read requires a matching --share <signed-token>");
+      }
+      await getAndRender(invocation, `/api/shares/${encodePath(token)}/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
+        after_seq: integerOption(invocation, "after"),
+        limit: integerOption(invocation, "limit"),
+      });
+    }),
   ];
 }
 
@@ -897,11 +910,19 @@ function taskCommandSpecs(): CommandSpec[] {
     nativeSpec("task.steer.list", ["task", "steer", "list"], "List steer directives sent to a task", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, ["messages"]);
     }),
-    nativeSpec("task.message.list", ["task", "message", "list"], "List task messages", "read", HUMAN_TASK, [refPositional("task")], [
-      { name: "since", type: "integer", valueName: "seq", description: "First sequence number" },
+    nativeSpec("task.trace.read", ["task", "trace", "read"], "Read a task trace window", "read", HUMAN_TASK, [refPositional("task")], [
+      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
+      { name: "since", type: "integer", valueName: "seq", description: "Deprecated alias for --after" },
+      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
     ], async (invocation) => {
-      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/messages`, ["messages"], { since: integerOption(invocation, "since") });
-    }, [{ path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task message list" }]),
+      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
+        after_seq: integerOption(invocation, "after") ?? integerOption(invocation, "since"),
+        limit: integerOption(invocation, "limit"),
+      });
+    }, [
+      { path: ["task", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+      { path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
+    ]),
     nativeSpec("task.inspect", ["task", "inspect"], "Inspect derived task health metadata", "read", HUMAN_TASK, [refPositional("task")], [], async (invocation) => {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/inspection`, ["inspection"]);
     }),

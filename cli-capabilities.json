@@ -4204,6 +4204,24 @@
       "hidden": false,
       "migration_status": "native"
     },
+    "share.trace.read": {
+      "command": "remi share trace read",
+      "aliases": [],
+      "auth": [
+        "human",
+        "share",
+        "task"
+      ],
+      "capability": "share.trace.read",
+      "mutation": "read",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ],
+      "hidden": false,
+      "migration_status": "native"
+    },
     "label": {
       "command": "remi label",
       "aliases": [],
@@ -4795,16 +4813,17 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "task.message.list": {
-      "command": "remi task message list",
+    "task.trace.read": {
+      "command": "remi task trace read",
       "aliases": [
+        "remi task message list",
         "remi task messages"
       ],
       "auth": [
         "human",
         "task"
       ],
-      "capability": "task.message.list",
+      "capability": "task.trace.read",
       "mutation": "read",
       "output": [
         "table",
@@ -9844,10 +9863,16 @@
       "replacement": "remi attachment download",
       "hidden": false
     },
-    "remi task messages": {
-      "command": "task.message.list",
+    "remi task message list": {
+      "command": "task.trace.read",
       "deprecated_since": "0.3.0",
-      "replacement": "remi task message list",
+      "replacement": "remi task trace read",
+      "hidden": false
+    },
+    "remi task messages": {
+      "command": "task.trace.read",
+      "deprecated_since": "0.3.0",
+      "replacement": "remi task trace read",
       "hidden": false
     },
     "remi multiremi agent list": {
@@ -10848,7 +10873,7 @@
       "command": "task.inspect"
     },
     "GET /api/multiremi/tasks/:id/messages": {
-      "command": "task.message.list"
+      "command": "task.trace.read"
     },
     "GET /api/multiremi/tasks/:id/steer": {
       "command": "task.steer.list"
@@ -10990,6 +11015,9 @@
     "GET /api/shares/:token/attachments/:attachmentId/content": {
       "command": "share.view"
     },
+    "GET /api/shares/:token/tasks/:task_id/trace": {
+      "command": "share.trace.read"
+    },
     "GET /api/skills": {
       "command": "skill.list"
     },
@@ -11023,8 +11051,11 @@
     "GET /api/tasks/:id/steer": {
       "command": "task.steer.list"
     },
+    "GET /api/tasks/:id/trace": {
+      "command": "task.trace.read"
+    },
     "GET /api/tasks/:taskId/messages": {
-      "command": "task.message.list"
+      "command": "task.trace.read"
     },
     "GET /api/tasks/:taskId/prompt": {
       "command": "task.prompt"

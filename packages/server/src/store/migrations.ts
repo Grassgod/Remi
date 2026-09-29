@@ -3317,6 +3317,29 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
         ON multiremi_project_docs(project_id, content_uri);
     `);
   });
+  runMigrationOnce(db, "20260919_agent_fallback_model", () => {
+    addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
+    addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");
+  });
+  // MUL-338: a gateway model whose engine publishes no reasoning metadata (every
+  // Claude alias outside the ACP selector) can have its levels declared by an
+  // administrator. That is an explicit operator statement, not a borrowed one, so
+  // it lives in its own table: the discovery snapshot is rewritten on every probe
+  // with `models = excluded.models`, and sharing a row would clear the declaration.
+  runMigrationOnce(db, GATEWAY_MODEL_REASONING_MIGRATION, () => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_reasoning (
+        workspace_id TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        levels TEXT NOT NULL DEFAULT '[]',
+        default_level TEXT,
+        updated_by TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, engine, model_id)
+      );
+    `);
+  });
   // MUL-426 / B1 (ADR 0006): the single per-session conversation log. One row is
   // one display unit (`head` at seq 0, `message`, `system`, `turn`,
   // `result_published`); every other lifecycle fact is a hidden marker row so
@@ -3359,29 +3382,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
         head_seq INTEGER NOT NULL DEFAULT 0,
         log_version INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
-      );
-    `);
-  });
-  runMigrationOnce(db, "20260919_agent_fallback_model", () => {
-    addColumnIfMissing(db, "multiremi_agents", "fallback_model TEXT");
-    addColumnIfMissing(db, "multiremi_agents", "fallback_thinking_level TEXT");
-  });
-  // MUL-338: a gateway model whose engine publishes no reasoning metadata (every
-  // Claude alias outside the ACP selector) can have its levels declared by an
-  // administrator. That is an explicit operator statement, not a borrowed one, so
-  // it lives in its own table: the discovery snapshot is rewritten on every probe
-  // with `models = excluded.models`, and sharing a row would clear the declaration.
-  runMigrationOnce(db, GATEWAY_MODEL_REASONING_MIGRATION, () => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS multiremi_gateway_model_reasoning (
-        workspace_id TEXT NOT NULL,
-        engine TEXT NOT NULL,
-        model_id TEXT NOT NULL,
-        levels TEXT NOT NULL DEFAULT '[]',
-        default_level TEXT,
-        updated_by TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(workspace_id, engine, model_id)
       );
     `);
   });

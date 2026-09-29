@@ -132,6 +132,63 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    index). Web, share links, the Feishu concierge relay and the organizer all
    read through one `trace-reader` module that routes on the pointer. No copies,
    no share snapshots.
+   Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
+   missing card statistics or unavailable live reads retain the legacy-table
+   fallback until MUL-432 removes that table.
+   B5's page/share trace endpoints and CLI return the original `TraceEvent`.
+   Multi-event pages stay within the serialized events-array budget (default
+   1MiB, including brackets and commas). If the first event alone exceeds that
+   budget, it is returned alone, byte-for-byte, even over 1MiB. No field is
+   shortened or removed; `state=ok`, the cursor equals that event's `seq`,
+   the real `head` is retained, and subsequent pages continue normally to `eof`.
+   The share view displays the full event with its existing type/pre rendering,
+   automatically pages to `eof`, and adds no size notice or controls.
+   MUL-402 `cmt_9y4qvdn2ytng` and `cmt_1u7d8q41zsdp` revoke the read-time
+   truncation in (n) and all of (t). The unpublished read projection fields and
+   its minimum budget are removed; positive integer `maxBytes` remains required.
+
+   `TRACE_SANITIZED_EVENT_MAX_BYTES` in
+   [budget fixture](../../tests/unit/multiremi/trace-budget-fixtures.ts) computes the
+   conditional bound of sanitized fields plus the JSON skeleton from
+   [sanitize constants](../../packages/shared/src/trace-sanitize.ts):
+   `6 * (TRACE_CONTENT_MAX_BYTES + TRACE_OUTPUT_MAX_BYTES + TRACE_TOOL_MAX_BYTES)`
+   plus three serialized write-truncation markers (excluding their quotes),
+   plus `TRACE_INPUT_MAX_BYTES + TRACE_META_MAX_BYTES`, plus the actual serialized
+   skeleton (all field names, punctuation, quotes and the largest safe `seq`).
+   Every nullable field uses the larger of `null` and `""` in the skeleton;
+   each bounded field replaces that placeholder with its largest serialized
+   representation, including the longest accepted `status`. String fields use UTF-8
+   caps, so one-byte control characters escaping to six-byte JSON are the worst
+   case. The marker is included because the existing write sanitizer appends it
+   after its UTF-8 cut. Structured `input` and `meta` are capped by serialized
+   JSON bytes; capped invalid JSON becomes null, so their caps are not multiplied
+   by six. The conditional finite portion is **2,297,014 bytes**: assume the
+   string contents of `type`, `tool_call_id` and `ts` are empty, and all other
+   fields are maximal. Their names and quotes remain counted; a null
+   `tool_call_id` counts four bytes. `traceFiniteEventBytes` subtracts only the
+   escaped contents of those three strings from an actual event for comparison.
+   At the largest safe `seq`, adding a 27-byte timestamp gives QA4's
+   **2,297,041 bytes**; adding its legal 121-byte timestamp gives **2,297,135**.
+   MUL-402 QA4 `cmt_1452lgej5n06` and ruling `cmt_zjfw9qrsbemk` establish this
+   applicability condition and the nullable correction.
+   A contract-limit fixture fills all five bounded fields, remains unchanged
+   through A's sanitizer, and exceeds 1MiB; HTTP response size is checked against
+   its actual serialized event bytes plus the existing 512-byte envelope margin.
+
+   **Three gaps:** the write sanitizer does not bound `type` or `tool_call_id`,
+   and A-0 uses the caller's `ts` verbatim. B4's timestamp validator accepts
+   arbitrarily long fractional seconds, so `ts` has no fixed 27-byte limit.
+   All three string contents are excluded from this conditional calculation;
+   their actual escaped JSON bytes must be added when
+   determining an event's total size. There is no universal finite event bound
+   or read-time fallback for these fields. Oversized values are returned intact.
+   A-0's store admits the first over-budget event and its daemon reader forwards
+   it. `DAEMON_TRACE_READ_MAX_BYTES=1MiB` is the request budget; the declared WS
+   maximum is 4MiB. Real A-6 RPC/WS validation, including the separately declared
+   `DAEMON_FRAME_MAX_BYTES=1MiB`, is **integration-time verification**: no
+   transport implementation enforces these constants on this parent baseline.
+   If integration discards, splits or rejects the contract-limit event, stop
+   and obtain an A-side ruling; B5 does not alter A's transport or sanitizer.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and
