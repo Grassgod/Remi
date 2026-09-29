@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
+import { MemorySessionReplica } from "@multiremi/core/replica";
+import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enIssues from "../../locales/en/issues.json";
@@ -17,6 +19,13 @@ const timelinePageControl = vi.hoisted(() => ({
   hasMore: false,
   olderEntries: [] as TimelineEntry[],
 }));
+const issueLogOverride = vi.hoisted(() => ({ current: null as any }));
+
+vi.mock("@multiremi/core/session-log/use-issue-log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multiremi/core/session-log/use-issue-log")>();
+  return { ...actual, useIssueLog: (...args: Parameters<typeof actual.useIssueLog>) =>
+    issueLogOverride.current ?? actual.useIssueLog(...args) };
+});
 
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -524,6 +533,7 @@ const mockTimeline: TimelineEntry[] = [
 
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
 import { IssueDetail } from "./issue-detail";
+import { IssueActivitySection } from "./issue-activity-section";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -581,6 +591,7 @@ async function waitForReveal() {
 describe("IssueDetail (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    issueLogOverride.current = null;
     timelinePageControl.hasMore = false;
     timelinePageControl.olderEntries = [];
     mockViewport.isMobile = false;
@@ -1765,6 +1776,49 @@ describe("IssueDetail (shared)", () => {
         comment_type: "comment",
       },
     ] as TimelineEntry[];
+
+    it("deep-links to a reply while its resolved parent stays collapsed", async () => {
+      const row = (seq: number, id: string, body: string, parentId: string | null,
+        resolvedAt: string | null): SessionLogRow => ({
+        session_id: "session-main", seq, id, revision: 1, kind: "message", visibility: "shown",
+        author_type: "member", author_id: "user-1", task_id: null, parent_id: parentId,
+        body_md: body, body_html: `<p>${body}</p>`, render_version: "test",
+        metadata: { attachments: [], reactions: [] }, resolved_at: resolvedAt,
+        resolved_by_type: resolvedAt ? "member" : null, resolved_by_id: resolvedAt ? "user-1" : null,
+        created_at: "2026-01-18T00:00:00Z", updated_at: "2026-01-18T00:00:00Z", deleted_at: null,
+      });
+      const entries = [
+        row(1, "resolved-parent", "Resolved root", null, "2026-01-19T00:00:00Z"),
+        row(2, "reply-1", "Reply inside resolved thread", "resolved-parent", null),
+      ];
+      const replica = new MemorySessionReplica({ "session-main": { entries, ready: true, fresh: true } });
+      issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
+      const session = { id: "session-main", title: "Main", issue_id: mockIssue.id,
+        workspace_id: "ws-1", status: "active", is_default: true, summary: null,
+        created_by_type: "system", created_by_id: null, created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z", participants: [] } as any;
+      render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <QueryClientProvider client={createTestQueryClient()}>
+            <IssueActivitySection issueId={mockIssue.id} projectId={null} members={[]} agents={[]}
+              currentUserId="user-1" canModerateComments activeIssueSessionId="session-main"
+              activeIssueSession={session} sessionsPending={false} sessionsFetching={false}
+              onRetrySessions={vi.fn()} highlightCommentId="reply-1"
+              initialLog={{ sessionId: "session-main", window: {
+                entries: [], head_seq: 2, log_version: 1, has_more_before: false, has_more_after: false,
+              }, head: null }} onScrollRoot={vi.fn()} onShowKeyResults={vi.fn()}
+              scrollContainerEl={null} />
+          </QueryClientProvider>
+        </I18nProvider>,
+      );
+
+      await waitForReveal();
+      expect(document.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-reply-1");
+      expect(document.getElementById("comment-reply-1")).toHaveClass("bg-warning/10");
+      expect(screen.getByText("Reply inside resolved thread")).toBeInTheDocument();
+      expect(screen.queryByText("Resolved root")).not.toBeInTheDocument();
+      expect(document.getElementById("comment-resolved-parent")).not.toBeNull();
+    });
 
     it("renders every comment as its own entry in created_at order", async () => {
       mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
