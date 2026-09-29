@@ -4,10 +4,10 @@
  *
  * When this was written `PostgresSyncDatabase.transaction()` was a bare
  * BEGIN/COMMIT pair, so a nested BEGIN let the inner COMMIT end the outer unit
- * early and a later ROLLBACK could not undo it. Since B1 (MUL-426) a nested
+ * early and a later ROLLBACK could not undo it. Since MUL-405 a nested
  * `transaction()` is a SAVEPOINT inside the outer unit, and
- * `maxTransactionDepth` counts only the outer BEGIN (MUL-405). The entry points
- * below still hold depth 1 exactly, savepoints included — see
+ * `maxTransactionDepth` counts every frame, the SAVEPOINT included. The entry
+ * points below still hold depth 1 exactly, with no nested frame — see
  * docs/adr/0011-transaction-ownership-and-side-effect-timing.md. The depth
  * counter is asserted for the
  * three scenarios the fix round names: auto-start after a prerequisite is done,

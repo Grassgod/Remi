@@ -1,14 +1,19 @@
 /**
- * MUL-400 S1 on real PostgreSQL: one outer BEGIN/COMMIT per guarded entry point,
- * depth 1 as a hard contract rather than a bridge limit
- * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md).
+ * MUL-400 S1 on real PostgreSQL: the same transaction-depth ceiling the SQLite
+ * suite asserts, plus the two cases that only a second connection can produce —
+ * the E2 hook's own atomicity and the "two children end while the owner is
+ * busy" coalescing contract.
  *
- * Count outer transaction ownership separately from savepoints and record the
- * actual SQL for every entry point; a savepoint is the cross-repo-reuse safety
- * net (ADR 0011 §2), not a frame a helper may add.
- * Before the outer COMMIT, no second BEGIN or premature COMMIT is allowed;
- * nested layers may only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT.
- * The existing post-commit hook, atomicity, rollback and event checks remain.
+ * Depth 1 is a hard contract for these entry points, not a bridge limit (Senior
+ * ruling cmt_96e1yqxgifms §1,
+ * docs/adr/0011-transaction-ownership-and-side-effect-timing.md). The depth
+ * counter wraps the `PostgresSyncDatabase` the store was built with and counts
+ * every `transaction()` frame, outer and nested: a nested frame is a SAVEPOINT
+ * (MUL-405), the cross-repo-reuse safety net (ADR 0011 §2), not a frame a
+ * guarded helper may add. It also records the actual transaction-control SQL:
+ * before the outer COMMIT, no second BEGIN or premature COMMIT is allowed, and a
+ * nested layer may only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT.
+ * The post-commit hook, atomicity, rollback and event checks stay as they are.
  *
  * Skipped (not failed) when Postgres is unreachable, matching the other PG
  * suites. Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the
@@ -57,8 +62,7 @@ interface TransactionControl {
 }
 
 interface DepthCounter {
-  maxTopLevel: number;
-  maxNested: number;
+  max: number;
   controls: TransactionControl[];
   reset(): void;
   assertTransactionControl(label?: string): void;
@@ -68,13 +72,11 @@ interface DepthCounter {
 function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const original = database.transaction.bind(database);
   const counter: DepthCounter = {
-    maxTopLevel: 0,
-    maxNested: 0,
+    max: 0,
     controls: [],
     reset() {
       counter.assertTransactionControl("before the next entry point");
-      counter.maxTopLevel = 0;
-      counter.maxNested = 0;
+      counter.max = 0;
       counter.controls = [];
     },
     assertTransactionControl(label = "PG transaction control") {
@@ -103,8 +105,9 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
           const name = control.sql.split(" ").at(-1)!;
           if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
           else {
+            // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
             expect(savepoints.at(-1), detail).toBe(name);
-            if (control.sql.startsWith("RELEASE ")) savepoints.pop();
+            savepoints.pop();
           }
         }
       }
@@ -112,9 +115,7 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
       expect(savepoints, label).toHaveLength(0);
     },
   };
-  let topLevelDepth = 0;
-  let nestedDepth = 0;
-  let invocationDepth = 0;
+  let depth = 0;
   let callbackDepth = 0;
   // Observe statements at the bridge boundary and retain callback ownership.
   const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
@@ -122,7 +123,7 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   target.execute = (sql, params) => {
     const command = sql.trim().toUpperCase();
     if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
-      counter.controls.push({ sql: command, invocationDepth, callbackDepth, inTransaction: database.inTransaction });
+      counter.controls.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
     }
     return execute(sql, params);
   };
@@ -134,16 +135,12 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
         finally { callbackDepth -= 1; }
       }) as (...args: unknown[]) => unknown;
       return (...args: unknown[]) => {
-        const nested = database.inTransaction;
-        invocationDepth += 1;
-        if (nested) counter.maxNested = Math.max(counter.maxNested, ++nestedDepth);
-        else counter.maxTopLevel = Math.max(counter.maxTopLevel, ++topLevelDepth);
+        depth += 1;
+        counter.max = Math.max(counter.max, depth);
         try {
           return run(...args);
         } finally {
-          invocationDepth -= 1;
-          if (nested) nestedDepth -= 1;
-          else topLevelDepth -= 1;
+          depth -= 1;
         }
       };
     };
@@ -395,7 +392,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
-    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.max).toBe(1);
     const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
     expect(queued).toHaveLength(1);
     expect(queued[0]?.prompt).toContain("reported is done");
@@ -419,7 +416,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
-    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.max).toBe(1);
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
   });
 
@@ -694,7 +691,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     // terminal call hid it.
     counter.reset();
     const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "lifecycle" });
-    expect(counter.maxTopLevel, "createTask").toBe(1);
+    expect(counter.max, "createTask").toBe(1);
     // The child parked at todo, as createTask's own derivation requires.
     expect(store.getIssue(child.id)?.status).toBe("todo");
 
@@ -703,12 +700,12 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(claimed?.id).toBe(task.id);
     counter.reset();
     store.startTask(task.id);
-    expect(counter.maxTopLevel, "startTask").toBe(1);
+    expect(counter.max, "startTask").toBe(1);
     expect(store.getIssue(child.id)?.status).toBe("in_progress");
 
     counter.reset();
     store.completeTask(task.id, { output: "lifecycle done" });
-    expect(counter.maxTopLevel, "completeTask").toBe(1);
+    expect(counter.max, "completeTask").toBe(1);
   });
 
   it("keeps a comment-triggered automatic dispatch at depth 1 (Postgres)", () => {
@@ -739,7 +736,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       authorId: "local",
       body: `[@${agent}](mention://agent/${agent}) please continue`,
     });
-    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.max).toBe(1);
   });
 
   it("keeps completeTask, failTask and cancelTask at depth 1 on Postgres", () => {
@@ -770,7 +767,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     claimAndStart(completing.id);
     counter.reset();
     store.completeTask(completing.id, { output: "finished" });
-    expect(counter.maxTopLevel, "completeTask").toBe(1);
+    expect(counter.max, "completeTask").toBe(1);
 
     const failingChild = store.createIssue({
       title: "PG failing child",
@@ -784,13 +781,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     claimAndStart(failing.id);
     counter.reset();
     store.failTask(failing.id, { error: "boom" });
-    expect(counter.maxTopLevel, "failTask").toBe(1);
+    expect(counter.max, "failTask").toBe(1);
     expect(store.getIssue(failingChild.id)?.status).toBe("blocked");
 
     const cancelling = store.createTask({ agentId: agent, issueId: parent.id, prompt: "cancel me" });
     counter.reset();
     store.cancelTask(cancelling.id);
-    expect(counter.maxTopLevel, "cancelTask").toBe(1);
+    expect(counter.max, "cancelTask").toBe(1);
   });
 
   it("commits the child ending and rolls nothing back when the hook throws (Postgres)", () => {
@@ -892,7 +889,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     } finally {
       unsubscribe();
     }
-    expect(counter.maxTopLevel, "PG chain depth").toBe(1);
+    expect(counter.max, "PG chain depth").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.getIssue(grandparent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_derived"))
@@ -1012,7 +1009,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     } finally {
       unsubscribe();
     }
-    expect(counter.maxTopLevel).toBe(1);
+    expect(counter.max).toBe(1);
     counter.assertTransactionControl("createTaskFailureSystemComment COMMIT");
     expect(counter.controls.filter((control) => control.sql === "BEGIN")).toHaveLength(1);
     expect(counter.controls.filter((control) => control.sql === "COMMIT")).toHaveLength(1);
@@ -1051,6 +1048,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       counter.reset();
       action();
       counter.assertTransactionControl(label);
+      expect(counter.max, label).toBeLessThanOrEqual(1);
       observed += counter.controls.length;
     };
 

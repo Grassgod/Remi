@@ -9,11 +9,11 @@ MUL-457, delivered by MUL-405): main's guards and main's `transaction()`
 implementation stay, and B1's three nesting sites are reshaped.
 
 It narrows the reading of MUL-402 rulings `cmt_78bx01xhb75x` §2 and
-`cmt_gestk2r6imjh` (c) for the entry points listed below. Those rulings remain
-correct about the mechanics of `maxTransactionDepth` — only the outer `BEGIN` is
-counted — but they are not a licence for a helper to add a transaction frame.
-MUL-400's ADR 0003 stays as written; this ADR is the authority for the entry
-points named here.
+`cmt_gestk2r6imjh` (c) for the entry points listed below: they are not a licence
+for a helper to add a transaction frame. `maxTransactionDepth` is main's counter
+(MUL-405): it records the deepest nesting reached, every `SAVEPOINT` frame
+included, and the depth-1 guards rely on that. MUL-400's ADR 0003 stays as
+written; this ADR is the authority for the entry points named here.
 
 ## Context
 
@@ -98,7 +98,8 @@ non-aborting bridge failures), and the outer `COMMIT`:
 3. only then runs the `afterCommit` frames.
 
 An inner savepoint `ROLLBACK` clears the mark for depths deeper than the
-savepoint it rolled back to.
+savepoint it rolled back to. `ROLLBACK TO SAVEPOINT` ends that level as it does
+on main; no `RELEASE` follows it.
 
 ## Consequences
 
@@ -114,5 +115,6 @@ savepoint it rolled back to.
   warn-and-continue best-effort, and MUL-409's post-commit activity writes
   accepted the same window.
 - The guard test headers cite this ADR instead of the superseded rulings. The
-  depth assertions themselves are unchanged; what changed is B1's three nesting
-  sites and the shape of the code, not the guards.
+  guards count every transaction frame, a `SAVEPOINT` included, on both
+  backends; a guard that counted only the outer `BEGIN` would pass a helper's
+  extra frame as depth 1 (MUL-402 QA F2/F3, `cmt_1khg3kqww3q5`).
