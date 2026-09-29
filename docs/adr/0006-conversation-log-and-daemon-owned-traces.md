@@ -152,26 +152,37 @@ not enforced on either backend. Postgres nested transactions use savepoints.
 
    `TRACE_SANITIZED_EVENT_MAX_BYTES` in
    [budget fixture](../../tests/unit/multiremi/trace-budget-fixtures.ts) computes the
-   finite bound of sanitized fields plus the JSON skeleton from
+   conditional bound of sanitized fields plus the JSON skeleton from
    [sanitize constants](../../packages/shared/src/trace-sanitize.ts):
    `6 * (TRACE_CONTENT_MAX_BYTES + TRACE_OUTPUT_MAX_BYTES + TRACE_TOOL_MAX_BYTES)`
    plus three serialized write-truncation markers (excluding their quotes),
    plus `TRACE_INPUT_MAX_BYTES + TRACE_META_MAX_BYTES`, plus the actual serialized
-   skeleton (all field names, punctuation, empty string quotes, the largest safe
-   `seq`, longest canonical ISO timestamp and accepted `status`), minus the two
-   `null` placeholders replaced by structured fields. String fields use UTF-8
+   skeleton (all field names, punctuation, quotes and the largest safe `seq`).
+   Every nullable field uses the larger of `null` and `""` in the skeleton;
+   each bounded field replaces that placeholder with its largest serialized
+   representation, including the longest accepted `status`. String fields use UTF-8
    caps, so one-byte control characters escaping to six-byte JSON are the worst
    case. The marker is included because the existing write sanitizer appends it
    after its UTF-8 cut. Structured `input` and `meta` are capped by serialized
    JSON bytes; capped invalid JSON becomes null, so their caps are not multiplied
-   by six. The calculated finite portion is **2,297,039 bytes**.
+   by six. The conditional finite portion is **2,297,014 bytes**: assume the
+   string contents of `type`, `tool_call_id` and `ts` are empty, and all other
+   fields are maximal. Their names and quotes remain counted; a null
+   `tool_call_id` counts four bytes. `traceFiniteEventBytes` subtracts only the
+   escaped contents of those three strings from an actual event for comparison.
+   At the largest safe `seq`, adding a 27-byte timestamp gives QA4's
+   **2,297,041 bytes**; adding its legal 121-byte timestamp gives **2,297,135**.
+   MUL-402 QA4 `cmt_1452lgej5n06` and ruling `cmt_zjfw9qrsbemk` establish this
+   applicability condition and the nullable correction.
    A contract-limit fixture fills all five bounded fields, remains unchanged
    through A's sanitizer, and exceeds 1MiB; HTTP response size is checked against
    its actual serialized event bytes plus the existing 512-byte envelope margin.
 
-   **Gap:** the write sanitizer does not bound `type` or `tool_call_id`.
-   Their string contents are excluded from this finite calculation (the skeleton
-   uses empty values); their actual escaped JSON bytes must be added when
+   **Three gaps:** the write sanitizer does not bound `type` or `tool_call_id`,
+   and A-0 uses the caller's `ts` verbatim. B4's timestamp validator accepts
+   arbitrarily long fractional seconds, so `ts` has no fixed 27-byte limit.
+   All three string contents are excluded from this conditional calculation;
+   their actual escaped JSON bytes must be added when
    determining an event's total size. There is no universal finite event bound
    or read-time fallback for these fields. Oversized values are returned intact.
    A-0's store admits the first over-budget event and its daemon reader forwards
