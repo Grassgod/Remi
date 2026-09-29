@@ -1,8 +1,10 @@
+import { reportFrame } from "../../fixtures/report-session.js";
 // HTTP surface the daemon itself calls: install commands and token minting,
 // claim/start/complete, task reports, orphan recovery, GC checks, task history.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
+import { daemonTaskWireResponse, daemonTaskMessageWireResponse } from "@multiremi/api/wire/index.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -111,11 +113,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const app = createMultiremiApp({ store });
 
-    const report = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runtime_id: runtime.id,
+    const report = await reportFrame(store, "task.workspace", { task_id: task.id, runtime_id: runtime.id,
         root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: `agent/${issue.key}`,
         status: "in_use",
@@ -128,10 +126,8 @@ describe("Multiremi API — daemon endpoints", () => {
           base_commit: "1234567890abcdef1234567890abcdef12345678",
           status: "ready",
           dirty: false,
-        }],
-      }),
-    });
-    expect(report.status).toBe(200);
+        }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(report.ok).toBe(true);
 
     const response = await app.request(`/api/issues/${issue.id}/workspace`);
     expect(response.status).toBe(200);
@@ -170,29 +166,17 @@ describe("Multiremi API — daemon endpoints", () => {
     const nextRuntime = store.registerRuntime({ id: "rt_workspace_next", name: "codex (next)", provider: "codex" });
     const nextTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
     expect(store.claimTask(nextRuntime.id)?.id).toBe(nextTask.id);
-    const nextReport = await app.request(`/api/daemon/tasks/${nextTask.id}/workspace`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runtime_id: nextRuntime.id,
+    const nextReport = await reportFrame(store, "task.workspace", { task_id: nextTask.id, runtime_id: nextRuntime.id,
         root_path: `/home/next/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: `agent/${issue.key}`,
-        status: "preparing",
-      }),
-    });
-    expect(nextReport.status).toBe(200);
+        status: "preparing", }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(nextReport.ok).toBe(true);
 
-    const staleReport = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runtime_id: runtime.id,
+    const staleReport = await reportFrame(store, "task.workspace", { task_id: task.id, runtime_id: runtime.id,
         root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: `agent/${issue.key}`,
-        status: "ready",
-      }),
-    });
-    expect(staleReport.status).toBe(409);
+        status: "ready", }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(staleReport).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
     expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(nextRuntime.id);
   });
 
@@ -205,11 +189,7 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const app = createMultiremiApp({ store });
 
-    const report = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runtime_id: runtime.id,
+    const report = await reportFrame(store, "task.workspace", { task_id: task.id, runtime_id: runtime.id,
         root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
         branch_name: "",
         status: "ready",
@@ -221,11 +201,9 @@ describe("Multiremi API — daemon endpoints", () => {
           base_ref: "abc123",
           status: "ready",
           dirty: false,
-        }],
-      }),
-    });
+        }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
-    expect(report.status).toBe(200);
+    expect(report.ok).toBe(true);
     expect(store.getIssueWorkspace(issue.id)).toMatchObject({ branchName: "", status: "ready" });
   });
 
@@ -1104,25 +1082,19 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(Date.parse(store.getTask(task.id)!.dispatchedAt!)).toBeGreaterThan(Date.parse(stale));
     expect(store.claimTask(runtime.id)).toBeNull();
 
-    const start = await app.request(`/api/daemon/tasks/${task.id}/start`, { method: "POST" });
-    expect(start.status).toBe(200);
-    const startBody = await start.json();
+    const start = await reportFrame(store, "task.start", { task_id: task.id,  }, { headers: undefined, authToken: "" });
+    expect(start.ok).toBe(true);
+    const startBody = daemonTaskWireResponse(store.getTask(task.id)!);
     expect(startBody.status).toBe("running");
     expect(startBody.agent_id).toBe(agent.id);
     expect(startBody.agentId).toBeUndefined();
 
-    const complete = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        output: "ok",
+    const complete = await reportFrame(store, "task.complete", { task_id: task.id, output: "ok",
         pr_url: "https://example.test/pull/1",
         session_id: "sess-complete",
-        work_dir: "/tmp/work",
-      }),
-    });
-    expect(complete.status).toBe(200);
-    const completeBody = await complete.json();
+        work_dir: "/tmp/work", }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(complete.ok).toBe(true);
+    const completeBody: any = daemonTaskWireResponse(store.getTask(task.id)!);
     expect(completeBody.status).toBe("completed");
     expect(completeBody.agentId).toBeUndefined();
     expect(completeBody.result).toEqual({
@@ -1140,53 +1112,36 @@ describe("Multiremi API — daemon endpoints", () => {
     const taskRunsBody = await taskRuns.json();
     expect(taskRunsBody[0].result).toEqual(completeBody.result);
 
-    const duplicateComplete = await app.request(`/api/daemon/tasks/${task.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ output: "late" }),
-    });
-    expect(duplicateComplete.status).toBe(200);
-    const duplicateCompleteBody = await duplicateComplete.json();
+    const duplicateComplete = await reportFrame(store, "task.complete", { task_id: task.id, output: "late" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(duplicateComplete.ok).toBe(true);
+    const duplicateCompleteBody = daemonTaskWireResponse(store.getTask(task.id)!);
     expect(duplicateCompleteBody.status).toBe("completed");
     expect(duplicateCompleteBody.result).toEqual(completeBody.result);
 
-    const terminalFail = await app.request(`/api/daemon/tasks/${task.id}/fail`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "late failure" }),
-    });
-    expect(terminalFail.status).toBe(200);
-    const terminalFailBody = await terminalFail.json();
+    const terminalFail = await reportFrame(store, "task.fail", { task_id: task.id, error: "late failure" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(terminalFail.ok).toBe(true);
+    const terminalFailBody = daemonTaskWireResponse(store.getTask(task.id)!);
     expect(terminalFailBody.status).toBe("completed");
     expect(terminalFailBody.result).toEqual(completeBody.result);
 
     const branchAliasTask = store.createTask({ agentId: agent.id, prompt: "branch alias should not work" });
     expect(store.claimTask(runtime.id)?.id).toBe(branchAliasTask.id);
-    expect((await (await app.request(`/api/daemon/tasks/${branchAliasTask.id}/start`, { method: "POST" })).json()).status).toBe("running");
-    const branchAliasComplete = await app.request(`/api/daemon/tasks/${branchAliasTask.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ output: "branch alias", branch_name: "https://example.test/pull/branch-alias" }),
-    });
-    expect(branchAliasComplete.status).toBe(200);
-    const branchAliasBody = await branchAliasComplete.json();
+    expect((await reportFrame(store, "task.start", { task_id: branchAliasTask.id })).ok).toBe(true);
+    expect(store.getTask(branchAliasTask.id)?.status).toBe("running");
+    const branchAliasComplete = await reportFrame(store, "task.complete", { task_id: branchAliasTask.id, output: "branch alias", branch_name: "https://example.test/pull/branch-alias" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(branchAliasComplete.ok).toBe(true);
+    const branchAliasBody: any = daemonTaskWireResponse(store.getTask(branchAliasTask.id)!);
     expect(branchAliasBody.result.pr_url).toBe("");
     expect(store.getTask(branchAliasTask.id)?.branchName).not.toBe("https://example.test/pull/branch-alias");
 
     const failingTask = store.createTask({ agentId: agent.id, prompt: "fail me" });
     expect(store.claimTask(runtime.id)?.id).toBe(failingTask.id);
-    const fail = await app.request(`/api/daemon/tasks/${failingTask.id}/fail`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        error: "boom",
+    const fail = await reportFrame(store, "task.fail", { task_id: failingTask.id, error: "boom",
         failure_reason: "codex_semantic_inactivity",
         session_id: "sess-fail",
-        work_dir: "/tmp/fail-work",
-      }),
-    });
-    expect(fail.status).toBe(200);
-    const failBody = await fail.json();
+        work_dir: "/tmp/fail-work", }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(fail.ok).toBe(true);
+    const failBody = daemonTaskWireResponse(store.getTask(failingTask.id)!);
     expect(failBody.status).toBe("failed");
     expect(failBody.completed_at).toBeString();
     expect(failBody.result).toBeNull();
@@ -1201,28 +1156,20 @@ describe("Multiremi API — daemon endpoints", () => {
 
     const camelReasonTask = store.createTask({ agentId: agent.id, prompt: "camel reason should not work" });
     expect(store.claimTask(runtime.id)?.id).toBe(camelReasonTask.id);
-    const camelReasonFail = await app.request(`/api/daemon/tasks/${camelReasonTask.id}/fail`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "camel boom", failureReason: "codex_semantic_inactivity" }),
-    });
-    expect(camelReasonFail.status).toBe(200);
-    const camelReasonBody = await camelReasonFail.json();
+    const camelReasonFail = await reportFrame(store, "task.fail", { task_id: camelReasonTask.id, error: "camel boom", failureReason: "codex_semantic_inactivity" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(camelReasonFail.ok).toBe(true);
+    const camelReasonBody = daemonTaskWireResponse(store.getTask(camelReasonTask.id)!);
     expect(camelReasonBody.failure_reason).toBe("agent_error");
     expect(store.getTask(camelReasonTask.id)?.failureReason).toBe("agent_error");
 
     const queuedTask = store.createTask({ agentId: agent.id, prompt: "not claimed yet" });
-    const startQueued = await app.request(`/api/daemon/tasks/${queuedTask.id}/start`, { method: "POST" });
-    expect(startQueued.status).toBe(400);
-    expect(await startQueued.json()).toEqual({ error: "start task: no rows in result set" });
+    const startQueued = await reportFrame(store, "task.start", { task_id: queuedTask.id,  }, { headers: undefined, authToken: "" });
+    expect(startQueued).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(store.getTask(queuedTask.id)?.status).toBe("queued");
 
-    const completeQueued = await app.request(`/api/daemon/tasks/${queuedTask.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ output: "too early" }),
-    });
-    expect(completeQueued.status).toBe(200);
-    expect((await completeQueued.json()).status).toBe("queued");
+    const completeQueued = await reportFrame(store, "task.complete", { task_id: queuedTask.id, output: "too early" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(completeQueued).toEqual({ ok: false, code: "authority_revoked", retryable: false });
+    expect(store.getTask(queuedTask.id)?.status).toBe("queued");
 
     const waitQueued = await app.request(`/api/daemon/tasks/${queuedTask.id}/wait-local-directory`, {
       method: "POST",
@@ -1232,16 +1179,12 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(waitQueued.status).toBe(400);
     expect(await waitQueued.json()).toEqual({ error: "mark task waiting_local_directory: no rows in result set" });
 
-    const invalidComplete = await app.request(`/api/daemon/tasks/${queuedTask.id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{",
-    });
-    expect(invalidComplete.status).toBe(400);
-    expect(await invalidComplete.json()).toEqual({ error: "invalid request body" });
+    const invalidComplete = await reportFrame(store, "task.complete", { task_id: queuedTask.id,  }, { headers: { "Content-Type": "application/json" }, authToken: "", rawPayload: "{" });
+    expect(invalidComplete).toEqual({ closed: 4002 });
+    expect(invalidComplete).toEqual({ closed: 4002 });
 
-    const missingStart = await app.request("/api/daemon/tasks/missing/start", { method: "POST" });
-    expect(missingStart.status).toBe(404);
+    const missingStart = await reportFrame(store, "task.start", { task_id: "missing",  }, { headers: undefined, authToken: "" });
+    expect(missingStart).toMatchObject({ ok: false, code: "task_not_found", retryable: false });
     const missingStatus = await app.request("/api/daemon/tasks/missing/status");
     expect(missingStatus.status).toBe(404);
   });
@@ -1321,88 +1264,59 @@ describe("Multiremi API — daemon endpoints", () => {
 
     expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(task.id);
 
-    const session = await app.request(`/api/daemon/tasks/${task.id}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: "sess-live", work_dir: "/tmp/live" }),
-    });
-    expect(session.status).toBe(204);
+    const session = await reportFrame(store, "task.session_pin", { task_id: task.id, session_id: "sess-live", work_dir: "/tmp/live" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(session.ok).toBe(true);
     expect(store.getTask(task.id)?.sessionId).toBe("sess-live");
     expect(store.getTask(task.id)?.workDir).toBe("/tmp/live");
 
-    const emptySession = await app.request(`/api/daemon/tasks/${task.id}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(emptySession.status).toBe(400);
-    expect(await emptySession.json()).toEqual({ error: "session_id or work_dir required" });
+    const emptySession = await reportFrame(store, "task.session_pin", { task_id: task.id,  }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(emptySession).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
+    expect(emptySession).toEqual({ ok: false, code: "invalid_report", retryable: false });
 
-    const camelCaseSession = await app.request(`/api/daemon/tasks/${task.id}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: "sess-camel", workDir: "/tmp/camel" }),
-    });
-    expect(camelCaseSession.status).toBe(400);
-    expect(await camelCaseSession.json()).toEqual({ error: "session_id or work_dir required" });
+    const camelCaseSession = await reportFrame(store, "task.session_pin", { task_id: task.id, sessionId: "sess-camel", workDir: "/tmp/camel" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(camelCaseSession).toMatchObject({ ok: false, code: "invalid_report", retryable: false });
+    expect(camelCaseSession).toEqual({ ok: false, code: "invalid_report", retryable: false });
     expect(store.getTask(task.id)?.sessionId).toBe("sess-live");
     expect(store.getTask(task.id)?.workDir).toBe("/tmp/live");
 
-    const progress = await app.request(`/api/daemon/tasks/${task.id}/progress`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ summary: "editing", step: 1, total: 3 }),
-    });
-    expect(progress.status).toBe(200);
-    expect(await progress.json()).toEqual({ status: "ok" });
+    const progress = await reportFrame(store, "task.progress", { task_id: task.id, summary: "editing", step: 1, total: 3 }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(progress.ok).toBe(true);
+    expect(progress).toEqual({ ok: true });
     expect(store.getTask(task.id)?.progressSummary).toBe("editing");
 
-    const firstMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [
+    // Seed the legacy reader fixture without the removed daemon write route.
+    store.appendTaskMessages(task.id, [
           { seq: 1, type: "assistant", content: "starting" },
           { seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "ok" },
-        ],
-      }),
-    });
-    expect(firstMessages.status).toBe(200);
-    expect(await firstMessages.json()).toEqual({ status: "ok" });
+    ]);
     const seqTwoId = store.listTaskMessages(task.id).find((message) => message.seq === 2)?.id;
     expect(seqTwoId).toBeString();
 
-    const replayedMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: [{ seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "updated" }] }),
-    });
-    expect(await replayedMessages.json()).toEqual({ status: "ok" });
+    store.appendTaskMessages(task.id, [{ seq: 2, type: "tool", tool: "edit", input: { path: "README.md" }, output: "updated" }]);
     const replayedMessage = store.listTaskMessages(task.id).find((message) => message.seq === 2);
     expect(replayedMessage?.id).toBe(seqTwoId);
     expect(replayedMessage?.output).toBe("updated");
     const since = await app.request(`/api/daemon/tasks/${task.id}/messages?since_seq=1`);
-    const sinceBody = await since.json();
+    expect(since.status).toBe(404);
+    // The remaining UI read path still exposes legacy rows during A/B/C rollout.
+    const uiMessages = await (await app.request(`/api/tasks/${task.id}/messages`)).json();
+    expect(uiMessages.map((message: any) => message.seq)).toEqual([1, 2]);
+    const sinceBody = store.listTaskMessages(task.id).filter(message => message.seq > 1).map(message => daemonTaskMessageWireResponse(message, store.getTask(task.id)!));
     expect(sinceBody.map((message: any) => [message.seq, message.output])).toEqual([[2, "updated"]]);
     expect(sinceBody[0].task_id).toBe(task.id);
     expect(sinceBody[0].taskId).toBeUndefined();
     const invalidSince = await app.request(`/api/daemon/tasks/${task.id}/messages?since=bad`);
-    expect(invalidSince.status).toBe(400);
+    expect(invalidSince.status).toBe(404);
 
     const invalidMessages = await app.request(`/api/daemon/tasks/${task.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{",
     });
-    expect(invalidMessages.status).toBe(400);
-    expect(await invalidMessages.json()).toEqual({ error: "invalid request body" });
+    expect(invalidMessages.status).toBe(404);
 
-    const usageFirst = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ usage: [{ provider: "codex", model: "gpt-5", inputTokens: 10, outputTokens: 5 }] }),
-    });
-    expect(await usageFirst.json()).toEqual({ status: "ok" });
+    const usageFirst = await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "codex", model: "gpt-5", inputTokens: 10, outputTokens: 5 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(usageFirst).toEqual({ ok: true });
     expect(store.getTask(task.id)!.usage).toEqual([{
       provider: "codex",
       model: "gpt-5",
@@ -1412,17 +1326,11 @@ describe("Multiremi API — daemon endpoints", () => {
       cacheWriteTokens: 0,
       totalTokens: 0,
     }]);
-    const usageSecond = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        usage: [
+    const usageSecond = await reportFrame(store, "task.usage", { task_id: task.id, usage: [
           { provider: "codex", model: "gpt-5", input_tokens: 12, output_tokens: 6, cache_read_tokens: 3 },
           { provider: "claude", model: "sonnet", input_tokens: 2, output_tokens: 1 },
-        ],
-      }),
-    });
-    expect(await usageSecond.json()).toEqual({ status: "ok" });
+        ], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(usageSecond).toEqual({ ok: true });
     const usage = store.getTask(task.id)!.usage;
     expect(usage).toHaveLength(2);
     expect(usage.find((entry) => entry.provider === "codex" && entry.model === "gpt-5")).toMatchObject({
@@ -1432,22 +1340,14 @@ describe("Multiremi API — daemon endpoints", () => {
     });
 
     store.completeTask(task.id, { output: "done" });
-    const terminalProgress = await app.request(`/api/daemon/tasks/${task.id}/progress`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ summary: "too late" }),
-    });
-    expect(terminalProgress.status).toBe(200);
-    expect(await terminalProgress.json()).toEqual({ status: "ok" });
+    const terminalProgress = await reportFrame(store, "task.progress", { task_id: task.id, summary: "too late" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(terminalProgress.ok).toBe(true);
+    expect(terminalProgress).toEqual({ ok: true });
 
     expect((await (await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" })).json()).task.id).toBe(waitingTask.id);
     store.markTaskWaitingLocalDirectory(waitingTask.id, "/tmp/repo");
-    const skippedSession = await app.request(`/api/daemon/tasks/${waitingTask.id}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: "sess-should-not-stick", work_dir: "/tmp/waiting" }),
-    });
-    expect(skippedSession.status).toBe(204);
+    const skippedSession = await reportFrame(store, "task.session_pin", { task_id: waitingTask.id, session_id: "sess-should-not-stick", work_dir: "/tmp/waiting" }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(skippedSession.ok).toBe(true);
     expect(store.getTask(waitingTask.id)?.sessionId).toBeNull();
     expect(store.getTask(waitingTask.id)?.workDir).toBeNull();
 
@@ -1509,43 +1409,34 @@ describe("Multiremi API — daemon endpoints", () => {
       prompt: "Maintain Wiki before GC",
     });
     store.updateIssue(completedIssueWithQueuedTask.id, { status: "done" });
-    const heldGc = await app.request(
-      `/api/daemon/issues/${completedIssueWithQueuedTask.id}/gc-check`,
-      { headers: daemonHeaders },
-    );
-    expect((await heldGc.json()).status).toBe("active");
+    const gcOptions = { headers: daemonHeaders, authToken: "root-secret", runtimeId: runtime.id };
+    const heldGc = await reportFrame(store, "gc.check_issue", { issue_id: completedIssueWithQueuedTask.id }, gcOptions);
+    expect(heldGc.status).toBe("active");
     store.cancelTask(queuedIssueTask.id);
-    const releasedGc = await app.request(
-      `/api/daemon/issues/${completedIssueWithQueuedTask.id}/gc-check`,
-      { headers: daemonHeaders },
-    );
-    expect((await releasedGc.json()).status).toBe("done");
+    const releasedGc = await reportFrame(store, "gc.check_issue", { issue_id: completedIssueWithQueuedTask.id }, gcOptions);
+    expect(releasedGc.status).toBe("done");
 
-    const issueGc = await app.request(`/api/daemon/issues/${issue.id}/gc-check`, { headers: daemonHeaders });
-    expect(await issueGc.json()).toEqual({ status: "todo", updated_at: issue.updatedAt });
-    const chatGc = await app.request(`/api/daemon/chat-sessions/${chat.id}/gc-check`, { headers: daemonHeaders });
-    expect(await chatGc.json()).toEqual({ status: "active", updated_at: chat.updatedAt });
-    const runGc = await app.request(`/api/daemon/autopilot-runs/${completedRun.id}/gc-check`, { headers: daemonHeaders });
-    expect(await runGc.json()).toEqual({ status: "completed", completed_at: completedRun.completedAt });
-    const taskGc = await app.request(`/api/daemon/tasks/${completedTask.id}/gc-check`, { headers: daemonHeaders });
-    expect(await taskGc.json()).toEqual({ status: "completed", completed_at: completedTask.completedAt });
+    const issueGc = await reportFrame(store, "gc.check_issue", { issue_id: issue.id }, gcOptions);
+    expect(issueGc).toEqual({ ok: true, status: "todo", updated_at: issue.updatedAt });
+    const chatGc = await reportFrame(store, "gc.check_chat_session", { session_id: chat.id }, gcOptions);
+    expect(chatGc).toEqual({ ok: true, status: "active", updated_at: chat.updatedAt });
+    const runGc = await reportFrame(store, "gc.check_autopilot_run", { run_id: completedRun.id }, gcOptions);
+    expect(runGc).toEqual({ ok: true, status: "completed", completed_at: completedRun.completedAt });
+    const taskGc = await reportFrame(store, "gc.check_task", { task_id: completedTask.id }, gcOptions);
+    expect(taskGc).toEqual({ ok: true, status: "completed", completed_at: completedTask.completedAt });
 
-    for (const path of [
-      `/api/daemon/issues/${remoteIssue.id}/gc-check`,
-      `/api/daemon/chat-sessions/${remoteChat.id}/gc-check`,
-      `/api/daemon/autopilot-runs/${remoteRun.id}/gc-check`,
-      `/api/daemon/tasks/${remoteTask.id}/gc-check`,
-    ]) {
-      const crossWorkspace = await app.request(path, { headers: daemonHeaders });
-      expect(crossWorkspace.status).toBe(404);
-      expect(await crossWorkspace.json()).toEqual({ error: "not found" });
+    for (const [type, payload] of [
+      ["gc.check_issue", { issue_id: remoteIssue.id }],
+      ["gc.check_chat_session", { session_id: remoteChat.id }],
+      ["gc.check_autopilot_run", { run_id: remoteRun.id }],
+      ["gc.check_task", { task_id: remoteTask.id }],
+    ] as const) {
+      const crossWorkspace = await reportFrame(store, type, payload, gcOptions);
+      expect(crossWorkspace).toMatchObject({ ok: false, code: "task_not_found", retryable: false });
     }
 
-    const remoteTaskStart = await app.request(`/api/daemon/tasks/${remoteTask.id}/start`, {
-      method: "POST",
-      headers: daemonHeaders,
-    });
-    expect(remoteTaskStart.status).toBe(403);
+    const remoteTaskStart = await reportFrame(store, "task.start", { task_id: remoteTask.id,  }, { headers: daemonHeaders, authToken: "root-secret" });
+    expect(remoteTaskStart).toMatchObject({ ok: false, code: "authority_revoked", retryable: false });
   });
 
   it("serves agent task history and workspace task snapshots", async () => {

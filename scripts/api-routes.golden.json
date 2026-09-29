@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 774,
+    "routeCount": 749,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 546,
+      "compat": 521,
       "root": 16
     },
-    "getRoutes": 329,
-    "getRoutesWithBody": 326,
+    "getRoutes": 324,
+    "getRoutesWithBody": 321,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 445,
-    "mutationRoutesCovered": 282,
+    "mutationRoutes": 425,
+    "mutationRoutesCovered": 268,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -178,10 +178,7 @@
     "GET /api/cloud-runtime/readyz",
     "GET /api/config",
     "GET /api/daemon/agent-plugin-artifacts/:digest",
-    "GET /api/daemon/autopilot-runs/:runId/gc-check",
-    "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/decisions/:decisionId",
-    "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
@@ -192,9 +189,7 @@
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
-    "GET /api/daemon/tasks/:taskId/gc-check",
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
-    "GET /api/daemon/tasks/:taskId/messages",
     "GET /api/daemon/tasks/:taskId/status",
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
@@ -535,51 +530,32 @@
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
     "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer",
-    "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
-    "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
-    "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result",
-    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/commands/claim",
-    "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/attachments",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/messages",
-    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/cancel",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/inspect",
     "POST /api/daemon/runtimes/:runtimeId/feishu-bot/session/reset",
-    "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
     "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
-    "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/models/claim",
     "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
     "POST /api/daemon/runtimes/:runtimeId/tasks/claim",
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
     "POST /api/daemon/scm/git-credentials",
-    "POST /api/daemon/tasks/:taskId/complete",
     "POST /api/daemon/tasks/:taskId/dispatch-lease",
-    "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
-    "POST /api/daemon/tasks/:taskId/messages",
-    "POST /api/daemon/tasks/:taskId/progress",
-    "POST /api/daemon/tasks/:taskId/prompt",
-    "POST /api/daemon/tasks/:taskId/session",
-    "POST /api/daemon/tasks/:taskId/start",
     "POST /api/daemon/tasks/:taskId/steer/consume",
-    "POST /api/daemon/tasks/:taskId/usage",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
-    "POST /api/daemon/tasks/:taskId/workspace",
     "POST /api/daemon/workspaces/:workspaceId/external-membership/check",
     "POST /api/feedback",
     "POST /api/inbox/:id/archive",
@@ -796,7 +772,6 @@
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
-    "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
     "PUT /api/issues/:issueId/change-requests/:changeRequestId",
@@ -935,10 +910,7 @@
     "GET /api/cloud-runtime/readyz",
     "GET /api/config",
     "GET /api/daemon/agent-plugin-artifacts/:digest",
-    "GET /api/daemon/autopilot-runs/:runId/gc-check",
-    "GET /api/daemon/chat-sessions/:sessionId/gc-check",
     "GET /api/daemon/issues/:issueId/decisions/:decisionId",
-    "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
@@ -949,9 +921,7 @@
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
-    "GET /api/daemon/tasks/:taskId/gc-check",
     "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
-    "GET /api/daemon/tasks/:taskId/messages",
     "GET /api/daemon/tasks/:taskId/status",
     "GET /api/daemon/tasks/:taskId/steer",
     "GET /api/daemon/workspaces/:workspaceId/repos",
@@ -1276,30 +1246,17 @@
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
     "POST /api/daemon/register",
-    "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/commands/claim",
-    "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
-    "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
-    "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/models/claim",
     "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
     "POST /api/daemon/runtimes/:runtimeId/tasks/claim",
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
-    "POST /api/daemon/tasks/:taskId/complete",
-    "POST /api/daemon/tasks/:taskId/fail",
     "POST /api/daemon/tasks/:taskId/human-requests",
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-    "POST /api/daemon/tasks/:taskId/messages",
-    "POST /api/daemon/tasks/:taskId/progress",
-    "POST /api/daemon/tasks/:taskId/prompt",
-    "POST /api/daemon/tasks/:taskId/session",
-    "POST /api/daemon/tasks/:taskId/start",
-    "POST /api/daemon/tasks/:taskId/usage",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
     "POST /api/feedback",
     "POST /api/inbox/:id/archive",
@@ -1427,7 +1384,6 @@
     "PUT /api/agents/:id/skills",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
-    "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
     "PUT /api/labels/:id",
@@ -4909,46 +4865,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#008 POST /api/daemon/tasks/:taskId/start",
-      "route": "POST /api/daemon/tasks/:taskId/start",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/start",
-      "status": 400,
-      "body": {
-        "error": "start task: no rows in result set"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/progress",
-      "route": "POST /api/daemon/tasks/:taskId/progress",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/progress",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#010 POST /api/daemon/tasks/:taskId/messages",
-      "route": "POST /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/messages",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/prompt",
-      "route": "POST /api/daemon/tasks/:taskId/prompt",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/prompt",
-      "status": 200,
-      "body": {
-        "task_id": "tsk_7212d1hv48ko",
-        "mode": "bootstrap",
-        "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
-        "assembled_at": "<timestamp>"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#012 GET /api/tasks/:taskId/prompt",
+      "key": "daemon-task-lifecycle#008 GET /api/tasks/:taskId/prompt",
       "route": "GET /api/tasks/:taskId/prompt",
       "path": "/api/tasks/tsk_7212d1hv48ko/prompt",
       "status": 200,
@@ -4961,29 +4878,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/session",
-      "route": "POST /api/daemon/tasks/:taskId/session",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/session",
-      "status": 204,
-      "body": ""
-    },
-    {
-      "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/usage",
-      "route": "POST /api/daemon/tasks/:taskId/usage",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/usage",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#009 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_glzgc77isk18",
+          "id": "hrq_s9bxee1nx8n3",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -4999,13 +4900,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#016 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#010 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/human-requests/hrq_glzgc77isk18/respond",
+      "path": "/api/multiremi/tasks/tsk_7212d1hv48ko/human-requests/hrq_s9bxee1nx8n3/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_glzgc77isk18",
+          "id": "hrq_s9bxee1nx8n3",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -5021,13 +4922,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_9u85rmh8s6lk",
+          "id": "hrq_7scgjf9hexul",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -5043,13 +4944,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#018 POST /api/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#012 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
-      "path": "/api/tasks/tsk_7212d1hv48ko/human-requests/hrq_9u85rmh8s6lk/respond",
+      "path": "/api/tasks/tsk_7212d1hv48ko/human-requests/hrq_7scgjf9hexul/respond",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_9u85rmh8s6lk",
+          "id": "hrq_7scgjf9hexul",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -5065,13 +4966,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests",
       "status": 201,
       "body": {
         "request": {
-          "id": "hrq_cse1btodjmtp",
+          "id": "hrq_k9s0950jhzoo",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -5087,13 +4988,13 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
+      "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests/hrq_cse1btodjmtp/expire",
+      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/human-requests/hrq_k9s0950jhzoo/expire",
       "status": 200,
       "body": {
         "request": {
-          "id": "hrq_cse1btodjmtp",
+          "id": "hrq_k9s0950jhzoo",
           "taskId": "tsk_7212d1hv48ko",
           "kind": "permission",
           "payload": {
@@ -5106,72 +5007,6 @@
           "respondedAt": "<timestamp>",
           "expiresAt": "<timestamp>"
         }
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#021 POST /api/daemon/tasks/:taskId/complete",
-      "route": "POST /api/daemon/tasks/:taskId/complete",
-      "path": "/api/daemon/tasks/tsk_7212d1hv48ko/complete",
-      "status": 200,
-      "body": {
-        "id": "tsk_7212d1hv48ko",
-        "agent_id": "agt_snapshot",
-        "runtime_id": "rt_snapshot",
-        "issue_id": "iss_snapshot",
-        "holds_workspace": true,
-        "workspace_id": "local",
-        "status": "queued",
-        "priority": 0,
-        "dispatched_at": null,
-        "started_at": null,
-        "completed_at": null,
-        "result": null,
-        "error": null,
-        "attempt": 1,
-        "max_attempts": 3,
-        "created_at": "<timestamp>",
-        "kind": "direct",
-        "progress_summary": "half",
-        "progress_step": 1,
-        "progress_total": 2,
-        "issue_session_id": "ises_cdyoy133keds",
-        "issue_session_generation": 1,
-        "codex_profile": null,
-        "claude_profile": null
-      }
-    },
-    {
-      "key": "daemon-task-lifecycle#022 POST /api/daemon/tasks/:taskId/fail",
-      "route": "POST /api/daemon/tasks/:taskId/fail",
-      "path": "/api/daemon/tasks/tsk_snapshot/fail",
-      "status": 200,
-      "body": {
-        "id": "tsk_snapshot",
-        "agent_id": "agt_snapshot",
-        "runtime_id": "rt_snapshot",
-        "issue_id": "iss_snapshot",
-        "holds_workspace": true,
-        "workspace_id": "local",
-        "status": "completed",
-        "priority": 0,
-        "dispatched_at": "<timestamp>",
-        "started_at": "<timestamp>",
-        "completed_at": "<timestamp>",
-        "result": null,
-        "error": null,
-        "attempt": 1,
-        "max_attempts": 3,
-        "created_at": "<timestamp>",
-        "kind": "direct",
-        "progress_summary": "Waiting for permission approval",
-        "progress_step": 1,
-        "progress_total": 2,
-        "issue_session_id": "ises_cdyoy133keds",
-        "issue_session_generation": 1,
-        "plugin_snapshot": [],
-        "codex_profile": null,
-        "claude_profile": null,
-        "execution_fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
       }
     },
     {
@@ -5515,27 +5350,7 @@
       }
     },
     {
-      "key": "daemon#003 PUT /api/daemon/runtimes/:runtimeId/models",
-      "route": "PUT /api/daemon/runtimes/:runtimeId/models",
-      "path": "/api/daemon/runtimes/rt_snapshot/models",
-      "status": 200,
-      "body": {
-        "runtime_id": "rt_snapshot",
-        "supported": true,
-        "models": [
-          {
-            "id": "claude-sonnet-4",
-            "label": "Claude Sonnet 4",
-            "provider": "claude",
-            "default": false,
-            "createdAt": "<timestamp>",
-            "updatedAt": "<timestamp>"
-          }
-        ]
-      }
-    },
-    {
-      "key": "daemon#004 POST /api/daemon/runtimes/:runtimeId/models/claim",
+      "key": "daemon#003 POST /api/daemon/runtimes/:runtimeId/models/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/models/claim",
       "status": 200,
@@ -5544,16 +5359,7 @@
       }
     },
     {
-      "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
-      "route": "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/models/rml_95b5dwter7av/result",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon#006 POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
+      "key": "daemon#004 POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/claim",
       "status": 200,
@@ -5577,16 +5383,7 @@
       }
     },
     {
-      "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
-      "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_u7jlxs9tay5o/result",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon#008 POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
+      "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/claim",
       "status": 200,
@@ -5595,16 +5392,7 @@
       }
     },
     {
-      "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
-      "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_s05boock1828/result",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon#010 POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
+      "key": "daemon#006 POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/claim",
       "status": 200,
@@ -5613,16 +5401,7 @@
       }
     },
     {
-      "key": "daemon#011 POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
-      "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_bbo9f1dxazyr/result",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon#012 POST /api/daemon/runtimes/:runtimeId/update/claim",
+      "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/update/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/update/claim",
       "status": 200,
@@ -5631,7 +5410,7 @@
       }
     },
     {
-      "key": "daemon#013 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
+      "key": "daemon#008 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/update/rup_yy6thkeq1n3e/result",
       "status": 200,
@@ -5640,7 +5419,7 @@
       }
     },
     {
-      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/commands/claim",
+      "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/commands/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/commands/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/commands/claim",
       "status": 200,
@@ -5649,16 +5428,7 @@
       }
     },
     {
-      "key": "daemon#015 POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
-      "route": "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
-      "path": "/api/daemon/runtimes/rt_snapshot/commands/rcm_snapshot/result",
-      "status": 200,
-      "body": {
-        "status": "ok"
-      }
-    },
-    {
-      "key": "daemon#016 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+      "key": "daemon#010 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "route": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "path": "/api/daemon/runtimes/rt_snapshot/recover-orphans",
       "status": 200,
@@ -5668,7 +5438,7 @@
       }
     },
     {
-      "key": "daemon#017 POST /api/daemon/deregister",
+      "key": "daemon#011 POST /api/daemon/deregister",
       "route": "POST /api/daemon/deregister",
       "path": "/api/daemon/deregister",
       "status": 200,
@@ -13965,26 +13735,6 @@
       }
     },
     {
-      "key": "get-sweep GET /api/daemon/autopilot-runs/:runId/gc-check",
-      "route": "GET /api/daemon/autopilot-runs/:runId/gc-check",
-      "path": "/api/daemon/autopilot-runs/run_2xbrsagogw63/gc-check",
-      "status": 200,
-      "body": {
-        "status": "running",
-        "completed_at": null
-      }
-    },
-    {
-      "key": "get-sweep GET /api/daemon/chat-sessions/:sessionId/gc-check",
-      "route": "GET /api/daemon/chat-sessions/:sessionId/gc-check",
-      "path": "/api/daemon/chat-sessions/cht_snapshot/gc-check",
-      "status": 200,
-      "body": {
-        "status": "active",
-        "updated_at": "<timestamp>"
-      }
-    },
-    {
       "key": "get-sweep GET /api/daemon/issues/:issueId/decisions/:decisionId",
       "route": "GET /api/daemon/issues/:issueId/decisions/:decisionId",
       "path": "/api/daemon/issues/iss_snapshot/decisions/dcs_snapshot",
@@ -14034,16 +13784,6 @@
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
-      }
-    },
-    {
-      "key": "get-sweep GET /api/daemon/issues/:issueId/gc-check",
-      "route": "GET /api/daemon/issues/:issueId/gc-check",
-      "path": "/api/daemon/issues/iss_snapshot/gc-check",
-      "status": 200,
-      "body": {
-        "status": "active",
-        "updated_at": "<timestamp>"
       }
     },
     {
@@ -14240,16 +13980,6 @@
       }
     },
     {
-      "key": "get-sweep GET /api/daemon/tasks/:taskId/gc-check",
-      "route": "GET /api/daemon/tasks/:taskId/gc-check",
-      "path": "/api/daemon/tasks/tsk_snapshot/gc-check",
-      "status": 200,
-      "body": {
-        "status": "completed",
-        "completed_at": "<timestamp>"
-      }
-    },
-    {
       "key": "get-sweep GET /api/daemon/tasks/:taskId/human-requests/:requestId",
       "route": "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
       "path": "/api/daemon/tasks/tsk_snapshot/human-requests/hrq_snapshot",
@@ -14271,22 +14001,6 @@
           "expiresAt": "<timestamp>"
         }
       }
-    },
-    {
-      "key": "get-sweep GET /api/daemon/tasks/:taskId/messages",
-      "route": "GET /api/daemon/tasks/:taskId/messages",
-      "path": "/api/daemon/tasks/tsk_snapshot/messages",
-      "status": 200,
-      "body": [
-        {
-          "task_id": "tsk_snapshot",
-          "seq": 1,
-          "type": "assistant",
-          "created_at": "<timestamp>",
-          "issue_id": "iss_snapshot",
-          "content": "working"
-        }
-      ]
     },
     {
       "key": "get-sweep GET /api/daemon/tasks/:taskId/status",

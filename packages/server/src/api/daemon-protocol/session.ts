@@ -201,6 +201,8 @@ export interface DaemonSessionOptions {
   onReply?(frame: DaemonParsedFrame): void;
   /** Dispatch an uplink RPC frame. Returning null means "not wired here". */
   onRpc?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
+  onEvent?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
+  onBestEffort?(frame: DaemonParsedFrame): Promise<unknown | null> | unknown | null;
   /** Observability hook, called once per dispatched frame. */
   onFrame?(sample: WsFrameSample): void;
   /** Connection ended, for any reason. Called at most once. */
@@ -208,6 +210,8 @@ export interface DaemonSessionOptions {
   /** Time seam. Defaults to the real clock; tests install a manual one. */
   clock?: DaemonProtocolClock;
 }
+
+const DEFERRED_RPC_REPLY = Symbol("deferred daemon RPC reply");
 
 /** A pending reliable downlink frame awaiting its acknowledgement. */
 interface PendingAck {
@@ -413,6 +417,14 @@ export class DaemonProtocolSession {
     return this.sendDirect({ t: "res", ...(requestId ? { re: requestId } : {}), p: payload });
   }
 
+  /** A reverse RPC reply must be processed before its awaiting uplink handler. */
+  deferReply(requestId: string, reply: Promise<unknown>): symbol {
+    void reply.then(payload => this.sendReply(requestId, payload), () => this.sendReply(requestId, {
+      ok: false, code: "server_error", retryable: true,
+    }));
+    return DEFERRED_RPC_REPLY;
+  }
+
   /** Issue a server -> daemon RPC and remember it until the reply arrives. */
   request(rpcId: string, frame: Omit<DaemonSessionOutboundFrame, "id">): string | null {
     if (this.closed) return null;
@@ -545,7 +557,7 @@ export class DaemonProtocolSession {
       let direction: "uplink" | "rpc" = category === "rpc" ? "rpc" : "uplink";
       switch (category) {
         case "best_effort":
-          errorCode = this.handleBestEffort(frame);
+          errorCode = await this.handleBestEffort(frame);
           break;
         case "ack": {
           // A standalone `ack` frame carries the number in its payload; the
@@ -562,7 +574,7 @@ export class DaemonProtocolSession {
           errorCode = await this.handleRpc(frame);
           break;
         case "event":
-          errorCode = this.handleEvent(frame);
+          errorCode = await this.handleEvent(frame);
           break;
         case "handshake":
           direction = "uplink";
@@ -773,7 +785,7 @@ export class DaemonProtocolSession {
     this.close(rejection.code, rejection.hint);
   }
 
-  private handleBestEffort(frame: DaemonParsedFrame): string | null {
+  private async handleBestEffort(frame: DaemonParsedFrame): Promise<string | null> {
     if (frame.type === "hb") {
       const reply = this.options.onHeartbeat?.({
         daemonId: this.daemonId,
@@ -785,8 +797,8 @@ export class DaemonProtocolSession {
       this.sendReply(frame.id ?? "", reply ?? { ok: true });
       return null;
     }
-    // `runtime.ready` and `concierge.status` belong to A-3/A-4. Accepting them
-    // here keeps the transport from rejecting a frame a later sub-issue owns.
+    const reply = await this.options.onBestEffort?.(frame);
+    if (reply && frame.id) this.sendReply(frame.id, reply);
     return null;
   }
 
@@ -810,6 +822,7 @@ export class DaemonProtocolSession {
       return "protocol_violation";
     }
     const reply = await handler(frame);
+    if (reply === DEFERRED_RPC_REPLY) return null;
     if (reply === null || reply === undefined) {
       // No handler answered. Replying "not wired yet" is deliberate: an RPC left
       // unanswered burns the caller's whole timeout and hides which layer is
@@ -830,7 +843,14 @@ export class DaemonProtocolSession {
     return errorCode;
   }
 
-  private handleEvent(frame: DaemonParsedFrame): string | null {
+  private async handleEvent(frame: DaemonParsedFrame): Promise<string | null> {
+    const reply = await this.options.onEvent?.(frame);
+    if (reply !== null && reply !== undefined) {
+      const replyTo = frame.seq !== null ? String(frame.seq) : frame.id;
+      if (replyTo) this.sendReply(replyTo, reply);
+      return typeof reply === "object" && (reply as { ok?: unknown }).ok === false
+        ? String((reply as { code?: unknown }).code ?? "invalid_report") : null;
+    }
     // A-1 carries no business frames: the uplink events and `trace.append` arrive
     // here, and the transport-level exchange A-1 owns is the sequence and the
     // reply. The honest answer today is a deterministic refusal the sender can tell

@@ -110,7 +110,7 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("res")).toBe("reply");
     expect(daemonFrameCategory("ack")).toBe("ack");
     expect(daemonFrameCategory("task.offer")).toBe("event");
-    expect(daemonFrameCategory("trace.append")).toBe("event");
+    expect(daemonFrameCategory("trace.append")).toBe("rpc");
     expect(daemonFrameCategory("trace.push")).toBe("event");
     expect(daemonFrameCategory("runtime.ready")).toBe("best_effort");
     expect(daemonFrameCategory("concierge.status")).toBe("best_effort");
@@ -118,17 +118,16 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("trace.subscribe")).toBe("rpc");
   });
 
-  it("replays the event category, which is exactly the set that carries a seq", () => {
+  it("keeps event sequences separate from head-based trace reliability", () => {
     for (const name of ALL_FRAME_NAMES) {
       const category = daemonFrameCategory(name);
-      const mustReplay = category === "event";
+      const mustReplay = category === "event" || name === "trace.append";
       expect(daemonFrameIsReliable(name), `${name} (${category}) replay flag`).toBe(mustReplay);
-      // seq and replay are the same decision, so they must never disagree.
-      expect(daemonFrameUsesSeq(name), `${name} (${category}) seq flag`).toBe(mustReplay);
+      expect(daemonFrameUsesSeq(name), `${name} (${category}) seq flag`).toBe(category === "event");
     }
   });
 
-  it("keeps every non-event category off both the replay path and the seq field", () => {
+  it("keeps ordinary RPC and best-effort frames off both replay and seq", () => {
     expect(daemonFrameCategory("hb")).toBe("best_effort");
     expect(daemonFrameIsReliable("hb")).toBe(false);
     expect(daemonFrameUsesSeq("hb")).toBe(false);
@@ -153,7 +152,16 @@ describe("daemon protocol frame inventory", () => {
     // And the frames that do carry a seq say so.
     expect(daemonFrameUsesSeq("task.offer")).toBe(true);
     expect(daemonFrameUsesSeq("task.complete")).toBe(true);
-    expect(daemonFrameUsesSeq("trace.append")).toBe(true);
+    expect(daemonFrameUsesSeq("trace.push")).toBe(true);
+  });
+
+  it("resumes trace.append by head without an outer seq or outbox window", () => {
+    expect(daemonFrameCategory("trace.append")).toBe("rpc");
+    expect(daemonFrameIsReliable("trace.append")).toBe(true);
+    expect(daemonFrameUsesSeq("trace.append")).toBe(false);
+    expect(daemonFrameUsesOutboxWindow("trace.append")).toBe(false);
+    expect(daemonFrameCategory("trace.push")).toBe("event");
+    expect(daemonFrameUsesSeq("trace.push")).toBe(true);
   });
 
   it("windows only outbox-backed uplink frames, never trace", () => {

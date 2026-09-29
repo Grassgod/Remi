@@ -8,13 +8,9 @@
  * and B's file implementation uses the same functions, so the file and the frame
  * can never disagree.
  *
- * `sanitizeTraceEventFields` is a faithful extraction, not a rewrite. Its output
- * for a given message must equal what `appendTaskMessages` writes into
- * `multiremi_task_messages` today, byte for byte — including the truncation
- * marker and the UTF-8 char-boundary handling — and
- * `tests/unit/daemon/trace-sanitize-equivalence.test.ts` holds it to that by
- * running one fixture set through both implementations. When A-6 deletes the old
- * write path, that test's tasks-repo half is deleted with it; this module stays.
+ * The deprecated Store writer also delegates here for legacy reader fixtures.
+ * Boundary tests pin the original byte caps, truncation marker, UTF-8 handling
+ * and structured-field guards; there is no second sanitizer to keep in sync.
  *
  * Lives in `@multiremi/shared` because the server store and the daemon trace
  * store both need it and neither may depend on the other.

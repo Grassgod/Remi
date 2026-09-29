@@ -123,7 +123,7 @@ describe("Bun Multiremi daemon steering", () => {
       expect(steerId).toBeTruthy();
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-      const steerMessages = store.listTaskMessages(task.id).filter((m) => m.type === "steer");
+      const steerMessages = daemon.traceStore().read(task.id).events.filter((m) => m.type === "steer");
       expect(steerMessages).toHaveLength(1);
       expect(steerMessages[0]?.content).toBe("改用中文输出");
     } finally {
@@ -273,6 +273,10 @@ describe("Bun Multiremi daemon steering", () => {
     try {
       const daemon = activeDaemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${proxy.port}`,
+        protocolClientOptions: { connect: (url, init) => {
+          const upstream = new URL(url); upstream.port = String(server.port);
+          return new WebSocket(upstream, init as never);
+        } },
         token: daemonToken.token,
         daemonId: "daemon-steer-duppoll",
         runtimeName: "duppoll-runtime",
