@@ -533,9 +533,10 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
     expect(savepoints).toHaveLength(0);
   });
 
+  // The 55-answer PG fixture also persists an inbox entry and wake for each reply.
   it("windows recently answered decisions by answered_at and exposes history", async () => {
     await exerciseAnsweredWindow(store);
-  });
+  }, 15_000);
 
   it("falls back to the issue creator, then workspace owners, when an escalated decision has no explicit audience", async () => {
     await exerciseDecisionRecipientFallback(store);
