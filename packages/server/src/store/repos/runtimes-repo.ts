@@ -2015,7 +2015,11 @@ export class RuntimesRepo {
     // on changed. Computed by the same helper the desired snapshot uses, from
     // rows this transaction already loaded — no extra query.
     let agentPluginDesiredRevision: string | null = null;
-    if (options.agentPluginProtocol !== undefined) {
+    const reportedAgentPluginProtocol = normalizeAgentPluginProtocol(options.agentPluginProtocol ?? 0);
+    // A capable daemon advances pending Plugin reconciliation on every heartbeat.
+    // A silent or legacy daemon only needs the transaction once to clear a stored capability.
+    if (options.agentPluginProtocol !== undefined
+      && (reportedAgentPluginProtocol > 0 || (previousAgentPluginProtocol ?? 0) > 0)) {
       const workspaceId = runtime.workspaceId ?? "local";
       const result = this.ctx.db.transaction(() => {
         this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
