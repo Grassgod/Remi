@@ -4,8 +4,10 @@ import type {
   MultiremiSessionProjectionMode,
 } from "@multiremi/contracts/types.js";
 import { estimateProjectionTokens } from "@multiremi/store/session-projection-budget.js";
+import { envelopePriority, type EnvelopePriority } from "@multiremi/contracts/inbox.js";
 
 const DEFAULT_EVENT_BODY_MAX_CHARS = 4_000;
+const BODY_SUMMARY_PREFIX_CHARS = 600;
 const ELISION_NOTE = "Earlier session events omitted to fit the projection token budget.";
 
 type EventPerspective = "assistant_history" | "external_agent" | "user" | "operator"
@@ -77,9 +79,26 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   }
   const headerJson = JSON.stringify(header);
   const prepared = prepareProjectionEvents(projected, input);
+  const targetAgentName = input.resolveAuthorName?.("agent", input.targetAgentId) ?? null;
+  const tocJson = JSON.stringify({
+    type: "inbox_toc",
+    entries: prepared.filter(({ event }) => event.authorType !== "agent" || event.authorId !== input.targetAgentId)
+      .map(({ event, authorName }) => ({
+        seq: event.seq,
+        id: event.sourceCommentId ?? event.id,
+        priority: eventPriority(event, input.targetAgentId, targetAgentName),
+        kind: event.kind,
+        author_name: authorName,
+        created_at: event.createdAt,
+        title: (event.body.split(/\r?\n/, 1)[0] ?? "").slice(0, 80),
+        chars: event.body.length,
+        folded: event.body.length > projectionEventBodyMaxChars(),
+      }))
+      .sort((a, b) => a.priority - b.priority || a.seq - b.seq),
+  });
   const eventBodyMaxChars = projectionEventBodyMaxChars();
   const full = assembleProjection(
-    headerJson,
+    headerJson, tocJson,
     prepared,
     new Set(prepared.map((_, index) => index)),
     null,
@@ -104,7 +123,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     const selected = new Set(pinned);
     const recent = recentCount > 0 ? recentCandidates.slice(-recentCount) : [];
     for (const index of recent) selected.add(index);
-    assembled = assembleProjection(headerJson, prepared, selected, null);
+    assembled = assembleProjection(headerJson, tocJson, prepared, selected, null);
   }
 
   if (assembled.estimatedTokens > tokenBudget) {
@@ -113,7 +132,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     let fitting: AssembledProjection | null = null;
     while (lower <= upper) {
       const bodyLimit = Math.floor((lower + upper) / 2);
-      const candidate = assembleProjection(headerJson, prepared, pinned, bodyLimit);
+      const candidate = assembleProjection(headerJson, tocJson, prepared, pinned, bodyLimit);
       if (candidate.estimatedTokens <= tokenBudget) {
         fitting = candidate;
         lower = bodyLimit + 1;
@@ -121,7 +140,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
         upper = bodyLimit - 1;
       }
     }
-    assembled = fitting ?? assembleProjection(headerJson, prepared, pinned, 0);
+    assembled = fitting ?? assembleProjection(headerJson, tocJson, prepared, pinned, 0);
   }
 
   if (assembled.estimatedTokens > tokenBudget) {
@@ -140,7 +159,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
       if (publishedCount > 0) {
         for (const index of published.slice(-publishedCount)) selected.add(index);
       }
-      const candidate = assembleProjection(headerJson, prepared, selected, 0);
+      const candidate = assembleProjection(headerJson, tocJson, prepared, selected, 0);
       if (candidate.estimatedTokens <= tokenBudget) {
         fitting = candidate;
         lower = publishedCount + 1;
@@ -149,7 +168,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
       }
     }
     assembled = fitting ?? assembleProjection(
-      headerJson,
+      headerJson, tocJson,
       prepared,
       lastIndex === null ? new Set() : new Set([lastIndex]),
       0,
@@ -157,7 +176,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   }
 
   if (assembled.estimatedTokens > tokenBudget && prepared.length > 0) {
-    assembled = assembleProjection(headerJson, prepared, new Set(), 0);
+    assembled = assembleProjection(headerJson, tocJson, prepared, new Set(), 0);
   }
 
   if (assembled.estimatedTokens > tokenBudget) {
@@ -188,6 +207,28 @@ interface PreparedProjectionEvent {
   fullJsonLength: number;
 }
 
+function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, targetAgentName: string | null): EnvelopePriority {
+  const envelope = event.metadata?.envelope;
+  if (envelope && typeof envelope === "object") {
+    const value = envelope as Record<string, unknown>;
+    const lifecycleEvent = typeof value.lifecycleEvent === "string" ? value.lifecycleEvent : event.kind;
+    return envelopePriority({
+      kind: value.kind as "request",
+      wake: value.wake as "now",
+      outcome: value.outcome as "done" | undefined,
+      senderType: value.priority === 1 ? "member" : event.authorType,
+      lifecycleEvent,
+    });
+  }
+  if (event.authorType === "member" && event.kind === "message"
+    && (event.body.includes(`@${targetAgentId}`)
+      || event.body.includes(`mention://agent/${targetAgentId}`)
+      || Boolean(targetAgentName && event.body.includes(`@${targetAgentName}`)))) return 1;
+  if (event.kind === "task_failed" || event.kind === "task_cancelled") return 2;
+  if (event.kind === "task_completed") return 3;
+  return 4;
+}
+
 function prepareProjectionEvents(
   events: MultiremiSessionEvent[],
   input: BuildSessionProjectionInput,
@@ -204,7 +245,7 @@ function prepareProjectionEvents(
       ? inheritedEventMetadata(event.metadata)
       : event.metadata);
     const perspective = eventPerspective(event, input.targetAgentId, input.perspectiveMode);
-    const fullLine = eventLine(event, perspective, authorName ?? null, metadata, event.body, 0);
+    const fullLine = eventLine(event, perspective, authorName ?? null, metadata, null);
     const fullJson = JSON.stringify(fullLine);
     return {
       event,
@@ -219,11 +260,20 @@ function prepareProjectionEvents(
 
 function assembleProjection(
   headerJson: string,
+  tocJson: string,
   events: PreparedProjectionEvent[],
   selected: Set<number>,
   bodyLimit: number | null,
 ): AssembledProjection {
-  const lines: string[] = [headerJson];
+  const toc = JSON.parse(tocJson) as { type: string; entries: Array<{ seq: number; folded: boolean }> };
+  const selectedSeqs = new Set([...selected].map((index) => events[index]?.event.seq));
+  const foldedSeqs = new Set([...selected].filter((index) => bodyLimit !== null
+    && events[index]!.event.body.length > bodyLimit).map((index) => events[index]!.event.seq));
+  const lines: string[] = [headerJson, JSON.stringify({
+    type: toc.type,
+    entries: toc.entries.filter((entry) => selectedSeqs.has(entry.seq))
+      .map((entry) => foldedSeqs.has(entry.seq) ? { ...entry, folded: true } : entry),
+  })];
   let omittedEvents = 0;
   let bodyTruncated = false;
   let index = 0;
@@ -276,14 +326,12 @@ function renderPreparedEvent(
     return { json: prepared.fullJson, bodyTruncated: false };
   }
   const body = prepared.event.body.slice(0, Math.max(0, bodyLimit));
-  const omittedChars = prepared.event.body.length - body.length;
   const line = eventLine(
     prepared.event,
     prepared.perspective,
     prepared.authorName,
     prepared.metadata,
     body,
-    omittedChars,
   );
   return { json: JSON.stringify(line), bodyTruncated: true };
 }
@@ -293,8 +341,7 @@ function eventLine(
   perspective: EventPerspective,
   authorName: string | null,
   metadata: unknown,
-  body: string,
-  bodyOmittedChars: number,
+  bodyOverride: string | null,
 ): Record<string, unknown> {
   const line: Record<string, unknown> = {
     type: "session_event",
@@ -304,11 +351,17 @@ function eventLine(
     author_type: event.authorType,
     author_id: event.authorId,
     author_name: authorName,
-    body,
   };
-  if (bodyOmittedChars > 0) {
-    line.body_truncated = true;
-    line.body_omitted_chars = bodyOmittedChars;
+  const body = bodyOverride ?? event.body;
+  if (body.length > projectionEventBodyMaxChars() || bodyOverride !== null && body.length < event.body.length) {
+    const prefix = body.slice(0, BODY_SUMMARY_PREFIX_CHARS);
+    const outline = [...event.body.matchAll(/^#{1,3}\s+.+$/gm)].map(([heading]) => heading);
+    line.body_summary = [prefix, ...outline].join("\n");
+    line.body_folded = true;
+    line.body_omitted_chars = event.body.length - prefix.length;
+    line.expand = `remi session log get ${event.sessionId} ${event.seq}`;
+  } else {
+    line.body = body;
   }
   line.task_id = event.sourceCommentId ? null : event.taskId;
   line.source_comment_id = event.sourceCommentId;

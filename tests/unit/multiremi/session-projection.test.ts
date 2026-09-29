@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("bounded Session projections", () => {
-  it("preserves a body larger than the fallback cap byte-for-byte when the projection fits", () => {
+  it("folds a body above the threshold even when the full body fits the budget", () => {
     const body = `full body:${"x".repeat(9_000)}`;
     const projection = buildSessionProjection({
       sessionId: "ises_1",
@@ -30,24 +30,15 @@ describe("bounded Session projections", () => {
       resolveAuthorName: () => "Teammate",
     });
 
-    expect(projection.jsonl).toBe([
-      '{"type":"session_projection","version":1,"mode":"bootstrap","session_id":"ises_1","target_agent_id":"agt_target","from_seq":0,"to_seq":1}',
-      JSON.stringify({
-        type: "session_event",
-        seq: 1,
-        kind: "message",
-        perspective: "user",
-        author_type: "member",
-        author_id: "usr_1",
-        author_name: "Teammate",
-        body,
-        task_id: null,
-        source_comment_id: "cmt_1",
-        metadata: { a: 2, z: 1 },
-        created_at: "2026-08-28T00:00:00.000Z",
-      }),
-    ].join("\n"));
-    expect(projection.jsonl).not.toContain("body_truncated");
+    const [header, toc, rendered] = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+    expect(header.type).toBe("session_projection");
+    expect(toc.entries).toEqual([expect.objectContaining({ seq: 1, chars: body.length, folded: true })]);
+    expect(rendered).toMatchObject({
+      type: "session_event", seq: 1, body_folded: true,
+      body_summary: body.slice(0, 600), body_omitted_chars: body.length - 600,
+      expand: "remi session log get ises_1 1", metadata: { a: 2, z: 1 },
+    });
+    expect(rendered.body).toBeUndefined();
     expect(projection).toMatchObject({
       truncated: false,
       omittedEvents: 0,
@@ -76,31 +67,46 @@ describe("bounded Session projections", () => {
     expect(projection.truncated).toBe(true);
     expect(projection.omittedEvents).toBeGreaterThan(0);
     expect(projection.estimatedTokens).toBeLessThanOrEqual(1_200);
+    const toc = lines[1];
+    expect(toc.type).toBe("inbox_toc");
+    expect(toc.entries.every((entry: { seq: number }) => projectedEvents.some((event) => event.seq === entry.seq))).toBe(true);
     expect(projectedEvents.some((line) => line.seq === 3 && line.kind === "result_published")).toBe(true);
     expect(projectedEvents.at(-1)?.seq).toBe(10);
     expect(elisions.length).toBeGreaterThan(0);
     expect(elisions.every((line) => line.omitted_events > 0 && line.omitted_chars > 0)).toBe(true);
-    const positions = lines.slice(1).map((line) => line.type === "session_event" ? line.seq : line.from_seq);
+    const positions = lines.slice(2).map((line) => line.type === "session_event" ? line.seq : line.from_seq);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
   });
 
-  it("hard-truncates a single giant body until the assembled JSONL fits", () => {
+  it("folds a giant body and counts its projected size", () => {
     const projection = buildSessionProjection({
       sessionId: "ises_giant",
       targetAgentId: "agt_target",
       events: [event(1, "message", "巨".repeat(50_000))],
       cursorSeq: 0,
       providerSessionId: null,
-      tokenBudget: 400,
+      tokenBudget: 1_200,
     });
-    const rendered = JSON.parse(projection.jsonl.split("\n")[1]!);
+    const rendered = JSON.parse(projection.jsonl.split("\n")[2]!);
 
-    expect(rendered.body_truncated).toBe(true);
+    expect(rendered.body_folded).toBe(true);
     expect(rendered.body_omitted_chars).toBeGreaterThan(0);
-    expect(projection.truncated).toBe(true);
+    expect(rendered.body).toBeUndefined();
     expect(projection.omittedEvents).toBe(0);
-    expect(projection.estimatedTokens).toBeLessThanOrEqual(400);
-    expect(estimateProjectionTokens(projection.jsonl)).toBeLessThanOrEqual(400);
+    expect(projection.estimatedTokens).toBeLessThanOrEqual(1_200);
+    expect(estimateProjectionTokens(projection.jsonl)).toBeLessThanOrEqual(1_200);
+  });
+
+  it("marks a shorter entry folded when budget fallback folds it", () => {
+    const projection = buildSessionProjection({
+      sessionId: "ises_budget", targetAgentId: "agt_target",
+      events: [event(1, "message", "x".repeat(3_000))],
+      cursorSeq: 0, providerSessionId: null, tokenBudget: 500,
+    });
+    const [, toc, rendered] = projection.jsonl.split("\n").map((line) => JSON.parse(line));
+    expect(toc.entries[0].folded).toBe(true);
+    expect(rendered.body_folded).toBe(true);
+    expect(projection.estimatedTokens).toBeLessThanOrEqual(500);
   });
 
   it("resolves each author identity once across repeated fallback assemblies", () => {
@@ -122,7 +128,7 @@ describe("bounded Session projections", () => {
       },
     });
 
-    expect(resolverCalls).toBe(2);
+    expect(resolverCalls).toBe(3); // Two authors plus the target agent's @-mention name.
     expect(projection.truncated).toBe(true);
     expect(projection.estimatedTokens).toBeLessThanOrEqual(1_200);
   });

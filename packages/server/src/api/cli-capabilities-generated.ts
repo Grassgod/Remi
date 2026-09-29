@@ -2295,6 +2295,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "session.log.get": {
+      "command": "remi session log get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "session.log.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "session.log.window": {
       "command": "remi session log window",
       "auth": [
