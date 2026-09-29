@@ -1748,13 +1748,9 @@ export class FeishuBotRepo {
    * `reminder_sent_at` on the decision row is the single compare-and-set that
    * makes it once-only. A decision answered a second earlier produces nothing.
    */
-  private materializeIssueDecisionRemindersWithinTransaction(
-    workspaceId: string,
-    now: Date,
-    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
-  ): void {
+  private findDueIssueDecisionReminders(workspaceId: string, now: Date): Row[] {
     const threshold = new Date(now.getTime() - ISSUE_DECISION_CARD_REMINDER_DELAY_MS).toISOString();
-    const due = this.ctx.db.query(
+    return this.ctx.db.query(
       `SELECT decision.id, decision.issue_id
        FROM multiremi_issue_decisions decision
        JOIN multiremi_issues issue ON issue.id = decision.issue_id
@@ -1769,6 +1765,14 @@ export class FeishuBotRepo {
          ) <= ?
        ORDER BY decision.id ASC`,
     ).all(workspaceId, threshold) as Row[];
+  }
+
+  private materializeIssueDecisionRemindersWithinTransaction(
+    workspaceId: string,
+    now: Date,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+    due: Row[],
+  ): void {
     for (const row of due) {
       const decision = this.ctx.issues().getIssueDecision(String(row.issue_id), String(row.id));
       if (!decision || decision.status !== "escalated") continue;
@@ -2719,6 +2723,9 @@ export class FeishuBotRepo {
     // reminder activity below is written before COMMIT and published after it.
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
+      // Read candidates before taking write locks. Each row is revalidated and
+      // claimed by CAS below, so concurrent pollers can share this snapshot.
+      const dueIssueDecisions = this.findDueIssueDecisionReminders(workspaceId, now);
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
       const nowIsoValue = now.toISOString();
@@ -2727,7 +2734,7 @@ export class FeishuBotRepo {
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
       // transaction means a host that polls continuously still queues one nudge.
       this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
-      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
+      this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents, dueIssueDecisions);
       this.reconcileTaskDeliveriesWithinTransaction(workspaceId);
       const exhausted = this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
         SET status = 'failed', claim_token = NULL, leased_until = NULL,
