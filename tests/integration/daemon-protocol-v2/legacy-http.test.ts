@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
+import { createMultiremiApp, RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import baseline from "../../fixtures/daemon-v1-routes.json";
-import current from "../../../scripts/api-routes.golden.json";
+import { snapshotRouteTable } from "../../../scripts/snapshot-api-routes.js";
 import { waitFor } from "./harness.js";
 
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
@@ -38,20 +38,22 @@ const removedBy421 = [
 ];
 
 it("keeps the retired method + path table equal to v1 minus live routes", () => {
-  const live = new Set(current.routes);
   const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
   expect(retired).toHaveLength(new Set(retired).size);
-  expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !live.has(route)).toSorted());
+  expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
 });
 
 let removedRoutesServer: ReturnType<typeof startMultiremiServer>;
 let removedRoutesDb: Database;
+let liveRoutes: Set<string>;
 const removedRoutesAuthToken = "isolated-removed-v1-routes";
 
 beforeAll(() => {
   removedRoutesDb = new Database(":memory:");
   const store = new MultiremiStore(removedRoutesDb);
   store.ensureLocalWorkspace();
+  const app = createMultiremiApp({ store, authToken: removedRoutesAuthToken, apiRole: "all" });
+  liveRoutes = new Set(snapshotRouteTable(app).map(({ method, path }) => `${method} ${path}`));
   removedRoutesServer = startMultiremiServer({ store, authToken: removedRoutesAuthToken, backgroundJobs: false, apiRole: "all", hostname: "127.0.0.1", port: 0 });
 });
 
@@ -65,7 +67,7 @@ afterAll(async () => {
 
 it.each(removedBy421)("returns the protocol 426 for deleted MUL-421 route %s", async route => {
   expect(baseline.routes).toContain(route);
-  expect(current.routes).not.toContain(route);
+  expect(liveRoutes.has(route)).toBe(false);
   const [method, pattern] = route.split(" ");
   const path = pattern!.replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
   const response = await fetch(`http://127.0.0.1:${removedRoutesServer.port}${path}`, {
@@ -95,8 +97,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
   const credential = await store.createAccessToken({ name: "Legacy HTTP fixture", type: "daemon", workspaceId: "local", daemonId: runtime.daemonId, userId: "local" });
   const authToken = "isolated-legacy-http-fixture";
   const options = { store, authToken, backgroundJobs: false, apiRole };
-  const routes = new Set(current.routes);
-  const removed = baseline.routes.filter(route => !routes.has(route));
+  const removed = baseline.routes.filter(route => !liveRoutes.has(route));
   const server = startMultiremiServer({ ...options, hostname: "127.0.0.1", port: 0 });
   const headers = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
   const request = (path: string, method = "GET", body?: unknown) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
