@@ -1424,10 +1424,6 @@ export class TasksRepo {
     if (wake.mode === "inbox_only") return { task: null, action: "none" };
     let pending: MultiremiTask | null;
     if (lane.kind === "issue") {
-      if (wake.mode === "next_turn" && this.ctx.db.query(`SELECT id FROM multiremi_tasks
-        WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ?
-          AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human') LIMIT 1`)
-        .get(lane.issueSessionId, lane.agentId, lane.executionScope)) return { task: null, action: "none" };
       const row = this.ctx.db.query(`SELECT id FROM multiremi_tasks
         WHERE issue_session_id = ? AND agent_id = ? AND execution_scope = ? AND status = 'queued'
         ORDER BY created_at ASC, id ASC LIMIT 1`).get(lane.issueSessionId, lane.agentId, lane.executionScope) as { id: string } | null;
