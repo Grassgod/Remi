@@ -1,7 +1,7 @@
 // The fleet catalog the UI reads: which engines/models an any-provider runtime
 // surfaces, how models bucket by runtime engine, and cross-connection claim atomicity.
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -861,8 +861,8 @@ describe("Multiremi store — fleet engine and model catalog", () => {
   it("claims runtime tasks atomically across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-task-claim-"));
     const path = join(dir, "multiremi.db");
-    const dbA = new Database(path);
-    const dbB = new Database(path);
+    const dbA = openSqliteDatabase(path);
+    const dbB = openSqliteDatabase(path);
     try {
       const storeA = new MultiremiStore(dbA);
       const storeB = new MultiremiStore(dbB);

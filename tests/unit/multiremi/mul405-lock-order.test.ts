@@ -27,8 +27,10 @@
  * configured role may CREATE DATABASE.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { resolveSqlDialect } from "@multiremi/store/migrations.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { classifyLockOrderStatement } from "@multiremi/store/lock-order-sentinel.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
@@ -75,7 +77,11 @@ function firstTouchOrder(locks: LockName[]): LockName[] {
  */
 class LockRecordingDatabase implements SqlDatabase {
   readonly locks: LockName[] = [];
-  constructor(private readonly inner: Database) {}
+  constructor(private readonly inner: ReturnType<typeof openSqliteDatabase>) {}
+
+  get dialect(): "sqlite" {
+    return this.inner.dialect;
+  }
 
   private record(lock: LockName): void {
     if (this.locks[this.locks.length - 1] !== lock) this.locks.push(lock);
@@ -143,13 +149,21 @@ afterEach(() => {
 function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase } {
   previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
-  const db = new Database(":memory:");
+  const db = openSqliteDatabase(":memory:");
   openDbs.push(db);
   const recorder = new LockRecordingDatabase(db);
+  expect(recorder.dialect).toBe("sqlite");
+  expect(resolveSqlDialect(recorder)).toBe("sqlite");
   const store = new MultiremiStore(recorder as unknown as SqlDatabase);
   store.ensureLocalWorkspace();
   return { store, recorder };
 }
+
+it("preserves the SQLite dialect on the recording wrapper", () => {
+  const { recorder } = freshStore();
+  expect(recorder.dialect).toBe("sqlite");
+  expect(resolveSqlDialect(recorder)).toBe("sqlite");
+});
 
 /** The Feishu group-topic path: workspace row lock, then the auto-created Issue. */
 function recordFeishuOrder(): LockName[] {

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, writeFile, rm, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { CommandRegistry, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
@@ -121,7 +121,7 @@ describe("native collaboration CLI contracts", () => {
   });
   it("runs the five decision commands through the real issue routes", async () => {
     useCliEnv();
-    const database = new Database(":memory:");
+    const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();

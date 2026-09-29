@@ -32,7 +32,7 @@
  *                        it naturally lands on page 2 and the probe must read
  *                        beyond page one (`inboxInjected=true`)
  */
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -62,7 +62,7 @@ const KEEP = process.env.MUL384_KEEP === "1";
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const TOKEN_PLACEHOLDER = "local-e2e-token-not-a-real-credential";
 
-const database = new Database(":memory:");
+const database = openSqliteDatabase(":memory:");
 const store = new MultiremiStore(database);
 const workspace = store.ensureLocalWorkspace();
 const slug = workspace.slug ?? "local";
