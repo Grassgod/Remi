@@ -569,7 +569,7 @@ export class IssueSessionsRepo {
       // The projection budget needs the Agent's provider/model, not its Skills.
       const agent = this.ctx.agents().getAgentLite(task.agentId);
       const session = this.getIssueSession(task.issueSessionId)!;
-      const events = this.projectionEvents(task.issueSessionId);
+      const { events, expandableSeqs } = this.projectionEvents(task.issueSessionId);
       const tokenBudget = resolveProjectionTokenBudget({
         provider: agent?.provider,
         model: agent?.model,
@@ -603,6 +603,7 @@ export class IssueSessionsRepo {
         sessionId: task.issueSessionId,
         targetAgentId: task.agentId,
         events,
+        expandableSeqs,
         cursorSeq: lane.cursorSeq,
         providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
         tokenBudget: tokenBudget - inheritedTokenBudget,
@@ -612,10 +613,12 @@ export class IssueSessionsRepo {
       if (hasInheritedWindow) {
         const parent = this.getIssueSession(session.parentSessionId!);
         if (!parent) throw new Error(`Parent session not found: ${session.parentSessionId}`);
+        const inherited = this.projectionEvents(parent.id);
         const inheritedProjection = buildSessionProjection({
           sessionId: parent.id,
           targetAgentId: task.agentId,
-          events: this.projectionEvents(parent.id).filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
+          events: inherited.events.filter((event) => event.seq > parentFromSeq && event.seq <= parentToSeq),
+          expandableSeqs: inherited.expandableSeqs,
           cursorSeq: 0,
           fromSeq: parentFromSeq,
           toSeq: parentToSeq,
@@ -845,9 +848,21 @@ export class IssueSessionsRepo {
     return Number(row.seq);
   }
 
-  private projectionEvents(sessionId: string): MultiremiSessionEvent[] {
-    const projected = conversationLogProjectionEvents(this.ctx.conversationLog().listConversationLogEntries(sessionId));
-    return [...projected, ...this.legacyDelegationReports(sessionId)].sort((a, b) => a.seq - b.seq);
+  private projectionEvents(sessionId: string): {
+    events: MultiremiSessionEvent[];
+    expandableSeqs: Set<number>;
+  } {
+    const entries = this.ctx.conversationLog().listConversationLogEntries(sessionId);
+    const projected = conversationLogProjectionEvents(entries);
+    const entriesBySeq = new Map(entries.map((entry) => [entry.seq, entry]));
+    const expandableSeqs = new Set(projected.filter((event) => {
+      const entry = entriesBySeq.get(event.seq);
+      return entry?.visibility === "shown" && entry.deleted_at === null && event.body === entry.body_md;
+    }).map((event) => event.seq));
+    return {
+      events: [...projected, ...this.legacyDelegationReports(sessionId)].sort((a, b) => a.seq - b.seq),
+      expandableSeqs,
+    };
   }
 
   private sessionAuthorName(authorType: string, authorId: string | null): string | null {

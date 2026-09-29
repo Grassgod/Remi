@@ -5,10 +5,12 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { estimateProjectionTokens } from "@multiremi/store/session-projection-budget.js";
 import { envelopePriority, type EnvelopePriority } from "@multiremi/contracts/inbox.js";
+import { CONVERSATION_LOG_SHOWN_KINDS } from "@multiremi/contracts/conversation-log.js";
 
 const DEFAULT_EVENT_BODY_MAX_CHARS = 4_000;
 const BODY_SUMMARY_PREFIX_CHARS = 600;
 const ELISION_NOTE = "Earlier session events omitted to fit the projection token budget.";
+const DEFAULT_EXPANDABLE_KINDS = new Set<string>(CONVERSATION_LOG_SHOWN_KINDS);
 
 type EventPerspective = "assistant_history" | "external_agent" | "user" | "operator"
   | "inherited_agent" | "inherited_user" | "inherited_operator";
@@ -28,6 +30,8 @@ export interface BuildSessionProjectionInput {
   toSeq?: number;
   /** The current request is rendered in its own prompt section, not replayed as history. */
   currentTaskId?: string | null;
+  /** Seq values whose displayed bodies can be recovered verbatim through /log/entry. */
+  expandableSeqs?: ReadonlySet<number>;
   resolveAuthorName?: (authorType: string, authorId: string | null) => string | null;
 }
 
@@ -83,7 +87,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
   const tocJson = JSON.stringify({
     type: "inbox_toc",
     entries: prepared.filter(({ event }) => event.authorType !== "agent" || event.authorId !== input.targetAgentId)
-      .map(({ event, authorName }) => ({
+      .map(({ event, authorName, expandable }) => ({
         seq: event.seq,
         id: event.sourceCommentId ?? event.id,
         priority: eventPriority(event, input.targetAgentId, targetAgentName),
@@ -92,7 +96,7 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
         created_at: event.createdAt,
         title: (event.body.split(/\r?\n/, 1)[0] ?? "").slice(0, 80),
         chars: event.body.length,
-        folded: event.body.length > projectionEventBodyMaxChars(),
+        folded: expandable && event.body.length > projectionEventBodyMaxChars(),
       }))
       .sort((a, b) => a.priority - b.priority || a.seq - b.seq),
   });
@@ -200,6 +204,7 @@ interface AssembledProjection {
 
 interface PreparedProjectionEvent {
   event: MultiremiSessionEvent;
+  expandable: boolean;
   perspective: EventPerspective;
   authorName: string | null;
   metadata: unknown;
@@ -245,10 +250,12 @@ function prepareProjectionEvents(
       ? inheritedEventMetadata(event.metadata)
       : event.metadata);
     const perspective = eventPerspective(event, input.targetAgentId, input.perspectiveMode);
-    const fullLine = eventLine(event, perspective, authorName ?? null, metadata, null);
+    const expandable = input.expandableSeqs?.has(event.seq) ?? DEFAULT_EXPANDABLE_KINDS.has(event.kind);
+    const fullLine = eventLine(event, perspective, authorName ?? null, metadata, null, expandable);
     const fullJson = JSON.stringify(fullLine);
     return {
       event,
+      expandable,
       perspective,
       authorName: authorName ?? null,
       metadata,
@@ -268,7 +275,8 @@ function assembleProjection(
   const toc = JSON.parse(tocJson) as { type: string; entries: Array<{ seq: number; folded: boolean }> };
   const selectedSeqs = new Set([...selected].map((index) => events[index]?.event.seq));
   const foldedSeqs = new Set([...selected].filter((index) => bodyLimit !== null
-    && events[index]!.event.body.length > bodyLimit).map((index) => events[index]!.event.seq));
+    && events[index]!.expandable && events[index]!.event.body.length > bodyLimit)
+    .map((index) => events[index]!.event.seq));
   const lines: string[] = [headerJson, JSON.stringify({
     type: toc.type,
     entries: toc.entries.filter((entry) => selectedSeqs.has(entry.seq))
@@ -322,7 +330,7 @@ function renderPreparedEvent(
   prepared: PreparedProjectionEvent,
   bodyLimit: number | null,
 ): { json: string; bodyTruncated: boolean } {
-  if (bodyLimit === null || prepared.event.body.length <= bodyLimit) {
+  if (bodyLimit === null || !prepared.expandable || prepared.event.body.length <= bodyLimit) {
     return { json: prepared.fullJson, bodyTruncated: false };
   }
   const body = prepared.event.body.slice(0, Math.max(0, bodyLimit));
@@ -332,6 +340,7 @@ function renderPreparedEvent(
     prepared.authorName,
     prepared.metadata,
     body,
+    prepared.expandable,
   );
   return { json: JSON.stringify(line), bodyTruncated: true };
 }
@@ -342,6 +351,7 @@ function eventLine(
   authorName: string | null,
   metadata: unknown,
   bodyOverride: string | null,
+  expandable: boolean,
 ): Record<string, unknown> {
   const line: Record<string, unknown> = {
     type: "session_event",
@@ -353,7 +363,8 @@ function eventLine(
     author_name: authorName,
   };
   const body = bodyOverride ?? event.body;
-  if (body.length > projectionEventBodyMaxChars() || bodyOverride !== null && body.length < event.body.length) {
+  if (expandable && (body.length > projectionEventBodyMaxChars()
+    || bodyOverride !== null && body.length < event.body.length)) {
     const prefix = body.slice(0, BODY_SUMMARY_PREFIX_CHARS);
     const outline = [...event.body.matchAll(/^#{1,3}\s+.+$/gm)].map(([heading]) => heading);
     line.body_summary = [prefix, ...outline].join("\n");
