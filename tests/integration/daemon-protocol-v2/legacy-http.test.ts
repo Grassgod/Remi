@@ -10,12 +10,11 @@ import { waitFor } from "./harness.js";
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
 
 const removedBy421 = [
-  "GET /api/daemon/autopilot-runs/:runId/gc-check",
-  "GET /api/daemon/chat-sessions/:sessionId/gc-check",
-  "GET /api/daemon/issues/:issueId/gc-check",
-  "GET /api/daemon/tasks/:taskId/gc-check",
+  "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+  "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
+  "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
   "GET /api/daemon/tasks/:taskId/messages",
-  "POST /api/daemon/issues/:issueId/workspace/cleaned",
+  "GET /api/daemon/tasks/:taskId/steer",
   "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
   "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result",
   "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
@@ -26,12 +25,15 @@ const removedBy421 = [
   "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
   "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
   "POST /api/daemon/tasks/:taskId/complete",
+  "POST /api/daemon/tasks/:taskId/dispatch-lease",
   "POST /api/daemon/tasks/:taskId/fail",
+  "POST /api/daemon/tasks/:taskId/human-requests",
+  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
   "POST /api/daemon/tasks/:taskId/messages",
   "POST /api/daemon/tasks/:taskId/progress",
   "POST /api/daemon/tasks/:taskId/prompt",
   "POST /api/daemon/tasks/:taskId/session",
-  "POST /api/daemon/tasks/:taskId/start",
+  "POST /api/daemon/tasks/:taskId/steer/consume",
   "POST /api/daemon/tasks/:taskId/usage",
   "POST /api/daemon/tasks/:taskId/workspace",
   "PUT /api/daemon/runtimes/:runtimeId/models",
@@ -41,6 +43,33 @@ it("keeps the retired method + path table equal to v1 minus live routes", () => 
   const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
   expect(retired).toHaveLength(new Set(retired).size);
   expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
+});
+
+it.each(["all", "runtime"] as const)("keeps v1 task claim inert and authenticated (%s)", async apiRole => {
+  const db = new Database(":memory:");
+  try {
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    const runtime = store.registerRuntime({ id: `rt_claim_${apiRole}`, name: "Legacy claim", provider: "claude" });
+    const agent = store.createAgent({ name: "Legacy claim", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Legacy claim" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: runtime.id, prompt: "Remain queued" });
+    const authToken = "isolated-legacy-claim";
+    const app = createMultiremiApp({ store, authToken, apiRole });
+    const path = `/api/daemon/runtimes/${runtime.id}/tasks/claim`;
+    expect(baseline.routes).toContain("POST /api/daemon/runtimes/:runtimeId/tasks/claim");
+    const unauthorized = await app.request(path, { method: "POST" });
+    expect(unauthorized.status).toBe(401);
+    expect(await unauthorized.json()).toEqual({ error: "unauthorized" });
+    const changesBefore = db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count;
+    const response = await app.request(path, { method: "POST", headers: { Authorization: `Bearer ${authToken}` } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ task: null });
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(db.query<{ count: number }, []>("SELECT total_changes() AS count").get()!.count).toBe(changesBefore);
+  } finally {
+    db.close();
+  }
 });
 
 let removedRoutesServer: ReturnType<typeof startMultiremiServer>;

@@ -363,6 +363,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     deregisterDaemonRuntimes(c, store, runtimeIds.runtimeIds);
     return c.json({ status: "ok" });
   });
+  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", (c) => c.json({ task: null }));
   app.post("/api/daemon/heartbeat", async (c) => {
     const body = await readJsonStrict<{
       runtime_id?: string;
