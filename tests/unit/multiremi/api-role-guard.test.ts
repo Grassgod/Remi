@@ -13,7 +13,7 @@
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 759 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -375,20 +375,19 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("ui", path));
       if (status === 421) misdirected.push(pattern);
     }
-    // Fixed counts await the parent merge baseline sync; route-by-route assertions
-    // above already include the B5 trace-read ownership change.
-    // 70 of the 766 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // Fixed counts, derived from the literal rule above (not from the guard).
+    // 88 of the 789 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
-    // so the full-inventory total is 71. Pinning the swept count AND the arithmetic
+    // so the full-inventory total is 89. Pinning the swept count AND the arithmetic
     // means a route cannot be reclassified without one of the numbers moving.
-    // Unchanged by MUL-410's five /api/issues/:id/decisions routes and by MUL-457's
-    // four /api[/multiremi]/issues/:id/parent-done-grant routes: all nine are browser
-    // traffic, so this process serves them and the count stands.
-    // MUL-438's `GET /api/trace/ws` is a browser path (`ui` serves it), so it does
-    // not move this count: it is refused only by `runtime`. The swept total was 70;
-    // the new route is upgrade-only and is asserted in the websocket block below.
-    expect(misdirected, routeCountHint("ui")).toHaveLength(70);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(71);
+    // MUL-412's two /api/daemon/issues/:issueId/decisions routes are runtime
+    // protocol traffic, so they move the swept/full totals from 70/71 to 72/73.
+    // MUL-462 adds two /internal/peer/* routes. Both roles serve /internal, so
+    // the swept inventory grows from 769 to 771 while these refusal totals stay put.
+    // MUL-444 adds 14 daemon archive routes and two runtime-owned trace reads:
+    // ui refusals rise from 72 to 88; two browser log reads stay on ui.
+    expect(misdirected, routeCountHint("ui")).toHaveLength(88);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(89);
   });
 
   it("refuses paths outside runtime's daemon, health, peer and trace routes", async () => {
@@ -399,17 +398,26 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 691 of the 766 swept patterns are refused; the two browser upgrade routes
+    // 694 of the 789 swept patterns are refused; the two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 693. Every route main has added since this matrix landed sits outside
+    // total is 696. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
     // four /api[/multiremi]/issues/:id/parent-done-grant routes took it 687 -> 691.
+    // MUL-438 adds `GET /api/trace/ws` to the literal allowlist above, and it is
+    // upgrade-only, so it changes neither number: the swept refusals stay at 691
+    // (the inventory grew by one, but the new path is not swept) and the two
+    // refused upgrade routes are still `GET /ws` and `GET /api/realtime/ws` —
+    // `GET /api/daemon/ws` and the new trace socket are served by this role.
     // MUL-395: /api/issues/status-pages is browser/CLI traffic, outside the
     // runtime allowlist. UI serves it; runtime refuses this one new route.
-    expect(refused, routeCountHint("runtime")).toBe(692);
-    expect(refused + 2, routeCountHint("runtime")).toBe(694);
+    // MUL-462's two /internal/peer/* routes increase the swept inventory by two,
+    // but runtime serves both, so the refusal totals remain 692/694.
+    // MUL-444 adds two browser log reads: runtime refusals rise from 692 to 694;
+    // its 14 daemon archive routes and two trace reads are served by runtime.
+    expect(refused, routeCountHint("runtime")).toBe(694);
+    expect(refused + 2, routeCountHint("runtime")).toBe(696);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

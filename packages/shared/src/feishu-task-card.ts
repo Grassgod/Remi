@@ -7,7 +7,7 @@
  * server depending on the connector's Lark SDK surface.
  */
 import { createHash } from "node:crypto";
-import type { MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
+import type { MultiremiIssueDecision, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
 import type { AskUserQuestionData } from "@shared/contracts/acp-protocol.js";
 import { getNewbornName, getSessionName } from "@shared/session-name.js";
 
@@ -339,4 +339,140 @@ function formatCardTimestamp(value: string): string | null {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())} `
     + `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+}
+
+/**
+ * The callback name a decision card's submit button carries (MUL-412).
+ *
+ * A decision has no Task to key on: the row hangs on the parent Issue and the
+ * person who answers may be on a machine that never ran the asking Task, so the
+ * marker is derived from the Issue and the decision. Deriving it instead of
+ * persisting one is what lets a host that restarted re-register the same card
+ * from the delivery row.
+ */
+export function decisionInteractionMarker(issueId: string, decisionId: string): string {
+  return `fd_${createHash("sha256").update(`${issueId}:${decisionId}`).digest("hex").slice(0, 24)}`;
+}
+
+/** Option ids are positional and stable across a re-render of the same row. */
+export function decisionOptionValue(index: number): string {
+  return `option_${index + 1}`;
+}
+
+export interface IssueDecisionCardOptions {
+  header: Record<string, unknown>;
+  recipientOpenId?: string;
+  /** Only the sending host can resolve the recipient; see TaskInteractionCardOptions. */
+  recipientPending?: boolean;
+  /** Render the terminal state instead of the form. */
+  receipt?: boolean;
+}
+
+/**
+ * The rendered answer text of a decision, or the state it ended in.
+ * `withdrawn` is a terminal state of its own: E4 has no expiry, so the only
+ * ways a card closes are "answered" and "the asker took it back".
+ */
+export function issueDecisionStatusText(decision: Pick<MultiremiIssueDecision, "status">): string {
+  if (decision.status === "answered") return "已回答";
+  if (decision.status === "withdrawn") return "已撤回";
+  return "等待回答";
+}
+
+/** Who answered and when, so web and Feishu answers read identically. */
+export function issueDecisionReceiptLine(
+  decision: Pick<MultiremiIssueDecision, "status" | "answer" | "updatedAt">,
+): string | null {
+  if (decision.status === "withdrawn") {
+    const at = formatCardTimestamp(decision.updatedAt);
+    return at ? `已被撤回（${at}）。` : "已被撤回。";
+  }
+  if (decision.status !== "answered") return null;
+  const answer = decision.answer;
+  if (!answer) return null;
+  const at = formatCardTimestamp(answer.answeredAt);
+  const who = escapeCardText(answer.answererId);
+  return at ? `答者：${who} · ${at}` : `答者：${who}`;
+}
+
+/**
+ * Build the Issue decision card (MUL-412 / MUL-400 E5).
+ *
+ * Pure JSON so the control plane and the connector render the same thing; the
+ * header stays caller-supplied because the conversation label is
+ * connector-owned. The form posts one option or free text — the same two
+ * shapes the HTTP answer endpoint accepts.
+ */
+export function buildIssueDecisionCard(
+  decision: MultiremiIssueDecision,
+  options: IssueDecisionCardOptions,
+): Card {
+  const marker = decisionInteractionMarker(decision.issueId, decision.id);
+  const elements: Card[] = [];
+  const terminal = options.receipt || decision.status === "answered" || decision.status === "withdrawn";
+  elements.push({ tag: "markdown", content: `**${escapeCardText(decision.title)}**` });
+  const body = decision.body.trim();
+  if (body) elements.push({ tag: "markdown", content: escapeCardText(body.slice(0, 6000)) });
+  if (terminal) {
+    elements.push({ tag: "markdown", content: `**${issueDecisionStatusText(decision)}**` });
+    const receipt = issueDecisionReceiptLine(decision);
+    if (receipt) elements.push({ tag: "markdown", content: receipt });
+    if (decision.status === "answered" && decision.answer) {
+      elements.push({ tag: "markdown", content: escapeCardText(decision.answer.answer) });
+      const reason = decision.answer.reason.trim();
+      if (reason) elements.push({ tag: "markdown", content: `理由：${escapeCardText(reason)}` });
+      const overturn = decision.answer.overturn?.trim();
+      if (overturn) elements.push({ tag: "markdown", content: `如何推翻：${escapeCardText(overturn)}` });
+    }
+  } else if (!options.recipientOpenId && !options.recipientPending) {
+    elements.push({ tag: "markdown", content: "未能确定处理人，请在 Remi 工作台处理此决策。" });
+  } else {
+    const choices = Array.isArray(decision.options) ? decision.options : [];
+    const lines: string[] = ["请在下面选择一项，或直接写下你的决定。"];
+    const form: Card[] = [{
+      tag: "markdown",
+      content: choices.length
+        ? lines.concat(choices.map((choice, index) => `${index + 1}. ${escapeCardText(String(choice))}`)).join("\n")
+        : lines[0]!,
+    }];
+    choices.forEach((choice, index) => form.push({
+      tag: "column_set", flex_mode: "none", columns: [{
+        tag: "column", width: "weighted", weight: 1, padding: "8px", background_style: "grey-50",
+        elements: [{
+          tag: "checker", name: `${marker}_o${index}`, checked: false, overall_checkable: true,
+          checked_style: { show_strikethrough: false, opacity: 1 },
+          text: { tag: "lark_md", content: `**${escapeCardText(String(choice))}**` },
+        }],
+      }],
+    }));
+    form.push({
+      tag: "input", name: `${marker}_answer`, input_type: "multiline_text", width: "fill",
+      label: { tag: "plain_text", content: "自定义回答" },
+      placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" },
+      max_length: 2000, rows: 3,
+    });
+    form.push({
+      tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
+      type: "primary_filled", width: "fill", form_action_type: "submit",
+    });
+    elements.push({ tag: "form", name: `form_${marker}`, elements: form });
+  }
+  if (!terminal) {
+    if (/^ou_[A-Za-z0-9_-]+$/.test(String(options.recipientOpenId ?? ""))) {
+      elements.push({ tag: "markdown", content: `<at id=${options.recipientOpenId}></at>` });
+    } else if (options.recipientPending) {
+      elements.push(decisionMentionElement(null));
+    }
+  }
+  return {
+    schema: "2.0",
+    header: options.header,
+    config: {
+      update_multi: true, enable_forward: false, width_mode: "default",
+      summary: { content: decision.status === "answered" || decision.status === "withdrawn"
+        ? "Remi · 待你决定"
+        : "Remi · 等你决定" },
+    },
+    body: { padding: "12px 16px", elements },
+  };
 }

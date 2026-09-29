@@ -1,6 +1,10 @@
 {
   "results": [
     {
+      "name": "production Next build",
+      "ok": true
+    },
+    {
       "name": "trace endpoint stays idle before click",
       "ok": true
     },

@@ -1,22 +1,22 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 791,
+    "routeCount": 793,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 563,
+      "compat": 565,
       "root": 16
     },
-    "getRoutes": 337,
-    "getRoutesWithBody": 333,
+    "getRoutes": 338,
+    "getRoutesWithBody": 334,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 454,
-    "mutationRoutesCovered": 282,
+    "mutationRoutes": 455,
+    "mutationRoutesCovered": 283,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -37,6 +37,7 @@
       "issue-relations-native",
       "issue-sessions",
       "issue-shares",
+      "issue-topics-invalid-stored",
       "issues-compat",
       "issues-native",
       "labels",
@@ -181,6 +182,7 @@
     "GET /api/daemon/agent-plugin-artifacts/:digest",
     "GET /api/daemon/autopilot-runs/:runId/gc-check",
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+    "GET /api/daemon/issues/:issueId/decisions/:decisionId",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
@@ -543,6 +545,7 @@
     "POST /api/contact-sales",
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
+    "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer",
     "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
@@ -955,6 +958,7 @@
     "GET /api/daemon/agent-plugin-artifacts/:digest",
     "GET /api/daemon/autopilot-runs/:runId/gc-check",
     "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+    "GET /api/daemon/issues/:issueId/decisions/:decisionId",
     "GET /api/daemon/issues/:issueId/gc-check",
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
@@ -1476,6 +1480,7 @@
     "PUT /api/squads/:id",
     "PUT /api/workspaces/:id",
     "PUT /api/workspaces/:id/feishu-bot",
+    "PUT /api/workspaces/:id/issue-topics",
     "PUT /api/workspaces/:id/relay-config/:engine",
     "PUT /api/workspaces/:id/relay-config/discovery"
   ],
@@ -14044,6 +14049,58 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/issues/:issueId/decisions/:decisionId",
+      "route": "GET /api/daemon/issues/:issueId/decisions/:decisionId",
+      "path": "/api/daemon/issues/iss_snapshot/decisions/dcs_snapshot",
+      "status": 200,
+      "body": {
+        "decision": {
+          "id": "dcs_snapshot",
+          "workspaceId": "local",
+          "issueId": "iss_snapshot",
+          "sourceIssueId": "iss_snapshot",
+          "sourceTaskId": "tsk_snapshot",
+          "kind": "merge",
+          "title": "Snapshot merge decision",
+          "body": "Snapshot decision body",
+          "options": null,
+          "status": "answered",
+          "answer": {
+            "answererType": "member",
+            "answererId": "mem_snapshot_one",
+            "answer": "Hold for QA",
+            "reason": "Human review",
+            "overturn": null,
+            "answeredAt": "<timestamp>"
+          },
+          "answeredByMemberId": "mem_snapshot_one",
+          "answeredAt": "<timestamp>",
+          "history": [
+            {
+              "answererType": "agent",
+              "answererId": "agt_snapshot",
+              "answer": "Merge after CI",
+              "reason": "Checks passed",
+              "overturn": "A member can reverse this if QA fails",
+              "answeredAt": "<timestamp>"
+            },
+            {
+              "answererType": "member",
+              "answererId": "mem_snapshot_one",
+              "answer": "Hold for QA",
+              "reason": "Human review",
+              "overturn": null,
+              "answeredAt": "<timestamp>"
+            }
+          ],
+          "ownerAgentId": "agt_snapshot",
+          "createdByAgentId": "agt_snapshot",
+          "createdAt": "<timestamp>",
+          "updatedAt": "<timestamp>"
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/issues/:issueId/gc-check",
       "route": "GET /api/daemon/issues/:issueId/gc-check",
       "path": "/api/daemon/issues/iss_snapshot/gc-check",
@@ -25488,7 +25545,15 @@
           "hole_wait_ms": 0,
           "dropped_frames": 0,
           "pending_frames": 0,
-          "evicted_streams": 0
+          "evicted_streams": 0,
+          "peer_link": "disabled",
+          "hub_peer_loss_detected": {
+            "first_epoch": 0,
+            "epoch_change": 0,
+            "sequence_gap": 0
+          },
+          "hub_peer_reconcile_streams": 0,
+          "hub_peer_duplicate_dropped": 0
         }
       }
     },
@@ -25529,14 +25594,7 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true,
-        "hub": {
-          "role": "all",
-          "transport": "local",
-          "peer_link": false,
-          "fill_count": 0,
-          "hub_hole_wait_ms": 0
-        }
+        "ok": true
       }
     },
     {
@@ -26534,6 +26592,68 @@
       "path": "/api/issues/iss_snapshot/share",
       "status": 204,
       "body": ""
+    },
+    {
+      "key": "issue-topics-invalid-stored#000 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "person",
+          "notify_open_id": null
+        },
+        "invalid": {
+          "code": "issue_topic_config_invalid",
+          "message": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person"
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#001 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 400,
+      "body": {
+        "error": "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
+        "code": "issue_topic_config_invalid"
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#002 PUT /api/workspaces/:id/issue-topics",
+      "route": "PUT /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
+    },
+    {
+      "key": "issue-topics-invalid-stored#003 GET /api/workspaces/:id/issue-topics",
+      "route": "GET /api/workspaces/:id/issue-topics",
+      "path": "/api/workspaces/local/issue-topics",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "config": {
+          "enabled": true,
+          "chat_id": "oc_snapshot_topics",
+          "project_ids": null,
+          "notify_mode": "none",
+          "notify_open_id": null
+        }
+      }
     },
     {
       "key": "issues-compat#000 POST /api/issues",

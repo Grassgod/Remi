@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { startMultiremiServer } from "@multiremi/api.js";
+import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { createPeerChannel, PEER_REALTIME_TOPIC, type PeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import type { PeerEventEnvelope } from "@multiremi/contracts/peer-events.js";
 import { peerMetricsSnapshot, resetRequestMetricsForTest } from "@multiremi/observability/request-metrics.js";
@@ -261,7 +262,10 @@ describe("realtime fanout — two servers over one database", () => {
    * `queueLimit` lets a case watch overflow happen without writing 10 000
    * events; the default is the production cap.
    */
-  async function startTwoServers(options: { queueLimit?: number } = {}): Promise<TwoServers> {
+  async function startTwoServers(options: {
+    queueLimit?: number;
+    roles?: { a: LocalRealtimeRole; b: LocalRealtimeRole };
+  } = {}): Promise<TwoServers> {
     const directory = mkdtempSync(join(tmpdir(), "multiremi-peer-two-"));
     const databasePath = join(directory, "shared.sqlite");
     const dbA = new Database(databasePath, { create: true });
@@ -311,11 +315,12 @@ describe("realtime fanout — two servers over one database", () => {
       scheduler: null,
       port: 0,
       hostname: "127.0.0.1",
+      apiRole: options.roles?.a,
       peerChannel: peerA,
       peerSecret: secret,
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
-        bufferCapacity: 16, role: "all",
+        bufferCapacity: 16, role: options.roles?.a ?? "all",
       },
     });
     serverB = startMultiremiServer({
@@ -323,11 +328,12 @@ describe("realtime fanout — two servers over one database", () => {
       scheduler: null,
       port: 0,
       hostname: "127.0.0.1",
+      apiRole: options.roles?.b,
       peerChannel: peerB,
       peerSecret: secret,
       requestMetrics: {
         enabled: false, slowRequestMs: 500, summaryIntervalMs: 60_000, summaryTopRoutes: 10,
-        bufferCapacity: 16, role: "all",
+        bufferCapacity: 16, role: options.roles?.b ?? "all",
       },
     });
 
@@ -436,6 +442,153 @@ describe("realtime fanout — two servers over one database", () => {
 
     }
   });
+
+  it("routes decision HTTP to runtime and fans decision events to the ui socket once", async () => {
+    const two = await startTwoServers({ roles: { a: "ui", b: "runtime" } });
+    const encryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    const larkAppId = process.env.MULTIREMI_LARK_APP_ID;
+    const larkAppSecret = process.env.MULTIREMI_LARK_APP_SECRET;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 29).toString("base64");
+    process.env.MULTIREMI_LARK_APP_ID = "cli_peer_decision";
+    process.env.MULTIREMI_LARK_APP_SECRET = "peer-decision-secret";
+    try {
+      const { storeA, serverA, serverB } = two;
+      const user = storeA.getOrCreateUser({
+        externalId: "ou_peer_decision",
+        name: "Peer decision member",
+        email: "peer-decision@example.test",
+      });
+      storeA.createWorkspaceMember({
+        workspaceId: "local",
+        userId: user.id,
+        name: "Peer decision member",
+        email: "peer-decision@example.test",
+        role: "member",
+      });
+      const agent = storeA.createAgent({ name: "Peer decision agent", provider: "codex", workspaceId: "local" });
+      storeA.registerRuntime({
+        id: "rt_peer_decision",
+        name: "Peer decision bot host",
+        provider: "codex",
+        workspaceId: "local",
+        daemonId: "peer-decision-host",
+      });
+      storeA.heartbeatRuntime("rt_peer_decision", {
+        supportsFeishuBotConfig: true,
+        supportsIssueDecisionCard: true,
+      });
+      const config = storeA.upsertFeishuBotConfig("local", {
+        agentId: agent.id,
+        runtimeId: "rt_peer_decision",
+        appId: "cli_peer_decision",
+        appSecretOp: "set",
+        appSecret: "peer-decision-secret",
+        domain: "feishu",
+        enabled: true,
+      });
+      storeA.reportFeishuBotRuntimeStatus("local", "rt_peer_decision", {
+        appliedRevision: config.revision,
+        state: "online",
+      });
+      const workspace = storeA.getWorkspace("local")!;
+      storeA.updateWorkspace("local", {
+        settings: {
+          ...workspace.settings,
+          issueTopics: { enabled: true, chatId: "oc_peer_decision", notifyMode: "person", notifyOpenId: "ou_peer_decision" },
+        },
+      });
+      const issue = storeA.createIssue({ title: "Peer decision issue", workspaceId: "local" });
+      storeA.prepareFeishuIssueTopicWithinTransaction(issue);
+      const root = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+      storeA.reportFeishuBotOutbound("local", "rt_peer_decision", root.id, {
+        claimToken: root.claimToken,
+        status: "sent",
+        externalMessageId: "om_peer_decision_root",
+      });
+      const browserToken = await storeA.createAccessToken({
+        name: "Peer decision browser",
+        type: "pat",
+        workspaceId: "local",
+        userId: user.id,
+      });
+      const daemonToken = await storeA.createAccessToken({
+        name: "Peer decision bot host",
+        type: "daemon",
+        workspaceId: "local",
+        daemonId: "peer-decision-host",
+      });
+      const socket = openBrowserSocket(serverA.port, browserToken.token);
+      await authenticateBrowserSocket(socket, browserToken.token);
+      const frames: any[] = [];
+      socket.addEventListener("message", (event) => {
+        const frame = JSON.parse(String(event.data));
+        if (frame.type === "decision:created" || frame.type === "decision:updated") frames.push(frame);
+      });
+
+      try {
+        const uiBase = `http://127.0.0.1:${serverA.port}`;
+        const runtimeBase = `http://127.0.0.1:${serverB.port}`;
+        await Bun.sleep(100);
+        const postsBeforeCreate = { ...two.postCounts };
+        const createdResponse = await fetch(`${uiBase}/api/issues/${issue.id}/decisions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${browserToken.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ kind: "production_change", title: "Ship through the peer?" }),
+        });
+        expect(createdResponse.status, await createdResponse.clone().text()).toBe(201);
+        const created = (await createdResponse.json() as any).decision;
+        const createDeadline = Date.now() + WS_TIMEOUT_MS;
+        while ((!frames.some((frame) => frame.type === "decision:created")
+          || two.postCounts.a === postsBeforeCreate.a) && Date.now() < createDeadline) {
+          await Bun.sleep(20);
+        }
+        expect(frames.filter((frame) => frame.type === "decision:created" && frame.payload.decision.id === created.id)).toHaveLength(1);
+        expect(two.postCounts.a).toBeGreaterThan(postsBeforeCreate.a);
+        expect(two.postCounts.b).toBe(postsBeforeCreate.b);
+
+        const card = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+        storeA.reportFeishuBotOutbound("local", "rt_peer_decision", card.id, {
+          claimToken: card.claimToken,
+          status: "sent",
+          externalMessageId: "om_peer_decision_card",
+          interactionOpenId: "ou_peer_decision",
+        });
+        const readPath = `/api/daemon/issues/${issue.id}/decisions/${created.id}`;
+        expect((await fetch(`${uiBase}${readPath}`, {
+          headers: { Authorization: `Bearer ${daemonToken.token}` },
+        })).status).toBe(421);
+        expect((await fetch(`${runtimeBase}${readPath}`, {
+          headers: { Authorization: `Bearer ${daemonToken.token}` },
+        })).status).toBe(200);
+
+        const postsBeforeAnswer = { ...two.postCounts };
+        const daemon = new MultiremiDaemonClient(runtimeBase, daemonToken.token);
+        const answered = await daemon.answerFeishuIssueDecision(issue.id, created.id, {
+          answer: "yes",
+          operatorOpenId: "ou_peer_decision",
+        });
+        expect(answered.status).toBe("answered");
+        const answerDeadline = Date.now() + WS_TIMEOUT_MS;
+        while (!frames.some((frame) => frame.type === "decision:updated") && Date.now() < answerDeadline) {
+          await Bun.sleep(20);
+        }
+        await Bun.sleep(100);
+        expect(frames.filter((frame) => frame.type === "decision:updated" && frame.payload.decision.id === created.id)).toHaveLength(1);
+        expect(two.postCounts.b).toBeGreaterThan(postsBeforeAnswer.b);
+        expect(two.postCounts.a).toBe(postsBeforeAnswer.a);
+      } finally {
+        socket.close();
+      }
+    } finally {
+      two.cleanup();
+      if (encryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = encryptionKey;
+      if (larkAppId === undefined) delete process.env.MULTIREMI_LARK_APP_ID;
+      else process.env.MULTIREMI_LARK_APP_ID = larkAppId;
+      if (larkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
+      else process.env.MULTIREMI_LARK_APP_SECRET = larkAppSecret;
+    }
+  }, 60_000);
 
   it("wakes a daemon socket on B for a task created on A", async () => {
     const two = shared!;
@@ -573,7 +726,10 @@ describe("realtime fanout — two servers over one database", () => {
     const database = new Database(join(directory, "single.sqlite"), { create: true });
     const store = new MultiremiStore(database);
     store.ensureLocalWorkspace();
-    const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
+    const server = startMultiremiServer({
+      store, scheduler: null, port: 0, hostname: "127.0.0.1",
+      apiRoleConfiguration: { role: "all", configured: false },
+    });
     try {
       // QA item 2: with nothing configured this body must be exactly what main
       // returned, key set included — no `role`, no `peer_healthy`.

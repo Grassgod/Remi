@@ -82,7 +82,7 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 - 认证成功后对每条活动流重发 `stream.subscribe`：有本地帧则 `from_seq = 本地 head + 1`，否则沿用调用方原始锚点。
 - 收到 `resync` 与收到重连走同一恢复动作：重订阅所有流，再跑一次非流式缓存的失效（[use-realtime-sync.ts](../../frontend/packages/core/realtime/use-realtime-sync.ts)）。
 
-`resync` 的发送方是服务端一个进程级入口 `server.broadcastResync()`（[server.ts](../../packages/server/src/api/server.ts)、[hub/browser-stream.ts](../../packages/server/src/api/hub/browser-stream.ts)）：给本进程所有已认证浏览器连接发 `{type:"resync"}`，每连接 0–2s 抖动，避免整片客户端同一刻重取。Hub 的 peer 适配器在链路恢复后调用它。
+`resync` 的发送方是服务端一个进程级入口 `server.broadcastResync()`（[server.ts](../../packages/server/src/api/server.ts)、[hub/browser-stream.ts](../../packages/server/src/api/hub/browser-stream.ts)）：给本进程所有已认证浏览器连接发 `{type:"resync"}`，每连接 0–2s 抖动，避免整片客户端同一刻重取。Hub 的 peer 适配器在序号跳号或对端重启时改为查库补齐，不广播 `resync`；链路静默 15 秒只在 `/health.hub.peer_link` 标记 `stale`。
 
 ## 客户端订阅入口
 

@@ -97,6 +97,7 @@ import type {
 } from "@multiremi/contracts/conversation-log";
 import {
   IssuesRepo,
+  type AnswerIssueDecisionOptions,
   IssueDependencyError,
   ParentStatusGuardError,
   type IssueTimelineCursor,
@@ -964,7 +965,7 @@ runMigrations(this.db);
     return this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1648,9 +1649,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -2100,6 +2102,26 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueDecision(workspaceId, daemonId, issueId);
+  }
+
+  supportsFeishuIssueDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
+    return this.feishuBot.supportsIssueDecisionCard(workspaceId, runtimeId);
+  }
+
+  resolveFeishuDecisionOperatorMember(workspaceId: string, appId: string, openId: string | null | undefined) {
+    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
+  }
+
+  listFeishuIssueDecisionCards(workspaceId: string, runtimeId: string) {
+    return this.feishuBot.listLiveIssueDecisionCards(workspaceId, runtimeId);
+  }
+
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string) {
+    return this.feishuBot.getIssueDecisionCardContext(workspaceId, decisionId);
+  }
+
   listFeishuBotLiveDecisionCards(
     workspaceId: string,
     runtimeId: string,
@@ -2150,6 +2172,21 @@ runMigrations(this.db);
 
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
+  }
+
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.prepareIssueDecisionCardWithinTransaction(issue, decision, deferredEvents);
+  }
+
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.enqueueIssueDecisionCardPatchWithinTransaction(decision, deferredEvents);
   }
 
   prepareFeishuBotHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
@@ -3314,6 +3351,7 @@ runMigrations(this.db);
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
@@ -3347,6 +3385,10 @@ runMigrations(this.db);
     return this.issues.getIssueDecision(issueId, decisionId);
   }
 
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecisionAnywhere(decisionId);
+  }
+
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
     return this.issues.listIssueDecisions(issueId);
   }
@@ -3359,8 +3401,14 @@ runMigrations(this.db);
     return this.issues.createIssueDecision(sourceIssueId, input, actor);
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
-    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor, options);
   }
 
   escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
@@ -5205,6 +5253,10 @@ runMigrations(this.db);
     return this.tasks.createTaskSteerMessage(input);
   }
 
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
+  }
+
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
     return this.tasks.getTaskSteerMessage(steerId);
   }
@@ -5303,7 +5355,7 @@ runMigrations(this.db);
       } else {
         const content = String(input.content ?? "").trim();
         if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
-        message = this.tasks.createTaskSteerMessage({
+        message = this.tasks.createTaskSteerMessageWithinTransaction({
           taskId: target.id,
           kind: input.action,
           content,

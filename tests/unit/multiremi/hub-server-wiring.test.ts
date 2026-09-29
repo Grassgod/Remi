@@ -51,7 +51,7 @@ describe("MUL-436 shared server Hub wiring", () => {
       const health = await (await fetch(`${base}/health`)).json() as Record<string, any>;
       expect(health).not.toHaveProperty("role");
       expect(health.hub).toMatchObject({ role: "all", transport: "local", streams: 2, subscriptions: 2 });
-      expect(await (await fetch(`${base}/readyz`)).json()).toMatchObject({ ok: true, hub: { role: "all", transport: "local" } });
+      expect(await (await fetch(`${base}/readyz`)).json()).toEqual({ ok: true });
     } finally {
       log.close();
       trace.close();
@@ -65,11 +65,12 @@ describe("MUL-436 shared server Hub wiring", () => {
     const app = createMultiremiApp({ store, apiRole, backgroundJobs: false, authToken: null });
     const server = startMultiremiServer({ store, apiRole, backgroundJobs: false, port: 0, hostname: "127.0.0.1", authToken: null });
     try {
-      for (const path of ["/health", "/readyz"]) {
-        const expected = { ok: true, role: apiRole, hub: { role: apiRole, transport: "local" } };
-        expect(await (await app.request(path)).json()).toMatchObject(expected);
-        expect(await (await fetch(`http://127.0.0.1:${server.port}${path}`)).json()).toMatchObject(expected);
-      }
+      const expectedReady = { ok: true, role: apiRole };
+      expect(await (await app.request("/readyz")).json()).toEqual(expectedReady);
+      expect(await (await fetch(`http://127.0.0.1:${server.port}/readyz`)).json()).toEqual(expectedReady);
+      const expectedHealth = { ok: true, role: apiRole, hub: { role: apiRole, transport: "local" } };
+      expect(await (await app.request("/health")).json()).toMatchObject(expectedHealth);
+      expect(await (await fetch(`http://127.0.0.1:${server.port}/health`)).json()).toMatchObject(expectedHealth);
     } finally { server.stop(true); }
   });
 
