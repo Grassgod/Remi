@@ -1,4 +1,5 @@
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
+import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -3422,6 +3423,10 @@ runMigrations(this.db);
     return this.issues.listUnmetPrerequisites(issueId);
   }
 
+  replayDependencyAutoStart(event: MultiremiSystemEvent): void {
+    this.issues.replayDependencyAutoStart(event);
+  }
+
   /** MUL-458: caller owns the force-start task/status/activity transaction. */
   recordDependencyForceStarted(
     issueId: string,
@@ -3463,6 +3468,7 @@ runMigrations(this.db);
     previous: MultiremiIssue;
     cancelledTasks: number;
     handledForcedStart: boolean;
+    dependencyCheckEventId: string | null;
   } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
@@ -3473,6 +3479,7 @@ runMigrations(this.db);
       previous: MultiremiIssue;
       cancelledTasks: number;
       handledForcedStart: boolean;
+      dependencyCheckEventId: string | null;
     },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
@@ -3510,7 +3517,7 @@ runMigrations(this.db);
     issue: MultiremiIssue,
     parentTaskId: string | null,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; seen?: Set<string> } = {},
+    options: { taskTerminalStatus?: "completed" | "failed" | "cancelled"; dependencyCheckEventId?: string | null; seen?: Set<string> } = {},
   ): void {
     this.issues.notifyChildStatusChange(previous, issue, parentTaskId, collector, options);
   }
@@ -4502,7 +4509,7 @@ runMigrations(this.db);
     actorId?: string | null;
     automationSourceEventId?: string | null;
     automationSourceTaskId?: string | null;
-  }): MultiremiSystemEvent | null {
+  }): { event: MultiremiSystemEvent | null; dependencyCheckEventId: string | null } {
     return this.autopilots.enqueueIssueStatusChangedEvent(input);
   }
 
@@ -4878,13 +4885,17 @@ runMigrations(this.db);
     return this.tasks.getTaskHumanRequest(requestId);
   }
 
+  prepareTaskStreamQuestionCard(requestId: string, recipientOpenId: string): Record<string, unknown> | null {
+    return this.feishuBot.prepareTaskStreamQuestionCard(requestId, recipientOpenId);
+  }
+
   listTaskHumanRequests(taskId: string): MultiremiTaskHumanRequest[] {
     return this.tasks.listTaskHumanRequests(taskId);
   }
 
   respondTaskHumanRequest(
     requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null },
+    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
     if (request) this.feishuBot.enqueueDecisionCardPatch(request);
