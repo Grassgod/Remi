@@ -22,6 +22,7 @@ import { Database } from "bun:sqlite";
 import { PostgresSyncDatabase, type SqlDatabase, type SqlStatement } from "@multiremi/store/db/postgres.js";
 import { classifyLockOrderStatement, type LockOrderClass } from "@multiremi/store/lock-order-sentinel.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import type { FeishuBotRepo } from "@multiremi/store/repos/feishu-bot-repo.js";
 import type { CanonicalMessage } from "@multiremi/contracts/messaging.js";
 import type { IngestedFeishuMessageInput } from "@multiremi/store/repos/feishu-ingest-repo.js";
 
@@ -31,6 +32,7 @@ type LockClass = LockOrderClass;
 
 class LockRecordingDatabase implements SqlDatabase {
   readonly trace: Array<{ cls: LockClass; key: string; depth: number }> = [];
+  failAuditInsert = false;
   // Like the sentinel, nested calls share their outermost transaction frame.
   readonly frames: Array<LockRecordingDatabase["trace"]> = [];
   private depth = 0;
@@ -74,6 +76,9 @@ class LockRecordingDatabase implements SqlDatabase {
   }
   run(sql: string, ...params: unknown[]) {
     this.classify(sql);
+    if (this.failAuditInsert && /^\s*INSERT INTO multiremi_feishu_bot_audit\b/i.test(sql)) {
+      throw new Error("injected audit insert failure");
+    }
     return this.inner.run(sql, ...params as never[]);
   }
   exec(sql: string): void {
@@ -107,6 +112,8 @@ class LockRecordingDatabase implements SqlDatabase {
 let openDbs: Array<Database | PostgresSyncDatabase> = [];
 let pgDatabases: string[] = [];
 let previousEncryptionKey: string | undefined;
+let previousJobs: string | undefined;
+let previousKinds: string | undefined;
 
 afterEach(() => {
   for (const db of openDbs) db.close();
@@ -122,6 +129,10 @@ afterEach(() => {
   }
   if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
+  if (previousJobs === undefined) delete process.env.MULTIREMI_BACKGROUND_JOBS;
+  else process.env.MULTIREMI_BACKGROUND_JOBS = previousJobs;
+  if (previousKinds === undefined) delete process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS;
+  else process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS = previousKinds;
 });
 
 function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase } {
@@ -174,6 +185,39 @@ function scaffold(): ReturnType<typeof freshStore> & { agentId: string; runtimeI
   store.reportFeishuBotRuntimeStatus("local", runtimeId, { appliedRevision: config.revision, state: "online" });
   store.replaceFeishuBotAgentRoutes("local", [{ scope: "chat", chatId: "oc_lock_paths", agentId: agent.id }]);
   return { store, recorder, agentId: agent.id, runtimeId, revision: config.revision };
+}
+
+function splitReceiptFixture() {
+  previousJobs = process.env.MULTIREMI_BACKGROUND_JOBS;
+  previousKinds = process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS;
+  process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+  process.env.MULTIREMI_FEISHU_OUTBOUND_KINDS = "1";
+  const fixture = scaffold();
+  fixture.store.submitFeishuBotMessage("local", fixture.runtimeId, {
+    revision: fixture.revision,
+    externalSessionKey: "oc_lock_paths:thread:omt_receipt",
+    externalMessageId: "om_lock_receipt",
+    chatType: "group",
+    chatId: "oc_lock_paths",
+    threadId: "omt_receipt",
+    senderOpenId: "ou_lock_paths",
+    text: "receipt lock order",
+    deliveryMode: "native_cot_v1",
+  });
+  const receipt = fixture.store.claimFeishuBotOutbounds("local", fixture.runtimeId)
+    .find((row) => row.kind === "receipt");
+  expect(receipt).toBeDefined();
+  return { ...fixture, receipt: receipt! };
+}
+
+function outboundStatus(recorder: LockRecordingDatabase, id: string): string {
+  return (recorder.query("SELECT status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
+    .get(id) as { status: string }).status;
+}
+
+function expectDepthOne(): void {
+  const db = openDbs.at(-1);
+  if (db instanceof PostgresSyncDatabase) expect(db.maxTransactionDepth).toBe(1);
 }
 
 /**
@@ -415,6 +459,84 @@ describe("MUL-405 per-path lock order", () => {
     // QA round 3: this case used to assert monotonicity only, so deleting the W
     // from recordAuditWithinTransaction left all eleven cases green.
     assertPath("recordFeishuBotAudit", recorder, ["W", "N", "D"]);
+  });
+
+  it("claimOutbound exhausted receipt: W -> N -> D in one transaction", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    const now = new Date(Date.now() + 121_000);
+    recorder.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET attempt_count = 6, leased_until = ? WHERE id = ?",
+      new Date(now.getTime() - 1_000).toISOString(), receipt.id);
+    clear(recorder);
+    const db = openDbs.at(-1);
+    if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
+    store.claimFeishuBotOutbound("local", runtimeId, now, true, true, true, true);
+    assertFrames("claimOutbound exhausted receipt", recorder, [["W", "N", "D"]]);
+    expectDepthOne();
+    expect(outboundStatus(recorder, receipt.id)).toBe("failed");
+  });
+
+  it("claimOutbound without an exhausted receipt: D only", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    recorder.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET status = 'pending', available_at = ? WHERE id = ?",
+      new Date(Date.now() - 1_000).toISOString(), receipt.id);
+    clear(recorder);
+    store.claimFeishuBotOutbound("local", runtimeId, new Date(), true, true, true, true);
+    assertFrames("claimOutbound ordinary delivery", recorder, [["D"]]);
+  });
+
+  it("reportOutbound terminal receipt: W -> N -> D in one transaction", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    clear(recorder);
+    const db = openDbs.at(-1);
+    if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();
+    expect(store.reportFeishuBotOutbound("local", runtimeId, receipt.id,
+      { claimToken: receipt.claimToken, status: "failed", retryable: false })).toBe(true);
+    assertFrames("reportOutbound terminal receipt", recorder, [["W", "N", "D"]]);
+    expectDepthOne();
+  });
+
+  it("reportOutbound retryable receipt: D only", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    clear(recorder);
+    expect(store.reportFeishuBotOutbound("local", runtimeId, receipt.id,
+      { claimToken: receipt.claimToken, status: "failed", retryable: true })).toBe(true);
+    assertFrames("reportOutbound retryable receipt", recorder, [["D"]]);
+  });
+
+  it("claimOutbound rolls back exhausted receipt when audit insert fails", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    const now = new Date(Date.now() + 121_000);
+    recorder.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET attempt_count = 6, leased_until = ? WHERE id = ?",
+      new Date(now.getTime() - 1_000).toISOString(), receipt.id);
+    recorder.failAuditInsert = true;
+    expect(() => store.claimFeishuBotOutbound("local", runtimeId, now, true, true, true, true))
+      .toThrow("injected audit insert failure");
+    expect(outboundStatus(recorder, receipt.id)).toBe("sending");
+  });
+
+  it("reportOutbound rolls back terminal receipt when audit insert fails", () => {
+    const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
+    recorder.failAuditInsert = true;
+    expect(() => store.reportFeishuBotOutbound("local", runtimeId, receipt.id,
+      { claimToken: receipt.claimToken, status: "failed", retryable: false }))
+      .toThrow("injected audit insert failure");
+    expect(outboundStatus(recorder, receipt.id)).toBe("sending");
+  });
+
+  it("exhausted sweep updates only the selected ids", () => {
+    const { store, recorder, receipt } = splitReceiptFixture();
+    const other = recorder.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE id <> ? AND delivery_mode = 'split' LIMIT 1")
+      .get(receipt.id) as { id: string };
+    const now = new Date(Date.now() + 121_000).toISOString();
+    recorder.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET attempt_count = 6, leased_until = ? WHERE id IN (?, ?)",
+      new Date(Date.parse(now) - 1_000).toISOString(), receipt.id, other.id);
+    const repo = (store as unknown as { feishuBot: FeishuBotRepo }).feishuBot as unknown as {
+      sweepExhaustedWithinTransaction(workspaceId: string, ids: string[], nowIso: string): Array<{ id: string }>;
+    };
+    const changed = recorder.transaction(() => repo.sweepExhaustedWithinTransaction("local", [receipt.id], now))();
+    expect(changed.map((row) => row.id)).toEqual([receipt.id]);
+    expect(outboundStatus(recorder, receipt.id)).toBe("failed");
+    expect(outboundStatus(recorder, other.id)).toBe("sending");
   });
 
   it("createPinnedItem: W -> N", () => {

@@ -2720,6 +2720,15 @@ export class FeishuBotRepo {
     const deferredEvents = createCommitEventQueue();
     const claimed = this.ctx.db.transaction(() => {
       const nowIsoValue = now.toISOString();
+      const exhaustedCandidates = this.ctx.db.query(`SELECT id, kind FROM multiremi_feishu_bot_outbound_deliveries
+        WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
+          AND ((status = 'pending' AND available_at <= ?)
+            OR (status = 'sending' AND leased_until <= ?))`
+      ).all(workspaceId, nowIsoValue, nowIsoValue) as Row[];
+      if (exhaustedCandidates.some((row) => row.kind === 'receipt')) {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       // The reminder lane is materialized here rather than at request creation:
       // a request answered before its window closes must never produce one, and
       // `reminder_sent_at` is the single dedupe record. Doing it inside the claim
@@ -2727,13 +2736,9 @@ export class FeishuBotRepo {
       this.materializeDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
       this.materializeIssueDecisionRemindersWithinTransaction(workspaceId, now, deferredEvents);
       this.reconcileTaskDeliveriesWithinTransaction(workspaceId);
-      const exhausted = this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
-        SET status = 'failed', claim_token = NULL, leased_until = NULL,
-          last_error = 'Delivery lease exhausted after six attempts', updated_at = ?
-        WHERE workspace_id = ? AND delivery_mode = 'split' AND attempt_count >= 6
-          AND ((status = 'pending' AND available_at <= ?)
-            OR (status = 'sending' AND leased_until <= ?))
-        RETURNING id, kind, attempt_count`).all(nowIsoValue, workspaceId, nowIsoValue, nowIsoValue) as Row[];
+      const exhausted = this.sweepExhaustedWithinTransaction(
+        workspaceId, exhaustedCandidates.map((row) => String(row.id)), nowIsoValue,
+      );
       for (const failed of exhausted) {
         if (failed.kind === 'receipt') this.recordReceiptFailure(workspaceId, runtimeId, String(failed.id), Number(failed.attempt_count));
       }
@@ -2875,6 +2880,19 @@ export class FeishuBotRepo {
     })();
     this.ctx.emitCommitEvents(deferredEvents);
     return claimed;
+  }
+
+  private sweepExhaustedWithinTransaction(workspaceId: string, ids: string[], nowIsoValue: string): Row[] {
+    if (ids.length === 0) return [];
+    return this.ctx.db.query(`UPDATE multiremi_feishu_bot_outbound_deliveries
+      SET status = 'failed', claim_token = NULL, leased_until = NULL,
+        last_error = 'Delivery lease exhausted after six attempts', updated_at = ?
+      WHERE workspace_id = ? AND id IN (${ids.map(() => '?').join(', ')})
+        AND delivery_mode = 'split' AND attempt_count >= 6
+        AND ((status = 'pending' AND available_at <= ?)
+          OR (status = 'sending' AND leased_until <= ?))
+      RETURNING id, kind, attempt_count`
+    ).all(nowIsoValue, workspaceId, ...ids, nowIsoValue, nowIsoValue) as Row[];
   }
 
   /** Checkpoint before the first send, under the existing delivery lease. */
@@ -3067,6 +3085,10 @@ export class FeishuBotRepo {
       const delayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(6, Math.max(0, Number(row.attempt_count) - 1)));
       const terminal = input.retryable === false || Number(row.attempt_count) >= 6;
       const error = cleanOptionalString(input.error)?.slice(0, 2_000) ?? "Feishu send failed";
+      if (terminal && row.kind === 'receipt') {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
+      }
       const updated = this.ctx.db.run(
         `UPDATE multiremi_feishu_bot_outbound_deliveries
          SET status = ?, claim_token = NULL, leased_until = NULL,
@@ -3110,7 +3132,7 @@ export class FeishuBotRepo {
   }
 
   private recordReceiptFailure(workspaceId: string, runtimeId: string, deliveryId: string, attempts: number): void {
-    this.recordAudit(workspaceId, 'receipt_failed', { actorType: 'daemon', actorId: runtimeId,
+    this.recordAuditWithinTransaction(workspaceId, 'receipt_failed', { actorType: 'daemon', actorId: runtimeId,
       details: { delivery_id: deliveryId, attempts } });
     log.warn(`Feishu receipt delivery ${deliveryId} failed after ${attempts} attempt(s)`);
   }
@@ -3493,8 +3515,8 @@ export class FeishuBotRepo {
     return this.ctx.db.transaction(() => this.recordAuditWithinTransaction(workspaceId, action, input))();
   }
 
-  /** Caller already holds the transaction that takes the number lock. */
-  private recordAuditWithinTransaction(
+  /** Transactional callers take W then N before domain writes; re-taking them here is free. */
+  recordAuditWithinTransaction(
     workspaceId: string,
     action: FeishuBotAuditAction,
     input: { actorType?: string; actorId?: string | null; details?: Record<string, unknown> },
