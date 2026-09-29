@@ -168,6 +168,26 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("positions a cached inbox target when the Issue resolves after the log window", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2)], ready: true, fresh: true },
+    });
+    const anchor = { kind: "element" as const, id: "comment-cmt_2" };
+    const view = renderList(replica, { anchor, contentReady: false });
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("pending");
+    expect(view.content.style.visibility).toBe("hidden");
+
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} anchor={anchor} contentReady />);
+    reveal();
+    const target = view.container.querySelector('[data-perf-anchor="target-comment"]');
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(target).toHaveAttribute("id", anchor.id);
+    expect(target).toHaveClass("bg-warning/10");
+    expect(view.content.style.visibility).toBe("");
+    view.restore();
+  });
+
   it("renders pre-rendered HTML with the measurement contract attributes", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1), entry(2)] },

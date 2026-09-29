@@ -19,7 +19,7 @@ behavior is covered as follows; the old fold controls are intentionally absent.
 | expanding a non-trailing block shows every entry; only the trailing block truncates older ones | `issue-detail.test.tsx`: all system rows remain visible in seq order; `issue-log.test.ts` covers older-window expansion |
 | loads older pages until the highlighted comment is available | `issue-log.test.ts`: locate then sparse-window expansion; `issue-log-check.ts --step2`: locate request precedes the anchored 15+15 window |
 | scrolls to the highlighted comment after both issue and timeline finish loading | `issue-log-check.ts --step2`: target is centered and its highlight has stable height on cold open |
-| still scrolls when the timeline is ready before the issue (inbox-click regression) | `issue-log-check.ts --step2`: inbox and comment-link navigation each reach the target with zero jumps |
+| still scrolls when the timeline is ready before the issue (inbox-click regression) | `frontend/packages/views/common/session-log/session-log-list.test.tsx:170`: a cached target waits hidden for Issue readiness, then reveals at the anchored, highlighted row; `issue-log-check.ts --step2` checks the browser navigation. Mutation: removed `contentReady` from `session-log-list.tsx:218` -> this test fails (`ready` before the Issue gate opens, expected `pending`). |
 | lands directly on a reply whose parent is folded away as resolved | `issue-detail.test.tsx` flat session stream: reply is a separate visible row; `issue-log.test.ts`: deep-link window locates a seq independently of earlier rows; `issue-log-check.ts --step2`: comment-link target is directly visible |
 
 The retained detail cases still cover title, description, replies, attachments,
