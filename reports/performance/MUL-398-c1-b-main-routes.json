@@ -1,0 +1,5269 @@
+{
+  "routeCount": 329,
+  "rows": [
+    {
+      "method": "GET",
+      "route": "/",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 52
+    },
+    {
+      "method": "HEAD",
+      "route": "/",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/favicon.ico",
+      "status": 204,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "HEAD",
+      "route": "/favicon.ico",
+      "status": 204,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/readyz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/readyz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/healthz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/healthz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/config",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 132
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/config",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cli/context",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 756
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cli/context",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cli/capabilities",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 79901
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cli/capabilities",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cli/latest-version",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 21
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cli/latest-version",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/auth/lark/url",
+      "status": 503,
+      "maxReplyBytes": 0,
+      "reason": "handler error in fixture",
+      "bytes": 40
+    },
+    {
+      "method": "HEAD",
+      "route": "/auth/lark/url",
+      "status": 503,
+      "maxReplyBytes": 0,
+      "reason": "handler error in fixture",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/health/realtime",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 56
+    },
+    {
+      "method": "HEAD",
+      "route": "/health/realtime",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/internal/peer/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 48
+    },
+    {
+      "method": "HEAD",
+      "route": "/internal/peer/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/scm/capabilities",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 1919
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/scm/capabilities",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/health",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/remi/releases/latest/version",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 48
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/remi/releases/latest/version",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/remi/releases/latest/:filename",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 21
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/remi/releases/latest/:filename",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/remi/releases/download/:tag/:filename",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 21
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/remi/releases/download/:tag/:filename",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/install/daemon",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 994
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/install/daemon",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 64
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/issues/:issueId/decisions/:decisionId",
+      "status": 200,
+      "maxReplyBytes": 18874901,
+      "reason": "requested",
+      "bytes": 18874780
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/issues/:issueId/decisions/:decisionId",
+      "status": 200,
+      "maxReplyBytes": 18874901,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 64
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 64
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/ssh-mesh/config",
+      "status": 400,
+      "maxReplyBytes": 0,
+      "reason": "fixture lacks required request fields",
+      "bytes": 34
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/ssh-mesh/config",
+      "status": 400,
+      "maxReplyBytes": 0,
+      "reason": "fixture lacks required request fields",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/workspaces/:workspaceId/repos",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437431
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/workspaces/:workspaceId/repos",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/tasks/pending",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/tasks/pending",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/tasks/:taskId/human-requests/:requestId",
+      "status": 200,
+      "maxReplyBytes": 18874716,
+      "reason": "requested",
+      "bytes": 18874600
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/tasks/:taskId/human-requests/:requestId",
+      "status": 200,
+      "maxReplyBytes": 18874716,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/tasks/:taskId/messages",
+      "status": 200,
+      "maxReplyBytes": 25185987,
+      "reason": "requested",
+      "bytes": 25178968
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/tasks/:taskId/messages",
+      "status": 200,
+      "maxReplyBytes": 25185987,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/tasks/:taskId/status",
+      "status": 200,
+      "maxReplyBytes": 18874614,
+      "reason": "requested",
+      "bytes": 9437395
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/tasks/:taskId/status",
+      "status": 200,
+      "maxReplyBytes": 18874614,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/tasks/:taskId/steer",
+      "status": 200,
+      "maxReplyBytes": 9437406,
+      "reason": "requested",
+      "bytes": 9437365
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/tasks/:taskId/steer",
+      "status": 200,
+      "maxReplyBytes": 9437406,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/issues/:issueId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 59
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/issues/:issueId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/chat-sessions/:sessionId/gc-check",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 34
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/chat-sessions/:sessionId/gc-check",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/autopilot-runs/:runId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 42
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/autopilot-runs/:runId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/tasks/:taskId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/tasks/:taskId/gc-check",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+      "status": 404,
+      "maxReplyBytes": 9437903,
+      "reason": "fixture id absent or route not found",
+      "bytes": 41
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+      "status": 404,
+      "maxReplyBytes": 9437903,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "status": 405,
+      "maxReplyBytes": 0,
+      "reason": "route does not accept this method",
+      "bytes": 30
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+      "status": 404,
+      "maxReplyBytes": 9437903,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/session-archive",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 355
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/session-archive",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:issueId/session-archives",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18875411
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:issueId/session-archives",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 77
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 77
+    },
+    {
+      "method": "HEAD",
+      "route": "/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/realtime/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 77
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/realtime/ws",
+      "status": 426,
+      "maxReplyBytes": 0,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-runtime",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 34
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-runtime",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-runtime/healthz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 44
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-runtime/healthz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-runtime/readyz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 44
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-runtime/readyz",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-runtime/nodes",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-runtime/nodes",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/balance",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 116
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/balance",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/transactions",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 46
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/transactions",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/batches",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 46
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/batches",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/topups",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 46
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/topups",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/price-tiers",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 144
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/price-tiers",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/cloud-billing/checkout-sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 168
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/cloud-billing/checkout-sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/me",
+      "status": 200,
+      "maxReplyBytes": 387,
+      "reason": "requested",
+      "bytes": 575
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/me",
+      "status": 200,
+      "maxReplyBytes": 387,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 18874766
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 18874764
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/runtime-provisions",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 17
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/runtime-provisions",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/runtime-provisions/:provisionId",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/runtime-provisions/:provisionId",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/runtime-provisions/:provisionId/states",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/organizer",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 45
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/organizer",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/issue-topics",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 133
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/issue-topics",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/bot-menu",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 38
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/bot-menu",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/bot-menu/publish/:requestId",
+      "status": 404,
+      "maxReplyBytes": 252,
+      "reason": "fixture id absent or route not found",
+      "bytes": 46
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/bot-menu/publish/:requestId",
+      "status": 404,
+      "maxReplyBytes": 252,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/prompts",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 2452
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/prompts",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/prompt-template",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 28704
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/prompt-template",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repos",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 203
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repos",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repository-wikis",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 470
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repository-wikis",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 597
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref/backlinks",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437788
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "status": 200,
+      "maxReplyBytes": 9437788,
+      "reason": "requested",
+      "bytes": 9437498
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/repos/:repositoryId/wiki/:ref/revisions",
+      "status": 200,
+      "maxReplyBytes": 9437788,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/env",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 33
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/env",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/ssh-mesh",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 1501
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/ssh-mesh",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/relay-config",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 51
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/relay-config",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/relay-config/:engine/reasoning-levels",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437365
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/relay-config/:engine/reasoning-levels",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/lark/installations",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 88
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/lark/installations",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/lark/install/:sessionId/status",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 159
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/lark/install/:sessionId/status",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/change-requests",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437892
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/change-requests",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/scm/connections",
+      "status": 200,
+      "maxReplyBytes": 725,
+      "reason": "requested",
+      "bytes": 665
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/scm/connections",
+      "status": 200,
+      "maxReplyBytes": 725,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/scm/connections/:connectionId",
+      "status": 200,
+      "maxReplyBytes": 725,
+      "reason": "requested",
+      "bytes": 652
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/scm/connections/:connectionId",
+      "status": 200,
+      "maxReplyBytes": 725,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/scm/events",
+      "status": 200,
+      "maxReplyBytes": 9437759,
+      "reason": "requested",
+      "bytes": 9437737
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/scm/events",
+      "status": 200,
+      "maxReplyBytes": 9437759,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/scm/events/:eventId",
+      "status": 200,
+      "maxReplyBytes": 9437759,
+      "reason": "requested",
+      "bytes": 18875113
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/scm/events/:eventId",
+      "status": 200,
+      "maxReplyBytes": 9437759,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/providers",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 431
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/providers",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/connections",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 9437579
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/connections",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId",
+      "status": 200,
+      "maxReplyBytes": 9437548,
+      "reason": "requested",
+      "bytes": 9437523
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId",
+      "status": 200,
+      "maxReplyBytes": 9437548,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
+      "status": 400,
+      "maxReplyBytes": 9437548,
+      "reason": "fixture lacks required request fields",
+      "bytes": 46
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId/authorization-sessions/:sessionId",
+      "status": 400,
+      "maxReplyBytes": 9437548,
+      "reason": "fixture lacks required request fields",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/sources",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 18874834
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/sources",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 18874821
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 563
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId/status",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+      "status": 400,
+      "maxReplyBytes": 18875017,
+      "reason": "fixture lacks required request fields",
+      "bytes": 80
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/sources/:sourceId/available-conversations",
+      "status": 400,
+      "maxReplyBytes": 18875017,
+      "reason": "fixture lacks required request fields",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/conversations",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 9437410
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/conversations",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/messages",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 28312325
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/messages",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 28312273
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/connections/:connectionId/messages/:externalMessageId",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/messaging/proposals",
+      "status": 200,
+      "maxReplyBytes": 34,
+      "reason": "requested",
+      "bytes": 65
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/messaging/proposals",
+      "status": 200,
+      "maxReplyBytes": 34,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/endpoints",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 171
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/endpoints",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/sources",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 18874785
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/sources",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 18874772
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 454
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId/status",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
+      "status": 400,
+      "maxReplyBytes": 18875017,
+      "reason": "fixture lacks required request fields",
+      "bytes": 69
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/sources/:sourceId/available-chats",
+      "status": 400,
+      "maxReplyBytes": 18875017,
+      "reason": "fixture lacks required request fields",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/messages",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 28312233
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/messages",
+      "status": 200,
+      "maxReplyBytes": 28312334,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/chats",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 9437368
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/chats",
+      "status": 200,
+      "maxReplyBytes": 18875017,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:workspaceId/feishu/proposals",
+      "status": 200,
+      "maxReplyBytes": 34,
+      "reason": "requested",
+      "bytes": 65
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:workspaceId/feishu/proposals",
+      "status": 200,
+      "maxReplyBytes": 34,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 498
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/status",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 293
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/status",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/candidates",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 310
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/candidates",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/audit",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 37
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/audit",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/routes",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 36
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/routes",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/chats",
+      "status": 404,
+      "maxReplyBytes": 18874718,
+      "reason": "fixture id absent or route not found",
+      "bytes": 68
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/chats",
+      "status": 404,
+      "maxReplyBytes": 18874718,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/senders",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 14
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/senders",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "status": 404,
+      "maxReplyBytes": 252,
+      "reason": "fixture id absent or route not found",
+      "bytes": 42
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/feishu-bot/registration/:sessionId",
+      "status": 404,
+      "maxReplyBytes": 252,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/members",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 160
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/members",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/members",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 250
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/members",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/members/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 28
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/members/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/invitations",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/invitations",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/invitations",
+      "status": 200,
+      "maxReplyBytes": 387,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/invitations",
+      "status": 200,
+      "maxReplyBytes": 387,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/invitations/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 32
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/invitations/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agents",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9438018
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agents",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agents/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9438015
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agents/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agents/:id/skills",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agents/:id/skills",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agents/:id/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18876883
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agents/:id/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agents/:id/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18876863
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agents/:id/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agents/:id/skills",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agents/:id/skills",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agents/:id/env",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 47
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agents/:id/env",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agents",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9437899
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agents",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agents/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9437897
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agents/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-task-snapshot",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18876883
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-task-snapshot",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agent-task-snapshot",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18876863
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agent-task-snapshot",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-run-counts",
+      "status": 200,
+      "maxReplyBytes": 68,
+      "reason": "requested",
+      "bytes": 110
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-run-counts",
+      "status": 200,
+      "maxReplyBytes": 68,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agent-run-counts",
+      "status": 200,
+      "maxReplyBytes": 68,
+      "reason": "requested",
+      "bytes": 89
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agent-run-counts",
+      "status": 200,
+      "maxReplyBytes": 68,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-activity-30d",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 25
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-activity-30d",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agent-activity-30d",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agent-activity-30d",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-plugins",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 976
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-plugins",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-plugins/:id",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 963
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-plugins/:id",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-plugins/:id/versions",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 468
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-plugins/:id/versions",
+      "status": 200,
+      "maxReplyBytes": 377,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-plugins/:id/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437728,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-plugins/:id/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437728,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:runtimeId/agent-plugins",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:runtimeId/agent-plugins",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agents/:id/plugins",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 113
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agents/:id/plugins",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 113
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/agent-plugin-artifacts/:digest",
+      "status": 200,
+      "maxReplyBytes": 9437260,
+      "reason": "requested",
+      "bytes": 9437195
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/agent-plugin-artifacts/:digest",
+      "status": 200,
+      "maxReplyBytes": 9437260,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-templates",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 13059
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-templates",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/agent-templates/:slug",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 30
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/agent-templates/:slug",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agent-templates",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 13034
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agent-templates",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/agent-templates/:slug",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 30
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/agent-templates/:slug",
+      "status": 404,
+      "maxReplyBytes": 0,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/skills",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 238
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/skills",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/skills/search",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 177
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/skills/search",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/skills/:id",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 18874774
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/skills/:id",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/skills",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 203
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/skills",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/skills/search",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 156
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/skills/search",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/skills/:id",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 18874753
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/skills/:id",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/skills/:id/files",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 9437346
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/skills/:id/files",
+      "status": 200,
+      "maxReplyBytes": 9437440,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tokens",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tokens",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tokens",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tokens",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/notification-preferences",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 73
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/notification-preferences",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/notification-preferences",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 73
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/notification-preferences",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/notification-channels",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 25
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/notification-channels",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/notification-deliveries",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 27
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/notification-deliveries",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/feedback",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 25
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/feedback",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/codex-profile",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 16
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/codex-profile",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:id/codex-profile-key",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 33
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:id/codex-profile-key",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/claude-profile",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 16
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/claude-profile",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemon/runtimes/:id/claude-profile-key",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 33
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemon/runtimes/:id/claude-profile-key",
+      "status": 403,
+      "maxReplyBytes": 0,
+      "reason": "requires scoped actor",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 18875226
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 18875234
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/models",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437403
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/models",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/models/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437410
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/models/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/models",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437341
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/models",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/models/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437380
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/models/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/update/:updateId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437431
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/update/:updateId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/update/:updateId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437376
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/update/:updateId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/commands/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437676
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/commands/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/local-skills/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/local-skills/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/local-skills/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/local-skills/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/local-skills/import/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/local-skills/import/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/local-skills/import/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/local-skills/import/:requestId",
+      "status": 404,
+      "maxReplyBytes": 9437755,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/directory-scans/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 213
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/directory-scans/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/directory-scans/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 218
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/directory-scans/:requestId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 32
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 12
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/usage/by-hour",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 12
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/usage/by-hour",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/runtimes/:id/task-activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 15
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/runtimes/:id/task-activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 9437675
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/execution-groups",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 191
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/execution-groups",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/execution-groups",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 191
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/execution-groups",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/models",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437363
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/models",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/models",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437363
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/models",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 18875261
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/usage/by-hour",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/usage/by-hour",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/task-activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/task-activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/activity",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtime-workspaces",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 17
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtime-workspaces",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtimes/:id/workspaces",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 17
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtimes/:id/workspaces",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/runtime-workspaces/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/runtime-workspaces/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/daemons/:daemonId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 175
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/daemons/:daemonId",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/daemons",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 173
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/daemons",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/daemons/:daemonId/retirement-plan",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 616
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/daemons/:daemonId/retirement-plan",
+      "status": 200,
+      "maxReplyBytes": 9437755,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/platform/config",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 184
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/platform/config",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/platform/status",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9438085
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/platform/status",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/platform/operations",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437586
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/platform/operations",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/dashboard/usage/daily",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437369
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/dashboard/usage/daily",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/dashboard/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437340
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/dashboard/usage/by-agent",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/dashboard/agent-runtime",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 83
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/dashboard/agent-runtime",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/dashboard/runtime/daily",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 73
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/dashboard/runtime/daily",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/knowledge/submissions",
+      "status": 200,
+      "maxReplyBytes": 699,
+      "reason": "requested",
+      "bytes": 922
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/knowledge/submissions",
+      "status": 200,
+      "maxReplyBytes": 699,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/knowledge/submissions/:id",
+      "status": 200,
+      "maxReplyBytes": 18874830,
+      "reason": "requested",
+      "bytes": 18874883
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/knowledge/submissions/:id",
+      "status": 200,
+      "maxReplyBytes": 18874830,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/knowledge/runs",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437633
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/knowledge/runs",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/knowledge/runs/:id",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 9437611
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/knowledge/runs/:id",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/projects",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 396
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/projects",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/projects/search",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 418
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/projects/search",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/search",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 432
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/search",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 409
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/projects/:id",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 18874890
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/projects/:id",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/projects/:id/resources",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 26
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/projects/:id/resources",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/projects/:id/devices",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/projects/:id/devices",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 18874882
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/resources",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 26
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/resources",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/devices",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 39
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/devices",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/docs",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 9437638
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/docs",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/docs/:ref",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 9437635
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/docs/:ref",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/docs/:ref/revisions",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 9437393
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/docs/:ref/revisions",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/docs/:ref/backlinks",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/docs/:ref/backlinks",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/projects/:id/knowledge/recall",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 578
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/projects/:id/knowledge/recall",
+      "status": 200,
+      "maxReplyBytes": 18874909,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/project-docs",
+      "status": 200,
+      "maxReplyBytes": 9437806,
+      "reason": "requested",
+      "bytes": 9437673
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/project-docs",
+      "status": 200,
+      "maxReplyBytes": 9437806,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/project-knowledge/migration",
+      "status": 200,
+      "maxReplyBytes": 9437771,
+      "reason": "requested",
+      "bytes": 130
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/project-knowledge/migration",
+      "status": 200,
+      "maxReplyBytes": 9437771,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/squads",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 9437485
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/squads",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/squads",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 9437675
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/squads",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/squads/:id",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 9437645
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/squads/:id",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/squads/:id/members",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 174
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/squads/:id/members",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/squads/:id",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 9437673
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/squads/:id",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/squads/:id/members",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 166
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/squads/:id/members",
+      "status": 200,
+      "maxReplyBytes": 9437493,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/squads/:id/members/status",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 77
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/squads/:id/members/status",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/autopilots",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 1168
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/autopilots",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 579
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/autopilots/:id",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 18876483
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/autopilots/:id",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/autopilots/:id/runs",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 18874785
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/autopilots/:id/runs",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/autopilots/:id/deliveries",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 541
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/autopilots/:id/deliveries",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/autopilots/:id/deliveries/:deliveryId",
+      "status": 200,
+      "maxReplyBytes": 9437765,
+      "reason": "requested",
+      "bytes": 9437709
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/autopilots/:id/deliveries/:deliveryId",
+      "status": 200,
+      "maxReplyBytes": 9437765,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/scheduler",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 45
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/scheduler",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots/:id",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 580
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots/:id",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots/:id/runs",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 9437612
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots/:id/runs",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots/:id/runs/:runId",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 18874759
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots/:id/runs/:runId",
+      "status": 200,
+      "maxReplyBytes": 28312075,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots/:id/deliveries",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 516
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots/:id/deliveries",
+      "status": 200,
+      "maxReplyBytes": 657,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/autopilots/:id/deliveries/:deliveryId",
+      "status": 200,
+      "maxReplyBytes": 9437765,
+      "reason": "requested",
+      "bytes": 9437696
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/autopilots/:id/deliveries/:deliveryId",
+      "status": 200,
+      "maxReplyBytes": 9437765,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/labels",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/labels",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/labels/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 27
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/labels/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/labels",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/labels",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/labels/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 27
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/labels/:id",
+      "status": 404,
+      "maxReplyBytes": 21,
+      "reason": "fixture id absent or route not found",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/pins",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 21
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/pins",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/pins",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/pins",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/workspaces/:id/issue-archive",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 58
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/workspaces/:id/issue-archive",
+      "status": 200,
+      "maxReplyBytes": 18874718,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437918
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437863
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/status-pages",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9438211
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/status-pages",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/grouped",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437905
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/grouped",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/grouped",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437905
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/grouped",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/assignee-frequency",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/assignee-frequency",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/assignee-frequency",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/assignee-frequency",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/search",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437864
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/search",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/search",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437874
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/search",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/child-progress",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 25
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/child-progress",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/child-progress",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 25
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/child-progress",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/children",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/children",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/children",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/children",
+      "status": 200,
+      "maxReplyBytes": 0,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/generated-issues",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/generated-issues",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 94376840
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18875477
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/workspace",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/workspace",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/timeline",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 28312652
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/timeline",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/timeline",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 28312285
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/timeline",
+      "status": 200,
+      "maxReplyBytes": 37749129,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/active-task",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18877433
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/active-task",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/task-runs",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18877423
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/task-runs",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 137
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/usage",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/children",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/children",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/children",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/children",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/decisions",
+      "status": 200,
+      "maxReplyBytes": 18874901,
+      "reason": "requested",
+      "bytes": 28312329
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/decisions",
+      "status": 200,
+      "maxReplyBytes": 18874901,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/dependencies",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/dependencies",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/dependencies",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 29
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/dependencies",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 506,
+      "reason": "requested",
+      "bytes": 460
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 506,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/sessions/:sessionId/inherited-context",
+      "status": 200,
+      "maxReplyBytes": 506,
+      "reason": "requested",
+      "bytes": 183
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/sessions/:sessionId/inherited-context",
+      "status": 200,
+      "maxReplyBytes": 506,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/sessions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 1158
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/sessions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 460
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/sessions/:sessionId/participants",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/sessions/:sessionId/participants",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/sessions/:sessionId/events",
+      "status": 200,
+      "maxReplyBytes": 37749245,
+      "reason": "requested",
+      "bytes": 37749214
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/sessions/:sessionId/events",
+      "status": 200,
+      "maxReplyBytes": 37749245,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/sessions/:sessionId/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/sessions/:sessionId/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/session-results",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437401
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/session-results",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/comments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18875028
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/comments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/comments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437549
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/comments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 16
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437517
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 9437861
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/labels",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 23
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/labels",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/labels",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 13
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/labels",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/subscribers",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/subscribers",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/subscribers",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/subscribers",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/issues/:id/metadata",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 15
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/issues/:id/metadata",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/metadata",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/metadata",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/issues/:id/share",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 203
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/issues/:id/share",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/shares/:token",
+      "status": 200,
+      "maxReplyBytes": 37749245,
+      "reason": "requested",
+      "bytes": 157314088
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/shares/:token",
+      "status": 200,
+      "maxReplyBytes": 37749245,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/shares/:token/attachments/:attachmentId/content",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/shares/:token/attachments/:attachmentId/content",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/inbox",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 33
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/inbox",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/inbox",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 2
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/inbox",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/inbox/page",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 59
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/inbox/page",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/inbox/summary",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 26
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/inbox/summary",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/inbox/unread-count",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 11
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/inbox/unread-count",
+      "status": 200,
+      "maxReplyBytes": 252,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/comments/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 16
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/comments/:id/reactions",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/comments/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 18
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/comments/:id/attachments",
+      "status": 200,
+      "maxReplyBytes": 9437903,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/attachments/:id",
+      "status": 200,
+      "maxReplyBytes": 9437532,
+      "reason": "requested",
+      "bytes": 9437514
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/attachments/:id",
+      "status": 200,
+      "maxReplyBytes": 9437532,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/attachments/:id",
+      "status": 200,
+      "maxReplyBytes": 9437532,
+      "reason": "requested",
+      "bytes": 18875372
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/attachments/:id",
+      "status": 200,
+      "maxReplyBytes": 9437532,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/attachments/:id/download",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/attachments/:id/download",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/attachments/:id/content",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/attachments/:id/content",
+      "status": 302,
+      "maxReplyBytes": 9437532,
+      "reason": "route redirects or has another non-2xx result",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/chats",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 822
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/chats",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/chats/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9438177
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/chats/:id",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/chats/:id/messages",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9437369
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/chats/:id/messages",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/sessions",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 658
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/sessions",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 656
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/sessions/:sessionId",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/sessions/:sessionId/messages",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9437365
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/sessions/:sessionId/messages",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/sessions/:sessionId/messages/page",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 9437425
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/sessions/:sessionId/messages/page",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/sessions/:sessionId/pending-task",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 41
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/sessions/:sessionId/pending-task",
+      "status": 200,
+      "maxReplyBytes": 9437825,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/chat/pending-tasks",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 12
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/chat/pending-tasks",
+      "status": 200,
+      "maxReplyBytes": 21,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 2401
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks/:id",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 56627969
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks/:id",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks/:id/steer",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437365
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks/:id/steer",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tasks/:id/steer",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437365
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tasks/:id/steer",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks/:id/inspection",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 916
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks/:id/inspection",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tasks/:id/inspection",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 916
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tasks/:id/inspection",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks/:id/messages",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 25185596
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks/:id/messages",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/multiremi/tasks/:id/human-requests",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18874603
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/multiremi/tasks/:id/human-requests",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tasks/:id/human-requests",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 18874603
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tasks/:id/human-requests",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tasks/:taskId/messages",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 25185583
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tasks/:taskId/messages",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    },
+    {
+      "method": "GET",
+      "route": "/api/tasks/:taskId/prompt",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 9437304
+    },
+    {
+      "method": "HEAD",
+      "route": "/api/tasks/:taskId/prompt",
+      "status": 200,
+      "maxReplyBytes": 28313525,
+      "reason": "requested",
+      "bytes": 0
+    }
+  ]
+}

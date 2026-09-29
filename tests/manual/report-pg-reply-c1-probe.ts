@@ -25,9 +25,9 @@ const readers: Record<string, string> = {
   multiremi_message_sources: "MessagingRepo.listSources/getSource",
   multiremi_knowledge_submissions: "KnowledgeRepo.getSubmission/listSubmissions",
   multiremi_project_docs: "ProjectsRepo.listProjectDocs/getProjectDoc",
-  multiremi_repository_wiki_docs: "RepositoryWikiRepo.get/list/readBodies",
+  multiremi_repository_wiki_docs: "RepositoryWikiRepo.getByRef/list/listWorkspace",
   multiremi_gateway_models: "WorkspacesRepo.getGatewayModels",
-  multiremi_autopilot_runs: "AutopilotsRepo.listRuns/getRun",
+  multiremi_autopilot_runs: "AutopilotsRepo.listAutopilotRuns/getAutopilotRun",
   multiremi_session_results: "IssueSessionsRepo.listIssueSessionResults/getSessionResult",
   multiremi_issue_activity: "IssuesRepo.listIssueActivity/listIssueTimeline",
   multiremi_task_human_requests: "TasksRepo.getTaskHumanRequest/listTaskHumanRequests",
@@ -35,7 +35,7 @@ const readers: Record<string, string> = {
   multiremi_task_steer_messages: "TasksRepo.listTaskSteerMessages/listPendingTaskSteerMessages",
   multiremi_knowledge_compilation_runs: "KnowledgeRepo.getRun/listRunsPage",
   multiremi_project_doc_revisions: "ProjectsRepo.listProjectDocRevisions",
-  multiremi_repository_wiki_doc_revisions: "RepositoryWikiRepo.listRepositoryWikiDocRevisions",
+  multiremi_repository_wiki_doc_revisions: "MultiremiStore.listRepositoryWikiDocRevisions -> RepositoryWikiRepo.revisions",
   multiremi_agent_plugin_versions: "AgentPluginsRepo.getAgentPluginArtifactByDigest",
   multiremi_runtimes: "RuntimesRepo.getRuntime/listRuntimes",
   multiremi_runtime_models: "RuntimesRepo.listRuntimeModels",
@@ -85,10 +85,12 @@ const groups = pairs.map(scenario => ({
   column: scenario.column,
   reader: readers[scenario.column.split(".")[0]!] ?? "See static audit",
   regressions: scenario.rows.filter(row => success(row.main.status) && row.head.status !== null && row.head.status >= 500),
+  blocked: scenario.rows.filter(row => success(row.main.status) && row.head.status !== null && !success(row.head.status)),
   changes: scenario.rows.filter(row => row.main.status !== row.head.status),
   maxReplyBytes: Math.max(...scenario.rows.map(row => row.main.maxReplyBytes)),
 }));
 const affected = new Set(groups.flatMap(group => group.regressions.map(row => row.route)));
+const blockedPatterns = new Set(groups.flatMap(group => group.blocked.map(row => row.route)));
 const requests = pairs.reduce((sum, scenario) => sum + scenario.rows.length, 0);
 const regressions = groups.reduce((sum, group) => sum + group.regressions.length, 0);
 if (groups.some(group => group.maxReplyBytes < 9 * 1_048_576)) throw new Error("A payload category was not read at >=9 MiB");
@@ -99,12 +101,14 @@ const coverage = (rows: Row[]) => ({
   statuses: Object.fromEntries([...new Set(rows.map(row => row.status))].map(status => [String(status), rows.filter(row => row.status === status).length])),
 });
 const fullRegressions = fullPairs.filter(row => success(row.main.status) && row.enforced.status !== null && row.enforced.status >= 500);
+const fullBlocked = fullPairs.filter(row => success(row.main.status) && row.enforced.status !== null && !success(row.enforced.status));
 const writerArchive = readFileSync(`${directory}/MUL-398-c1-r1-route-probe.md`, "utf8");
 const writerTable = writerArchive.slice(writerArchive.indexOf("| Root column(s) |"), writerArchive.indexOf("\n## Limits of this pass"));
 const content = [
   "## Probe Results",
   "",
   `Complete runtime fixture: ${full.main!.routeCount} GET patterns, GET plus HEAD = ${fullPairs.length} requests per run. Main versus observe: **${observeChanges.length} status differences**. Main versus enforced: ${fullPairs.filter(row => row.main.status !== row.enforced.status).length} status differences, including ${fullRegressions.length} main 2xx -> 5xx requests (${new Set(fullRegressions.map(row => row.route)).size} patterns).`,
+  `Enforced mode changes ${fullBlocked.length} successful requests (${new Set(fullBlocked.map(row => row.route)).size} patterns) to non-2xx. SCM events list maps its bridge rejection to 400; this is also a C-2 candidate.`,
   "",
   "| Full fixture mode | Requested | 2xx | Skipped | Status counts |",
   "|---|---:|---:|---:|---|",
@@ -136,18 +140,18 @@ const content = [
   "",
   "### Isolated Column Matrix",
   "",
-  `${pairs.length} isolated column scenarios, ${requests} GET/HEAD requests per version (${requests * 2} total). Across scenarios: ${regressions} main 2xx -> enforced 5xx observations, ${affected.size} distinct patterns. These are C-2 candidates, not exception additions. A path appearing under several roots remains in each root group.`,
+  `${pairs.length} isolated column scenarios, ${requests} GET/HEAD requests per version (${requests * 2} total). Across scenarios: ${regressions} main 2xx -> enforced 5xx observations, ${affected.size} distinct patterns. Including the SCM 400 gives ${blockedPatterns.size} successful patterns blocked. These are C-2 candidates, not exception additions. A path appearing under several roots remains in each root group.`,
   "",
-  "| Root column | Reader | GET patterns with main 2xx -> head 5xx | Observed maximum reply bytes |",
+  "| Root column | Reader | GET patterns with main 2xx -> enforced non-2xx | Observed maximum reply bytes |",
   "|---|---|---|---:|",
-  ...groups.map(group => `| \`${group.column}\` | ${group.reader} | ${new Set(group.regressions.map(row => row.route)).size} | ${group.maxReplyBytes} |`),
+  ...groups.map(group => `| \`${group.column}\` | ${group.reader} | ${new Set(group.blocked.map(row => row.route)).size} | ${group.maxReplyBytes} |`),
   "",
-  ...groups.filter(group => group.regressions.length).flatMap(group => [
+  ...groups.filter(group => group.blocked.length).flatMap(group => [
     `### ${group.column}`, "", `Read path: ${group.reader}.`, "",
     "| Pattern | main GET/HEAD | enforced GET/HEAD | Largest main/enforced reply bytes |",
     "|---|---|---|---:|",
-    ...[...new Set(group.regressions.map(row => row.route))].map(route => {
-      const rows = group.regressions.filter(row => row.route === route);
+    ...[...new Set(group.blocked.map(row => row.route))].map(route => {
+      const rows = group.blocked.filter(row => row.route === route);
       return `| \`${route}\` | ${rows.map(row => row.main.status).join("/")} | ${rows.map(row => row.head.status).join("/")} | ${Math.max(...rows.map(row => row.main.maxReplyBytes))}/${Math.max(...rows.map(row => row.head.maxReplyBytes))} |`;
     }), "",
   ]),
@@ -159,10 +163,10 @@ const content = [
 ];
 const report = `${directory}/MUL-398-c1-b.md`;
 const original = readFileSync(report, "utf8").split("\n## Probe Results")[0]!;
-const markdown = `${original}\n${content.join("\n")}\n`;
+const markdown = `${original}\n${content.join("\n").trimEnd()}\n`;
 writeFileSync(report, markdown);
 const escape = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 writeFileSync(`${directory}/MUL-398-c1-b.html`, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MUL-398 C-1 Ruling B</title><style>body{margin:24px;background:#fff;color:#202124;font:14px/1.5 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,monospace;max-width:1280px;margin:auto}</style><body><pre>${escape(markdown)}</pre></body></html>\n`);
 console.log(JSON.stringify({ scenarios: pairs.length, requestsPerVersion: requests,
-  regressionObservations: regressions, affectedPatterns: affected.size,
-  groups: groups.filter(group => group.regressions.length).map(group => ({ column: group.column, patterns: new Set(group.regressions.map(row => row.route)).size })) }));
+  regressionObservations: regressions, affectedPatterns: affected.size, blockedPatterns: blockedPatterns.size,
+  groups: groups.filter(group => group.blocked.length).map(group => ({ column: group.column, patterns: new Set(group.blocked.map(row => row.route)).size })) }));

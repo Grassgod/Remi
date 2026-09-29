@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { Hono } from "hono";
 import { createMultiremiApp } from "@multiremi/api/server.js";
 import {
@@ -97,7 +97,7 @@ describe("MUL-398 C-1 effective reply limit", () => {
 
   it("keeps every HTTP exception registered and resolves its actual Hono pattern", async () => {
     defaultLimit();
-    const db = new Database(":memory:");
+    const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     const realApp = createMultiremiApp({ store, backgroundJobs: false, authToken: "c1-fixture" });
     const registered = new Set(realApp.routes.map(route => `${route.method} ${route.path}`));
@@ -155,7 +155,7 @@ describe("MUL-398 C-1 effective reply limit", () => {
       expect(await (await app.request("/api/c1/nonexception")).json()).toEqual({ bytes: 64 * MIB, rows: 8 });
       defaultLimit();
     }
-    const sqlite = new Database(":memory:");
+    const sqlite = openSqliteDatabase(":memory:");
     try { expect(taskMessagePageRows(sqlite)).toBe(8); }
     finally { sqlite.close(); }
   });

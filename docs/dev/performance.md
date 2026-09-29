@@ -112,11 +112,13 @@ repository-wikis 的 A/A2（`d905961b`、`d6714966`）已在 main、晚于 v0.2.
 
 新增路由可能通过鉴权、回读或调用链触及项目/agent 指令、skill 正文等大列，慢请求日志不能覆盖快请求。变更这些路径时运行 `env -u MULTIREMI_TOKEN bun tests/manual/audit-pg-reply-c1-callers.ts --list-missing`；脚本从运行时 Hono 路由和 schema 扫描出保守候选。分类尚未完成，架构测试目前只守卫清单与扫描可执行，候选差异只输出报告；不得把绿灯当作例外完整性证明。真实 PG 全路由 GET/HEAD 对照入口是 `tests/manual/probe-pg-reply-c1-routes.ts`。Hono 的 HEAD 复用 GET handler，例外查找也按 GET key 计算有效上限。静态分析与合成样本都不能代替 C-2 的生产单次回包数据。
 
-MUL-479 的 context-window 写路由会经 `gatewayReasoningLevels` 读取无 SQL 字节上限的 `multiremi_gateway_models.models`。其调用路径和 QA r1 授权的 15 条 messaging/Feishu 已入表；表冻结在 `84101310` 的 418 条 HTTP + 独立 `<background>`。21 条 workspace context、8 条 source allowlist 以及 MUL-487 的 human request card 整行读均不再扩表，作为 C-2 的列级风险。推荐 repo 投影掉不需要的大列或给写入限界。全路由门禁运行两遍：默认只告警与 main GET/HEAD 状态码差异须为 0；`ENFORCE=1` 输出按根因列分组的拦截清单，作为 C-2 种子，不是例外表。脚本、最大单次字节、非成功/跳过原因和写入限制见 [实测报告](../../reports/performance/MUL-398-c1-r1-route-probe.md)。
+MUL-479 的 context-window 写路由会经 `gatewayReasoningLevels` 读取无 SQL 字节上限的 `multiremi_gateway_models.models`。其调用路径和 QA r1 授权的 15 条 messaging/Feishu 已入表；表冻结在 `84101310` 的 418 条 HTTP + 独立 `<background>`。21 条 workspace context、8 条 source allowlist 以及 MUL-487 的 human request card 整行读均不再扩表，作为 C-2 的列级风险。推荐 repo 投影掉不需要的大列或给写入限界。全路由门禁运行两遍：默认只告警与 main GET/HEAD 状态码差异须为 0；`ENFORCE=1` 输出按根因列分组的拦截清单，作为 C-2 种子，不是例外表。脚本、最大单次字节、非成功/跳过原因和写入限制见 [裁决 B 实测报告](../../reports/performance/MUL-398-c1-b.md)。
 
 **环境变量**（都在 [api.env.example](../../deploy/docker/api.env.example) 有登记）：`MULTIREMI_API_ROLE`（`all` | `ui` | `runtime`，**默认 `all`**；未设置、空串和无法识别的值都解析为 `all`，也就是 main 的行为。`ui` 只服务页面请求、对 `/api/daemon/*` 返回 421，`runtime` 只服务 daemon 协议 `/health*`、`/readyz`、`/healthz`、`/internal/*`、其余全部 421。注意 `/api/daemons/:id` 复数前缀是浏览器路由；实现与守卫表见 [api-role.ts](../../packages/server/src/config/api-role.ts)）、`MULTIREMI_REQUEST_METRICS`（默认开，`0/false/off` 关闭指标采集、指标日志和响应头；PG 回包护栏与其日志仍独立生效）、`MULTIREMI_SLOW_REQUEST_MS`（默认 500，设 0 可让每个请求都打一行，适合短时冒烟）、`MULTIREMI_METRICS_SUMMARY_INTERVAL_MS`（默认 60000）、`MULTIREMI_METRICS_SUMMARY_TOP_N`（默认 10）、`MULTIREMI_METRICS_BUFFER_SIZE`（默认 4096）、`MULTIREMI_PG_REPLY_MAX_BYTES`（**默认 8388608 = 8 MiB**；未设置/空串使用默认，非法值告警后回落；显式 `0` 关闭可配置上限，集中例外保留 64 MiB）。
 
 **观测与验证入口**：
+
+`MULTIREMI_PG_REPLY_ENFORCE` 已在同一 env 示例登记，代码默认 `0`；`MAX_BYTES` 是阈值而不是开启拒绝的开关。C-2 必须先修读/写边界并取得生产单次回包证据，再申请当次翻转授权。
 
 ```bash
 # 生产容器里的四类日志（209 上的 API 容器）

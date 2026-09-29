@@ -297,13 +297,14 @@ try {
         });
         const bytes = (await response.arrayBuffer()).byteLength;
         rows.push({ method, route, status: response.status, maxReplyBytes: activeMaxReplyBytes,
-          reason: response.status === 404 ? "fixture id absent or route not found"
+          reason: activeRejected ? "PG reply rejected"
+            : response.status === 404 ? "fixture id absent or route not found"
             : response.status === 401 || response.status === 403 ? "requires scoped actor"
             : response.status === 400 ? "fixture lacks required request fields"
             : response.status === 405 ? "route does not accept this method"
             : response.status === 426 ? "requires a WebSocket upgrade"
             : response.status === 503 ? "integration configuration absent"
-            : response.status >= 500 ? activeRejected ? "PG reply rejected" : "handler error in fixture"
+            : response.status >= 500 ? "handler error in fixture"
             : response.status >= 300 ? "route redirects or has another non-2xx result" : "requested",
           bytes });
       } catch {

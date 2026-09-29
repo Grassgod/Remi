@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { Database } from "bun:sqlite";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import ts from "typescript";
 import { createMultiremiApp } from "../../packages/server/src/api/server.js";
 import { DB_REPLY_TRANSITION_EXCEPTIONS } from "../../packages/server/src/observability/request-metrics.js";
@@ -19,7 +19,7 @@ if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.m
 const options = ts.parseJsonConfigFileContent(config.config, ts.sys, root).options;
 const program = ts.createProgram(files(server), options);
 const checker = program.getTypeChecker();
-const schema = new Database(":memory:");
+const schema = openSqliteDatabase(":memory:");
 const app = createMultiremiApp({ store: new MultiremiStore(schema), backgroundJobs: false, authToken: "audit" });
 const runtimeRoutes = new Set(app.routes.filter(route => route.method !== "ALL")
   .map(route => `${route.method} ${route.path}`));
