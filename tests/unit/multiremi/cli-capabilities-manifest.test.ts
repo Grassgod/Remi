@@ -169,15 +169,22 @@ describe("CLI capabilities manifest", () => {
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
     // machine-to-server protocol, so they raise the exempt count with the total.
-    // Merge (v): retain main's routes and B5's two mapped trace reads (679 + 2).
+    // Merge (v): retain main's routes and B5's two mapped trace reads. Main's
+    // MUL-395 status-pages route is mapped too: 679 + 1 + 2 = 682.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 681,
+      // MUL-479's context-window PUT maps to `remi workspace relay context-window
+      // update`, so it raises the mapped count with the total.
+      mapped: 683,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
-      exempt: 106,
+      //
+      // MUL-462 adds the two `/internal/peer/*` routes (the split-API peer
+      // channel), also exempt under `daemon_internal_protocol`: machine-to-server
+      // traffic between two API processes with no user-facing command.
+      exempt: 110,
       missing: 0,
-      total: 787,
+      total: 793,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
@@ -200,6 +207,8 @@ describe("CLI capabilities manifest", () => {
       .toEqual({ command: "workspace.relay.reasoning-levels.get" });
     expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
       .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/context-window"])
+      .toEqual({ command: "workspace.relay.context-window.update" });
     expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
       command: "remi workspace relay reasoning-levels update",
       mutation: "write",

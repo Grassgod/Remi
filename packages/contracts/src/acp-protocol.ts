@@ -242,6 +242,7 @@ export type PromptContent =
 
 export interface PromptResult {
   stopReason: StopReason;
+  _meta?: Record<string, unknown>;
   /**
    * Token usage reported when `session/prompt` settles. The scope is
    * provider-specific: claude-agent-acp reports the whole prompt turn, while
@@ -384,6 +385,8 @@ export interface ElicitationCreateParams {
   requestedSchema?: ElicitationSchema;
   url?: string;
   elicitationId?: string;
+  /** Agent-specific extension data; codex-acp puts `codex.autoResolutionMs` here. */
+  _meta?: Record<string, unknown>;
 }
 
 export interface ElicitationSchema {
@@ -395,7 +398,7 @@ export interface ElicitationSchema {
 export interface ElicitationEnumEntry {
   const: string;
   title?: string;
-  /** codex-acp carries the option's help text here (dist/index.js:25133-25137). */
+  /** codex-acp carries the option's help text here (1.13.1 dist/index.js:32076-32079). */
   description?: string;
 }
 
@@ -406,7 +409,12 @@ export interface ElicitationPropertySchema {
   oneOf?: ElicitationEnumEntry[];
   enum?: string[];
   items?: { anyOf?: ElicitationEnumEntry[]; enum?: string[] };
-  /** codex-acp tags its `<questionId>__other` companion fields here. */
+  /**
+   * codex-acp tags its question and companion fields here: 1.11 used
+   * `{ questionId, isOtherAnswer }` for `<questionId>__other` companions,
+   * >= 1.12 uses `{ isOther, isSecret }` on questions and
+   * `{ questionId, role: "user_note", isSecret }` on `<questionId>_note`.
+   */
   _meta?: Record<string, unknown>;
 }
 
@@ -466,6 +474,7 @@ export interface ConfigOptionUpdate {
 export interface SessionInfoUpdate {
   sessionUpdate: "session_info_update";
   title?: string;
+  _meta?: Record<string, unknown>;
 }
 
 export interface AvailableCommandsUpdate {
@@ -527,6 +536,7 @@ export interface LoadSessionParams {
   cwd: string;
   mcpServers: McpServerConfig[];
   additionalDirectories?: string[];
+  _meta?: NewSessionMeta;
 }
 
 export interface CloseSessionParams {

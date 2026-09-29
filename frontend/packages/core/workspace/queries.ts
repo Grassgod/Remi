@@ -50,19 +50,28 @@ export function memberListOptions(wsId: string) {
   });
 }
 
-export function agentListOptions(wsId: string) {
+export function agentListOptions(
+  wsId: string,
+  /** `false` keeps cached agents readable without issuing the request (MUL-472 b). */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: workspaceKeys.agents(wsId),
     queryFn: () =>
       api.listAgents({ workspace_id: wsId, include_archived: true }),
+    enabled: options.enabled ?? true,
   });
 }
 
-export function squadListOptions(wsId: string) {
+export function squadListOptions(
+  wsId: string,
+  /** `false` defers the fetch without dropping a cached list (MUL-472 b). */
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions<Squad[]>({
     queryKey: workspaceKeys.squads(wsId),
     queryFn: () => api.listSquads(),
-    enabled: !!wsId,
+    enabled: !!wsId && (options.enabled ?? true),
   });
 }
 
@@ -123,17 +132,22 @@ export function selectSkillAssignments(
   return map;
 }
 
-export function invitationListOptions(wsId: string) {
+export function invitationListOptions(
+  wsId: string,
+  options: { enabled?: boolean } = {},
+) {
   return queryOptions({
     queryKey: workspaceKeys.invitations(wsId),
     queryFn: () => api.listWorkspaceInvitations(wsId),
+    enabled: options.enabled ?? true,
   });
 }
 
-export function myInvitationListOptions() {
+export function myInvitationListOptions(options: { enabled?: boolean } = {}) {
   return queryOptions({
     queryKey: workspaceKeys.myInvitations(),
     queryFn: () => api.listMyInvitations(),
+    enabled: options.enabled ?? true,
   });
 }
 

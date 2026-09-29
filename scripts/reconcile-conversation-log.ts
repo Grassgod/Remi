@@ -12,11 +12,25 @@ export interface ConversationMigrationEvidence {
     reconciliation: ConversationReconciliation }>;
 }
 
-export function readOnlyConversationReconciliation(db: SqlDatabase): ConversationReconciliation {
+export interface ConversationReconciliationTarget { sqlite?: string; pgEnv?: string }
+
+/** Opens the selected target exactly the way the CLI does: SQLite read-only, Postgres behind the sync bridge. */
+export function openConversationLogTarget(target: ConversationReconciliationTarget): SqlDatabase {
+  return target.sqlite
+    ? new Database(target.sqlite, { readonly: true })
+    : new PostgresSyncDatabase(process.env[target.pgEnv!]!);
+}
+
+/** Runs `run` inside the read-only transaction that guards every reconciliation read. */
+export function readOnlyConversationTransaction<T>(db: SqlDatabase, run: () => T): T {
   return db.transaction(() => {
     if (db instanceof PostgresSyncDatabase) db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
-    return reconcileConversationLog(db);
+    return run();
   })();
+}
+
+export function readOnlyConversationReconciliation(db: SqlDatabase): ConversationReconciliation {
+  return readOnlyConversationTransaction(db, () => reconcileConversationLog(db));
 }
 
 function reportMarkdown(evidence: ConversationMigrationEvidence): string {
@@ -63,7 +77,7 @@ if (import.meta.main) {
     process.exit(values.help ? 0 : 2);
   }
   if (pgEnv && !process.env[pgEnv]) throw new Error("The selected PostgreSQL environment variable is not set");
-  const db = sqlite ? new Database(sqlite, { readonly: true }) : new PostgresSyncDatabase(process.env[pgEnv!]!);
+  const db = openConversationLogTarget({ sqlite, pgEnv });
   try {
     const reconciliation = readOnlyConversationReconciliation(db);
     await writeConversationMigrationEvidence(out, { generatedAt: new Date().toISOString(), scope: "Read-only reconciliation; no data exported except ids, counts and digests.",

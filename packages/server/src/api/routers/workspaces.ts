@@ -5,6 +5,7 @@ import {
   currentTaskParentId,
   denyCurrentUserWorkspaceAccess,
   gatewayReasoningLevels,
+  validateGatewayContextWindow,
   importWorkspaceRepository,
   inspectWorkspaceRepository,
   isFirstAgentInWorkspace,
@@ -51,7 +52,7 @@ import {
 import {
   IssueTopicConfigError,
   parseIssueTopicConfig,
-  readWorkspaceIssueTopics,
+  readWorkspaceIssueTopicsLenient,
 } from "@multiremi/issue-topics/config.js";
 import {
   SshMeshMutationConflictError,
@@ -62,6 +63,7 @@ import type {
   CreateWorkspaceRuntimeProvisionInput,
   CreateWorkspaceInput,
   IssueTopicConfig,
+  IssueTopicConfigInvalid,
   MultiremiBotMenuPublishRequest,
   MultiremiRepositoryWikiDoc,
   MultiremiRepositoryWikiDocRevision,
@@ -261,7 +263,14 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     try {
-      return c.json(issueTopicConfigResponse(workspaceId, readWorkspaceIssueTopics(workspace.settings)));
+      let invalid: IssueTopicConfigInvalid | undefined;
+      const config = readWorkspaceIssueTopicsLenient(workspace.settings, (error) => {
+        invalid = { code: error.code, message: error.message };
+      });
+      return c.json({
+        ...issueTopicConfigResponse(workspaceId, config),
+        ...(invalid ? { invalid } : {}),
+      });
     } catch (error) {
       return issueTopicConfigErrorResponse(c, error);
     }
@@ -286,7 +295,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "only enabled, chat_id, project_ids, notify_mode, and notify_open_id are allowed" }, 400);
     }
     try {
-      const previous = readWorkspaceIssueTopics(workspace.settings);
+      const previous = readWorkspaceIssueTopicsLenient(workspace.settings);
       const issueTopics = parseIssueTopicConfig({
         enabled: body.enabled,
         chatId: body.chat_id,
@@ -1335,6 +1344,26 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     // the client never has to guess whether its own write took effect — a
     // declaration can be outranked by a gateway/Runtime statement, and the row's
     // `effective.source` is the only honest answer to that.
+    return c.json({ deleted, ...gatewayReasoningLevels(store, workspaceId, engine, updatedBy) });
+  });
+  app.put("/api/workspaces/:id/relay-config/:engine/context-window", async (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude") return c.json({ error: "1M context is only supported for Claude" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    const body = await readJsonStrict<{ model?: unknown; one_million?: unknown }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const validation = validateGatewayContextWindow(body);
+    if (!validation.ok) return c.json({ error: validation.error }, 400);
+    const updatedBy = currentRequestUserId(c);
+    let deleted = false;
+    if (validation.oneMillion) {
+      store.saveGatewayModelContext(workspaceId, engine, { modelId: validation.modelId, updatedBy });
+    } else {
+      deleted = store.deleteGatewayModelContext(workspaceId, engine, validation.modelId);
+    }
     return c.json({ deleted, ...gatewayReasoningLevels(store, workspaceId, engine, updatedBy) });
   });
   app.post("/api/workspaces/:id/leave", async (c) => {

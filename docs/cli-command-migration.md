@@ -16,6 +16,55 @@ This document is the user-facing migration contract for the Registry-based Remi 
 The machine-readable source of truth remains `cli-capabilities.json`; CI checks this
 table against that manifest.
 
+`remi issue status-pages --statuses todo,in_progress --limit 50
+--include-archived-total --output json` calls `GET /api/issues/status-pages`.
+The response is `{ groups: { [status]: { issues, total, has_more } },
+archived_total? }`. Each bucket contains the same compatibility Issue records
+and total as `/api/issues?status=...&limit=...&offset=0`. Default statuses are
+all seven server statuses, including `cancelled`; `open` normalizes to `todo`.
+The default limit is 50 per status, capped at 500. Only offset 0 is accepted;
+continue each bucket through the existing `/api/issues` route.
+
+The API reuses the compatibility list query: `workspace_id`, `statuses`/`status`,
+`priorities`/`priority`, `assignee_types`, `assignee_id`, `assignee_ids`,
+`project_id`, `project_ids`, `parent_id`, `top_level_only`, `metadata` (JSON
+equality filters), `include_no_assignee`, `include_no_project`, `include_archived`,
+`archived_only`, `limit`, and `offset`. Lists are comma-separated. CLI options
+use `--workspace`, `--statuses`/`--status`, `--priority`, `--assignee-type`,
+`--assignee`, `--assignee-ids`, `--project`, `--project-ids`, `--parent`,
+`--metadata`, and hyphenated forms of the Boolean flags. Assignee references
+use the shared resolver, including user IDs, member IDs, Agent IDs and names.
+The compatibility list query also accepts the legacy `assignee_type` spelling
+when `assignee_types` is absent; the plural takes precedence, including when
+empty. Native queries retain `assigneeTypes`/`assignee_types` only. The CLI sends
+`assignee_types` for `--assignee-type`.
+Like the existing list, ordering is `updated_at DESC`; `sort_by`, `sort_order`,
+`creator_id` and `involves_user_id` currently have no effect.
+
+`remi issue children <key-or-id>` accepts either reference. Both children batch
+routes resolve `parent_ids` to parent IDs and deduplicate those IDs before
+listing children. A full issue ID resolves globally, whatever workspace is
+selected, so the CLI's default `X-Workspace-ID` never hides a parent the caller
+can access; the workspace only distinguishes keys, numbers and ID prefixes.
+For those, explicit workspace selectors take precedence in this order: query
+`workspace_id` (native requests first check `workspaceId`, then `workspace_id`),
+`X-Workspace-ID`, then `X-Workspace-Slug` resolved to a workspace ID. An unknown
+explicit slug skips keys, numbers and prefixes but still resolves full IDs. With
+no explicit selector, resolution remains unscoped and does not infer token or
+member defaults. Non-ID references follow `getIssueByRef`, like
+`/api/issues/:id/children`: a unique match wins, or, without a workspace
+selector, the unique local row takes precedence among multiple matches. An
+explicit workspace restricts resolution to that workspace's row. Unknown or
+still unresolved references and inaccessible parents are skipped; children must
+also pass the existing workspace access check. Compatibility responses retain
+snake_case Issue fields, while native responses retain camelCase.
+
+`include_archived_total=true` (CLI `--include-archived-total`) adds the
+workspace-wide archived count, independent of other list filters. Omission
+performs no archive count query and omits the field. Buckets, totals, labels
+and the optional count share a SQLite read transaction or a PostgreSQL
+read-only Repeatable Read transaction. The Web pages do not call this API yet.
+
 Agent creation, editing and default-agent commands accept `--provider antigravity`.
 `remi daemon start --provider antigravity` selects the native `agy` runtime;
 automatic daemon discovery also detects it. Install/sign in to agy on the daemon

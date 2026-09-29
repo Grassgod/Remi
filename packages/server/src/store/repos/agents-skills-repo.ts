@@ -15,6 +15,8 @@ import {
   uniqueRefMatch,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { isAgentRole, normalizeStoredAgentRole } from "@multiremi/store/agent-role.js";
 import type {
   CreateAgentInput,
@@ -28,6 +30,9 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+
+/** Keeps one `IN (…)` below SQLite's default bind-variable limit. */
+const AGENT_LOOKUP_BATCH_SIZE = 400;
 
 export class AgentsSkillsRepo {
   constructor(private ctx: StoreContext) {}
@@ -88,27 +93,29 @@ export class AgentsSkillsRepo {
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
+    return this.ctx.db.transaction(() => this.updateAgentWithinTransaction(id, input))();
+  }
+
+  /** Caller owns the transaction, including any role-dependent token revocations. */
+  updateAgentWithinTransaction(id: string, input: UpdateAgentInput): MultiremiAgent {
     const initial = this.getAgent(id);
     if (!initial) throw new Error(`Agent not found: ${id}`);
     const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
       ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
       : initial.workspaceId;
     const workspaceIds = [...new Set([initial.workspaceId, requestedWorkspaceId])].sort();
-    const transaction = this.ctx.db.transaction(() => {
-      for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
-      this.lockAgentRow(id);
-      const current = this.getAgent(id);
-      if (!current) throw new Error(`Agent not found: ${id}`);
-      const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
-        ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
-        : current.workspaceId;
-      if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
-        throw new Error("Agent workspace changed concurrently; retry the update");
-      }
-      return this.updateAgentWithinPluginLock(id, input);
-    });
-    return transaction();
+    for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+    this.lockAgentRow(id);
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+      ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
+      : current.workspaceId;
+    if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
+      throw new Error("Agent workspace changed concurrently; retry the update");
+    }
+    return this.updateAgentWithinPluginLock(id, input);
   }
 
   setAgentRole(id: string, role: MultiremiAgent["role"]): MultiremiAgent {
@@ -329,7 +336,21 @@ export class AgentsSkillsRepo {
     const initial = this.getAgent(id);
     if (!initial) throw new Error(`Agent not found: ${id}`);
     const tx = this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N, before any domain lock. The
+      // Feishu cascade at the end of this transaction writes the audit trail
+      // (its seq is allocated under the audit number lock) and updates rows, so
+      // N must already be held when the first D write happens — otherwise this
+      // path runs W -> D -> N while every other audit writer runs W -> N -> D.
+      //
+      // Taken unconditionally: this is a low-frequency admin action, and the
+      // alternative (a read to see whether any Feishu config references this
+      // Agent, then a conditional lock) would need the read to be lock-free
+      // against config creation. It is not: `upsertConfig` and `replaceRoutes`
+      // also take W, so a plain read here cannot be proven race-free without
+      // adding a read-creates-a-write dependency. A per-workspace lock held for
+      // one archive is the cheaper, provable choice.
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${initial.workspaceId}`));
       this.ctx.agentPlugins().lockAgentPluginWorkspace(initial.workspaceId);
       this.lockAgentRow(id);
       const agent = this.getAgent(id);
@@ -722,6 +743,29 @@ export class AgentsSkillsRepo {
     return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
+  /**
+   * Resolve an assignee reference to an Agent row, without Skills or Skill files.
+   *
+   * Same matching rule as {@link getAgentByRef} (exact id, then the tiered
+   * alias match over the workspace's Agents), but the alias scan reads the
+   * Agent rows only. The caller is selecting a row — the reference-shaped
+   * branch of the assignee filter resolver (MUL-473) — and never ships the
+   * result to a daemon, so pulling every Skill body across the bridge would
+   * dominate the request for an answer the Skills cannot change.
+   */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
+    const value = ref.trim();
+    if (!value) return null;
+    const exact = this.getAgentLite(value);
+    if (exact && !exact.archivedAt && (!workspaceId || exact.workspaceId === workspaceId)) return exact;
+    return uniqueRefMatch(
+      this.listAgentsLite().filter((agent) => !workspaceId || agent.workspaceId === workspaceId),
+      value,
+      (agent) => agent.id,
+      (agent) => [agent.name],
+    );
+  }
+
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
     const value = ref.trim();
     if (!value) return null;
@@ -755,6 +799,30 @@ export class AgentsSkillsRepo {
       ? "SELECT * FROM multiremi_agents ORDER BY created_at ASC"
       : "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
     return rows.map(toAgent);
+  }
+
+  /**
+   * Live Agent rows for a set of ids, without Skills or Skill files.
+   *
+   * Read-path counterpart of {@link hydrateTasksByIds}: a list route that has
+   * already decided it only needs to *check* Agents (visibility, workspace)
+   * reads them in one bounded `IN (…)` instead of one hydrated load per id.
+   * Archived Agents are included — the decision the caller makes is the same one
+   * `getAgent` supports, and filtering here would silently change it (MUL-473).
+   */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[] {
+    const uniqueIds = [...new Set(ids.map((id) => String(id ?? "").trim()).filter(Boolean))];
+    if (!uniqueIds.length) return [];
+    const out: MultiremiAgent[] = [];
+    for (let offset = 0; offset < uniqueIds.length; offset += AGENT_LOOKUP_BATCH_SIZE) {
+      const batch = uniqueIds.slice(offset, offset + AGENT_LOOKUP_BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(", ");
+      const rows = this.ctx.db.query(
+        `SELECT * FROM multiremi_agents WHERE id IN (${placeholders})`,
+      ).all(...batch) as Row[];
+      out.push(...rows.map(toAgent));
+    }
+    return out;
   }
 
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {

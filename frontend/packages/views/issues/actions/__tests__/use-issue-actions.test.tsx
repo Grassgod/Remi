@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
+import { isShellGatePassedForTest, markRouteContentReady, resetAfterFirstScreenForTest } from "@multiremi/core/platform/use-after-first-screen";
+import { ApiError } from "@multiremi/core/api";
+import { toast } from "sonner";
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -18,7 +21,7 @@ vi.mock("@multiremi/core/modals", () => ({
   ),
 }));
 
-const mockAuthState = { user: { id: "user-1" }, isAuthenticated: true };
+const mockAuthState: { user: { id: string } | null; isAuthenticated: boolean } = { user: { id: "user-1" }, isAuthenticated: true };
 vi.mock("@multiremi/core/auth", () => ({
   useAuthStore: Object.assign(
     (selector?: any) => (selector ? selector(mockAuthState) : mockAuthState),
@@ -104,7 +107,11 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  mockAuthState.user = { id: "user-1" };
+  resetAfterFirstScreenForTest();
+  act(() => markRouteContentReady("/test/issues/issue-1"));
+  await waitFor(() => expect(isShellGatePassedForTest()).toBe(true));
   mockOpenModal.mockReset();
   mockUpdateMutate.mockReset();
   mockCreatePinMutate.mockReset();
@@ -129,6 +136,28 @@ describe("useIssueActions", () => {
       { id: "issue-1", status: "done" },
       expect.any(Object),
     );
+  });
+
+  it("offers a member the force confirmation only for a structured status hold", () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+    act(() => result.current.updateField({ status: "done" }));
+    const callbacks = mockUpdateMutate.mock.calls[0]?.[1];
+    act(() => callbacks.onError(new ApiError("held", 409, "Conflict", {
+      code: "issue_status_held", reason: "children_open", open_children: 2,
+    })));
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-force-status", {
+      issueId: "issue-1", identifier: "TES-1", status: "done", reason: "children_open", openChildren: 2,
+    });
+  });
+
+  it("keeps an agent rejection on the denied path without opening force confirmation", () => {
+    mockAuthState.user = null;
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+    act(() => result.current.updateField({ status: "done" }));
+    const callbacks = mockUpdateMutate.mock.calls[0]?.[1];
+    act(() => callbacks.onError(new ApiError("member required", 403, "Forbidden", { code: "parent_done_requires_member" })));
+    expect(mockOpenModal).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("member required");
   });
 
   it("assigning an agent to a backlog issue opens the backlog-hint modal", () => {

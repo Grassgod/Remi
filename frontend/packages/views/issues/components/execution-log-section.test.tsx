@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { api, ApiError } from "@multiremi/core/api";
 import type { AgentTask } from "@multiremi/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
@@ -22,7 +24,10 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   }),
 }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
-vi.mock("@multiremi/core/api", () => ({ api: {} }));
+vi.mock("@multiremi/core/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(),
+  api: { rerunIssue: vi.fn(), updateIssue: vi.fn() },
+}));
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
 vi.mock("../../common/task-transcript", () => ({ TranscriptButton: () => null }));
 vi.mock("./task-steer-actions", () => ({ TaskSteerActions: () => null }));
@@ -30,9 +35,17 @@ vi.mock("./terminate-task-confirm-dialog", () => ({ TerminateTaskConfirmDialog: 
 
 import { ExecutionLogSection } from "./execution-log-section";
 
+function renderLog() {
+  return renderWithI18n(
+    <QueryClientProvider client={new QueryClient()}>
+      <ExecutionLogSection issueId="issue-1" />
+    </QueryClientProvider>,
+  );
+}
+
 describe("ExecutionLogSection", () => {
   it("shows the task's actual model and switch cause, not the Agent's current primary", () => {
-    renderWithI18n(<ExecutionLogSection issueId="issue-1" />);
+    renderLog();
     expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
     expect(screen.queryByText("gpt-primary")).toBeNull();
     expect(screen.getByText(/No available gateway account/)).toBeInTheDocument();
@@ -42,7 +55,7 @@ describe("ExecutionLogSection", () => {
   it("keeps the execution metadata visible in past runs", () => {
     task.status = "completed";
     try {
-      renderWithI18n(<ExecutionLogSection issueId="issue-1" />);
+      renderLog();
       fireEvent.click(screen.getByRole("button", { name: /Show past runs/ }));
       expect(screen.getByText("deepseek-flash")).toBeInTheDocument();
     } finally {
@@ -55,11 +68,29 @@ describe("ExecutionLogSection", () => {
       executionThinkingLevel: undefined, fallbackSwitched: false,
       usage: [{ model: "observed-backup", inputTokens: 7 }] };
     try {
-      renderWithI18n(<ExecutionLogSection issueId="issue-1" />);
+      renderLog();
       fireEvent.click(screen.getByRole("button", { name: /Show past runs/ }));
       expect(screen.getByText("observed-backup")).toBeInTheDocument();
       expect(screen.queryByText("gpt-primary")).toBeNull();
       expect(screen.queryByText("(low)")).toBeNull();
+    } finally {
+      displayedTask = task;
+    }
+  });
+
+  it("offers force start only for a dependencies_unmet rerun conflict", async () => {
+    displayedTask = { ...task, status: "failed" };
+    vi.mocked(api.rerunIssue).mockRejectedValueOnce(
+      new ApiError("dependencies unmet", 409, "Conflict", { code: "dependencies_unmet" }),
+    );
+    vi.mocked(api.updateIssue).mockResolvedValueOnce({ id: "issue-1" } as never);
+    try {
+      renderLog();
+      fireEvent.click(screen.getByRole("button", { name: /Show past runs/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Retry task/ }));
+      expect(await screen.findByText("Prerequisites are unfinished")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Force start" }));
+      await waitFor(() => expect(api.updateIssue).toHaveBeenCalledWith("issue-1", { status: "todo", force: true }));
     } finally {
       displayedTask = task;
     }

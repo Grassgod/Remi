@@ -8,6 +8,7 @@ export const AGENT_COMMENTED_EQUIVALENCE_CASES = [
   ["task-linked system comment", false],
   ["agent-authored system comment", false],
   ["deleted comment", false],
+  ["deleted comment with residual task id", false],
   ["edited comment", true],
   ["same issue side session", true],
   ["before since", false],
@@ -66,6 +67,12 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
             commentId = comment.id;
             if (name === "edited comment") store.updateIssueComment(comment.id, { body: "Edited current body" });
             if (name === "deleted comment") store.deleteIssueComment(comment.id);
+            if (name === "deleted comment with residual task id") {
+              // Ruling (e) clears task_id on tombstones before this query runs; keep a residual id so the
+              // deleted_at guard is the only legacy predicate that can exclude the row.
+              store.deleteIssueComment(comment.id);
+              db.run("UPDATE multiremi_conversation_log SET task_id = ? WHERE id = ?", [taskId, comment.id]);
+            }
           }
           if (commentId) {
             const createdAt = name === "before since" || name.startsWith("null since")
@@ -106,6 +113,30 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
         store.completeTask(task.id, { output: "Accumulated transcript must not be posted again" });
         const actualCommentsAfterCompletion = store.listIssueComments(issue.id).filter((candidate) => candidate.authorId === agent.id).length;
         expect(actualCommentsAfterCompletion).toBe(1);
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: a deleted comment with a residual task id still gets the automatic reply`, async () => {
+      await withStore(backend, (store, db) => {
+        const runtime = store.registerRuntime({ id: "rt_deleted_reply", name: "Deleted reply runtime", provider: "codex", workspaceId: "local" });
+        const agent = store.createAgent({ name: "Deleted reply author", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Deleted comment does not count", workspaceId: "local" });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Reply after deletion" });
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        store.startTask(task.id);
+        const comment = store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id,
+          taskId: task.id, body: "Deleted before the task completed" });
+        store.deleteIssueComment(comment.id);
+        // A tombstone keeps task_id NULL from ruling (e); restore it so only deleted_at excludes the row.
+        db.run("UPDATE multiremi_conversation_log SET task_id = ? WHERE id = ?", [task.id, comment.id]);
+        expect(Number(db.query(`SELECT COUNT(*) AS n FROM multiremi_conversation_log
+          WHERE session_id = ? AND author_id = ? AND task_id = ? AND kind = 'message' AND deleted_at IS NULL`)
+          .get(session.id, agent.id, task.id)!.n)).toBe(0);
+        store.completeTask(task.id, { output: "The automatic reply is still required" });
+        const replies = store.listIssueComments(issue.id).filter((candidate) => candidate.authorId === agent.id);
+        expect(replies.map((candidate) => candidate.id)).not.toContain(comment.id);
+        expect(replies.length).toBe(1);
       });
     }, 30_000);
   }

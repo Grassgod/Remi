@@ -480,6 +480,7 @@ export interface SeedRefs {
   inboxItemId: string;
   inboxMemberId: string;
   humanRequestId: string;
+  decisionId: string;
   runtimeModelRequestId: string;
   dirScanRequestId: string;
   localSkillListRequestId: string;
@@ -635,11 +636,16 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     parentIssueId: issue.id,
     createdBy: member.id,
   });
+  // MUL-400 E3: the snapshot's `blocks` row means the blocked issue waits on
+  // `issue`, so this one carries the unmet prerequisite. The assignment below
+  // must therefore stay a plain owner change (gate 1 records it and skips the
+  // dispatch), and the progress/children rows exercise the waiting buckets.
   const blockedIssue = store.createIssue({
     id: "iss_snapshot_blocked",
     title: "Snapshot blocked issue",
     workspaceId,
     createdBy: member.id,
+    status: "backlog",
   });
   store.attachLabelToIssue(issue.id, label.id);
   store.setIssueMetadataKey(issue.id, "snapshot_key", "snapshot_value");
@@ -689,6 +695,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   // MUL-410: an answered decision with a revision trail. Inserted directly so
   // the fixture stays deterministic: `createIssueDecision` would queue a round
   // and notify, and this row only exercises the read model.
+  const decisionId = "dcs_snapshot";
   const decisionHistory = [
     { answererType: "agent", answererId: agent.id, answer: "Merge after CI", reason: "Checks passed",
       overturn: "A member can reverse this if QA fails", answeredAt: "2026-01-01T00:00:01.000Z" },
@@ -702,7 +709,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
       created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'answered', ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      "dcs_snapshot",
+      decisionId,
       workspaceId,
       issue.id,
       issue.id,
@@ -893,6 +900,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     inboxItemId: inboxItem?.id ?? "inb_snapshot",
     inboxMemberId,
     humanRequestId: (humanRequest as any).id ?? (humanRequest as any).requestId ?? "hrq_snapshot",
+    decisionId,
     runtimeModelRequestId: (modelRequest as any).id ?? (modelRequest as any).requestId,
     dirScanRequestId: (dirScan as any).id ?? (dirScan as any).requestId,
     localSkillListRequestId: (localSkillList as any).id ?? (localSkillList as any).requestId,
@@ -939,6 +947,7 @@ const ID_BY_COLLECTION: Record<string, keyof SeedRefs> = {
 const BY_NAME: Record<string, keyof SeedRefs> = {
   attachmentId: "attachmentId",
   chatSessionId: "chatSessionId",
+  decisionId: "decisionId",
   dependencyId: "dependencyId",
   deliveryId: "deliveryId",
   invitationId: "invitationId",
@@ -1166,7 +1175,7 @@ export const buildSnapshotApp = buildApp;
 // families
 // ---------------------------------------------------------------------------
 
-type Flow = (rec: Recorder, refs: SeedRefs) => Promise<void>;
+type Flow = (rec: Recorder, refs: SeedRefs, store: MultiremiStore) => Promise<void>;
 
 const MUTATION_FLOWS: Array<{ name: string; run: Flow }> = [];
 
@@ -1808,6 +1817,18 @@ flow("feishu-bot", async (rec, refs) => {
 });
 
 // -- settings / misc --------------------------------------------------------
+flow("issue-topics-invalid-stored", async (rec, refs, store) => {
+  const workspace = store.getWorkspace(refs.workspaceId)!;
+  store.updateWorkspace(refs.workspaceId, { settings: { ...workspace.settings, issueTopics: {
+    enabled: true, chatId: "oc_snapshot_topics", notifyMode: "person",
+  } } });
+  const path = `/api/workspaces/${refs.workspaceId}/issue-topics`;
+  await rec.call("GET", path);
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics" });
+  await rec.json("PUT", path, { enabled: true, chat_id: "oc_snapshot_topics", notify_mode: "none" });
+  await rec.call("GET", path);
+});
+
 flow("settings-misc", async (rec, refs) => {
   await rec.json("PUT", "/api/notification-preferences", { email_enabled: false });
   await rec.json("PUT", "/api/multiremi/notification-preferences", { emailEnabled: true });
@@ -1914,7 +1935,7 @@ export async function captureApiSnapshot(): Promise<SnapshotFile> {
       resetDeterministicState();
       const boot = await buildApp();
       const recorder = new Recorder(boot.app, routes, name);
-      await run(recorder, boot.refs);
+      await run(recorder, boot.refs, boot.store);
       for (const entry of recorder.entries) entries.push(entry);
       for (const route of recorder.covered) covered.add(route);
       boot.db.close();

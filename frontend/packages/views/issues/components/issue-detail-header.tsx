@@ -31,7 +31,7 @@ interface IssueDetailHeaderProps {
   issue: Issue;
   parentIssue: Issue | null;
   breadcrumbProject: Project | null;
-  onUpdateField: (updates: Partial<UpdateIssueRequest>) => void;
+  onUpdateField: (updates: Partial<UpdateIssueRequest>, onSuccess?: () => void) => void;
   /** Present when the shell wants to close/advance the surface itself. */
   onDone?: () => void;
   /**
@@ -99,7 +99,7 @@ export function IssueDetailHeader({
       leaf={
         <AppLink
           href={paths.issueDetail(issue.id)}
-          className="flex min-w-0 transition-opacity hover:opacity-80"
+          className="flex min-w-0 overflow-hidden whitespace-nowrap transition-opacity hover:opacity-80"
         >
           <span className="truncate font-medium text-foreground">
             {issue.identifier} {issue.title}
@@ -116,7 +116,7 @@ export function IssueDetailHeader({
                   variant="ghost"
                   size="icon-sm"
                   className="text-muted-foreground"
-                  onClick={() => { onUpdateField({ status: "done" }); onDone?.(); }}
+                  onClick={() => onUpdateField({ status: "done" }, onDone)}
                 >
                   <CircleCheck />
                 </Button>

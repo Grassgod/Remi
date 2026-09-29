@@ -22,6 +22,9 @@ import { myIssueAssigneeGroupsOptions, myIssueListOptions, childIssueProgressOpt
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
 import { useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { myIssuesViewStore } from "@multiremi/core/issues/stores/my-issues-view-store";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
+import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { MyIssuesHeader } from "./my-issues-header";
@@ -30,6 +33,7 @@ export function MyIssuesPage() {
   const { t } = useT("my-issues");
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
+  const { pathname } = useNavigation();
   const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
@@ -38,6 +42,7 @@ export function MyIssuesPage() {
   const sortBy = useStore(myIssuesViewStore, (s) => s.sortBy);
   const sortDirection = useStore(myIssuesViewStore, (s) => s.sortDirection);
   const agentRunningFilter = useStore(myIssuesViewStore, (s) => s.agentRunningFilter);
+  const showSubIssues = useStore(myIssuesViewStore, (s) => s.showSubIssues);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
 
   const sort = useMemo(
@@ -51,14 +56,22 @@ export function MyIssuesPage() {
   // See issues-page.tsx for the rationale — derive a workspace-wide set
   // of issue ids with at least one running task, drive the "agents
   // working" quick-filter from it.
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  //
+  // MUL-472 b: same two-class rule as issues-page.tsx — the roll-up waits with
+  // the page-level queries, except when the running-agent filter makes the
+  // snapshot the row set itself.
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const snapshotIsLoadBearing = agentRunningFilter;
+  const snapshotQuery = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || snapshotIsLoadBearing }),
+  );
   const runningIssueIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const t of snapshot) {
+    for (const t of snapshotQuery.data ?? []) {
       if (t.status === "running" && t.issue_id) ids.add(t.issue_id);
     }
     return ids;
-  }, [snapshot]);
+  }, [snapshotQuery.data]);
 
   // Clear filter state when switching between workspaces (URL-driven).
   useClearFiltersOnWorkspaceChange(myIssuesViewStore, wsId);
@@ -73,24 +86,24 @@ export function MyIssuesPage() {
   // Direct member assignment is intentionally excluded — that is the
   // `assigned` tab's semantics.
   const filter: MyIssuesFilter = useMemo(() => {
-    if (!user) return {};
+    if (!user) return { top_level_only: !showSubIssues };
     switch (scope) {
       case "assigned":
-        return { assignee_id: user.id };
+        return { assignee_id: user.id, top_level_only: !showSubIssues };
       case "created":
-        return { creator_id: user.id };
+        return { creator_id: user.id, top_level_only: !showSubIssues };
       case "agents":
-        return { involves_user_id: user.id };
+        return { involves_user_id: user.id, top_level_only: !showSubIssues };
       case "all":
         // "All" is the union of the three single-relation filters above;
         // the per-relation user id is plumbed through `userId` to
         // myIssue*Options. The filter object stays empty so it carries
         // no narrowing of its own.
-        return {};
+        return { top_level_only: !showSubIssues };
       default:
-        return { assignee_id: user.id };
+        return { assignee_id: user.id, top_level_only: !showSubIssues };
     }
-  }, [scope, user]);
+  }, [scope, user, showSubIssues]);
 
   const assigneeGroupFilter = useMemo<AssigneeGroupedIssuesFilter>(
     () => ({
@@ -122,9 +135,21 @@ export function MyIssuesPage() {
         : (statusIssuesQuery.data ?? []),
     [assigneeGroupsQuery.data, statusIssuesQuery.data, usesAssigneeBoard],
   );
-  const loading = usesAssigneeBoard
+  // The running-agent filter reads the snapshot for its row set, so the list is
+  // not renderable until that arrives (see issues-page.tsx).
+  const snapshotPending = snapshotIsLoadBearing && snapshotQuery.isPending;
+  const loading = (usesAssigneeBoard
     ? assigneeGroupsQuery.isLoading
-    : statusIssuesQuery.isLoading;
+    : statusIssuesQuery.isLoading) || snapshotPending;
+  // MUL-472 item 5: see issues-page.tsx — same marker, same meaning.
+  const perfMarker = useListPerfMarker({
+    status: snapshotPending ? "pending"
+      : snapshotIsLoadBearing && snapshotQuery.isError ? "error"
+      : usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
+    isPlaceholderData: usesAssigneeBoard
+      ? assigneeGroupsQuery.isPlaceholderData
+      : statusIssuesQuery.isPlaceholderData,
+  });
 
   // Apply status/priority/agent-running filters from view store
   const issues = useMemo(
@@ -162,7 +187,9 @@ export function MyIssuesPage() {
     [myIssues, priorityFilters, agentRunningFilter, runningIssueIds],
   );
 
-  const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
+  const { data: childProgressMap = new Map() } = useQuery(
+    childIssueProgressOptions(wsId, { enabled: afterFirstScreen }),
+  );
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)
@@ -195,7 +222,7 @@ export function MyIssuesPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
         <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <Skeleton className="h-5 w-5 rounded" />
           <Skeleton className="h-4 w-32" />
@@ -234,7 +261,7 @@ export function MyIssuesPage() {
   }
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col">
+    <div className="flex flex-1 min-h-0 flex-col" {...perfMarker}>
       <PageHeader className="gap-2">
         <ListTodo className="h-4 w-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">{t(($) => $.page.breadcrumb)}</h1>

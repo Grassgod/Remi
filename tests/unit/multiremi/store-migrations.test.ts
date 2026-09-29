@@ -44,6 +44,31 @@ afterEach(() => {
 });
 
 describe("store migrations", () => {
+  it("upgrades gateway context declarations with no presets and preserves them across restarts", () => {
+    const database = freshDb();
+    migrate(database);
+    database.exec(`
+      DROP TABLE multiremi_gateway_model_context;
+      DELETE FROM multiremi_schema_migrations WHERE id = '20260928_gateway_model_context';
+    `);
+    migrate(database);
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_gateway_model_context").get()).toEqual({ count: 0 });
+    database.run(
+      "INSERT INTO multiremi_gateway_model_context VALUES (?, ?, ?, ?, ?, ?)",
+      ["local", "claude", "claude-opus-5", "1m", "local", "2026-09-28T00:00:00.000Z"],
+    );
+    migrate(database);
+    migrate(database);
+    expect(database.query("SELECT model_id, context_window FROM multiremi_gateway_model_context").all())
+      .toEqual([{ model_id: "claude-opus-5", context_window: "1m" }]);
+    expect(database.query("SELECT COUNT(*) AS count FROM multiremi_schema_migrations WHERE id = ?")
+      .get("20260928_gateway_model_context")).toEqual({ count: 1 });
+    expect(() => database.run(
+      "INSERT INTO multiremi_gateway_model_context VALUES (?, ?, ?, ?, ?, ?)",
+      ["local", "codex", "gpt-5", "1m", null, "2026-09-28T00:00:00.000Z"],
+    )).toThrow();
+  });
+
   it("adds provider-default metadata to existing runtime model tables idempotently", () => {
     const database = freshDb();
     migrate(database);
@@ -122,6 +147,9 @@ describe("store migrations", () => {
     ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
     expect(columnNames(database, "multiremi_tasks")).toContain("delegation_return_task_id");
+    expect(columnNames(database, "multiremi_tasks")).toEqual(expect.arrayContaining([
+      "delegated_from_issue_session_id", "delegation_skip_reason", "wake_source",
+    ]));
     expect(columnNames(database, "multiremi_tasks")).toContain("continued_from_task_id");
     expect(columnNames(database, "multiremi_chat_sessions")).not.toContain("issue_id");
     expect(columnNames(database, "multiremi_feishu_bot_chat_bindings")).toContain("issue_id");

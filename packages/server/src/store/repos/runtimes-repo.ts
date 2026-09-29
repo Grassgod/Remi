@@ -2,6 +2,8 @@ import { createLogger } from "@shared/logger.js";
 import { catalogAllowsModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
@@ -102,6 +104,7 @@ import type {
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
   FEISHU_DECISION_CARD_CAPABILITY,
+  FEISHU_ISSUE_DECISION_CARD_CAPABILITY,
   MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
 } from "@multiremi/contracts/types.js";
 
@@ -532,9 +535,91 @@ export class RuntimesRepo {
        LEFT JOIN multiremi_daemon_profiles profile
          ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
         AND profile.daemon_id = runtime.daemon_id
-       ORDER BY runtime.updated_at DESC`,
+       ORDER BY runtime.updated_at DESC, runtime.id DESC`,
     ).all() as Row[];
     return rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
+  }
+
+  /**
+   * The same list, narrowed to one workspace in SQL, with the three derived
+   * reads batched per table instead of per Runtime (MUL-473).
+   *
+   * The old list hydrates all deployment rows before the caller filters them.
+   * Narrowing first avoids derived reads for foreign workspaces. A NULL
+   * workspace still means `local`; both lists use `updated_at DESC, id DESC`.
+   */
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
+    const rows = this.ctx.db.query(
+      `SELECT runtime.*, profile.display_name AS daemon_display_name
+       FROM multiremi_runtimes runtime
+       LEFT JOIN multiremi_daemon_profiles profile
+         ON profile.workspace_id = COALESCE(runtime.workspace_id, 'local')
+        AND profile.daemon_id = runtime.daemon_id
+       WHERE COALESCE(runtime.workspace_id, 'local') = ?
+       ORDER BY runtime.updated_at DESC, runtime.id DESC`,
+    ).all(workspaceId) as Row[];
+    return this.hydrateRuntimes(rows.map((row) => toRuntime(row)), workspaceId);
+  }
+
+  /**
+   * `hydrateRuntime` over a list: one statement per derived table for all rows.
+   *
+   * List usage uses the existing parser on one workspace-scoped task read.
+   * Single-runtime reads keep their existing PostgreSQL settled-usage cache.
+   */
+  private hydrateRuntimes(runtimes: MultiremiRuntime[], workspaceId: string): MultiremiRuntime[] {
+    if (!runtimes.length) return [];
+    const groupsByRuntime = new Map<string, string[]>();
+    const modelsByRuntime = new Map<string, MultiremiRuntimeModel[]>();
+    const usageByRuntime = new Map<string, RuntimeUsageSummary>();
+    const workspaceRuntimes = `SELECT id FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?`;
+    const usageRows = this.ctx.db.query(
+      `SELECT runtime_id, status, usage FROM multiremi_tasks WHERE runtime_id IN (${workspaceRuntimes})`,
+    ).all(workspaceId) as Row[];
+    for (const row of usageRows) {
+      const id = String(row.runtime_id);
+      const stats = usageByRuntime.get(id) ?? {
+        taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      };
+      stats.taskCount += 1;
+      if (isInFlightTaskStatus(String(row.status) as MultiremiTaskStatus)) stats.activeTaskCount += 1;
+      if (row.status === "completed") stats.completedTaskCount += 1;
+      if (row.status === "failed") stats.failedTaskCount += 1;
+      addTaskUsage(stats, row.usage);
+      usageByRuntime.set(id, stats);
+    }
+    const groupRows = this.ctx.db.query(
+      `SELECT runtime_id, group_id FROM multiremi_execution_group_members
+       WHERE runtime_id IN (${workspaceRuntimes})
+       ORDER BY provider`,
+    ).all(workspaceId) as Row[];
+    for (const row of groupRows) {
+      const runtimeId = String(row.runtime_id);
+      const groups = groupsByRuntime.get(runtimeId) ?? [];
+      groups.push(String(row.group_id));
+      groupsByRuntime.set(runtimeId, groups);
+    }
+    const modelRows = this.ctx.db.query(
+      `SELECT * FROM multiremi_runtime_models
+       WHERE runtime_id IN (${workspaceRuntimes})
+       ORDER BY is_default DESC, label ASC`,
+    ).all(workspaceId) as Row[];
+    for (const row of modelRows) {
+      const runtimeId = String(row.runtime_id);
+      const models = modelsByRuntime.get(runtimeId) ?? [];
+      models.push(toRuntimeModel(row));
+      modelsByRuntime.set(runtimeId, models);
+    }
+    return runtimes.map((runtime) => withRuntimeLiveness({
+      ...runtime,
+      ...(usageByRuntime.get(runtime.id) ?? {
+        taskCount: 0, activeTaskCount: 0, completedTaskCount: 0, failedTaskCount: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      }),
+      executionGroupIds: groupsByRuntime.get(runtime.id) ?? [],
+      models: modelsByRuntime.get(runtime.id) ?? [],
+    }));
   }
 
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
@@ -616,6 +701,7 @@ export class RuntimesRepo {
     return this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) return false;
@@ -638,6 +724,11 @@ export class RuntimesRepo {
     if (this.hasInFlightTasksForRuntime(id) || this.hasUnrepoolableQueuedTasksForRuntime(id)) return false;
     const now = nowIso();
     if (options.repoolQueuedTasks !== false) this.repoolQueuedTasksForRuntime(id);
+    // Global lock order (MUL-405): the Feishu cascade below writes the bot
+    // config (D) and then appends an audit row whose seq is allocated under the
+    // audit number lock (N), so N must already be held when that cascade runs.
+    // Every caller takes W and then N for this workspace at the top of its own
+    // transaction (see `lockRuntimeCascadeOrder`), before its first D write.
     // A concierge whose host machine is going away must not stay enabled: an
     // admin has to pick a new Runtime deliberately rather than have the bot
     // silently reappear somewhere else.
@@ -745,6 +836,7 @@ export class RuntimesRepo {
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) return { status: "not_found" as const };
@@ -782,6 +874,7 @@ export class RuntimesRepo {
     const result = this.ctx.db.transaction(() => {
       const workspaceId = initial.workspaceId ?? "local";
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockRuntimeCascadeOrder(workspaceId);
       this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       const current = this.getRuntime(id);
       if (!current || (current.workspaceId ?? "local") !== workspaceId) throw new Error(`Runtime not found: ${id}`);
@@ -814,6 +907,27 @@ export class RuntimesRepo {
     })();
     this.publishClearedProjectDefaults(clearedProjects);
     return result;
+  }
+
+  /**
+   * MUL-405 lock order for the Runtime cascade: W then N, both before the
+   * caller's first domain write.
+   *
+   * The cascade reaches `deleteRuntimeWithinTransaction`, which disables the
+   * workspace's Feishu bot config (D) and appends an audit row whose seq is
+   * allocated under the audit number lock (N). The number lock must therefore
+   * be held from the top of the caller's transaction, not taken inside the
+   * cascade — otherwise the path runs W -> D -> N while every other audit
+   * writer runs W -> N -> D.
+   *
+   * Unconditional, for the same reason as `archiveAgent`: a conditional lock
+   * would need a race-free "does a config reference this Runtime" read, and
+   * config creation (`upsertConfig`, `replaceRoutes`) takes W too, so such a
+   * read cannot be proven stable. One per-workspace lock on a low-frequency
+   * admin path is the cheaper, provable choice.
+   */
+  private lockRuntimeCascadeOrder(workspaceId: string): void {
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`feishu-bot-audit:${workspaceId}`));
   }
 
   private listArchivedAgentIdsByRuntime(runtimeId: string): string[] {
@@ -968,6 +1082,7 @@ export class RuntimesRepo {
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(oldRuntime.workspaceId ?? "local");
+      this.lockRuntimeCascadeOrder(oldRuntime.workspaceId ?? "local");
       this.ctx.agentPlugins().lockAgentPluginWorkspace(oldRuntime.workspaceId ?? "local");
       const lockedOldRuntime = this.getRuntime(oldRuntimeId);
       const lockedNewRuntime = this.getRuntime(newRuntimeId);
@@ -1808,6 +1923,7 @@ export class RuntimesRepo {
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     // The heartbeat reads the Runtime row and its own columns; `getRuntime` would also run
     // the usage scan, execution-group membership and model catalog, which this method never
@@ -1828,6 +1944,10 @@ export class RuntimesRepo {
     // must lose it, or the control plane would keep writing cards it cannot render.
     if (options.supportsDecisionCard !== undefined) {
       metadataPatch[FEISHU_DECISION_CARD_CAPABILITY] = options.supportsDecisionCard ? 1 : 0;
+    }
+    // MUL-412: same "silence is an answer" rule for the decision-card flag.
+    if (options.supportsIssueDecisionCard !== undefined) {
+      metadataPatch[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] = options.supportsIssueDecisionCard ? 1 : 0;
     }
     const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
     let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);

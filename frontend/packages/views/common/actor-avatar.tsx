@@ -16,6 +16,7 @@ import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useNavigation } from "../navigation";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -78,7 +79,14 @@ export function ActorAvatar({
   hoverCardVariant = "profile",
   profileLink,
 }: ActorAvatarProps) {
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  const { pathname: routePath } = useNavigation();
+  // Gate the squad-list lookup: names for members and agents come from caches
+  // the page already fills, and the squad list is one more first-wave request
+  // (MUL-472 b).
+  const avatarGate = useAfterFirstScreen({ routeKey: routePath });
+  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName({
+    squadsEnabled: avatarGate,
+  });
   const paths = useWorkspacePaths();
   const avatar = (
     <ActorAvatarBase
@@ -195,7 +203,13 @@ function ActorAvatarProfileLink({
 // smaller avatars use a 6 px dot so the indicator doesn't overwhelm them.
 function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
-  const detail = useAgentPresenceDetail(ws?.id, agentId);
+  const { pathname } = useNavigation();
+  // MUL-472 b: the dot is a decoration on a row the page renders anyway, so its
+  // snapshot subscription waits for the page gate. Every avatar in the tree
+  // reaches this hook, which is why an ungated subscription here kept
+  // `/api/agent-task-snapshot` in the first wave (QA probe: 660 ms early).
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "page" });
+  const detail = useAgentPresenceDetail(ws?.id, agentId, afterFirstScreen);
   if (detail === "loading") return null;
 
   const { dotClass, label } = availabilityConfig[detail.availability];

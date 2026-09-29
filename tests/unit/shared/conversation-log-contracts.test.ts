@@ -153,8 +153,9 @@ describe("conversation log contract", () => {
       "message_deleted",
       "thread_resolved",
       "thread_unresolved",
+      "delegation_report",
     ]);
-    expect(CONVERSATION_LOG_KINDS).toHaveLength(15);
+    expect(CONVERSATION_LOG_KINDS).toHaveLength(16);
   });
 
   it("never names a kind that has no producer", () => {

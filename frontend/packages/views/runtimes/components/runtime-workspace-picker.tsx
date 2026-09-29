@@ -17,18 +17,20 @@ export interface WorkLocation {
 }
 
 /** One assignment slot. Selecting either kind replaces the other atomically. */
-export function WorkLocationPicker({ wsId, projectId = null, value, onChange, disabled = false, includeProjects = true, triggerRender }: {
+export function WorkLocationPicker({ wsId, projectId = null, value, onChange, disabled = false, projectsEnabled = true, includeProjects = true, triggerRender }: {
   wsId: string;
   projectId?: string | null;
   value: string | null;
   onChange: (location: WorkLocation) => void;
   disabled?: boolean;
+  /** Hidden callers keep cached project labels without fetching candidates. */
+  projectsEnabled?: boolean;
   includeProjects?: boolean;
   triggerRender?: ReactElement;
 }) {
   const { t } = useT("runtimes");
   const directories = useQuery(runtimeWorkspacesOptions(wsId));
-  const projects = useQuery({ ...projectListOptions(wsId), enabled: Boolean(wsId) && includeProjects });
+  const projects = useQuery({ ...projectListOptions(wsId), enabled: projectsEnabled && Boolean(wsId) && includeProjects });
   const runtimes = useQuery(runtimeListOptions(wsId));
   const selected = directories.data?.find(w => w.id === value);
   const project = projects.data?.find(p => p.id === projectId);

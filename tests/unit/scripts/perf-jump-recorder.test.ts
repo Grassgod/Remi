@@ -28,7 +28,9 @@ import {
   type PerfStateTransition,
 } from "../../../frontend/scripts/perf/lib/jump-recorder";
 import {
+  CONTRACT,
   inboxDomRowIndex,
+  inboxRowSelector,
   isEntryFailure,
   LEGACY,
   profileFor,
@@ -958,6 +960,9 @@ describe("selectors", () => {
   it("builds both tables for the same targets", () => {
     expect(issueRowSelector("legacy", "iss_1")).toBe('[data-slot="sidebar-inset"] a[href$="/issues/iss_1"]');
     expect(issueRowSelector("contract", "iss_1")).toBe('[data-perf-item="issue"][data-perf-key="iss_1"] a');
+    expect(inboxRowSelector("contract", "inb_1")).toBe(
+      '[data-perf-item="inbox"][data-perf-key="inb_1"] a, [data-perf-item="inbox"][data-perf-key="inb_1"] [role="button"], [data-perf-item="inbox"][data-perf-key="inb_1"]',
+    );
   });
 
   it("falls back to the heading rule where legacy has no stable hook", () => {
@@ -974,6 +979,26 @@ describe("selectors", () => {
     expect(running.anchors[0]).toMatchObject({ name: "latest-comment", pick: "last" });
     const deepLink = profileFor({ mode: "legacy", shape: "issue-detail", targetCommentId: "cmt_1" });
     expect(deepLink.anchors[0]!.selector).toBe('[id="comment-cmt_1"]');
+  });
+
+  // MUL-472 item 5: the list pages now publish `data-perf-scroll="list"` once
+  // their own request resolved, which is what makes `--selectors auto` stop
+  // falling back to the legacy table on every list round (32/32 in both 09-28
+  // baselines). The list *root* deliberately stays the content region in both
+  // tables so `selectorEquivalence.scrollRoot` keeps reading "same".
+  it("keeps one list root across both tables while the marker drives auto mode", () => {
+    expect(CONTRACT.listMarker).toBe('[data-perf-scroll="list"]');
+    expect(CONTRACT.scrollRoot).toBe("[data-perf-scroll]");
+    // `auto` resolves from `[data-perf-scroll]`, so a marked list page is a
+    // contract document even though its measured root is the content region.
+    // `detectContractDom` is browser-only (it reads `document`); the unit-level
+    // check is that the selector it queries is exactly the marker the app writes.
+    const source = readFileSync(
+      resolve(import.meta.dir, "../../../frontend/packages/views/common/use-list-perf-marker.ts"),
+      "utf8",
+    );
+    expect(source).toContain("data-perf-scroll");
+    expect(source).toContain("list");
   });
 
   it("roots list pages in the content region for both tables", () => {

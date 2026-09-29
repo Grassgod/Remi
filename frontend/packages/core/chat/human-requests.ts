@@ -100,6 +100,11 @@ const humanRequestSchema = z.object({
 
 const humanRequestListSchema = z.object({ requests: z.array(humanRequestSchema) });
 
+export function parseTaskHumanRequest(value: unknown): TaskHumanRequest | null {
+  const parsed = humanRequestSchema.safeParse(value);
+  return parsed.success ? parsed.data as TaskHumanRequest : null;
+}
+
 // ─── Queries ─────────────────────────────────────────────────────────────
 
 export function humanRequestsOptions(taskId: string) {

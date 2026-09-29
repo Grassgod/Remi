@@ -1,0 +1,803 @@
+{
+  "generatedAt": "2026-09-27T22:55:28.305Z",
+  "issue": "MUL-473",
+  "stage": "before",
+  "commit": "d6714966abcb757cf5d577a8e0755017edf5bfee",
+  "runtime": {
+    "bun": "1.3.14",
+    "node": "v24.3.0",
+    "platform": "linux x64",
+    "database": "postgres",
+    "bridgeBytes": "simulated (JSON.stringify({ rows, count }), same shape as pg-worker)",
+    "transport": "in-process app.request() over PostgresSyncDatabase (multiremi_mul473_2847456_942682)",
+    "postgresNote": null
+  },
+  "warmups": 3,
+  "samples": 10,
+  "scale": [
+    {
+      "sessions": 50,
+      "agents": 20,
+      "issues": 60,
+      "inboxRows": 300,
+      "results": [
+        {
+          "label": "GET /api/chat/pending-tasks",
+          "path": "/api/chat/pending-tasks",
+          "status": 200,
+          "samples": 10,
+          "dbq": 516,
+          "dbMs": 209.937,
+          "dbBytes": 529941,
+          "dbRows": 465,
+          "responseBytes": 4252,
+          "responseEntries": 50,
+          "p50Ms": 223.553,
+          "p95Ms": 237.744,
+          "topSql": [
+            {
+              "sql": "SELECT chat.*, (SELECT COUNT(*) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count, (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_content, (SELECT m.role FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_role, (SELECT m.created_at FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_created_at FROM multiremi_chat_sessions chat WHERE chat.id = ?",
+              "count": 100
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+              "count": 56
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+              "count": 56
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 50
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 50
+            },
+            {
+              "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ? LIMIT 1",
+              "count": 50
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 50
+            },
+            {
+              "sql": "SELECT id FROM multiremi_tasks WHERE chat_session_id = ? AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human') ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, priority DESC, chat_queue_order ASC, created_at ASC, id ASC",
+              "count": 50
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 50
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT chat.*, (SELECT COUNT(*) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count, (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_content, (SELECT m.role FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_role, (SELECT m.created_at FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_created_at FROM multiremi_chat_sessions chat WHERE workspace_id = ? AND creator_id = ? AND status != 'archived' ORDER BY pinned DESC, updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=usr_ user id, 3 tiers)",
+          "path": "/api/issues?assignee_id=usr_xax9cmtwvs5j&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 28.303,
+          "dbBytes": 118519,
+          "dbRows": 102,
+          "responseBytes": 10271,
+          "responseEntries": 15,
+          "p50Ms": 34.474,
+          "p95Ms": 37.502,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=usr_ agent name, 3 tiers)",
+          "path": "/api/issues?assignee_id=usr_mul473_lookalike&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 31.309,
+          "dbBytes": 108343,
+          "dbRows": 88,
+          "responseBytes": 726,
+          "responseEntries": 1,
+          "p50Ms": 33.488,
+          "p95Ms": 39.307,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=mem_ row id)",
+          "path": "/api/issues?assignee_id=mem_local_usr_xax9cmtwvs5j&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 7,
+          "dbMs": 4.182,
+          "dbBytes": 12175,
+          "dbRows": 20,
+          "responseBytes": 10271,
+          "responseEntries": 15,
+          "p50Ms": 5.464,
+          "p95Ms": 7.536,
+          "topSql": [
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=agt_)",
+          "path": "/api/issues?assignee_id=agt_hotspot_1&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 10,
+          "dbMs": 4.119,
+          "dbBytes": 8421,
+          "dbRows": 11,
+          "responseBytes": 2028,
+          "responseEntries": 3,
+          "p50Ms": 6.188,
+          "p95Ms": 9.367,
+          "topSql": [
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=<agent name>)",
+          "path": "/api/issues?assignee_id=Hotspot%20agent%205&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 31.627,
+          "dbBytes": 109735,
+          "dbRows": 90,
+          "responseBytes": 2028,
+          "responseEntries": 3,
+          "p50Ms": 35.088,
+          "p95Ms": 38.001,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sessions": 200,
+      "agents": 20,
+      "issues": 60,
+      "inboxRows": 300,
+      "results": [
+        {
+          "label": "GET /api/chat/pending-tasks",
+          "path": "/api/chat/pending-tasks",
+          "status": 200,
+          "samples": 10,
+          "dbq": 2016,
+          "dbMs": 968.407,
+          "dbBytes": 2067548,
+          "dbRows": 1815,
+          "responseBytes": 17102,
+          "responseEntries": 200,
+          "p50Ms": 864.831,
+          "p95Ms": 1019.714,
+          "topSql": [
+            {
+              "sql": "SELECT chat.*, (SELECT COUNT(*) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count, (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_content, (SELECT m.role FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_role, (SELECT m.created_at FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_created_at FROM multiremi_chat_sessions chat WHERE chat.id = ?",
+              "count": 400
+            },
+            {
+              "sql": "SELECT * FROM multiremi_tasks WHERE id = ?",
+              "count": 206
+            },
+            {
+              "sql": "SELECT id FROM multiremi_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+              "count": 206
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 200
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 200
+            },
+            {
+              "sql": "SELECT 1 AS present FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ? LIMIT 1",
+              "count": 200
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 200
+            },
+            {
+              "sql": "SELECT id FROM multiremi_tasks WHERE chat_session_id = ? AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'awaiting_human') ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, priority DESC, chat_queue_order ASC, created_at ASC, id ASC",
+              "count": 200
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 200
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT chat.*, (SELECT COUNT(*) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id AND m.role != 'user' AND m.created_at >= chat.unread_since) AS unread_count, (SELECT SUBSTR(m.body, 1, 240) FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_content, (SELECT m.role FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_role, (SELECT m.created_at FROM multiremi_chat_messages m WHERE m.chat_session_id = chat.id ORDER BY m.sequence DESC, m.id DESC LIMIT 1) AS last_message_created_at FROM multiremi_chat_sessions chat WHERE workspace_id = ? AND creator_id = ? AND status != 'archived' ORDER BY pinned DESC, updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=usr_ user id, 3 tiers)",
+          "path": "/api/issues?assignee_id=usr_ni16v0k1y2py&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 39.566,
+          "dbBytes": 118519,
+          "dbRows": 102,
+          "responseBytes": 10271,
+          "responseEntries": 15,
+          "p50Ms": 38.896,
+          "p95Ms": 47.011,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=usr_ agent name, 3 tiers)",
+          "path": "/api/issues?assignee_id=usr_mul473_lookalike&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 34.979,
+          "dbBytes": 108343,
+          "dbRows": 88,
+          "responseBytes": 726,
+          "responseEntries": 1,
+          "p50Ms": 38.569,
+          "p95Ms": 43.25,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=mem_ row id)",
+          "path": "/api/issues?assignee_id=mem_local_usr_ni16v0k1y2py&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 7,
+          "dbMs": 5.358,
+          "dbBytes": 12175,
+          "dbRows": 20,
+          "responseBytes": 10271,
+          "responseEntries": 15,
+          "p50Ms": 5.417,
+          "p95Ms": 7.751,
+          "topSql": [
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=agt_)",
+          "path": "/api/issues?assignee_id=agt_hotspot_1&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 10,
+          "dbMs": 5.069,
+          "dbBytes": 8421,
+          "dbRows": 11,
+          "responseBytes": 2028,
+          "responseEntries": 3,
+          "p50Ms": 6.62,
+          "p95Ms": 9.957,
+          "topSql": [
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "label": "GET /api/issues (assignee_id=<agent name>)",
+          "path": "/api/issues?assignee_id=Hotspot%20agent%205&limit=50",
+          "status": 200,
+          "samples": 10,
+          "dbq": 73,
+          "dbMs": 34.124,
+          "dbBytes": 109735,
+          "dbRows": 90,
+          "responseBytes": 2028,
+          "responseEntries": 3,
+          "p50Ms": 35.564,
+          "p95Ms": 40.288,
+          "topSql": [
+            {
+              "sql": "SELECT s.* FROM multiremi_skills s JOIN multiremi_agent_skills aks ON aks.skill_id = s.id WHERE aks.agent_id = ? AND s.archived_at IS NULL ORDER BY aks.created_at ASC, s.name ASC",
+              "count": 21
+            },
+            {
+              "sql": "SELECT * FROM multiremi_skill_files WHERE skill_id = ? ORDER BY path ASC",
+              "count": 20
+            },
+            {
+              "sql": "SELECT id FROM multiremi_skills WHERE id = ? AND archived_at IS NULL",
+              "count": 20
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC",
+              "count": 2
+            },
+            {
+              "sql": "SELECT * FROM multiremi_access_tokens WHERE token_hash = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE archived_at IS NULL ORDER BY created_at ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_agents WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT * FROM multiremi_workspace_members WHERE id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT COUNT(*) AS total FROM multiremi_issues WHERE archived_at IS NULL AND workspace_id = ? AND assignee_id = ?",
+              "count": 1
+            },
+            {
+              "sql": "SELECT il.issue_id AS __issue_id, l.* FROM multiremi_issue_labels l JOIN multiremi_issue_to_labels il ON il.label_id = l.id WHERE il.issue_id IN (?, ?, ?) ORDER BY lower(l.name) ASC",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.id = ? GROUP BY s.id",
+              "count": 1
+            },
+            {
+              "sql": "SELECT s.*, COUNT(m.id) AS member_count FROM multiremi_squads s LEFT JOIN multiremi_squad_members m ON m.squad_id = s.id WHERE s.workspace_id = ? AND s.archived_at IS NULL GROUP BY s.id ORDER BY s.updated_at DESC",
+              "count": 1
+            },
+            {
+              "sql": "UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?",
+              "count": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -105,7 +105,11 @@ describe("MUL-427 merge rulings", () => {
       });
     }, 30_000);
 
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: late mention SQL failure rolls back the comment and discards all queued events`, async () => {
+    // fix A (cmt_bpp6kbt1eccz; ruling cmt_ffadwzab6cnb): the mention dispatch
+    // runs after the comment's COMMIT, so its failure reaches the caller but
+    // cannot take the member's comment with it — main's "a failed forced start
+    // (MUL-458) must not roll back the member's comment", ADR 0011 §3.
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: late mention SQL failure after COMMIT throws, keeps the comment and emits only outside the transaction`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Rejected recipient", provider: "codex", workspaceId: "local" });
         const issue = store.createIssue({ title: "Late rollback", workspaceId: "local" });
@@ -116,22 +120,27 @@ describe("MUL-427 merge rulings", () => {
         } else {
           db.exec("CREATE TRIGGER reject_late_mention BEFORE INSERT ON multiremi_tasks BEGIN SELECT RAISE(ABORT, 'late mention rejected'); END");
         }
-        const emitted: string[] = [];
+        const body = `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push`;
+        const emitted: Array<{ type: string; inTransaction: boolean | undefined }> = [];
         const unsubscribers = [
-          store.onWorkspaceEvent((event) => emitted.push(event.type)),
-          store.onTaskEnqueued(() => emitted.push("enqueued")),
-          store.onTaskEvent((event) => emitted.push(event.type)),
+          store.onWorkspaceEvent((event) => emitted.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEnqueued(() => emitted.push({ type: "enqueued", inTransaction: db.inTransaction })),
+          store.onTaskEvent((event) => emitted.push({ type: event.type, inTransaction: db.inTransaction })),
         ];
         try {
-          expect(() => store.createIssueComment(issue.id, { body: `[@Recipient](mention://agent/${agent.id}) Reject after queuing the comment push` }))
-            .toThrow("late mention rejected");
-          expect(emitted).toEqual([]);
-          expect(store.listIssueComments(issue.id)).toEqual([]);
-          expect(store.listSessionEvents(session.id)).toEqual([]);
-          expect(store.listConversationLogEntries(session.id)).toEqual([]);
-          expect(store.getConversationLogHead(session.id)?.headSeq).toBe(0);
-          expect(store.listTasksForIssue(issue.id)).toEqual([]);
-          expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
+          expect(() => store.createIssueComment(issue.id, { body })).toThrow("late mention rejected");
+          const comments = store.listIssueComments(issue.id);
+          expect(comments.map((comment) => comment.body)).toEqual([body]);
+          expect(store.getConversationLogEntryById(comments[0]!.id)).toMatchObject({
+            session_id: session.id, kind: "message", body_md: body,
+          });
+          expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+            .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([comments[0]!.id]);
+          expect(emitted).toEqual([
+            { type: "activity:created", inTransaction: false },
+            { type: "comment:created", inTransaction: false },
+          ]);
+          expect(db.query("SELECT id FROM multiremi_tasks").all()).toEqual([]);
         } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
       });
     }, 30_000);
@@ -198,6 +207,85 @@ describe("MUL-427 merge rulings", () => {
           author_type: "system", body_md: frozen.body, metadata: frozen.metadata,
         });
         expect(store.getConversationLogHead(session.id)?.headSeq).toBe(events.length);
+      });
+    }, 30_000);
+
+    // Ruling (ab) item 2: `postAgentReplyComment` owns one transaction for the
+    // reply (comment, Session event, log row) and its turn card's
+    // `final_entry_id`; the reply's pushes, notifications and agent dispatch run
+    // after that COMMIT.
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply pushes and dispatches only after its own COMMIT`, async () => {
+      await withStore(backend, (store, db) => {
+        const runtime = store.registerRuntime({ id: "rt_reply_after_commit", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+        const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
+        const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
+        const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
+        const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
+        expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+        store.startTask(task.id);
+        const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
+        const enqueued: Array<{ agentId: string; inTransaction: boolean | undefined }> = [];
+        const unsubscribers = [
+          store.onWorkspaceEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+          store.onTaskEnqueued((queued) => enqueued.push({ agentId: queued.agentId, inTransaction: db.inTransaction })),
+        ];
+        try {
+          store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+          const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id)!;
+          expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
+            .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
+          expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
+          expect(events.map((event) => event.type)).toContain("comment:created");
+          expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
+        } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an automatic reply commits with its turn card's final_entry_id or not at all`, async () => {
+      await withStore(backend, (store, db) => {
+        const runtime = store.registerRuntime({ id: "rt_reply_final_entry", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+        const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Final entry", workspaceId: "local" });
+        const session = store.getOrCreateDefaultIssueSession(issue.id);
+        const completeRound = (output: string) => {
+          const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });
+          expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+          store.startTask(task.id);
+          store.completeTask(task.id, { output });
+          return task;
+        };
+        const committed = completeRound("Committed answer");
+        const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === committed.id)!;
+        expect(reply.body).toBe("Committed answer");
+        expect(store.findTurnEntry(committed.id)?.metadata.final_entry_id).toBe(reply.id);
+
+        // Reject only the reply's own card update; the terminal transaction
+        // writes `final_entry_id: null` and must still go through.
+        if (backend === "pg") {
+          db.run(`CREATE FUNCTION reject_final_entry() RETURNS trigger AS $$ BEGIN
+            IF NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL THEN RAISE EXCEPTION 'final entry rejected'; END IF;
+            RETURN NEW; END; $$ LANGUAGE plpgsql`);
+          db.run("CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log FOR EACH ROW EXECUTE FUNCTION reject_final_entry()");
+        } else {
+          db.exec(`CREATE TRIGGER reject_final_entry BEFORE UPDATE ON multiremi_conversation_log
+            WHEN NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'final entry rejected'); END`);
+        }
+        const emitted: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent((event) => emitted.push(event.type));
+        try {
+          const rejected = completeRound("Rolled back answer");
+          expect(store.getTask(rejected.id)?.status).toBe("completed");
+          expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
+          expect(store.listConversationLogEntriesByTask(rejected.id).filter((entry) => entry.kind === "message")).toEqual([]);
+          expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
+          expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+            .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
+          expect(emitted).not.toContain("comment:created");
+        } finally { unsubscribe(); }
       });
     }, 30_000);
   }

@@ -114,6 +114,10 @@
     "toast_failed": "Failed to create project"
   },
   "create_issue": {
+    "add_prerequisite": "Prerequisite",
+    "prerequisite_chip": "After {{identifier}}",
+    "remove_prerequisite": "Remove {{identifier}} prerequisite",
+    "prerequisite_picker_description": "Search for a prerequisite issue",
     "sr_manual": "New Issue",
     "sr_agent": "Quick create issue",
     "manual_breadcrumb": "Create manually",

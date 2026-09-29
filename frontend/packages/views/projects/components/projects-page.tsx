@@ -30,6 +30,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import type { Project, UpdateProjectRequest } from "@multiremi/core/types";
 import { PageHeader } from "../../layout/page-header";
+import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -252,7 +253,18 @@ export function ProjectsPage() {
   const wsId = useWorkspaceId();
   const viewMode = useProjectViewStore((state) => state.viewMode);
   const setViewMode = useProjectViewStore((state) => state.setViewMode);
-  const { data: projects = [], isLoading } = useQuery(projectListOptions(wsId));
+  const {
+    data: projects = [],
+    isLoading,
+    status: projectsStatus,
+    isPlaceholderData: projectsIsPlaceholderData,
+  } = useQuery(projectListOptions(wsId));
+  // MUL-472 item 5: mark the list container as this page's measured viewport and
+  // publish whether the rows came from this round's own response.
+  const perfMarker = useListPerfMarker({
+    status: projectsStatus,
+    isPlaceholderData: projectsIsPlaceholderData,
+  });
   const archiveProject = useArchiveProject();
   const restoreProject = useRestoreProject();
   const [scope, setScope] = useState<ProjectScope>("active");
@@ -285,7 +297,7 @@ export function ProjectsPage() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" {...perfMarker}>
       <PageHeader className="justify-between px-5">
         <div className="flex items-center gap-2">
           <FolderKanban className="size-4 text-muted-foreground" />

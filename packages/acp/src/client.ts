@@ -8,6 +8,7 @@ function createLogger(_: string) { return _log; }
 
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { isolateProcessTmp, mapPrivateTmpPath } from "./private-tmp.js";
+import { AcpRpcError, airMetadata } from "./session-failure.js";
 
 import type {
   JsonRpcRequest,
@@ -49,8 +50,13 @@ export interface AcpClientOptions {
   agentType?: string;
   /** Working directory for the agent process. */
   cwd?: string;
-  /** Daemon-owned directory mounted as this task execution's literal /tmp. */
+  /**
+   * Daemon-owned directory bound to this task execution. Linux mounts it as the
+   * literal /tmp; macOS (MUL-449) exports it through TMPDIR/TMP/TEMP instead.
+   */
   privateTmpDirectory?: string;
+  /** Platform override for the private-/tmp contract (test injection). */
+  privateTmpPlatform?: NodeJS.Platform;
   /** Additional MCP servers to configure. */
   mcpServers?: McpServerConfig[];
   /** Environment variables for the agent process. */
@@ -92,6 +98,7 @@ export class AcpClient {
   private _options: AcpClientOptions;
   private _serverSessionId: string | null = null;
   private _initializeResult: InitializeResult | null = null;
+  private _requestedSessionFailures = false;
   /**
    * Inbound requests we are serving and haven't answered yet, keyed by the
    * agent's request id. The value settles the request as cancelled; the agent
@@ -119,6 +126,12 @@ export class AcpClient {
     return this._initializeResult;
   }
 
+  get typedSessionFailures(): boolean {
+    const capabilities = airMetadata(this._initializeResult?._meta)?.capabilities
+      ?? airMetadata(this._initializeResult?.agentCapabilities?._meta)?.capabilities;
+    return this._requestedSessionFailures && Array.isArray(capabilities) && capabilities.includes("sessionFailure");
+  }
+
   private _log(...args: unknown[]) {
     this._options.log?.("[AcpClient]", ...args);
   }
@@ -142,7 +155,11 @@ export class AcpClient {
       resolveAcpProcessLaunch(executable, this._options.args ?? []),
       this._options.privateTmpDirectory,
       env,
+      this._options.privateTmpPlatform,
     );
+    // A platform downgrade (macOS) hands back the environment it needs; the
+    // caller's own `env` object is never mutated.
+    if (launch.env) Object.assign(env, launch.env);
     this._process = Bun.spawn([launch.executable, ...launch.args], {
       stdin: "pipe",
       stdout: "pipe",
@@ -370,7 +387,7 @@ export class AcpClient {
     this._pending.delete(msg.id);
 
     if (msg.error) {
-      pending.reject(new Error(`RPC error ${msg.error.code}: ${msg.error.message}`));
+      pending.reject(new AcpRpcError(msg.error.code, msg.error.message, msg.error.data));
     } else {
       pending.resolve(msg.result);
     }
@@ -464,7 +481,10 @@ export class AcpClient {
         // `line` is 1-based and `limit` caps the returned line count
         // (sdk schema.json ReadTextFileRequest); both are optional.
         const { path, line, limit } = msg.params as { path: string; line?: number | null; limit?: number | null };
-        let content = readFileSync(mapPrivateTmpPath(path, this._options.privateTmpDirectory), "utf-8");
+        let content = readFileSync(
+          mapPrivateTmpPath(path, this._options.privateTmpDirectory, this._options.privateTmpPlatform),
+          "utf-8",
+        );
         if (line != null || limit != null) {
           const start = line != null && line > 0 ? line - 1 : 0;
           const lines = content.split("\n");
@@ -473,7 +493,11 @@ export class AcpClient {
         this._respond(msg.id, { content });
       } else if (msg.method === "fs/write_text_file") {
         const { path, content } = msg.params as { path: string; content: string };
-        writeFileSync(mapPrivateTmpPath(path, this._options.privateTmpDirectory), content, "utf-8");
+        writeFileSync(
+          mapPrivateTmpPath(path, this._options.privateTmpDirectory, this._options.privateTmpPlatform),
+          content,
+          "utf-8",
+        );
         this._respond(msg.id, {});
       }
     } catch (err: any) {
@@ -500,8 +524,8 @@ export class AcpClient {
         _meta: {
           terminal_output: true,
           ...(this._options.agentType === "codex"
-            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue"] } } }
-            : { "subagent-transcript": true }),
+            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue", "sessionFailure"] } } }
+            : { "subagent-transcript": true, jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } } }),
         },
         fs: { readTextFile: true, writeTextFile: true },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and
@@ -512,6 +536,8 @@ export class AcpClient {
       },
     };
 
+    const capabilities = airMetadata(params.clientCapabilities?._meta)?.capabilities;
+    this._requestedSessionFailures = Array.isArray(capabilities) && capabilities.includes("sessionFailure");
     const result = await this._request<InitializeResult>("initialize", params);
     this._initialized = true;
     this._initializeResult = result;
@@ -592,8 +618,17 @@ export class AcpClient {
    * `cwd` and `mcpServers` are required by the schema — callers must supply
    * both or the agent rejects the load with -32602 (see {@link LoadSessionParams}).
    */
-  async loadSession(sessionId: string, cwd: string, mcpServers: McpServerConfig[]): Promise<NewSessionResult> {
-    const params: LoadSessionParams = { sessionId, cwd, mcpServers };
+  async loadSession(
+    sessionId: string,
+    cwd: string,
+    mcpServers: McpServerConfig[],
+    extra?: Pick<LoadSessionParams, "additionalDirectories" | "_meta">,
+  ): Promise<NewSessionResult> {
+    const params: LoadSessionParams = {
+      sessionId, cwd, mcpServers,
+      ...(extra?.additionalDirectories?.length ? { additionalDirectories: extra.additionalDirectories } : {}),
+      _meta: extra?._meta,
+    };
     const result = await this._request<NewSessionResult>("session/load", params);
     this._serverSessionId = result.sessionId ?? sessionId;
     return { ...result, sessionId: result.sessionId ?? sessionId };

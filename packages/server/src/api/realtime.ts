@@ -24,6 +24,7 @@ import {
   taskRealtimePayload,
 } from "./wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiAccessToken,
   MultiremiDaemonSshMeshStatus,
@@ -266,22 +267,47 @@ export function notifyBrowserTaskMessages(
   store: MultiremiStore,
   workspaceRegistry: BrowserWebSocketRegistry,
   scopeRegistry: BrowserScopeWebSocketRegistry,
-  task: MultiremiTask,
+  task: TaskMessageFanoutSubject,
   messages: MultiremiTaskMessage[],
 ): void {
   if (messages.length === 0) return;
+  const send = taskMessageFrameSender(store, workspaceRegistry, scopeRegistry, task);
+  for (const message of messages) {
+    send(JSON.stringify({
+      type: "task:message",
+      payload: taskMessageRealtimePayload(message, task),
+      actor_id: task.agentId,
+      actor_type: "agent",
+    }));
+  }
+}
+
+/** A failed reference must invalidate history, not invent a partial message row. */
+export function notifyBrowserTaskMessageReadFailed(
+  store: MultiremiStore,
+  workspaceRegistry: BrowserWebSocketRegistry,
+  scopeRegistry: BrowserScopeWebSocketRegistry,
+  task: TaskMessageFanoutSubject,
+  range: { seq_start: number; seq_end: number },
+): void {
+  const payload: Record<string, unknown> = {
+    task_id: task.id, issue_id: task.issueId, degraded: true, ...range,
+  };
+  if (task.chatSessionId) payload.chat_session_id = task.chatSessionId;
+  if (task.issueSessionId) payload.issue_session_id = task.issueSessionId;
+  taskMessageFrameSender(store, workspaceRegistry, scopeRegistry, task)(JSON.stringify({
+    type: "task:message", payload, actor_id: task.agentId, actor_type: "agent",
+  }));
+}
+
+function taskMessageFrameSender(
+  store: MultiremiStore,
+  workspaceRegistry: BrowserWebSocketRegistry,
+  scopeRegistry: BrowserScopeWebSocketRegistry,
+  task: TaskMessageFanoutSubject,
+): (frame: string) => void {
   if (task.chatSessionId) {
-    for (const message of messages) {
-      const frame = JSON.stringify({
-        type: "task:message",
-        payload: taskMessageRealtimePayload(message, task),
-        actor_id: task.agentId,
-        actor_type: "agent",
-      });
-      // Chat tasks are creator-only; subscriptions were authorized on subscribe.
-      sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId], ["task", task.id]]);
-    }
-    return;
+    return frame => sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId!], ["task", task.id]]);
   }
   const memo = createTaskAuthMemo();
   const allowedByUser = new Map<string | null, boolean>();
@@ -292,17 +318,7 @@ export function notifyBrowserTaskMessages(
     }
     return allowedByUser.get(userId);
   }));
-  for (const message of messages) {
-    const frame = JSON.stringify({
-      type: "task:message",
-      payload: taskMessageRealtimePayload(message, task),
-      actor_id: task.agentId,
-      actor_type: "agent",
-    });
-    sendFrameToBrowserWorkspaceClientsFiltered(workspaceRegistry, task.workspaceId, frame, (client) =>
-      allowedClients.has(client),
-    );
-  }
+  return frame => sendFrameToBrowserWorkspaceClientsFiltered(workspaceRegistry, task.workspaceId, frame, client => allowedClients.has(client));
 }
 
 export function sendFrameToBrowserWorkspaceClientsFiltered(

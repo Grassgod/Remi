@@ -1,4 +1,5 @@
 import { getCurrentWsId } from "../../platform/workspace-storage";
+import { issueKeys } from "../../issues/queries";
 import {
   onIssueCreated,
   onIssueUpdated,
@@ -11,6 +12,7 @@ import type {
   IssueUpdatedPayload,
   IssueCreatedPayload,
   IssueDeletedPayload,
+  IssueDecisionChangedPayload,
   IssueLabelsChangedPayload,
   IssueMetadataChangedPayload,
 } from "../../types";
@@ -24,6 +26,15 @@ import type { SyncContext, SyncModule } from "./types";
  * Instead, both mutations and WS handlers use dedup checks to be idempotent.
  */
 export function createIssueHandlers({ qc }: SyncContext): SyncModule {
+  const invalidateDecisionState = (payload: unknown) => {
+    const { issue_id: issueId } = payload as IssueDecisionChangedPayload;
+    if (!issueId) return;
+    const wsId = getCurrentWsId();
+    if (!wsId) return;
+    qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
+    qc.invalidateQueries({ queryKey: issueKeys.decisions(wsId, issueId) });
+  };
+
   return {
     handlers: {
       "issue:updated": (p) => {
@@ -37,6 +48,9 @@ export function createIssueHandlers({ qc }: SyncContext): SyncModule {
           }
         }
       },
+
+      "decision:created": invalidateDecisionState,
+      "decision:updated": invalidateDecisionState,
 
       "issue:created": (p) => {
         const { issue } = p as IssueCreatedPayload;

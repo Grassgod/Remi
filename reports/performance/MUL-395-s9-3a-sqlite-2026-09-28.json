@@ -1,0 +1,478 @@
+{
+  "backend": "sqlite",
+  "measuredAt": "2026-09-28T05:40:01.840Z",
+  "rounds": 5,
+  "warmup": 1,
+  "measurement": "Executed statements (includes BEGIN/COMMIT), driver elapsed time and serialized result bytes",
+  "fixture": "Primary project: 120 issues per status, 7 statuses; list limit 50; archived total 21",
+  "scenarios": [
+    {
+      "name": "issues",
+      "samples": [
+        {
+          "singles": {
+            "dbq": 35,
+            "dbMs": 5.877386999999089,
+            "dbBytes": 479349,
+            "responseBytes": 442058
+          },
+          "singlesWithArchive": {
+            "dbq": 39,
+            "dbMs": 5.998510999999326,
+            "dbBytes": 480265,
+            "responseBytes": 442082
+          },
+          "grouped": {
+            "dbq": 7,
+            "dbMs": 5.705098000000135,
+            "dbBytes": 474068,
+            "responseBytes": 442261
+          },
+          "groupedWithArchive": {
+            "dbq": 8,
+            "dbMs": 5.692553999999973,
+            "dbBytes": 474080,
+            "responseBytes": 442281
+          },
+          "oneStatus": {
+            "dbq": 5,
+            "dbMs": 0.8730639999998857,
+            "dbBytes": 68407,
+            "responseBytes": 63094
+          }
+        },
+        {
+          "singles": {
+            "dbq": 35,
+            "dbMs": 5.718680000000177,
+            "dbBytes": 479349,
+            "responseBytes": 442058
+          },
+          "singlesWithArchive": {
+            "dbq": 39,
+            "dbMs": 5.838766000000305,
+            "dbBytes": 480265,
+            "responseBytes": 442082
+          },
+          "grouped": {
+            "dbq": 7,
+            "dbMs": 5.833454999999958,
+            "dbBytes": 474068,
+            "responseBytes": 442261
+          },
+          "groupedWithArchive": {
+            "dbq": 8,
+            "dbMs": 5.6044359999998505,
+            "dbBytes": 474080,
+            "responseBytes": 442281
+          },
+          "oneStatus": {
+            "dbq": 5,
+            "dbMs": 0.8481089999997948,
+            "dbBytes": 68407,
+            "responseBytes": 63094
+          }
+        },
+        {
+          "singles": {
+            "dbq": 35,
+            "dbMs": 5.8291539999997894,
+            "dbBytes": 479349,
+            "responseBytes": 442058
+          },
+          "singlesWithArchive": {
+            "dbq": 39,
+            "dbMs": 5.967975999999453,
+            "dbBytes": 480265,
+            "responseBytes": 442082
+          },
+          "grouped": {
+            "dbq": 7,
+            "dbMs": 5.769839999999931,
+            "dbBytes": 474068,
+            "responseBytes": 442261
+          },
+          "groupedWithArchive": {
+            "dbq": 8,
+            "dbMs": 5.6416949999998,
+            "dbBytes": 474080,
+            "responseBytes": 442281
+          },
+          "oneStatus": {
+            "dbq": 5,
+            "dbMs": 0.8807429999999385,
+            "dbBytes": 68407,
+            "responseBytes": 63094
+          }
+        },
+        {
+          "singles": {
+            "dbq": 35,
+            "dbMs": 5.686105999999654,
+            "dbBytes": 479349,
+            "responseBytes": 442058
+          },
+          "singlesWithArchive": {
+            "dbq": 39,
+            "dbMs": 5.7888589999995474,
+            "dbBytes": 480265,
+            "responseBytes": 442082
+          },
+          "grouped": {
+            "dbq": 7,
+            "dbMs": 5.863679999999476,
+            "dbBytes": 474068,
+            "responseBytes": 442261
+          },
+          "groupedWithArchive": {
+            "dbq": 8,
+            "dbMs": 5.674839999999904,
+            "dbBytes": 474080,
+            "responseBytes": 442281
+          },
+          "oneStatus": {
+            "dbq": 5,
+            "dbMs": 0.8388670000001639,
+            "dbBytes": 68407,
+            "responseBytes": 63094
+          }
+        },
+        {
+          "singles": {
+            "dbq": 35,
+            "dbMs": 5.723728999999366,
+            "dbBytes": 479349,
+            "responseBytes": 442058
+          },
+          "singlesWithArchive": {
+            "dbq": 39,
+            "dbMs": 5.822470999999496,
+            "dbBytes": 480265,
+            "responseBytes": 442082
+          },
+          "grouped": {
+            "dbq": 7,
+            "dbMs": 5.758853999999928,
+            "dbBytes": 474068,
+            "responseBytes": 442261
+          },
+          "groupedWithArchive": {
+            "dbq": 8,
+            "dbMs": 5.676503999999795,
+            "dbBytes": 474080,
+            "responseBytes": 442281
+          },
+          "oneStatus": {
+            "dbq": 5,
+            "dbMs": 0.8493829999999889,
+            "dbBytes": 68407,
+            "responseBytes": 63094
+          }
+        }
+      ],
+      "median": {
+        "singles": {
+          "dbq": 35,
+          "dbMs": 5.723728999999366,
+          "dbBytes": 479349,
+          "responseBytes": 442058
+        },
+        "singlesWithArchive": {
+          "dbq": 39,
+          "dbMs": 5.838766000000305,
+          "dbBytes": 480265,
+          "responseBytes": 442082
+        },
+        "grouped": {
+          "dbq": 7,
+          "dbMs": 5.769839999999931,
+          "dbBytes": 474068,
+          "responseBytes": 442261
+        },
+        "groupedWithArchive": {
+          "dbq": 8,
+          "dbMs": 5.674839999999904,
+          "dbBytes": 474080,
+          "responseBytes": 442281
+        },
+        "oneStatus": {
+          "dbq": 5,
+          "dbMs": 0.8493829999999889,
+          "dbBytes": 68407,
+          "responseBytes": 63094
+        }
+      }
+    },
+    {
+      "name": "my-issues",
+      "samples": [
+        {
+          "singles": {
+            "dbq": 56,
+            "dbMs": 5.1667780000002494,
+            "dbBytes": 489086,
+            "responseBytes": 444221
+          },
+          "singlesWithArchive": {
+            "dbq": 60,
+            "dbMs": 5.276695000000245,
+            "dbBytes": 490002,
+            "responseBytes": 444245
+          },
+          "grouped": {
+            "dbq": 10,
+            "dbMs": 5.069830999999795,
+            "dbBytes": 477253,
+            "responseBytes": 444424
+          },
+          "groupedWithArchive": {
+            "dbq": 11,
+            "dbMs": 5.024145999999973,
+            "dbBytes": 477265,
+            "responseBytes": 444444
+          },
+          "oneStatus": {
+            "dbq": 8,
+            "dbMs": 0.773104000000103,
+            "dbBytes": 69798,
+            "responseBytes": 63403
+          }
+        },
+        {
+          "singles": {
+            "dbq": 56,
+            "dbMs": 5.438069999999698,
+            "dbBytes": 489086,
+            "responseBytes": 444221
+          },
+          "singlesWithArchive": {
+            "dbq": 60,
+            "dbMs": 5.538391999999476,
+            "dbBytes": 490002,
+            "responseBytes": 444245
+          },
+          "grouped": {
+            "dbq": 10,
+            "dbMs": 4.955843000000186,
+            "dbBytes": 477253,
+            "responseBytes": 444424
+          },
+          "groupedWithArchive": {
+            "dbq": 11,
+            "dbMs": 4.87381100000016,
+            "dbBytes": 477265,
+            "responseBytes": 444444
+          },
+          "oneStatus": {
+            "dbq": 8,
+            "dbMs": 0.7950689999997849,
+            "dbBytes": 69798,
+            "responseBytes": 63403
+          }
+        },
+        {
+          "singles": {
+            "dbq": 56,
+            "dbMs": 5.221271000001252,
+            "dbBytes": 489086,
+            "responseBytes": 444221
+          },
+          "singlesWithArchive": {
+            "dbq": 60,
+            "dbMs": 5.331981000000951,
+            "dbBytes": 490002,
+            "responseBytes": 444245
+          },
+          "grouped": {
+            "dbq": 10,
+            "dbMs": 5.061807999999928,
+            "dbBytes": 477253,
+            "responseBytes": 444424
+          },
+          "groupedWithArchive": {
+            "dbq": 11,
+            "dbMs": 4.841128999999,
+            "dbBytes": 477265,
+            "responseBytes": 444444
+          },
+          "oneStatus": {
+            "dbq": 8,
+            "dbMs": 0.7710920000001806,
+            "dbBytes": 69798,
+            "responseBytes": 63403
+          }
+        },
+        {
+          "singles": {
+            "dbq": 56,
+            "dbMs": 5.158378999999968,
+            "dbBytes": 489086,
+            "responseBytes": 444221
+          },
+          "singlesWithArchive": {
+            "dbq": 60,
+            "dbMs": 5.281995999999708,
+            "dbBytes": 490002,
+            "responseBytes": 444245
+          },
+          "grouped": {
+            "dbq": 10,
+            "dbMs": 4.987986000000319,
+            "dbBytes": 477253,
+            "responseBytes": 444424
+          },
+          "groupedWithArchive": {
+            "dbq": 11,
+            "dbMs": 4.851483000000144,
+            "dbBytes": 477265,
+            "responseBytes": 444444
+          },
+          "oneStatus": {
+            "dbq": 8,
+            "dbMs": 0.7508480000001327,
+            "dbBytes": 69798,
+            "responseBytes": 63403
+          }
+        },
+        {
+          "singles": {
+            "dbq": 56,
+            "dbMs": 5.157328000000689,
+            "dbBytes": 489086,
+            "responseBytes": 444221
+          },
+          "singlesWithArchive": {
+            "dbq": 60,
+            "dbMs": 5.279481000000487,
+            "dbBytes": 490002,
+            "responseBytes": 444245
+          },
+          "grouped": {
+            "dbq": 10,
+            "dbMs": 4.964242999999897,
+            "dbBytes": 477253,
+            "responseBytes": 444424
+          },
+          "groupedWithArchive": {
+            "dbq": 11,
+            "dbMs": 4.892111000000114,
+            "dbBytes": 477265,
+            "responseBytes": 444444
+          },
+          "oneStatus": {
+            "dbq": 8,
+            "dbMs": 0.7468429999998989,
+            "dbBytes": 69798,
+            "responseBytes": 63403
+          }
+        }
+      ],
+      "median": {
+        "singles": {
+          "dbq": 56,
+          "dbMs": 5.1667780000002494,
+          "dbBytes": 489086,
+          "responseBytes": 444221
+        },
+        "singlesWithArchive": {
+          "dbq": 60,
+          "dbMs": 5.281995999999708,
+          "dbBytes": 490002,
+          "responseBytes": 444245
+        },
+        "grouped": {
+          "dbq": 10,
+          "dbMs": 4.987986000000319,
+          "dbBytes": 477253,
+          "responseBytes": 444424
+        },
+        "groupedWithArchive": {
+          "dbq": 11,
+          "dbMs": 4.87381100000016,
+          "dbBytes": 477265,
+          "responseBytes": 444444
+        },
+        "oneStatus": {
+          "dbq": 8,
+          "dbMs": 0.7710920000001806,
+          "dbBytes": 69798,
+          "responseBytes": 63403
+        }
+      }
+    }
+  ],
+  "dbqMatrix": [
+    {
+      "statuses": 1,
+      "issuesPerStatus": 1,
+      "dbq": 8,
+      "dbMs": 0.39829400000030546,
+      "dbBytes": 2136,
+      "responseBytes": 1220
+    },
+    {
+      "statuses": 4,
+      "issuesPerStatus": 1,
+      "dbq": 8,
+      "dbMs": 0.9373000000000502,
+      "dbBytes": 5805,
+      "responseBytes": 4799
+    },
+    {
+      "statuses": 7,
+      "issuesPerStatus": 1,
+      "dbq": 8,
+      "dbMs": 1.9727220000004309,
+      "dbBytes": 9454,
+      "responseBytes": 8358
+    },
+    {
+      "statuses": 1,
+      "issuesPerStatus": 60,
+      "dbq": 8,
+      "dbMs": 0.7209470000002511,
+      "dbBytes": 59682,
+      "responseBytes": 56364
+    },
+    {
+      "statuses": 4,
+      "issuesPerStatus": 60,
+      "dbq": 8,
+      "dbMs": 2.338176000000203,
+      "dbBytes": 236577,
+      "responseBytes": 225963
+    },
+    {
+      "statuses": 7,
+      "issuesPerStatus": 60,
+      "dbq": 8,
+      "dbMs": 4.190188000000035,
+      "dbBytes": 412668,
+      "responseBytes": 394758
+    },
+    {
+      "statuses": 1,
+      "issuesPerStatus": 300,
+      "dbq": 8,
+      "dbMs": 1.2312560000000303,
+      "dbBytes": 60033,
+      "responseBytes": 56715
+    },
+    {
+      "statuses": 4,
+      "issuesPerStatus": 300,
+      "dbq": 8,
+      "dbMs": 4.1381390000001375,
+      "dbBytes": 237981,
+      "responseBytes": 227367
+    },
+    {
+      "statuses": 7,
+      "issuesPerStatus": 300,
+      "dbq": 8,
+      "dbMs": 7.864492000000155,
+      "dbBytes": 415125,
+      "responseBytes": 397215
+    }
+  ]
+}

@@ -81,7 +81,7 @@ import {
 } from "@multiremi/store/repos/knowledge-repo.js";
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
-import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
+import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
 import {
   ConversationLogRepo,
   type AppendConversationLogInput,
@@ -97,6 +97,8 @@ import type {
 } from "@multiremi/contracts/conversation-log";
 import {
   IssuesRepo,
+  type AnswerIssueDecisionOptions,
+  IssueDependencyError,
   ParentStatusGuardError,
   type IssueTimelineCursor,
   type IssueTimelinePageResult,
@@ -155,9 +157,11 @@ import type { SshMeshKeyMaterial } from "@multiremi/ssh-mesh/keys.js";
 import {
   TasksRepo,
   type ClaimTaskOptions,
+  type MultiremiTaskIdentity,
   type TaskListCandidate,
   type TaskRef,
   type TaskListCursor,
+  type TaskStatusSnapshot,
 } from "@multiremi/store/repos/tasks-repo.js";
 import { OrganizerActionError, readOrganizerMode } from "../organizer/settings.js";
 import {
@@ -181,6 +185,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelContextDecl,
   type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
@@ -189,6 +194,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelContextDecl,
   GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
@@ -211,6 +217,7 @@ import type {
   AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
+  AssignIssueOptions,
   AssignIssueResult,
   CreateAccessTokenInput,
   CreateBotMenuPublishRequestInput,
@@ -294,6 +301,7 @@ import type {
   ListIssueCommentsInput,
   ListIssueCommentsResult,
   MultiremiIssueDependency,
+  MultiremiIssueDependencyView,
   MultiremiIssue,
   MultiremiIssueDecision,
   MultiremiIssueDecisionList,
@@ -1028,7 +1036,7 @@ runMigrations(this.db);
     return this.db.transaction(() => {
       const current = this.agents.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const agent = this.agents.updateAgent(id, input);
+      const agent = this.agents.updateAgentWithinTransaction(id, input);
       if (current.role !== agent.role) {
         for (const task of this.tasks.listAgentTasks(id)) this.accessTokens.revokeTaskAccessTokens(task.id);
       }
@@ -1305,6 +1313,16 @@ runMigrations(this.db);
 
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
     return this.agents.getAgentByRef(ref, workspaceId);
+  }
+
+  /** Reference resolution from Agent rows only — no Skills, no Skill files. */
+  getAgentLiteByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null {
+    return this.agents.getAgentLiteByRef(ref, workspaceId);
+  }
+
+  /** Live Agent rows by id, without Skills or Skill files. */
+  listAgentsLiteByIds(ids: readonly string[]): MultiremiAgent[] {
+    return this.agents.listAgentsLiteByIds(ids);
   }
 
   listAgents(options?: { includeArchived?: boolean }): MultiremiAgent[] {
@@ -1596,6 +1614,24 @@ runMigrations(this.db);
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
   }
 
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    return this.workspaces.listGatewayModelContext(workspaceId, engine);
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    return this.workspaces.getGatewayModelContext(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string, engine: RelayEngine, input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    return this.workspaces.saveGatewayModelContext(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelContext(workspaceId, engine, modelId);
+  }
+
   listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
     return this.workspaces.listGatewayModelReasoning(workspaceId, engine);
   }
@@ -1702,9 +1738,10 @@ runMigrations(this.db);
 
   flushAgentIssueUpdatesForIssueWithinTransaction(
     issueId: string,
+    deferredEvents: CommitEventQueue,
     now?: string | Date,
   ): AgentIssueUpdateFlushResult {
-    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, now);
+    return this.agentIssueUpdates.flushIssueNowWithinTransaction(issueId, deferredEvents, now);
   }
 
   listNotificationChannels(workspaceId: string): MultiremiNotificationChannel[] {
@@ -2084,6 +2121,26 @@ runMigrations(this.db);
     return this.feishuBot.canDaemonAccessIssueTaskHumanRequest(workspaceId, daemonId, taskId);
   }
 
+  canFeishuBotDaemonAccessIssueDecision(workspaceId: string, daemonId: string, issueId: string): boolean {
+    return this.feishuBot.canDaemonAccessIssueDecision(workspaceId, daemonId, issueId);
+  }
+
+  supportsFeishuIssueDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
+    return this.feishuBot.supportsIssueDecisionCard(workspaceId, runtimeId);
+  }
+
+  resolveFeishuDecisionOperatorMember(workspaceId: string, appId: string, openId: string | null | undefined) {
+    return this.feishuBot.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
+  }
+
+  listFeishuIssueDecisionCards(workspaceId: string, runtimeId: string) {
+    return this.feishuBot.listLiveIssueDecisionCards(workspaceId, runtimeId);
+  }
+
+  getFeishuIssueDecisionCardContext(workspaceId: string, decisionId: string) {
+    return this.feishuBot.getIssueDecisionCardContext(workspaceId, decisionId);
+  }
+
   listFeishuBotLiveDecisionCards(
     workspaceId: string,
     runtimeId: string,
@@ -2134,6 +2191,21 @@ runMigrations(this.db);
 
   prepareFeishuIssueTopicWithinTransaction(issue: MultiremiIssue): boolean {
     return this.feishuBot.prepareIssueTopicWithinTransaction(issue);
+  }
+
+  prepareIssueDecisionCardWithinTransaction(
+    issue: MultiremiIssue,
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.prepareIssueDecisionCardWithinTransaction(issue, decision, deferredEvents);
+  }
+
+  enqueueIssueDecisionCardPatchWithinTransaction(
+    decision: MultiremiIssueDecision,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    this.feishuBot.enqueueIssueDecisionCardPatchWithinTransaction(decision, deferredEvents);
   }
 
   prepareFeishuBotHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
@@ -2948,6 +3020,10 @@ runMigrations(this.db);
     return this.runtimes.listRuntimes();
   }
 
+  listRuntimesForWorkspace(workspaceId: string): MultiremiRuntime[] {
+    return this.runtimes.listRuntimesForWorkspace(workspaceId);
+  }
+
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[] {
     return this.agents.listActiveAgentsByRuntime(runtimeId);
   }
@@ -3277,16 +3353,30 @@ runMigrations(this.db);
     supportsBotMenu?: boolean;
     supportsFeishuBotConfig?: boolean;
     supportsDecisionCard?: boolean;
+    supportsIssueDecisionCard?: boolean;
   } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
 
-  createIssue(input: CreateIssueInput): MultiremiIssue {
-    return this.issues.createIssue(input);
+  createIssue(input: CreateIssueInput, transaction?: {
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
+    deferredEvents: import("./context.js").CommitEventQueue;
+  }): MultiremiIssue {
+    return this.issues.createIssue(input, transaction);
   }
 
-  createIssueWithinTransaction(input: CreateIssueInput, deferredEvents: CommitEventQueue): MultiremiIssue {
-    return this.issues.createIssueWithinTransaction(input, deferredEvents);
+  /**
+   * MUL-400 E3: issue creation for a caller that already holds a transaction.
+   * Both a child-status collector and a commit-event queue are required — the
+   * caller replays the collector and drains the queue after its COMMIT (see
+   * IssuesRepo.createIssueWithinTransaction).
+   */
+  createIssueWithinTransaction(
+    input: CreateIssueInput,
+    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): MultiremiIssue {
+    return this.issues.createIssueWithinTransaction(input, childStatusChanges, deferredEvents);
   }
 
   getIssue(id: string): MultiremiIssue | null {
@@ -3295,6 +3385,10 @@ runMigrations(this.db);
 
   getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
     return this.issues.getIssueDecision(issueId, decisionId);
+  }
+
+  getIssueDecisionAnywhere(decisionId: string): MultiremiIssueDecision | null {
+    return this.issues.getIssueDecisionAnywhere(decisionId);
   }
 
   listIssueDecisions(issueId: string): MultiremiIssueDecisionList {
@@ -3309,8 +3403,14 @@ runMigrations(this.db);
     return this.issues.createIssueDecision(sourceIssueId, input, actor);
   }
 
-  answerIssueDecision(issueId: string, decisionId: string, input: AnswerIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
-    return this.issues.answerIssueDecision(issueId, decisionId, input, actor);
+  answerIssueDecision(
+    issueId: string,
+    decisionId: string,
+    input: AnswerIssueDecisionInput,
+    actor: IssueDecisionActor,
+    options: AnswerIssueDecisionOptions = {},
+  ): MultiremiIssueDecision {
+    return this.issues.answerIssueDecision(issueId, decisionId, input, actor, options);
   }
 
   escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
@@ -3377,6 +3477,10 @@ runMigrations(this.db);
     return this.issues.countIssues(input);
   }
 
+  listIssueStatusPages(input: ListIssuesInput = {}, includeArchivedTotal = false) {
+    return this.issues.listIssueStatusPages(input, includeArchivedTotal);
+  }
+
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
     return this.issues.listGroupedIssues(input);
   }
@@ -3393,7 +3497,11 @@ runMigrations(this.db);
     return this.issues.listAssigneeFrequency(input);
   }
 
-  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MultiremiIssue[] } {
+  batchUpdateIssues(input: BatchUpdateIssuesInput): {
+    updated: number;
+    issues: MultiremiIssue[];
+    skipped: Array<{ issueId: string; error: string; code: string | null }>;
+  } {
     return this.issues.batchUpdateIssues(input);
   }
 
@@ -3444,7 +3552,7 @@ runMigrations(this.db);
     return this.issues.getChildIssueProgress(parentIssueId);
   }
 
-  listIssueDependencies(issueId: string): MultiremiIssueDependency[] {
+  listIssueDependencies(issueId: string): MultiremiIssueDependencyView[] {
     return this.issues.listIssueDependencies(issueId);
   }
 
@@ -3464,7 +3572,7 @@ runMigrations(this.db);
     issueId: string,
     input: CreateIssueDependencyInput,
     activity?: IssueMutationActivityContext,
-  ): MultiremiIssueDependency {
+  ): MultiremiIssueDependencyView {
     return this.issues.createIssueDependency(issueId, input, activity);
   }
 
@@ -3488,8 +3596,43 @@ runMigrations(this.db);
     id: string,
     input: UpdateIssueInput,
     options: UpdateIssueOptions = {},
-  ): { issue: MultiremiIssue; cancelledTasks: number } {
+  ): {
+    issue: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+    /** The Issue the write itself saw, after its row lock (see the repo). */
+    previous: MultiremiIssue;
+  } {
     return this.issues.updateIssueWithOutcome(id, input, options);
+  }
+
+  /** MUL-400 E3: prerequisites that are not `done` yet. */
+  listUnmetPrerequisites(issueId: string): import("@multiremi/store/repos/issue-dependencies.js").IssueDependencyUnmetRef[] {
+    return this.issues.listUnmetPrerequisites(issueId);
+  }
+
+  /** MUL-458: caller owns the force-start task/status/activity transaction. */
+  recordDependencyForceStarted(
+    issueId: string,
+    input: import("@multiremi/store/repos/issues-repo.js").DependencyForceStartedInput,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+  ): void {
+    this.issues.recordDependencyForceStarted(issueId, input, deferredEvents);
+  }
+
+  /** MUL-400 E3: `waiting_on` page data (unmet + all direct prerequisites). */
+  getIssueWaitingOn(issueId: string): import("@multiremi/contracts/types.js").MultiremiIssueWaitingOn {
+    return this.issues.getIssueWaitingOn(issueId);
+  }
+
+  /** MUL-400 E3: caller owns the transaction, e.g. issue creation. */
+  createIssueDependencyWithinTransaction(
+    issueId: string,
+    input: import("@multiremi/contracts/types.js").CreateIssueDependencyInput,
+    activity: import("@multiremi/store/repos/issues-repo.js").IssueMutationActivityContext,
+    deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
+  ): import("@multiremi/contracts/types.js").MultiremiIssueDependencyView {
+    return this.issues.createIssueDependencyWithinTransaction(issueId, input, activity, deferredEvents);
   }
 
   /**
@@ -3504,12 +3647,22 @@ runMigrations(this.db);
     options: UpdateIssueOptions,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,
-  ): { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number } {
+  ): {
+    issue: MultiremiIssue;
+    previous: MultiremiIssue;
+    cancelledTasks: number;
+    handledForcedStart: boolean;
+  } {
     return this.issues.updateIssueWithinTransaction(id, input, options, collector, deferredEvents);
   }
 
   runIssueUpdatePostCommit(
-    result: { issue: MultiremiIssue; previous: MultiremiIssue; cancelledTasks: number },
+    result: {
+      issue: MultiremiIssue;
+      previous: MultiremiIssue;
+      cancelledTasks: number;
+      handledForcedStart: boolean;
+    },
     input: UpdateIssueInput,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
     deferredEvents: import("./context.js").CommitEventQueue,
@@ -3563,8 +3716,8 @@ runMigrations(this.db);
     return this.issues.issueArchiveSweepIntervalMs();
   }
 
-  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
-    return this.issues.assignIssue(id, input);
+  assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
+    return this.issues.assignIssue(id, input, options);
   }
 
   quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
@@ -3581,6 +3734,18 @@ runMigrations(this.db);
 
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
     return this.issues.createIssueComment(issueId, input);
+  }
+
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue },
+  ): import("./context.js").CreatedIssueComment {
+    return this.issues.createIssueCommentWithinTransaction(issueId, input, options);
+  }
+
+  runIssueCommentPostCommit(created: import("./context.js").CreatedIssueComment, input: CreateIssueCommentInput): void {
+    this.issues.runIssueCommentPostCommit(created, input);
   }
 
   createTaskFailureSystemComment(
@@ -3891,6 +4056,11 @@ runMigrations(this.db);
     return this.sessions.getOrCreateDefaultIssueSession(issueId, createdById);
   }
 
+  /** For callers that already own the transaction (Senior ruling cmt_96e1yqxgifms §2). */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    return this.sessions.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
+  }
+
   createIssueSession(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
     return this.sessions.createIssueSession(issueId, input);
   }
@@ -4150,7 +4320,7 @@ runMigrations(this.db);
     authorAgentId: string | null;
     targetAgentId: string;
     issueSessionId: string | null;
-  }): boolean {
+  }): import("./repos/issues-repo.js").SquadLeaderDelegationDecision {
     return this.issues.isSquadLeaderDelegation(input);
   }
 
@@ -4820,6 +4990,14 @@ runMigrations(this.db);
     return this.chat.listPendingChatTasks(workspaceId, options);
   }
 
+  /** MUL-473: the batched form of {@link getPendingChatTask} for a whole list. */
+  listPendingChatTaskCandidates(
+    workspaceId?: string | null,
+    options: { creatorId?: string | null; excludeTransportSessions?: boolean } = {},
+  ): PendingChatTaskCandidate[] {
+    return this.chat.listPendingChatTaskCandidates(workspaceId, options);
+  }
+
   listChatMessages(chatSessionId: string): MultiremiChatMessage[] {
     return this.chat.listChatMessages(chatSessionId);
   }
@@ -4896,14 +5074,6 @@ runMigrations(this.db);
     return this.tasks.ensureDelegationWakeup(input);
   }
 
-  ensureDelegationWakeupWithinTransaction(
-    input: import("./repos/tasks-repo.js").DelegationWakeupInput,
-    childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
-    deferredEvents: import("./context.js").CommitEventQueue,
-  ): { task: MultiremiTask | null; created: boolean; covered: boolean } {
-    return this.tasks.ensureDelegationWakeupWithinTransaction(input, childStatusChanges, deferredEvents);
-  }
-
   resetSessionAgentLane(sessionId: string, agentId: string, executionScope = ""): MultiremiSessionAgentLane | null {
     const deferredEvents = createCommitEventQueue();
     const lane = this.db.transaction(() =>
@@ -4934,12 +5104,36 @@ runMigrations(this.db);
     return this.tasks.refreshQueuedCapabilityWaitReasons(now);
   }
 
+  /**
+   * Read-only: the claim's own structural placement verdict for every
+   * registered Runtime, so operators and tests can see WHY a queued task
+   * cannot be taken without inferring it from claim side effects (MUL-449).
+   */
+  describeTaskPlacement(taskId: string): Array<{
+    runtimeId: string; provider: string; daemonId: string | null;
+    placementOk: boolean; routingOk: boolean;
+  }> {
+    return this.tasks.describeTaskPlacement(taskId);
+  }
+
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
     return this.runtimes.getRuntimeByDaemonAndProvider(daemonId, provider);
   }
 
   getTask(id: string): MultiremiTask | null {
     return this.tasks.getTask(id);
+  }
+
+  /** MUL-474: identity/status columns only, request-scoped. */
+  getTaskIdentity(id: string): MultiremiTaskIdentity | null;
+  getTaskIdentity(id: string, projection: "fanout"): import("@multiremi/store/context.js").TaskMessageFanoutSubject | null;
+  getTaskIdentity(id: string, projection?: "fanout") {
+    return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
+  }
+
+  /** MUL-474: the `status` route's projection, without the prompt column. */
+  getTaskStatusSnapshot(id: string): TaskStatusSnapshot | null {
+    return this.tasks.getTaskStatusSnapshot(id);
   }
 
   getTaskByRef(ref: string, input: { issueId?: string | null } = {}): MultiremiTask | null {
@@ -5054,6 +5248,10 @@ runMigrations(this.db);
     return this.tasks.createTaskSteerMessage(input);
   }
 
+  createTaskSteerMessageWithinTransaction(input: CreateTaskSteerMessageInput): MultiremiTaskSteerMessage {
+    return this.tasks.createTaskSteerMessageWithinTransaction(input);
+  }
+
   getTaskSteerMessage(steerId: string): MultiremiTaskSteerMessage | null {
     return this.tasks.getTaskSteerMessage(steerId);
   }
@@ -5141,8 +5339,9 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
-        // its COMMIT would end this one early on Postgres (no savepoints).
+        // Caller-owned transaction: inside it `cancelTask`'s own transaction is
+        // only a SAVEPOINT (B1, MUL-426), so its child-status replay and events
+        // would run before this COMMIT.
         cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = cancelledResult.task;
       } else if (input.action === "redispatch") {
@@ -5152,7 +5351,7 @@ runMigrations(this.db);
       } else {
         const content = String(input.content ?? "").trim();
         if (!content) throw new OrganizerActionError("organizer_content_required", "steer content is required", 400);
-        message = this.tasks.createTaskSteerMessage({
+        message = this.tasks.createTaskSteerMessageWithinTransaction({
           taskId: target.id,
           kind: input.action,
           content,
@@ -5217,8 +5416,12 @@ runMigrations(this.db);
     return this.tasks.appendTaskMessages(taskId, messages);
   }
 
-  listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
-    return this.tasks.listTaskMessages(taskId, sinceSeq);
+  getTaskMessagePageRows(): number {
+    return this.tasks.getTaskMessagePageRows();
+  }
+
+  listTaskMessages(taskId: string, sinceSeq?: number | null, throughSeq?: number, limit?: number): MultiremiTaskMessage[] {
+    return this.tasks.listTaskMessages(taskId, sinceSeq, throughSeq, limit);
   }
 
   recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {

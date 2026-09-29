@@ -9,6 +9,8 @@ import { canAssignAgentToIssue } from "@multiremi/core/permissions";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multiremi/core/workspace/queries";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { useNavigation } from "../../../navigation";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import {
   PropertyPicker,
@@ -69,9 +71,15 @@ export function AssigneePicker({
   const [filter, setFilter] = useState("");
   const user = useAuthStore((s) => s.user);
   const wsId = useWorkspaceId();
+  const { pathname } = useNavigation();
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
+  // MUL-472 b: the picker only offers these once the user opens it, so they wait
+  // for the page gate rather than joining the list's first wave.
+  const { data: squads = [] } = useQuery(
+    squadListOptions(wsId, { enabled: afterFirstScreen }),
+  );
   const { data: frequency = [] } = useQuery(assigneeFrequencyOptions(wsId));
   const { getActorName } = useActorName();
   const allowedTypeSet = useMemo(() => new Set(allowedTypes), [allowedTypes]);

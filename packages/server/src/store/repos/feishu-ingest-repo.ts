@@ -1,6 +1,9 @@
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createCommitEventQueue, type CommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
+import type { ChildStatusChangeCollector } from "./tasks-repo.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import type {
   CreateIssueFromMultiremiFeishuMessageInput,
@@ -967,14 +970,24 @@ export class FeishuIngestRepo {
     input: CreateFeishuIssueOutcomeInput,
   ): CreateFeishuIssueOutcomeResult {
     const issueInput = normalizeIssueProposalInput(input);
+    const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
-    const result = this.ctx.db.transaction(() => this.createIssueOutcomeWithinTransaction(messageId, {
-      ...issueInput,
-      workspaceId: input.workspaceId,
-      taskId: cleanOptionalString(input.taskId),
-      createdBy: cleanOptionalString(input.createdBy),
-    }, deferredEvents))();
+    // Global lock order (MUL-405): W then N before the message row lock the
+    // helper takes. This path may create an Issue, so both locks are taken
+    // unconditionally at the top of the transaction.
+    const result = this.ctx.db.transaction(() => {
+      this.lockWorkspace(input.workspaceId);
+      this.lockIssueNumber(input.workspaceId);
+      return this.createIssueOutcomeWithinTransaction(messageId, {
+        ...issueInput,
+        workspaceId: input.workspaceId,
+        taskId: cleanOptionalString(input.taskId),
+        createdBy: cleanOptionalString(input.createdBy),
+      }, childStatusChanges, deferredEvents);
+    })();
+
     this.ctx.emitCommitEvents(deferredEvents);
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
     return result;
   }
 
@@ -1092,8 +1105,13 @@ export class FeishuIngestRepo {
     proposalId: string,
     input: { workspaceId: string; approvedBy: string },
   ): ResolveFeishuIssueProposalResult {
+    const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
-    const result = this.ctx.db.transaction(() => {
+    const approved = this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W then N before any domain row lock.
+      this.lockWorkspace(input.workspaceId);
+      this.lockIssueNumber(input.workspaceId);
+
       let proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
       this.lockMessage(proposal.messageId);
       proposal = toIssueProposal(this.getIssueProposalRow(proposalId, input.workspaceId));
@@ -1103,7 +1121,7 @@ export class FeishuIngestRepo {
         workspaceId: input.workspaceId,
         taskId: null,
         createdBy: input.approvedBy,
-      }, deferredEvents);
+      }, childStatusChanges, deferredEvents);
       const resolvedAt = nowIso();
       this.ctx.db.run(
         `UPDATE multiremi_feishu_message_outcomes
@@ -1119,7 +1137,8 @@ export class FeishuIngestRepo {
       };
     })();
     this.ctx.emitCommitEvents(deferredEvents);
-    return result;
+    this.ctx.tasks().runCollectedChildStatusChanges(childStatusChanges);
+    return approved;
   }
 
   rejectIssueProposal(
@@ -1168,6 +1187,7 @@ export class FeishuIngestRepo {
   private createIssueOutcomeWithinTransaction(
     messageId: string,
     input: CreateFeishuIssueOutcomeInput,
+    childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
   ): CreateFeishuIssueOutcomeResult {
     const message = this.getMessage(messageId);
@@ -1207,7 +1227,7 @@ export class FeishuIngestRepo {
         message_app_link: message.messageAppLink,
       }],
       createdBy: cleanOptionalString(input.createdBy),
-    }, deferredEvents);
+    }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.insertOutcome({
       workspaceId: input.workspaceId,
@@ -1220,6 +1240,16 @@ export class FeishuIngestRepo {
     });
     this.markMessageProcessed(messageId, createdAt);
     return { message: this.getMessage(messageId)!, outcome, issue, created: true };
+  }
+
+  /** W: workspace lifecycle row lock (MUL-405 lock order, step 1). */
+  private lockWorkspace(workspaceId: string): void {
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+  }
+
+  /** N: this workspace's issue number lock (MUL-405 lock order, step 2). */
+  private lockIssueNumber(workspaceId: string): void {
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
   }
 
   private lockMessage(messageId: string): void {

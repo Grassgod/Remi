@@ -1,6 +1,13 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Clock3, Play } from "lucide-react";
+import { useWorkspaceId } from "@multiremi/core/hooks";
+import { issueDecisionsOptions, issueDependenciesOptions, issueKeys } from "@multiremi/core/issues/queries";
+import { useUpdateIssue } from "@multiremi/core/issues/mutations";
+import { Button } from "@multiremi/ui/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@multiremi/ui/components/ui/alert-dialog";
 import type { Agent, Issue, MemberWithUser, Project } from "@multiremi/core/types";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import type { UseIssueActionsResult } from "../actions";
@@ -10,15 +17,18 @@ import {
   type RevealAnchor,
 } from "../../common/use-anchored-reveal";
 import { useStickToBottom } from "../../common/use-stick-to-bottom";
+import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
+import { useNavigation } from "../../navigation";
 import {
   IssueActivitySection,
   STICK_PIN_THRESHOLD_PX,
 } from "./issue-activity-section";
 import { IssueDescriptionSection } from "./issue-description-section";
 import { IssueDetailHeader } from "./issue-detail-header";
+import { IssueDecisionPanel } from "./issue-decision-panel";
 import { IssueSessionList } from "./issue-session-list";
-import { IssueSubIssuesSection } from "./issue-sub-issues-section";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
+import { useT } from "../../i18n";
 
 /** Gate (i) and gate (ii) as the activity section reports them. */
 export interface RevealGates {
@@ -53,11 +63,13 @@ interface IssueDetailMainProps {
   agents: Agent[];
   currentUserId?: string;
   canModerateComments: boolean;
+  getActorName: (type: string, id: string) => string;
   highlightCommentId?: string;
   onShowKeyResults: () => void;
   /** Callback ref for the scroll parent Virtuoso attaches to. */
   onScrollContainerRef: (el: HTMLDivElement | null) => void;
   scrollContainerEl: HTMLDivElement | null;
+  canForceStart?: boolean;
 }
 
 /**
@@ -88,11 +100,46 @@ export function IssueDetailMain({
   agents,
   currentUserId,
   canModerateComments,
+  getActorName,
   highlightCommentId,
   onShowKeyResults,
   onScrollContainerRef,
   scrollContainerEl,
+  canForceStart = false,
 }: IssueDetailMainProps) {
+  const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
+  const updateIssue = useUpdateIssue();
+  const { data: dependencies = [] } = useQuery(issueDependenciesOptions(wsId, issueId));
+  const decisions = useQuery(issueDecisionsOptions(wsId, issueId));
+  const hasDecisionEntries = (issue.pending_decision_count ?? 0) > 0
+    || (decisions.data?.waiting_on_human.length ?? 0) > 0
+    || (decisions.data?.owner_and_answered.pending.length ?? 0) > 0
+    || (decisions.data?.owner_and_answered.answered.length ?? 0) > 0;
+  const waitingOn = dependencies
+    .filter((dependency) => dependency.direction === "blocked_by" && dependency.depends_on_issue?.status !== "done")
+    .map((dependency) => dependency.depends_on_issue?.identifier)
+    .filter((key): key is string => !!key);
+  const [forceStartOpen, setForceStartOpen] = useState(false);
+  const [forceStartError, setForceStartError] = useState("");
+  const getDecisionActorName = useCallback((type: string, id: string) => {
+    if (type === "member") {
+      return members.find((member) => member.id === id || member.user_id === id)?.name
+        ?? getActorName(type, id);
+    }
+    return getActorName(type, id);
+  }, [getActorName, members]);
+  const forceStart = async () => {
+    setForceStartError("");
+    try {
+      await updateIssue.mutateAsync({ id: issueId, status: "todo", force: true });
+      await queryClient.invalidateQueries({ queryKey: issueKeys.dependencies(wsId, issueId) });
+      setForceStartOpen(false);
+    } catch (error) {
+      setForceStartError(error instanceof Error ? error.message : t(($) => $.detail.force_start_failed));
+    }
+  };
   const handleSelectSession = (sessionId: string) => {
     sessions.select(sessionId);
     if (isMobile && sessionSidebarOpen) onToggleSessionSidebar();
@@ -116,6 +163,8 @@ export function IssueDetailMain({
   // cycle once the session list answers.
   const resetKey = `${issueId}:${sessions.activeId}:${highlightCommentId ?? ""}`;
 
+  const { pathname } = useNavigation();
+
   const reveal = useAnchoredReveal({
     scrollEl: scrollContainerEl,
     contentEl,
@@ -128,6 +177,14 @@ export function IssueDetailMain({
     fresh: undefined,
     budgetMs: highlightCommentId ? DEEP_LINK_REVEAL_BUDGET_MS : undefined,
   });
+
+  // MUL-472 b: the *main* content of an issue route is this scroll body, not the
+  // detail query. The issue row lands first; the timeline (and the reveal hook
+  // that un-hides it) settles after. Publishing readiness from the reveal state
+  // keeps the shell's deferred requests behind what the user is reading — QA's
+  // probe caught them 230-900 ms ahead of the first row. `revealed` is true for
+  // a forced reveal too, so a page that never settles still opens the gate.
+  useRouteContentReady(pathname, reveal.revealed);
 
   const stick = useStickToBottom({
     scrollEl: scrollContainerEl,
@@ -181,6 +238,64 @@ export function IssueDetailMain({
         sessionSidebarOpen={sessionSidebarOpen}
         onToggleSessionSidebar={onToggleSessionSidebar}
       />
+
+      <div
+        className={`flex h-10 shrink-0 items-center border-b px-4 ${
+          hasDecisionEntries
+            ? "bg-blue-50/70 dark:bg-blue-950/20"
+            : ""
+        }`}
+        data-issue-notice-slot
+      >
+        {hasDecisionEntries && (
+          <IssueDecisionPanel
+            issueId={issueId}
+            pendingCount={issue.pending_decision_count ?? 0}
+            showOwnerOnly={(issue.pending_decision_count ?? 0) === 0}
+            canAnswer={canForceStart}
+            getActorName={getDecisionActorName}
+          />
+        )}
+        {!hasDecisionEntries
+          && issue.parent_issue_id !== null
+          && issue.status === "backlog"
+          && waitingOn.length > 0 && (
+          <div className="flex min-w-0 w-full items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+            <Clock3 className="size-4 shrink-0" />
+            <span className="flex min-w-0 flex-1 flex-col leading-4">
+              <span className="truncate">{t(($) => $.detail.waiting_on, { keys: waitingOn.join(", ") })}</span>
+              {canForceStart && (
+                <span className="truncate text-[11px] text-muted-foreground">
+                  {t(($) => $.detail.waiting_on_start_hint)}
+                </span>
+              )}
+            </span>
+            {canForceStart && (
+              <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 whitespace-nowrap" onClick={() => setForceStartOpen(true)}>
+                <Play className="size-3.5" />{t(($) => $.detail.force_start_action)}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={forceStartOpen} onOpenChange={setForceStartOpen}>
+        <AlertDialogContent className="max-w-[390px]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.detail.force_start_title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.detail.force_start_body, { key: issue.identifier, keys: waitingOn.join(", ") })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {forceStartError && <p role="alert" className="text-sm text-destructive">{forceStartError}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={updateIssue.isPending}>{t(($) => $.detail.force_cancel)}</AlertDialogCancel>
+            <AlertDialogAction disabled={updateIssue.isPending} onClick={(event) => { event.preventDefault(); void forceStart(); }}>
+              {updateIssue.isPending ? t(($) => $.detail.force_start_pending) : t(($) => $.detail.force_start_action)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <div className="flex min-h-0 flex-1">
         {!isMobile && sessionSidebarOpen && sessionList}
@@ -244,11 +359,6 @@ export function IssueDetailMain({
               parentIssue={parentIssue}
               onUpdateField={actions.updateField}
               currentUserId={currentUserId}
-            />
-
-            <IssueSubIssuesSection
-              issueId={issueId}
-              onCreateSubIssue={actions.openCreateSubIssue}
             />
 
             <div className="my-8 border-t" />

@@ -584,6 +584,10 @@
     "confirm": "Confirm"
   },
   "modelGateway": {
+    "context_title": "1M context",
+    "context_label": "1M context for {{model}}",
+    "context_warning": "Claude Code does not check 1M support. Confirm this model supports 1M before enabling.",
+    "context_save_failed": "Could not save the context window.",
     "description": "Workspace gateway policy for every agent task. Each daemon rebuilds non-secret config in an isolated Provider Home; tokens are injected only into the child process environment.",
     "discovery_title": "Auto-discover models",
     "discovery_desc": "Query the gateway's /v1/models and /models so the agent-creation dropdown shows the gateway's real models. Applies to both engines.",
@@ -1029,6 +1033,7 @@
       "notify_none": "No mention",
       "notify_open_id": "Recipient open_id (bot application)",
       "notify_invalid": "Enter a valid open_id beginning with ou_.",
+      "config_invalid": "The saved configuration failed validation. Check the reason below, correct the settings, and save again.",
       "title": "Issue topics",
       "description": "Create one Feishu group topic for each new Issue and keep later work updates and replies in that thread.",
       "enabled": "Create topics for new Issues",

@@ -180,6 +180,7 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues": "issue.list",
     "POST /api/multiremi/issues": "issue.create",
     "GET /api/issues/grouped": "issue.grouped",
+    "GET /api/issues/status-pages": "issue.status-pages",
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
@@ -255,6 +256,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/workspaces\/:id\/relay-config\/:engine\/probe$/, "workspace.relay.probe"],
     [/^GET \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.get"],
     [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.update"],
+    [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/context-window$/, "workspace.relay.context-window.update"],
     [/^GET \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.get"],
     [/^PUT \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.update"],
     [/^POST \/api\/workspaces\/:id\/bot-menu\/publish$/, "workspace.bot-menu.publish"],
@@ -754,6 +756,14 @@ function exemptRoute(route: string): CliManifestRoute | null {
   });
   if (path === "/ws" || path === "/api/daemon/ws" || path === "/api/realtime/ws") {
     return exempt("websocket_transport", "Long-lived WebSocket transport is outside the CLI command surface.");
+  }
+  // MUL-462: the split-API peer channel lives off the dashboard surface —
+  // nginx never routes `/internal/`, and the two API processes authenticate
+  // each other with MULTIREMI_PEER_SECRET. It is machine-to-server traffic with
+  // no user-facing command, so it takes a fixed exempt category rather than
+  // becoming a `planned_command` that would never be implemented.
+  if (path.startsWith("/internal/")) {
+    return exempt("daemon_internal_protocol", "Cross-process API peer channel is machine-to-server traffic; it has no user-facing CLI workflow.");
   }
   if (path.startsWith("/api/daemon/") || /\/runtimes\/[^/]+\/heartbeat$/.test(path) || path === "/api/multiremi/scheduler/tick") {
     return exempt("daemon_internal_protocol", "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic.");
