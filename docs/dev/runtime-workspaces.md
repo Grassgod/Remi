@@ -95,6 +95,14 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
 
+Session Archive v2 的容器与遍历策略：包体是标准 ZIP（`multiremi.session-archive.v2`），每个成员单独 deflate（level 6）+ data descriptor，末尾 `index.json` 记录每个成员的 `local_header_offset`、`data_offset`、压缩/原始大小和 sha256，所以读单个 task 的 trace 只解压一个成员。成员布局为 `manifest.json`、`traces/<task_id>.jsonl`、`sessions/<session_id>/...` 与末尾 `index.json`；主体可以是 issue、chat 或一次性 task。`source_revision` 仍是内容清单的 sha256（与压缩方式无关），归档 `sha256` 仍是整包哈希，GC 屏障与硬删屏障不变。
+
+服务端逐个校验 trace 成员：Issue 包只收该 Issue 的 task，Chat 包只收该 Chat 的 task，一次性包只收同 id 且没有 Issue/Chat 绑定的 task；所有成员都须属于同一 workspace。执行 Runtime 可以等于归档 Runtime，也可以是同一 daemon 的另一个 Runtime（两行都存在且 `daemon_id` 非空且相同）。这与 daemon 按主体收集本机 session 根、上传路由按 daemon 身份鉴权一致；预校验和 ready 事务内复核使用同一规则。提升后的失败只清理由该 attempt 写入的最终文件与 manifest，按 attempt 编号及文件身份隔离较新的 attempt。
+
+归档遍历不再依赖 `/proc/self/fd`：写入器逐级 `lstat`，拒绝符号链接，并在扫描前后比对 dev/ino/size/mtime，成员读取用 `O_NOFOLLOW` 打开。这样 macOS daemon 也能归档（Linux 上过去只有描述符路径可用）。Windows 仍被拒绝，因为 `lstat` 不把 junction 报告为符号链接，无法保证「不逃出会话根」。
+
+daemon 的规范化过程记录按 task 写在 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；一次性 task 以 task id 代替 session id。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加。启动时扫描这些 daemon 管理目录重建索引。文件索引与 GC 共用完整性判定：校验头行、事件 seq 顺序及尾行的状态、时间和计数；未封口文件中的重复 seq 取首条、末尾半行忽略以便恢复；带尾行但仍有这些歧义的文件不进入索引。GC 对无法确认完好且已封口的 trace 保留目录并记录路径。
+
 [GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
 
 ## 实现和验证

@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";
@@ -33,6 +34,7 @@ import {
   promoteLegacyCliPatForDaemonHeartbeat,
   promoteLegacyCliPatForDaemonRegistration,
   localAttachmentFileResponse,
+  log,
 } from "../helpers.js";
 import {
   authenticatedRequestUserId,
@@ -90,6 +92,19 @@ import { invalidateRequestReadCache } from "@multiremi/store/request-read-cache.
 /** The statuses `isDaemonPendingTaskForRuntime` accepts, pushed into SQL. */
 const DAEMON_PENDING_TASK_STATUSES = ["queued", "dispatched"] as const;
 import { resolveTaskRepositoryWikiRepositories, canonicalRepositoryRemote } from "@multiremi/repository-wiki/task-scope.js";
+
+function daemonCompletionTraceEventCount(trace: unknown, taskId: string): number | undefined {
+  if (trace === undefined) return undefined;
+  if (trace !== null && typeof trace === "object" && !Array.isArray(trace)) {
+    const eventCount = (trace as Record<string, unknown>).event_count;
+    if (eventCount === undefined) return undefined;
+    if (typeof eventCount === "number" && Number.isSafeInteger(eventCount) && eventCount >= 0) {
+      return eventCount;
+    }
+  }
+  log.warn("Ignoring invalid daemon completion trace.event_count", { taskId });
+  return undefined;
+}
 
 type DaemonInstallRequestBody = {
   serverUrl?: string | null;
@@ -390,6 +405,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       feishu_concierge_protocol?: number;
       feishu_decision_card?: number;
       feishu_issue_decision_card?: number;
+      feishu_outbound_kinds?: number;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
@@ -473,19 +489,24 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       // fetches the payload itself over its own runtime-scoped route.
       const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
       if (directive) response.feishu_bot = directive;
-      const outbound = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
+      const supportsKinds = body.feishu_outbound_kinds === 1
+        && feishuConciergeProtocol >= FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION;
+      const legacyOutbound = !supportsKinds && feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_LEGACY_PROTOCOL_VERSION
         ? store.claimFeishuBotOutbound(workspaceId, runtimeId, undefined,
             feishuConciergeProtocol >= FEISHU_CONCIERGE_TASK_STREAM_PROTOCOL_VERSION,
             feishuConciergeProtocol >= FEISHU_CONCIERGE_NATIVE_COT_PROTOCOL_VERSION,
             feishuConciergeProtocol >= FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION)
         : null;
-      if (outbound) {
+      const outbounds = supportsKinds ? store.claimFeishuBotOutbounds(workspaceId, runtimeId)
+        : legacyOutbound ? [legacyOutbound] : [];
+      if (supportsKinds) response.pending_feishu_outbounds = [];
+      for (const outbound of outbounds) {
         const body = feishuConciergeProtocol >= FEISHU_CONCIERGE_OUTBOUND_PROTOCOL_VERSION
           ? outbound.body
           : degradeMarkdownImages(outbound.body, {
               publicUrl: process.env.MULTIREMI_PUBLIC_URL?.trim() || null,
             });
-        response.pending_feishu_outbound = {
+        const wireOutbound = {
           id: outbound.id,
           claim_token: outbound.claimToken,
           chat_id: outbound.chatId,
@@ -501,6 +522,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.interactionOpenId ? { interaction_open_id: outbound.interactionOpenId } : {}),
           ...(outbound.receiptMessageIds ? { receipt_message_ids: outbound.receiptMessageIds } : {}),
           ...(outbound.kind ? { kind: outbound.kind } : {}),
+          ...(outbound.receiptState ? { receipt_state: outbound.receiptState } : {}),
           ...(outbound.humanRequestId ? { human_request_id: outbound.humanRequestId } : {}),
           ...(outbound.decisionId ? { decision_id: outbound.decisionId } : {}),
           ...(outbound.decisionIssueId ? { decision_issue_id: outbound.decisionIssueId } : {}),
@@ -512,6 +534,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
           ...(outbound.expiresAt ? { expires_at: outbound.expiresAt } : {}),
           ...(outbound.degraded ? { degraded: outbound.degraded } : {}),
         };
+        if (supportsKinds) (response.pending_feishu_outbounds as unknown[]).push(wireOutbound);
+        else response.pending_feishu_outbound = wireOutbound;
       }
     }
     return c.json(response);
@@ -1351,7 +1375,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ output?: string; pr_url?: string; session_id?: string; work_dir?: string }>(c);
+    const body = await readJsonStrict<{
+      output?: string; pr_url?: string; session_id?: string; work_dir?: string;
+      trace?: DaemonTaskCompletionFields["trace"];
+    }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1367,6 +1394,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
         branchName: body.pr_url ?? null,
         sessionId: body.session_id ?? null,
         workDir: body.work_dir ?? null,
+        traceEventCount: daemonCompletionTraceEventCount(body.trace, taskId),
       });
     } catch (err) {
       // Unconsumed steer messages won the race against completion: tell the
@@ -1380,7 +1408,10 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
     const taskId = c.req.param("taskId");
-    const body = await readJsonStrict<{ error?: string; session_id?: string; work_dir?: string; failure_reason?: string }>(c);
+    const body = await readJsonStrict<{
+      error?: string; session_id?: string; work_dir?: string; failure_reason?: string;
+      trace?: DaemonTaskCompletionFields["trace"];
+    }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
     if (identityDenied) return identityDenied;
@@ -1394,6 +1425,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
       sessionId: body.session_id ?? null,
       workDir: body.work_dir ?? null,
       failureReason: body.failure_reason ?? null,
+      traceEventCount: daemonCompletionTraceEventCount(body.trace, taskId),
     });
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
   });

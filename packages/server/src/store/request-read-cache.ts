@@ -173,6 +173,7 @@ export function invalidatingDatabase<T extends object>(database: T): T {
   const afterCommitFrames: Array<Array<() => void>> = [];
   /** Depth of `transaction()` calls here; only the outermost opens a sentinel frame. */
   let sentinelTransactionDepth = 0;
+  let savepointSequence = 0;
   const interceptStatement = (statement: unknown, sql: string): unknown => {
     if (READ_ONLY_STATEMENT.test(sql)) return statement;
     const table = writtenTable(sql);
@@ -253,6 +254,37 @@ export function invalidatingDatabase<T extends object>(database: T): T {
           if (afterCommitFrames.length === 0) fn();
           else afterCommitFrames[afterCommitFrames.length - 1]!.push(fn);
         };
+      }
+      if (key === "savepoint" && typeof value === "function") {
+        return <R>(fn: () => R): R => withinTransaction(() => value.call(target, fn));
+      }
+      if (key === "savepoint" && value === undefined) {
+        return <R>(fn: () => R): R => withinTransaction(() => {
+          if (!Reflect.get(target, "inTransaction", target)) throw new Error("savepoint requires an open transaction");
+          const name = `multiremi_optional_${++savepointSequence}`;
+          const exec = Reflect.get(target, "exec", target) as (sql: string) => void;
+          exec.call(target, `SAVEPOINT ${name}`);
+          afterCommitFrames.push([]);
+          let released = false;
+          try {
+            const result = fn();
+            exec.call(target, `RELEASE SAVEPOINT ${name}`);
+            released = true;
+            return result;
+          } catch (error) {
+            exec.call(target, `ROLLBACK TO SAVEPOINT ${name}`);
+            exec.call(target, `RELEASE SAVEPOINT ${name}`);
+            invalidateTable(null);
+            throw error;
+          } finally {
+            const frame = afterCommitFrames.pop()!;
+            if (released) {
+              const parent = afterCommitFrames[afterCommitFrames.length - 1];
+              if (parent) parent.push(...frame);
+              else for (const callback of frame) { try { callback(); } catch { /* best-effort realtime */ } }
+            }
+          }
+        });
       }
       return typeof value === "function" ? value.bind(target) : value;
     },

@@ -6,14 +6,15 @@
  *      `tests/unit/multiremi/api-route-snapshot.test.ts` covers the byte-identical
  *      part; here the guard itself must be absent from the middleware chain);
  *   ② over the FULL golden route inventory: `ui` refuses every `/api/daemon/*`
- *      and nothing else, `runtime` is the mirror image, `all` refuses nothing;
+ *      and nothing else, `runtime` also serves B5's two trace reads (l), and
+ *      `all` refuses nothing;
  *   ③ WebSocket upgrades are refused with 421 rather than 426 — an upgrade never
  *      reaches Hono, so it is answered in `startMultiremiServer.fetch`, which is
  *      exactly the branch a middleware-only test would miss;
  *   ④ `role` reaches both metrics events and the health payloads.
  *
  * The matrix drives the same inventory the API snapshot does
- * (`scripts/api-routes.golden.json`, 759 patterns) instead of a hand-picked list,
+ * (`scripts/api-routes.golden.json`, 787 patterns) instead of a hand-picked list,
  * so a route added later under either prefix is covered without editing this file.
  */
 import { afterEach, describe, expect, it } from "bun:test";
@@ -71,13 +72,25 @@ const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string
  * exact paths; everything else is refused.
  */
 const RUNTIME_ALLOWED_PREFIXES = ["/api/daemon/", "/health/", "/internal/"] as const;
-const RUNTIME_ALLOWED_EXACT = ["/health", "/healthz", "/readyz", "/api/multiremi/health"] as const;
+const RUNTIME_ALLOWED_EXACT = [
+  "/health",
+  "/healthz",
+  "/readyz",
+  "/api/multiremi/health",
+  // MUL-438: the browser trace socket is served by the process that owns the
+  // trace stream (runtime), and nginx routes the path there. It is the one
+  // browser-facing path in this allowlist.
+  "/api/trace/ws",
+] as const;
+// MUL-402 cmt_0buuxntn73ab (l): trace reads are served by both ui and runtime.
+const RUNTIME_ALLOWED_TRACE_READS = [/^\/api\/tasks\/[^/]+\/trace$/, /^\/api\/shares\/[^/]+\/tasks\/[^/]+\/trace$/];
 
 /** Independent re-implementation of §3.2, used as the oracle. */
 function expectedRefusal(role: ApiRole, pathname: string): boolean {
   if (role === "all") return false;
   if (role === "ui") return pathname.startsWith("/api/daemon/");
   if (RUNTIME_ALLOWED_EXACT.includes(pathname as (typeof RUNTIME_ALLOWED_EXACT)[number])) return false;
+  if (RUNTIME_ALLOWED_TRACE_READS.some((pattern) => pattern.test(pathname))) return false;
   return !RUNTIME_ALLOWED_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
@@ -98,6 +111,7 @@ function routeCountHint(role: ApiRole): string {
     "  1. Read the new route's path and classify it against the literal rules at the top of this",
     "     file (RUNTIME_ALLOWED_PREFIXES / RUNTIME_ALLOWED_EXACT), NOT against the implementation.",
     "     /api/daemon/* -> the runtime process serves it and ui answers 421.",
+    "     The two exact B5 trace-read patterns -> both ui and runtime serve them, per (l).",
     "     /api/daemons/:id (plural) and everything else outside the allowlist -> ui serves it.",
     "  2. Confirm the route really belongs where it was added. A daemon-protocol route registered",
     "     outside /api/daemon/ (or a browser route added under it) is a routing bug, not a count to",
@@ -141,7 +155,12 @@ async function sweep(role: ApiRole): Promise<Map<string, number>> {
       const { method, path } = concreteRequest(pattern);
       // The three upgrade-only routes answer 426 through `app.request`; the WS
       // behaviour is asserted separately below against a real server.
-      if (pattern === "GET /api/daemon/ws" || pattern === "GET /ws" || pattern === "GET /api/realtime/ws") continue;
+      if (
+        pattern === "GET /api/daemon/ws"
+        || pattern === "GET /ws"
+        || pattern === "GET /api/realtime/ws"
+        || pattern === "GET /api/trace/ws"
+      ) continue;
       const response = await app.request(path, { method });
       statuses.set(pattern, response.status);
     }
@@ -275,6 +294,8 @@ describe("MUL-461 api role — env resolution", () => {
       "/api/multiremi/health",
       "/internal/peer/events",
       "/internal/peer/health",
+      "/api/tasks/tsk_role_probe/trace",
+      "/api/shares/share_role_probe/tasks/tsk_role_probe/trace",
     ]) {
       expect(isRuntimeAllowedPath(allowed), allowed).toBe(true);
       expect(expectedRefusal("runtime", allowed), `oracle ${allowed}`).toBe(false);
@@ -288,6 +309,10 @@ describe("MUL-461 api role — env resolution", () => {
       // A prefix sweep on "health" would have swallowed this browser route.
       "/api/cloud-runtime/healthz",
       "/api/cloud-runtime/readyz",
+      "/api/tasks/tsk_role_probe/trace/extra",
+      "/api/tasks/tsk_role_probe/messages",
+      "/api/shares/share_role_probe/tasks/tsk_role_probe/trace/extra",
+      "/api/shares/share_role_probe/trace",
     ]) {
       expect(isRuntimeAllowedPath(refused), refused).toBe(false);
       expect(expectedRefusal("runtime", refused), `oracle ${refused}`).toBe(true);
@@ -310,6 +335,8 @@ describe("MUL-461 api role — env resolution", () => {
       { path: "/api/cloud-runtime/healthz", ui: false, runtime: true },
       { path: "/internal/peer/events", ui: false, runtime: false },
       { path: "/internal/peer/health", ui: false, runtime: false },
+      { path: "/api/tasks/tsk_role_probe/trace", ui: false, runtime: false },
+      { path: "/api/shares/share_role_probe/tasks/tsk_role_probe/trace", ui: false, runtime: false },
     ];
     for (const entry of cases) {
       expect(isMisdirectedPath("ui", entry.path), `ui ${entry.path}`).toBe(entry.ui);
@@ -328,7 +355,7 @@ describe("MUL-461 api role — env resolution", () => {
 describe("MUL-461 api role — guard over the full golden route inventory", () => {
   it("keeps main's behavior when the role is all", async () => {
     const statuses = await sweep("all");
-    expect(statuses.size).toBe(GOLDEN.routes.length - 3);
+    expect(statuses.size).toBe(GOLDEN.routes.length - 4);
     let refused = 0;
     for (const [pattern, status] of statuses) {
       const { path } = concreteRequest(pattern);
@@ -355,20 +382,26 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       if (status === 421) misdirected.push(pattern);
     }
     // Fixed counts, derived from the literal rule above (not from the guard).
-    // 73 of the 773 swept patterns are refused here; `GET /api/daemon/ws` is the
+    // 87 of the 791 swept patterns are refused here; `GET /api/daemon/ws` is the
     // upgrade-only route this sweep cannot drive — the websocket block asserts it —
-    // so the full-inventory total is 74. Pinning the swept count AND the arithmetic
+    // so the full-inventory total is 88. Pinning the swept count AND the arithmetic
     // means a route cannot be reclassified without one of the numbers moving.
     // MUL-412's two /api/daemon/issues/:issueId/decisions routes are runtime
     // protocol traffic, so they move the swept/full totals from 70/71 to 72/73.
     // MUL-462 adds two /internal/peer/* routes. Both roles serve /internal, so
-    // the swept inventory grows from 769 to 771 while these refusal totals stay put.
-    // MUL-479's context-window PUT is browser traffic that ui serves, so it takes
-    // the swept inventory to 772 without moving these totals either.
-    // MUL-487's native card mint takes it to 773 and ui must refuse that route.
+    // the swept inventory grows by two while these refusal totals stay put.
+    // MUL-402 B4 adds seven daemon archive routes for each of chats and tasks:
+    // status, init, content GET/PUT, complete, archive failure and subject failure.
+    // All fourteen sit under /api/daemon/runtimes/:runtimeId/.../session-archives,
+    // so runtime serves them and ui refuses them: 72 -> 86. B1's two browser
+    // /api/sessions/:sessionId/log[/locate] routes leave this count unchanged.
+    // (l): GET /api/tasks/:id/trace and /api/shares/:token/tasks/:task_id/trace
+    // add two served reads. MUL-479's context-window PUT adds one served browser
+    // route; MUL-487's native card mint adds one refused daemon route.
+    expect(statuses.size).toBe(791);
     expect(misdirected).toContain("POST /api/daemon/tasks/:taskId/human-requests/:requestId/card");
-    expect(misdirected, routeCountHint("ui")).toHaveLength(73);
-    expect(misdirected.length + 1, routeCountHint("ui")).toBe(74);
+    expect(misdirected, routeCountHint("ui")).toHaveLength(87);
+    expect(misdirected.length + 1, routeCountHint("ui")).toBe(88);
   });
 
   it("refuses everything but the daemon protocol, health and /internal as runtime", async () => {
@@ -379,9 +412,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // 693 of the 773 swept patterns are refused; the two browser upgrade routes
+    // 695 of the 791 swept patterns are refused; the two browser upgrade routes
     // (`GET /ws`, `GET /api/realtime/ws`) are upgrade-only, so the full-inventory
-    // total is 695. Every browser route main added before MUL-462 sits outside
+    // total is 697. Every browser route main added before MUL-462 sits outside
     // the runtime allowlist (no /api/daemon/, /health/, /internal/ prefix and no bare
     // health path), so each one is refused here and served by ui: MUL-410's five
     // /api/issues/:id/decisions* routes took this count 682 -> 687, and MUL-457's
@@ -391,14 +424,20 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     // MUL-395: /api/issues/status-pages is browser/CLI traffic, outside the
     // runtime allowlist. UI serves it; runtime refuses this one new route.
     // MUL-462's two /internal/peer/* routes increase the swept inventory by two,
-    // but runtime serves both, so they leave the refusal totals unchanged. Only
-    // MUL-479's context-window PUT moves them, from 692/694 to 693/695.
-    // The native card mint is served by runtime and leaves these totals unchanged.
+    // but runtime serves both, so they do not add refusals.
+    // MUL-402 B1's GET /api/sessions/:sessionId/log and /log/locate are browser
+    // reads outside the allowlist: 692 -> 694. B4's fourteen daemon archive
+    // routes are inside /api/daemon/, so runtime serves them and the count stands.
+    // (l): the two exact trace-read patterns join the runtime allowlist. Both
+    // are also ui reads; unlike other browser routes they do not add refusals.
+    // MUL-479's context-window PUT adds one browser-only refusal.
+    // MUL-487's native card mint is also served by runtime.
     const mintRoute = "POST /api/daemon/tasks/:taskId/human-requests/:requestId/card";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(693);
-    expect(refused + 2, routeCountHint("runtime")).toBe(695);
+    expect(statuses.size).toBe(791);
+    expect(refused, routeCountHint("runtime")).toBe(695);
+    expect(refused + 2, routeCountHint("runtime")).toBe(697);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {
@@ -495,6 +534,18 @@ describe("MUL-461 api role — websocket upgrades", () => {
     }
   });
 
+  it("serves the browser trace socket from runtime and refuses it from ui's mirror rule", async () => {
+    // MUL-438: the trace stream's home is the runtime process, so this is the one
+    // browser upgrade path runtime must NOT refuse. A successful upgrade has no
+    // readable body (asserted by the status alone); a 421 would carry the header.
+    const served = await upgradeStatus("runtime", "/api/trace/ws?workspace_id=local");
+    expect(served.status).not.toBe(421);
+    // `ui` only refuses the daemon prefix, so this path is simply not its
+    // business to refuse at the guard — nginx sends it to runtime (MUL-464).
+    const onUi = await upgradeStatus("ui", "/api/trace/ws?workspace_id=local");
+    expect(onUi.status).not.toBe(421);
+  });
+
   it("keeps the 426 upgrade-required answer for a non-upgrade GET", async () => {
     const { store, db } = memoryStore();
     try {
@@ -515,7 +566,7 @@ describe("MUL-461 api role — health and effective config", () => {
     delete process.env.MULTIREMI_API_ROLE;
     const { store, db } = memoryStore();
     try {
-      const app = createMultiremiApp({ store, authToken: null });
+      const app = createMultiremiApp({ store, authToken: null, hub: null });
       // Byte-identity with main matters here: `snapshot-api-routes.ts` records these
       // bodies, so an unconditional `role` would break the golden check.
       expect(await (await app.request("/health")).json()).toEqual({ ok: true });

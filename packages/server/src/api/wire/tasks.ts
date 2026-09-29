@@ -15,6 +15,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type InternalTaskField =
+  | "execution_scope"
   | "codexProfile"
   | "claudeProfile"
   | "delegationId"
@@ -50,6 +51,7 @@ type TaskListOmittedField =
 
 export function taskPublicResponse<T extends MultiremiTask>(task: T): Omit<T, InternalTaskField> {
   const {
+    execution_scope: _executionScope,
     codexProfile: _codexProfile,
     claudeProfile: _claudeProfile,
     delegationId: _delegationId,

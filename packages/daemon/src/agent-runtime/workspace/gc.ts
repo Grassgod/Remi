@@ -12,6 +12,8 @@
 
 import {
   closeSync,
+  constants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -28,6 +30,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { MultiremiIssueWorkspaceArchiveBinding } from "@multiremi/contracts/types.js";
+import { checkTraceFileLines } from "@multiremi/contracts/trace-file.js";
 import { createLogger } from "@shared/logger.js";
 import {
   OWNED_DIRECTORY_QUARANTINE,
@@ -323,6 +326,10 @@ async function collectTopicWorkspace(
         summary.skipped++;
         return;
       }
+      if (hasUnclosedTrace(topicDir)) {
+        summary.skipped++;
+        return;
+      }
       options.assertRootOwner?.();
       removeGcWorkDir(root, topicDir, options.assertRootOwner);
       summary.orphaned++;
@@ -400,6 +407,13 @@ async function collectWorkspaceGcDecisionUnlocked(
     return;
   }
   const issueId = stringField(readGcMeta(workspaceDir)?.issue_id);
+  // A trace without its terminal trailer is still owned by this daemon. Keep
+  // the entire root until its task closes, even if the server reports terminal.
+  if (hasUnclosedTrace(workspaceDir)
+    || (issueId && issueRuntimeRoots(root, issueId).some(hasUnclosedTrace))) {
+    summary.skipped++;
+    return;
+  }
   let reportReceipt: string | null = null;
   if (
     decision === "clean"
@@ -753,10 +767,56 @@ function hasIssueRuntimeState(root: string, issueId: string): boolean {
 }
 
 function removeIssueRuntimeRoots(root: string, issueId: string, assertRootOwner?: () => void): void {
-  for (const sessionRoot of issueRuntimeRoots(root, issueId)) {
+  const roots = issueRuntimeRoots(root, issueId);
+  if (roots.some(hasUnclosedTrace)) throw new Error(`Issue ${issueId} has an unclosed trace`);
+  for (const sessionRoot of roots) {
     assertRootOwner?.();
     removeGcWorkDir(root, sessionRoot, assertRootOwner);
   }
+}
+
+/** Treat malformed or unreadable trace state as open so GC fails closed. */
+export function hasUnclosedTrace(workspaceDir: string): boolean {
+  const traces = join(workspaceDir, "traces");
+  let info: Stats;
+  try { info = lstatSync(traces); }
+  catch (error) { return !isFsNotFoundError(error); }
+  if (!info.isDirectory() || info.isSymbolicLink()) return true;
+  const files = safeReadDir(traces);
+  if (!files) return true;
+  for (const file of files) {
+    if (!file.name.endsWith(".jsonl")) continue;
+    const path = join(traces, file.name);
+    const stat = safeLstat(path);
+    if (!stat?.isFile() || stat.isSymbolicLink()) {
+      log.warn(`Keeping malformed trace during GC: ${path}: not a regular file`);
+      return true;
+    }
+    try {
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try {
+        const opened = fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) throw new Error("trace file changed during GC inspection");
+        bytes = readFileSync(fd);
+      } finally { closeSync(fd); }
+      const lastNewline = bytes.lastIndexOf(10);
+      const lines = lastNewline < 0 ? [] : bytes.subarray(0, lastNewline).toString("utf8").split("\n");
+      const checked = checkTraceFileLines(lines, {
+        taskId: file.name.slice(0, -6),
+        sessionId: basename(workspaceDir),
+        incompleteTail: lastNewline !== bytes.length - 1,
+      });
+      if (!checked.ok || !checked.value.closed) {
+        log.warn(`Keeping unclosed or malformed trace during GC: ${path}: ${checked.ok ? "incomplete or ambiguous framing" : checked.reason}`);
+        return true;
+      }
+    } catch (error) {
+      log.warn(`Keeping unreadable trace during GC: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 function issueRuntimeRoots(root: string, issueId: string): string[] {

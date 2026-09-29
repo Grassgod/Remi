@@ -132,20 +132,32 @@ export function useRealtimeSync(
     };
   }, [ws, qc, authStore, onToast]);
 
-  // Reconnect -> refetch all data to recover missed events
+  // Reconnect -> refetch all data to recover missed events.
+  //
+  // MUL-438: a server `resync` means the same thing to this layer. The peer
+  // adapter broadcasts it after the cross-process link recovers, and the streams
+  // themselves are re-subscribed by the socket (from each stream's local head) —
+  // so what is left for this layer is the non-stream caches, exactly as on a
+  // reconnect. Both paths share one implementation on purpose: two recovery
+  // routines would drift, and the second one would be the one that gets forgotten.
   useEffect(() => {
     if (!ws) return;
 
-    const unsub = ws.onReconnect(async () => {
+    const refetch = async () => {
       logger.info("reconnected, refetching all data");
       try {
         invalidateWorkspaceScopedQueries(qc);
       } catch (e) {
         logger.error("reconnect refetch failed", e);
       }
-    });
+    };
+    const unsubReconnect = ws.onReconnect(refetch);
+    const unsubResync = ws.onResync(refetch);
 
-    return unsub;
+    return () => {
+      unsubReconnect();
+      unsubResync();
+    };
   }, [ws, qc]);
 
   // New WSClient instance (workspace switch) -> invalidate workspace-scoped

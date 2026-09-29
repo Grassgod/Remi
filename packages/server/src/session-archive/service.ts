@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants,
+  lstatSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
 } from "node:fs";
 import {
   lstat,
@@ -29,10 +33,23 @@ import type {
   InitSessionArchiveInput,
   MultiremiIssueWorkspaceArchiveBinding,
   MultiremiSessionArchive,
+  MultiremiSessionArchiveSubjectKind,
 } from "@multiremi/contracts/types.js";
+import {
+  SESSION_ARCHIVE_FORMAT_V2,
+  SESSION_ARCHIVE_FORMAT_V1,
+} from "@multiremi/contracts/session-archive.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createId } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
+import {
+  SessionArchiveIngestError,
+  verifyArchiveIngest,
+  type ArchiveIngestVerification,
+} from "@multiremi/session-archive/ingest.js";
+import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
+import { SessionArchiveTraceOwnershipError } from "@multiremi/store/repos/session-archives-repo.js";
+import type { SessionArchiveMemberIndexEntry } from "@multiremi/contracts/session-archive.js";
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -47,6 +64,12 @@ interface IssueArchivePurgeReceipt {
   issue_id: string;
   relative_paths: string[];
   created_at: string;
+}
+
+interface FileIdentity { dev: number; ino: number }
+
+function sameFileIdentity(a: FileIdentity, b: FileIdentity): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
 }
 
 export interface SessionArchiveStorageConfig {
@@ -97,24 +120,73 @@ function encodedSegment(value: string): string {
 
 function archiveRelativePath(input: Pick<
   InitSessionArchiveInput,
-  "workspaceId" | "issueId"
+  "workspaceId" | "subjectKind" | "subjectId"
 > & { archiveId: string }): string {
   return join(
     "workspaces",
     encodedSegment(input.workspaceId),
-    "issues",
-    encodedSegment(input.issueId),
+    input.subjectKind === "issue" ? "issues" : "subjects",
+    encodedSegment(input.subjectId),
     input.archiveId,
-    "sessions.tar.gz",
+    "sessions.zip",
   );
 }
 
+/**
+ * New uploads must be v2.
+ *
+ * This is checked before any attempt is claimed: during an upgrade window a v1
+ * daemon would otherwise burn the whole retry budget re-uploading a container
+ * this server no longer indexes. Existing v1 rows stay readable and stay
+ * `ready` — the hard-delete barrier binds to them — so a request that names one
+ * of those is served as before instead of being rejected.
+ */
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim());
+}
+
+function isV2Format(format: string | undefined | null): boolean {
+  return format === SESSION_ARCHIVE_FORMAT_V2;
+}
+
+/**
+ * Which subject one upload request is about.
+ *
+ * A bare string is accepted as an Issue id so the long-standing Issue callers
+ * (the daemon GC path and its tests) stay readable; every other subject passes
+ * its kind explicitly.
+ */
+export type SessionArchiveScope = SessionArchiveSubjectScope | string;
+
+export interface SessionArchiveSubjectScope {
+  kind: MultiremiSessionArchiveSubjectKind;
+  id: string;
+}
+
+/** Normalize the two accepted scope spellings into a subject. */
+export function resolveSessionArchiveScope(scope: SessionArchiveScope): SessionArchiveSubjectScope {
+  return typeof scope === "string" ? { kind: "issue", id: scope } : scope;
+}
+
+/**
+ * Resolve an archive by subject and refuse a Runtime that does not own it.
+ *
+ * The subject check is what keeps a Chat or Task archive from being driven
+ * through another subject's route: the id alone is not enough, since the same
+ * text could name different things in different subject kinds.
+ */
 function assertArchiveScope(
   archive: MultiremiSessionArchive | null,
   runtimeId: string,
-  issueId: string,
+  scope: SessionArchiveScope,
 ): MultiremiSessionArchive {
-  if (!archive || archive.runtimeId !== runtimeId || archive.issueId !== issueId) {
+  const subject = resolveSessionArchiveScope(scope);
+  if (
+    !archive
+    || archive.runtimeId !== runtimeId
+    || archive.subjectKind !== subject.kind
+    || archive.subjectId !== subject.id
+  ) {
     throw new SessionArchiveError("session archive not found", 404, "session_archive_not_found");
   }
   return archive;
@@ -164,6 +236,32 @@ async function hashFile(path: string, expectedSizeBytes: number): Promise<{ sha2
   }
 }
 
+/**
+ * Turn verified trace members into pointer rows.
+ *
+ * `head`, `event_count` and `closed` come from the archive's own index, which
+ * the writer derived while hashing each member. `head` is what the swap rule
+ * compares, so it must be the largest seq rather than the event count.
+ */
+function buildTracePointers(
+  archive: MultiremiSessionArchive,
+  traces: readonly SessionArchiveMemberIndexEntry[],
+): TaskTraceArchivePointer[] {
+  return traces.map((member) => ({
+    taskId: member.task_id ?? "",
+    archiveId: archive.id,
+    memberPath: member.path,
+    dataOffset: member.data_offset,
+    compressedSize: member.compressed_size,
+    uncompressedSize: member.uncompressed_size,
+    sha256: member.sha256,
+    eventCount: member.event_count ?? null,
+    headSeq: member.head ?? 0,
+    closed: member.closed ?? false,
+    runtimeId: archive.runtimeId,
+  })).filter((pointer) => pointer.taskId.length > 0);
+}
+
 export class SessionArchiveService {
   readonly config: SessionArchiveStorageConfig;
   private completionAttempts = new Map<string, Promise<MultiremiSessionArchive>>();
@@ -190,6 +288,12 @@ export class SessionArchiveService {
     archive: MultiremiSessionArchive;
     created: boolean;
   } {
+    if (!/^[a-zA-Z0-9_.:-]{1,128}$/.test(input.subjectId)) {
+      throw new SessionArchiveError("subject_id must be a plain identifier", 400, "session_archive_invalid_subject");
+    }
+    if (input.subjectKind === "issue" && !nonEmptyString(input.issueId ?? input.subjectId)) {
+      throw new SessionArchiveError("Issue archives require an Issue id", 400, "session_archive_invalid_subject");
+    }
     if (!input.sourceRevision.trim() || input.sourceRevision.length > 512) {
       throw new SessionArchiveError("source_revision must be between 1 and 512 characters");
     }
@@ -213,10 +317,16 @@ export class SessionArchiveService {
     if (Buffer.byteLength(JSON.stringify(metadata), "utf8") > 64 * 1024) {
       throw new SessionArchiveError("metadata exceeds 65536 bytes", 413, "metadata_too_large");
     }
+    // A request that names no format is a new upload and therefore v2. A
+    // request that names one is held to it: `init` is the first call a daemon
+    // makes, so refusing v1 here (rather than at complete) is what keeps an old
+    // daemon from consuming the retry budget.
+    const format = input.format ?? SESSION_ARCHIVE_FORMAT_V2;
+    if (!isV2Format(format)) throw this.unsupportedFormat(format);
     const archiveId = createId("sar");
     try {
       return this.store.initSessionArchive(
-        { ...input, sha256: input.sha256.toLowerCase(), metadata },
+        { ...input, format, sha256: input.sha256.toLowerCase(), metadata },
         archiveId,
         archiveRelativePath({ ...input, archiveId }),
       );
@@ -239,18 +349,21 @@ export class SessionArchiveService {
    */
   async claimUploadAttempt(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
   ): Promise<{ archive: MultiremiSessionArchive; uploadAttempt: number | null }> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     if (archive.status === "ready") return { archive, uploadAttempt: null };
+    // Refuse before touching the retry budget: an old daemon retrying a v1
+    // container must not exhaust the attempts a v2 upload will need.
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (archive.status === "superseded") {
       throw new SessionArchiveError("session archive has been superseded", 409, "archive_superseded");
     }
     const claimed = this.store.claimSessionArchiveUploadAttempt(archive.id, runtimeId);
     if (!claimed) {
-      archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+      archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
       if (archive.status === "ready") return { archive, uploadAttempt: null };
       if (archive.retryExhaustedAt) {
         await this.cleanupExhaustedPartials(archive);
@@ -292,18 +405,19 @@ export class SessionArchiveService {
 
   async upload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
     body: ReadableStream<Uint8Array> | null,
   ): Promise<MultiremiSessionArchive> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "ready") return archive;
     if (archive.status === "superseded") {
       throw new SessionArchiveError("session archive has been superseded", 409, "archive_superseded");
     }
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (!body) throw new SessionArchiveError("archive body is required");
 
     const finalPath = await this.resolveArchivePath(archive.relativePath, true);
@@ -406,13 +520,16 @@ export class SessionArchiveService {
 
   preflightUpload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): void {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
+    if (!isV2Format(archive.format) && archive.status !== "ready") {
+      throw this.unsupportedFormat(archive.format);
+    }
     if (archive.status !== "pending" && archive.status !== "uploading") {
       throw new SessionArchiveError(
         `cannot upload archive in ${archive.status} state`,
@@ -424,15 +541,16 @@ export class SessionArchiveService {
 
   failUpload(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
     error: string,
   ): MultiremiSessionArchive {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "failed") return archive;
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     if (archive.status !== "pending" && archive.status !== "uploading") {
       throw new SessionArchiveError(
         `cannot fail archive upload in ${archive.status} state`,
@@ -458,14 +576,15 @@ export class SessionArchiveService {
 
   async complete(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): Promise<MultiremiSessionArchive> {
-    const key = JSON.stringify([runtimeId, issueId, archiveId, attemptCount]);
+    const subject = resolveSessionArchiveScope(scope);
+    const key = JSON.stringify([runtimeId, subject.kind, subject.id, archiveId, attemptCount]);
     const existing = this.completionAttempts.get(key);
     if (existing) return await existing;
-    const completion = this.completeAttempt(runtimeId, issueId, archiveId, attemptCount);
+    const completion = this.completeAttempt(runtimeId, scope, archiveId, attemptCount);
     this.completionAttempts.set(key, completion);
     try {
       return await completion;
@@ -476,11 +595,11 @@ export class SessionArchiveService {
 
   private async completeAttempt(
     runtimeId: string,
-    issueId: string,
+    scope: SessionArchiveScope,
     archiveId: string,
     attemptCount: number,
   ): Promise<MultiremiSessionArchive> {
-    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, issueId);
+    let archive = assertArchiveScope(this.store.getSessionArchive(archiveId), runtimeId, scope);
     archive = this.requireWritableArchive(archive, runtimeId);
     this.assertCurrentAttempt(archive, attemptCount);
     if (archive.status === "ready") return archive;
@@ -491,19 +610,85 @@ export class SessionArchiveService {
         "session_archive_invalid_state",
       );
     }
+    if (!isV2Format(archive.format)) throw this.unsupportedFormat(archive.format);
     const finalPath = await this.resolveArchivePath(archive.relativePath, false);
     const partialPath = this.partialPath(finalPath, attemptCount);
+    let promotedFile: FileIdentity | null = null;
+    let manifestTempPath: string | null = null;
     try {
-      const actual = await this.promoteVerifiedPartial(partialPath, finalPath, archive);
-      await this.writeManifest(finalPath, archive, actual.sizeBytes);
+      // Validate the attempt-owned partial before publishing it at the shared
+      // final path. A rejected member must never leave a final archive behind.
+      const ingestPath = await lstat(partialPath).then(() => partialPath, (error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return finalPath;
+        throw error;
+      });
+      this.assertArchiveHash(await hashFile(ingestPath, archive.sizeBytes), archive);
+      const ingest = await this.validateArchiveIngest(ingestPath, archive);
+      for (const trace of ingest.traces) {
+        const taskId = trace.task_id;
+        if (!taskId) throw new SessionArchiveTraceOwnershipError(trace.path);
+        const task = this.store.getTask(taskId);
+        const belongs = archive.subjectKind === "issue"
+          ? task?.issueId === archive.subjectId
+          : archive.subjectKind === "chat"
+            ? task?.chatSessionId === archive.subjectId
+            : taskId === archive.subjectId
+              && task?.issueId == null && task?.chatSessionId == null;
+        const taskRuntime = task?.runtimeId ? this.store.getRuntime(task.runtimeId) : null;
+        const archiveRuntime = this.store.getRuntime(archive.runtimeId);
+        const sameDaemon = Boolean(nonEmptyString(taskRuntime?.daemonId) && nonEmptyString(archiveRuntime?.daemonId)
+          && taskRuntime.daemonId === archiveRuntime.daemonId);
+        if (!task || !belongs || task.workspaceId !== archive.workspaceId
+          || !taskRuntime || !archiveRuntime
+          || (task.runtimeId !== archive.runtimeId && !sameDaemon)) {
+          throw new SessionArchiveTraceOwnershipError(taskId);
+        }
+      }
+      const stillOwned = this.store.getSessionArchive(archive.id);
+      if (stillOwned?.attemptCount !== attemptCount || stillOwned.status !== "uploading"
+        || stillOwned.runtimeId !== runtimeId) {
+        throw new SessionArchiveError(
+          "session archive completion attempt was superseded", 409, "session_archive_attempt_conflict",
+        );
+      }
+      // Publish only after the blob, every member and every trace owner pass.
+      const promotion = await this.preparePromotion(partialPath, finalPath, archive);
+      // 2. Derive pointers and durably write the manifest temp file outside the lock.
+      const pointers = buildTracePointers(archive, ingest.traces);
+      manifestTempPath = await this.writeManifest(finalPath, archive, promotion.sizeBytes);
+      const published = this.store.withLockedSessionArchiveSharedPaths(
+        archive.id, runtimeId, attemptCount, "promote", () => {
+          const partial = this.fileIdentitySync(partialPath);
+          const existing = this.fileIdentitySync(finalPath);
+          const reuse = existing && promotion.verifiedFinal
+            && sameFileIdentity(existing, promotion.verifiedFinal);
+          if (reuse) {
+            if (partial && promotion.partial && sameFileIdentity(partial, promotion.partial)) unlinkSync(partialPath);
+          } else if (partial && promotion.partial && sameFileIdentity(partial, promotion.partial)) {
+            renameSync(partialPath, finalPath);
+            promotedFile = partial;
+          } else {
+            throw new SessionArchiveError("archive upload attempt changed", 409, "session_archive_attempt_conflict");
+          }
+          renameSync(manifestTempPath!, join(dirname(finalPath), "manifest.json"));
+          manifestTempPath = null;
+          return true;
+        },
+      );
+      if (!published) throw new SessionArchiveError(
+        "session archive completion attempt was superseded", 409, "session_archive_attempt_conflict",
+      );
       await this.syncDirectory(dirname(finalPath));
-      const ready = this.store.markSessionArchiveReadyAttempt(
+      // 3. `ready` and the pointers land together; a reader can never see one
+      //    without the other.
+      const completed = this.store.completeSessionArchiveWithTracePointers(
         archive.id,
         runtimeId,
         attemptCount,
-        actual.sizeBytes,
+        promotion.sizeBytes,
+        pointers,
       );
-      if (!ready) {
+      if (!completed) {
         const current = this.store.getSessionArchive(archive.id);
         if (
           current?.status === "ready"
@@ -518,7 +703,7 @@ export class SessionArchiveService {
           "session_archive_attempt_conflict",
         );
       }
-      return ready;
+      return completed.archive;
     } catch (error) {
       const current = this.store.getSessionArchive(archive.id);
       if (
@@ -535,57 +720,154 @@ export class SessionArchiveService {
         attemptCount,
         message,
       );
-      await this.cleanupExhaustedPartials(failed);
+      try {
+        await this.cleanupFailedPromotion(finalPath, archive, attemptCount, promotedFile);
+      } catch (cleanupError) {
+        log.warn(`Failed to clean Session archive shared paths for ${archive.id}: ${String(cleanupError)}`);
+      }
+      if (manifestTempPath) await unlink(manifestTempPath).catch((cleanupError) => {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT")
+          log.warn(`Failed to clean Session archive manifest temp for ${archive.id}: ${String(cleanupError)}`);
+      });
+      if (failed) await unlink(partialPath).catch((cleanupError) => {
+        if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT")
+          log.warn(`Failed to clean Session archive partial for ${archive.id}: ${String(cleanupError)}`);
+      });
+      await this.cleanupExhaustedPartials(failed).catch((cleanupError) => {
+        log.warn(`Failed to clean exhausted Session archive partials for ${archive.id}: ${String(cleanupError)}`);
+      });
+      if (error instanceof SessionArchiveTraceOwnershipError) {
+        throw new SessionArchiveError(error.message, 422, "session_archive_trace_ownership_mismatch");
+      }
       throw error;
     }
   }
 
-  private async promoteVerifiedPartial(
+  /**
+   * Parse the central directory and cross-check `index.json` member by member.
+   *
+   * Every offset, size and digest in the index must match the container, and
+   * trace members are hashed from their bytes. Failure is terminal for the
+   * attempt: it throws, and the caller marks the row `failed` with the reason.
+   */
+  private async validateArchiveIngest(
+    finalPath: string,
+    archive: MultiremiSessionArchive,
+  ): Promise<ArchiveIngestVerification> {
+    const handle = await open(finalPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) {
+        throw new SessionArchiveError("archive is not a regular file", 409, "unsafe_archive_path");
+      }
+      const verification = await verifyArchiveIngest(handle);
+      if (
+        verification.index.subject.kind !== archive.subjectKind
+        || verification.index.subject.id !== archive.subjectId
+      ) {
+        throw new SessionArchiveIngestError(
+          `archive subject mismatch: index ${verification.index.subject.kind}:${verification.index.subject.id}, `
+          + `expected ${archive.subjectKind}:${archive.subjectId}`,
+        );
+      }
+      // The row was created with a declared revision before any bytes existed.
+      // Recompute it from the manifest the daemon actually wrote: a mismatch
+      // means the uploaded content is not the snapshot the control plane
+      // agreed to, and the GC barrier must never accept it.
+      if (verification.sourceRevision !== archive.sourceRevision) {
+        throw new SessionArchiveIngestError(
+          `archive content revision mismatch: manifest digest ${verification.sourceRevision}, `
+          + `declared ${archive.sourceRevision}`,
+        );
+      }
+      return verification;
+    } catch (error) {
+      if (error instanceof SessionArchiveIngestError) {
+        throw new SessionArchiveError(error.message, 422, error.code);
+      }
+      throw error;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+
+  private async preparePromotion(
     partialPath: string,
     finalPath: string,
     archive: MultiremiSessionArchive,
-  ): Promise<{ sha256: string; sizeBytes: number }> {
-    let partialHash: { sha256: string; sizeBytes: number } | null = null;
+  ): Promise<{ sizeBytes: number; partial: FileIdentity | null; verifiedFinal: FileIdentity | null }> {
+    let partialIdentity: FileIdentity | null = null;
     try {
       const partialStat = await lstat(partialPath);
       if (!partialStat.isFile() || partialStat.isSymbolicLink()) {
         throw new SessionArchiveError("partial archive is not a regular file", 409, "unsafe_archive_path");
       }
-      partialHash = await hashFile(partialPath, archive.sizeBytes);
-      this.assertArchiveHash(partialHash, archive);
+      partialIdentity = { dev: partialStat.dev, ino: partialStat.ino };
+      this.assertArchiveHash(await hashFile(partialPath, archive.sizeBytes), archive);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const finalHash = await this.verifiedFinalHash(finalPath, archive);
-      if (!finalHash) throw new Error("verified archive unexpectedly missing");
-      return finalHash;
     }
-
-    let finalHash: { sha256: string; sizeBytes: number } | null = null;
+    let verifiedFinal: FileIdentity | null = null;
     try {
-      finalHash = await this.verifiedFinalHash(finalPath, archive, false);
+      const stats = await lstat(finalPath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new SessionArchiveError("archive destination is unsafe", 409, "unsafe_archive_path");
+      }
+      if (await this.verifiedFinalHash(finalPath, archive, false)) {
+        verifiedFinal = { dev: stats.dev, ino: stats.ino };
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    if (finalHash) {
-      await unlink(partialPath).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      });
-      return finalHash;
-    }
+    if (!partialIdentity && !verifiedFinal) throw new SessionArchiveError(
+      "verified archive is missing", 409, "session_archive_attempt_conflict",
+    );
+    return { sizeBytes: archive.sizeBytes, partial: partialIdentity, verifiedFinal };
+  }
 
+  private fileIdentitySync(path: string): FileIdentity | null {
     try {
-      // The control-plane attempt fence makes replacement safe. This also
-      // repairs a corrupt object after verify -> retry.
-      await rename(partialPath, finalPath);
-      return partialHash;
+      const stats = lstatSync(path);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new SessionArchiveError("archive path is unsafe", 409, "unsafe_archive_path");
+      }
+      return { dev: stats.dev, ino: stats.ino };
     } catch (error) {
-      // Another Server process may have promoted this exact attempt between
-      // our hash and rename. Treat its matching immutable object as success.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const concurrentHash = await this.verifiedFinalHash(finalPath, archive);
-      if (!concurrentHash) throw new Error("verified archive unexpectedly missing");
-      return concurrentHash;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
+  }
+
+  private onCleanupLocked?: () => void;
+
+  private async cleanupFailedPromotion(
+    finalPath: string,
+    archive: MultiremiSessionArchive,
+    attemptCount: number,
+    promotedFile: FileIdentity | null,
+  ): Promise<void> {
+    const manifestPath = join(dirname(finalPath), "manifest.json");
+    this.store.withLockedSessionArchiveSharedPaths(
+      archive.id, archive.runtimeId, attemptCount, "cleanup", () => {
+        let ownedManifest = false;
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+          ownedManifest = manifest.archive_id === archive.id && manifest.attempt_count === attemptCount;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+        }
+        const manifestIdentity = ownedManifest ? this.fileIdentitySync(manifestPath) : null;
+        const finalIdentity = promotedFile ? this.fileIdentitySync(finalPath) : null;
+        this.onCleanupLocked?.();
+        if (manifestIdentity && sameFileIdentity(this.fileIdentitySync(manifestPath) ?? { dev: -1, ino: -1 }, manifestIdentity)) {
+          unlinkSync(manifestPath);
+        }
+        if (promotedFile && finalIdentity && sameFileIdentity(finalIdentity, promotedFile)
+          && sameFileIdentity(this.fileIdentitySync(finalPath) ?? { dev: -1, ino: -1 }, promotedFile)) {
+          unlinkSync(finalPath);
+        }
+      },
+    );
   }
 
   private assertArchiveHash(
@@ -720,8 +1002,26 @@ export class SessionArchiveService {
     runtimeId: string,
   ): MultiremiSessionArchive {
     const writable = this.store.touchWritableSessionArchive(archive.id, runtimeId);
-    if (!writable) throw this.issueLifecycleClosed();
+    if (!writable) throw this.subjectNotWritable(archive.subjectKind);
     return writable;
+  }
+
+  private subjectNotWritable(subjectKind: MultiremiSessionArchiveSubjectKind): SessionArchiveError {
+    if (subjectKind === "issue") return this.issueLifecycleClosed();
+    return new SessionArchiveError(
+      `${subjectKind} session archive is not writable: the Runtime no longer owns this subject`,
+      409,
+      "session_archive_subject_not_writable",
+    );
+  }
+
+  private unsupportedFormat(format: string): SessionArchiveError {
+    return new SessionArchiveError(
+      `session archive format ${format} is no longer accepted for new uploads; `
+      + `upgrade the daemon to upload ${SESSION_ARCHIVE_FORMAT_V2}`,
+      409,
+      "session_archive_format_unsupported",
+    );
   }
 
   private issueLifecycleClosed(): SessionArchiveError {
@@ -1112,13 +1412,17 @@ export class SessionArchiveService {
     archivePath: string,
     archive: MultiremiSessionArchive,
     sizeBytes: number,
-  ): Promise<void> {
+  ): Promise<string> {
     const manifestPath = join(dirname(archivePath), "manifest.json");
     const partialPath = `${manifestPath}.${archive.attemptCount}.${randomUUID()}.partial`;
     const payload = `${JSON.stringify({
       schema_version: 1,
       archive_id: archive.id,
+      attempt_count: archive.attemptCount,
       workspace_id: archive.workspaceId,
+      subject_kind: archive.subjectKind,
+      subject_id: archive.subjectId,
+      format: archive.format,
       issue_id: archive.issueId,
       runtime_id: archive.runtimeId,
       daemon_id: archive.daemonId,
@@ -1138,7 +1442,7 @@ export class SessionArchiveService {
     } finally {
       await handle.close();
     }
-    await rename(partialPath, manifestPath);
+    return partialPath;
   }
 
   private async ensureRoot(): Promise<string> {

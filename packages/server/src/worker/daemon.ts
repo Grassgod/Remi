@@ -194,7 +194,7 @@ import { ownedDirectoryRemovalSupport } from "@daemon/agent-runtime/workspace/sa
 import {
   prepareIssueSessionArchive,
   readIssueSessionArchiveReceipt,
-  removePreparedIssueSessionArchive,
+  removePreparedSessionArchive,
   writeIssueSessionArchiveReceipt,
 } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { SshMeshManager } from "@daemon/ssh-mesh.js";
@@ -1795,6 +1795,7 @@ export class MultiremiDaemon {
     if (ack.pending_feishu_outbound) {
       this.queueFeishuBotOutbound(runtimeId, ack.pending_feishu_outbound);
     }
+    for (const delivery of ack.pending_feishu_outbounds ?? []) this.queueFeishuBotOutbound(runtimeId, delivery);
     if (ack.ssh_mesh) {
       await this.sshMeshManager.reconcile(ack.ssh_mesh);
     }
@@ -2088,9 +2089,14 @@ export class MultiremiDaemon {
         ),
         uploadImage: async (image) => (await supervisor.uploadImage(image.buffer)).imageKey,
       });
-      const body = await rewriteMarkdownImages(delivery.body, resolveImage, {
-        publicUrl: this.options.serverUrl,
-      });
+      let body = delivery.body;
+      if (delivery.kind === "result_card") {
+        const card = JSON.parse(body);
+        card.text = await rewriteMarkdownImages(card.text, resolveImage, { publicUrl: this.options.serverUrl });
+        body = JSON.stringify(card);
+      } else {
+        body = await rewriteMarkdownImages(body, resolveImage, { publicUrl: this.options.serverUrl });
+      }
       await deliverFeishuOutbound(delivery, {
         signal,
         prepareMention: openId => this.client.prepareFeishuBotOutboundMention(runtimeId, delivery.id, delivery.claimToken, openId),
@@ -2863,12 +2869,13 @@ export class MultiremiDaemon {
     this.assertWorkspaceRootOwner();
     const runtimeId = this.options.runtimeId;
     if (!runtimeId) throw new Error("Session archive requires a registered Runtime");
+    const subject = { kind: "issue" as const, id: issueId };
     const receipt = await readIssueSessionArchiveReceipt(workspaceDir);
     let preflightStatus: MultiremiDaemonSessionArchiveStatus | null = null;
     if (!forceFreshSnapshot && receipt?.issueId === issueId) {
-      const status = await this.client.getIssueSessionArchiveStatus(
+      const status = await this.client.getSessionArchiveStatus(
         runtimeId,
-        issueId,
+        subject,
         receipt.sourceRevision,
         receipt.sha256,
       );
@@ -2885,7 +2892,7 @@ export class MultiremiDaemon {
       }
       preflightStatus = status;
     }
-    preflightStatus ??= await this.client.getIssueSessionArchiveStatus(runtimeId, issueId);
+    preflightStatus ??= await this.client.getSessionArchiveStatus(runtimeId, subject);
     if (this.shouldDeferIssueSessionArchive(issueId, preflightStatus.latest)) {
       return null;
     }
@@ -2895,6 +2902,7 @@ export class MultiremiDaemon {
     try {
       this.assertWorkspaceRootOwner();
       prepared = await prepareIssueSessionArchive(workspaceDir, {
+        issueId,
         maxSourceBytes: this.options.sessionArchiveMaxSourceBytes,
         ...(runtimeStorageRoot
           ? {
@@ -2907,7 +2915,7 @@ export class MultiremiDaemon {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
-        await this.client.reportIssueSessionArchiveFailure(runtimeId, issueId, {
+        await this.client.reportSessionArchiveFailure(runtimeId, subject, {
           stage: "prepare",
           error: message,
         });
@@ -2920,9 +2928,9 @@ export class MultiremiDaemon {
     }
     try {
       log.debug(`Checking Issue Session archive status for ${issueId}`);
-      const status = await this.client.getIssueSessionArchiveStatus(
+      const status = await this.client.getSessionArchiveStatus(
         runtimeId,
-        issueId,
+        subject,
         prepared.sourceRevision,
         prepared.sha256,
         forceFreshSnapshot,
@@ -2933,7 +2941,7 @@ export class MultiremiDaemon {
           status.latest?.source_revision === MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION
           && (status.latest.status === "failed" || status.latest.status === "pending")
         ) {
-          await this.client.initIssueSessionArchive(runtimeId, issueId, {
+          await this.client.initSessionArchive(runtimeId, subject, {
             sourceRevision: prepared.sourceRevision,
             sha256: prepared.sha256,
             sizeBytes: prepared.sizeBytes,
@@ -2961,7 +2969,7 @@ export class MultiremiDaemon {
       }
 
       log.debug(`Initializing Issue Session archive for ${issueId}`);
-      const initialized = await this.client.initIssueSessionArchive(runtimeId, issueId, {
+      const initialized = await this.client.initSessionArchive(runtimeId, subject, {
         sourceRevision: prepared.sourceRevision,
         sha256: prepared.sha256,
         sizeBytes: prepared.sizeBytes,
@@ -2987,16 +2995,16 @@ export class MultiremiDaemon {
         };
       }
       log.debug(`Uploading Issue Session archive for ${issueId}`);
-      await this.client.uploadIssueSessionArchive(
+      await this.client.uploadSessionArchive(
         runtimeId,
-        issueId,
+        subject,
         initialized.archive.id,
         prepared.archivePath,
       );
       log.debug(`Issue Session archive uploaded for ${issueId}`);
-      const completed = await this.client.completeIssueSessionArchive(
+      const completed = await this.client.completeSessionArchive(
         runtimeId,
-        issueId,
+        subject,
         initialized.archive.id,
       );
       if (completed.status !== "ready") return null;
@@ -3013,7 +3021,7 @@ export class MultiremiDaemon {
         sha256: prepared.sha256,
       };
     } finally {
-      await removePreparedIssueSessionArchive(prepared.archivePath);
+      await removePreparedSessionArchive(prepared.archivePath);
     }
   }
 

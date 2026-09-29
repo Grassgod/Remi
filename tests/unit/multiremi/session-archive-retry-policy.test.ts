@@ -64,6 +64,14 @@ describe("Session archive retry policy", () => {
     expect(isSessionArchiveRetryExhausted(7, policy)).toBe(true);
   });
 
+  it("restarts backoff and exhaustion relative to a manual retry base", () => {
+    const first = nextSessionArchiveRetryAt("sar_sequence", 1, policy, now);
+    expect(nextSessionArchiveRetryAt("sar_sequence", 7, policy, now, 6)).toBe(first);
+    expect(isSessionArchiveRetryExhausted(11, policy, 6)).toBe(false);
+    expect(isSessionArchiveRetryExhausted(12, policy, 6)).toBe(true);
+    expect(isSessionArchiveRetryExhausted(6, policy)).toBe(true);
+  });
+
   it("reads safe environment overrides", () => {
     process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_BASE_MS = "2000";
     process.env.MULTIREMI_SESSION_ARCHIVE_RETRY_MAX_MS = "120000";

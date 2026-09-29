@@ -1,20 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 776,
+    "routeCount": 795,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 548,
+      "compat": 567,
       "root": 16
     },
-    "getRoutes": 329,
-    "getRoutesWithBody": 326,
+    "getRoutes": 338,
+    "getRoutesWithBody": 334,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
+      "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 447,
+    "mutationRoutes": 457,
     "mutationRoutesCovered": 283,
     "flows": [
       "agents-compat",
@@ -186,11 +187,15 @@
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content",
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content",
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
@@ -383,8 +388,11 @@
     "GET /api/scm/capabilities",
     "GET /api/sessions/:sessionId",
     "GET /api/sessions/:sessionId/inherited-context",
+    "GET /api/sessions/:sessionId/log",
+    "GET /api/sessions/:sessionId/log/locate",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
+    "GET /api/shares/:token/tasks/:task_id/trace",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -396,9 +404,11 @@
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
+    "GET /api/tasks/:id/trace",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -540,6 +550,10 @@
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
     "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result",
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/failure",
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/failure",
+    "POST /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/commands/claim",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
@@ -562,6 +576,10 @@
     "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/models/claim",
     "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/complete",
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/failure",
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/failure",
+    "POST /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/init",
     "POST /api/daemon/runtimes/:runtimeId/tasks/claim",
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
     "POST /api/daemon/runtimes/:runtimeId/update/claim",
@@ -797,8 +815,10 @@
     "PUT /api/agents/:id/supervisor",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
+    "PUT /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content",
     "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "PUT /api/daemon/runtimes/:runtimeId/models",
+    "PUT /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
     "PUT /api/issues/:issueId/change-requests/:changeRequestId",
@@ -945,11 +965,15 @@
     "GET /api/daemon/runtimes/:id/claude-profile-key",
     "GET /api/daemon/runtimes/:id/codex-profile-key",
     "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content",
+    "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards",
     "GET /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/attachments/:attachmentId",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
     "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content",
+    "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/status",
     "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
     "GET /api/daemon/ssh-mesh/config",
     "GET /api/daemon/tasks/:taskId/gc-check",
@@ -1142,8 +1166,11 @@
     "GET /api/scm/capabilities",
     "GET /api/sessions/:sessionId",
     "GET /api/sessions/:sessionId/inherited-context",
+    "GET /api/sessions/:sessionId/log",
+    "GET /api/sessions/:sessionId/log/locate",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
+    "GET /api/shares/:token/tasks/:task_id/trace",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -1155,9 +1182,11 @@
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:id/inspection",
     "GET /api/tasks/:id/steer",
+    "GET /api/tasks/:id/trace",
     "GET /api/tasks/:taskId/messages",
     "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
+    "GET /api/trace/ws",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
     "GET /api/workspaces/:id/bot-menu",
@@ -12249,6 +12278,28 @@
             "allowed": true
           },
           {
+            "id": "session.log.locate",
+            "command": "remi session log locate",
+            "capability": "session.log.locate",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "session.log.window",
+            "command": "remi session log window",
+            "capability": "session.log.window",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
             "id": "session.message.create",
             "command": "remi session message create",
             "capability": "session.message.create",
@@ -12395,6 +12446,17 @@
             "id": "share.get",
             "command": "remi share get",
             "capability": "share.get",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "share.trace.read",
+            "command": "remi share trace read",
+            "capability": "share.trace.read",
             "outputs": [
               "table",
               "json",
@@ -12700,17 +12762,6 @@
             "allowed": true
           },
           {
-            "id": "task.message.list",
-            "command": "remi task message list",
-            "capability": "task.message.list",
-            "outputs": [
-              "table",
-              "json",
-              "jsonl"
-            ],
-            "allowed": true
-          },
-          {
             "id": "task.messages",
             "command": "remi issue run-messages",
             "capability": "task.messages",
@@ -12780,6 +12831,17 @@
             "id": "task.steer.list",
             "command": "remi task steer list",
             "capability": "task.steer.list",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "task.trace.read",
+            "command": "remi task trace read",
+            "capability": "task.trace.read",
             "outputs": [
               "table",
               "json",
@@ -14091,6 +14153,25 @@
       }
     },
     {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content",
+      "route": "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/:archiveId/content",
+      "path": "/api/daemon/runtimes/rt_snapshot/chats/cht_snapshot/session-archives/sar_snapshot/content",
+      "status": 405,
+      "body": {
+        "error": "method not allowed"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/status",
+      "route": "GET /api/daemon/runtimes/:runtimeId/chats/:sessionId/session-archives/status",
+      "path": "/api/daemon/runtimes/rt_snapshot/chats/cht_snapshot/session-archives/status",
+      "status": 409,
+      "body": {
+        "error": "chat session is not owned by this Runtime",
+        "code": "session_archive_subject_not_writable"
+      }
+    },
+    {
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/feishu-bot",
       "route": "GET /api/daemon/runtimes/:runtimeId/feishu-bot",
       "path": "/api/daemon/runtimes/rt_snapshot/feishu-bot",
@@ -14136,6 +14217,27 @@
       "status": 404,
       "body": {
         "error": "issue archive scope not found"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content",
+      "route": "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/:archiveId/content",
+      "path": "/api/daemon/runtimes/rt_snapshot/tasks/tsk_snapshot/session-archives/sar_snapshot/content",
+      "status": 405,
+      "body": {
+        "error": "method not allowed"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/status",
+      "route": "GET /api/daemon/runtimes/:runtimeId/tasks/:taskId/session-archives/status",
+      "path": "/api/daemon/runtimes/rt_snapshot/tasks/tsk_snapshot/session-archives/status",
+      "status": 200,
+      "body": {
+        "latest": null,
+        "latest_ready": null,
+        "requested_ready": null,
+        "gc_ready": false
       }
     },
     {
@@ -22863,6 +22965,8 @@
             "seq": 1,
             "created_at": "<timestamp>"
           },
+          "tool_call_count": 0,
+          "event_count": 1,
           "message_type_histogram": [
             {
               "type": "assistant",
@@ -23883,6 +23987,100 @@
       }
     },
     {
+      "key": "get-sweep GET /api/sessions/:sessionId/log",
+      "route": "GET /api/sessions/:sessionId/log",
+      "path": "/api/sessions/ise_snapshot/log",
+      "status": 200,
+      "body": {
+        "entries": [
+          {
+            "session_id": "ise_snapshot",
+            "seq": 0,
+            "id": "head_ise_snapshot",
+            "kind": "head",
+            "visibility": "shown",
+            "author_type": "system",
+            "author_id": null,
+            "task_id": null,
+            "body_md": "Snapshot issue\n\nIssue used by the snapshot",
+            "body_html": null,
+            "render_version": null,
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {
+              "title": "Snapshot issue"
+            },
+            "revision": 1,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          },
+          {
+            "session_id": "ise_snapshot",
+            "seq": 2,
+            "id": "sevt_u6dzsg7stnai",
+            "kind": "message",
+            "visibility": "shown",
+            "author_type": "member",
+            "author_id": "mem_snapshot_one",
+            "task_id": null,
+            "body_md": "Snapshot session message",
+            "body_html": null,
+            "render_version": null,
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {},
+            "revision": 1,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          },
+          {
+            "session_id": "ise_snapshot",
+            "seq": 3,
+            "id": "sevt_5nowh2h5qvvj",
+            "kind": "result_published",
+            "visibility": "shown",
+            "author_type": "system",
+            "author_id": null,
+            "task_id": null,
+            "body_md": "Snapshot session result body",
+            "body_html": null,
+            "render_version": null,
+            "parent_id": null,
+            "resolved_at": null,
+            "resolved_by_type": null,
+            "resolved_by_id": null,
+            "metadata": {
+              "result_id": "sres_y5ezs4p8gkp8",
+              "title": "Snapshot result"
+            },
+            "revision": 1,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "deleted_at": null
+          }
+        ],
+        "head_seq": 3,
+        "log_version": 6,
+        "has_more_before": false,
+        "has_more_after": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/sessions/:sessionId/log/locate",
+      "route": "GET /api/sessions/:sessionId/log/locate",
+      "path": "/api/sessions/ise_snapshot/log/locate",
+      "status": 400,
+      "body": {
+        "error": "id is required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/shares/:token",
       "route": "GET /api/shares/:token",
       "path": "/api/shares/awt_1ut6x0i244sp2mewms",
@@ -23895,6 +24093,15 @@
       "key": "get-sweep GET /api/shares/:token/attachments/:attachmentId/content",
       "route": "GET /api/shares/:token/attachments/:attachmentId/content",
       "path": "/api/shares/awt_1ut6x0i244sp2mewms/attachments/att_snapshot/content",
+      "status": 401,
+      "body": {
+        "error": "login required"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/shares/:token/tasks/:task_id/trace",
+      "route": "GET /api/shares/:token/tasks/:task_id/trace",
+      "path": "/api/shares/awt_1ut6x0i244sp2mewms/tasks/tsk_snapshot/trace",
       "status": 401,
       "body": {
         "error": "login required"
@@ -24124,6 +24331,8 @@
             "seq": 1,
             "created_at": "<timestamp>"
           },
+          "tool_call_count": 0,
+          "event_count": 1,
           "message_type_histogram": [
             {
               "type": "assistant",
@@ -24175,6 +24384,25 @@
       }
     },
     {
+      "key": "get-sweep GET /api/tasks/:id/trace",
+      "route": "GET /api/tasks/:id/trace",
+      "path": "/api/tasks/tsk_snapshot/trace",
+      "status": 200,
+      "body": {
+        "events": [],
+        "next_after_seq": 0,
+        "head": 0,
+        "eof": true,
+        "closed": false,
+        "source": "daemon",
+        "state": "unreachable",
+        "reason": "daemon_unreachable",
+        "runtime_id": "rt_snapshot",
+        "runtime_name": "snapshot-runtime",
+        "retryable": true
+      }
+    },
+    {
       "key": "get-sweep GET /api/tasks/:taskId/messages",
       "route": "GET /api/tasks/:taskId/messages",
       "path": "/api/tasks/tsk_snapshot/messages",
@@ -24220,6 +24448,17 @@
           "created_at": "<timestamp>"
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/trace/ws",
+      "route": "GET /api/trace/ws",
+      "path": "/api/trace/ws",
+      "status": 426,
+      "body": {
+        "__body__": {
+          "omitted": "websocket-upgrade route; status recorded only"
+        }
+      }
     },
     {
       "key": "get-sweep GET /api/workspaces",
@@ -25298,7 +25537,26 @@
       "path": "/health",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "streams": 0,
+          "frames": 0,
+          "ring_bytes": 0,
+          "known_heads": 0,
+          "subscriptions": 0,
+          "lagging_subscribers": 0,
+          "flush_p95_ms": 0,
+          "flush_samples": 0,
+          "fill_count": 0,
+          "fill_failures": 0,
+          "hole_waits": 0,
+          "hole_wait_ms": 0,
+          "dropped_frames": 0,
+          "pending_frames": 0,
+          "evicted_streams": 0
+        }
       }
     },
     {
@@ -25338,7 +25596,14 @@
       "path": "/readyz",
       "status": 200,
       "body": {
-        "ok": true
+        "ok": true,
+        "hub": {
+          "role": "all",
+          "transport": "local",
+          "peer_link": false,
+          "fill_count": 0,
+          "hub_hole_wait_ms": 0
+        }
       }
     },
     {

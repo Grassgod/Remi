@@ -522,7 +522,8 @@ remove any alias.
 | `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
 | `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
-| `remi task messages` | `remi task message list` | One-release compatibility alias |
+| `remi task message list` | `remi task trace read` | One-release compatibility alias; `--since` maps to `--after` |
+| `remi task messages` | `remi task trace read` | One-release compatibility alias |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
 | `remi agent edit` | `remi agent update` | One-release compatibility alias |
