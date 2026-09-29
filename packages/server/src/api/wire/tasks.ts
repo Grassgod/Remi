@@ -769,8 +769,17 @@ function appendDaemonClaimBoundIssueLog(
       has_more: shown.length > 100,
     };
   } catch (error) {
-    log.debug(
+    log.warn(
       `Failed to load bound Issue log for claimed task ${task.id}: `
+      + `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  try {
+    store.markBoundIssueLogDelivered(task.id, (response.bound_issue_log as { to_seq: number }).to_seq);
+  } catch (error) {
+    log.warn(
+      `Failed to mark bound Issue log delivered for claimed task ${task.id}: `
       + `${error instanceof Error ? error.message : String(error)}`,
     );
   }

@@ -3005,6 +3005,7 @@ export class TasksRepo {
     const relay = this.relayIssueLane(task);
     if (!relay) return task;
     this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
+    this.ctx.db.run("UPDATE multiremi_tasks SET bound_issue_log_delivered_seq = NULL WHERE id = ?", [task.id]);
     if (this.getBoundIssueLogToSeq(task.id) != null) return task;
     const toSeq = this.ctx.conversationLog().getConversationLogHead(relay.sessionId)?.headSeq ?? 0;
     this.ctx.db.run("UPDATE multiremi_tasks SET bound_issue_log_to_seq = ? WHERE id = ? AND bound_issue_log_to_seq IS NULL", [toSeq, task.id]);
@@ -3017,9 +3018,19 @@ export class TasksRepo {
     return row?.bound_issue_log_to_seq ?? null;
   }
 
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): void {
+    this.ctx.db.run(`UPDATE multiremi_tasks SET bound_issue_log_delivered_seq = ?
+      WHERE id = ? AND bound_issue_log_to_seq = ?`, [toSeq, taskId, toSeq]);
+  }
+
   private promoteRelayIssueLogCursorWithinTransaction(task: MultiremiTask): void {
-    const toSeq = this.getBoundIssueLogToSeq(task.id);
-    if (toSeq == null) return;
+    const row = this.ctx.db.query(`SELECT bound_issue_log_to_seq, bound_issue_log_delivered_seq
+      FROM multiremi_tasks WHERE id = ?`).get(task.id) as {
+        bound_issue_log_to_seq: number | null;
+        bound_issue_log_delivered_seq: number | null;
+      } | null;
+    const toSeq = row?.bound_issue_log_to_seq;
+    if (toSeq == null || row?.bound_issue_log_delivered_seq !== toSeq) return;
     const relay = this.relayIssueLane(task);
     if (!relay) return;
     this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);

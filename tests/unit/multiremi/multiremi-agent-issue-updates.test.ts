@@ -21,6 +21,16 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     return { ...f, agent, issue, session, chat, runtime, lane, reports, legacyRows };
   }
 
+  function claimRelayAfterCompletedIssueRound(f: ReturnType<typeof setup>) {
+    const issueTask = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Issue work" });
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(issueTask.id);
+    f.store.startTask(issueTask.id);
+    f.store.completeTask(issueTask.id, { output: "Issue result" });
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
+    return relay;
+  }
+
   for (const status of ["failed", "cancelled"] as const) {
     it(`reports a ${status} Issue round and advances the cursor only after relay completion`, () => {
       const f = setup();
@@ -89,6 +99,85 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(JSON.parse(nextLog.content_jsonl.split("\n")[0]!).from_seq).toBe(firstLog.to_seq);
   });
 
+  it("keeps the relay cursor when claim log reading fails and replays the unread interval", () => {
+    const f = setup();
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    const toSeq = f.store.getBoundIssueLogToSeq(relay.id)!;
+    expect(toSeq).toBe(3);
+    const unreadSeqs = f.store.listConversationLogShown(f.session.id, { toSeq }).map(entry => entry.seq);
+    const originalList = f.store.listConversationLogShown;
+    f.store.listConversationLogShown = () => { throw new Error("injected relay log read failure"); };
+    let response: Record<string, unknown>;
+    try {
+      response = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!);
+    } finally {
+      f.store.listConversationLogShown = originalList;
+    }
+    expect(response!.bound_issue_log).toBeUndefined();
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "Summary without log" });
+    expect(f.lane()?.cursorSeq).toBe(0);
+
+    const nextRelay = claimRelayAfterCompletedIssueRound(f);
+    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
+      from_seq: number; to_seq: number; content_jsonl: string;
+    };
+    expect(nextLog.from_seq).toBe(0);
+    expect(nextLog.to_seq).toBeGreaterThan(toSeq);
+    const deliveredSeqs = nextLog.content_jsonl.split("\n")
+      .map(line => JSON.parse(line) as { type: string; seq?: number })
+      .filter(line => line.type === "session_event")
+      .map(line => line.seq);
+    expect(deliveredSeqs).toEqual(expect.arrayContaining(unreadSeqs));
+  });
+
+  it("keeps the relay cursor when the claim delivery marker write fails", () => {
+    const f = setup();
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    const originalMark = f.store.markBoundIssueLogDelivered;
+    f.store.markBoundIssueLogDelivered = () => { throw new Error("injected relay delivery marker failure"); };
+    let response: Record<string, unknown>;
+    try {
+      response = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!);
+    } finally {
+      f.store.markBoundIssueLogDelivered = originalMark;
+    }
+    expect(response!.bound_issue_log).toMatchObject({ from_seq: 0, to_seq: 3 });
+    const row = f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+      .get(relay.id) as { bound_issue_log_delivered_seq: number | null };
+    expect(row.bound_issue_log_delivered_seq).toBeNull();
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "Summary after marker failure" });
+    expect(f.lane()?.cursorSeq).toBe(0);
+  });
+
+  it("clears a prior delivery marker before retrying a stale relay claim", () => {
+    const f = setup();
+    const relay = claimRelayAfterCompletedIssueRound(f);
+    const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
+      to_seq: number;
+    };
+    const deliveredSeq = () => (f.db.query("SELECT bound_issue_log_delivered_seq FROM multiremi_tasks WHERE id = ?")
+      .get(relay.id) as { bound_issue_log_delivered_seq: number | null }).bound_issue_log_delivered_seq;
+    expect(deliveredSeq()).toBe(firstLog.to_seq);
+
+    f.db.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", [
+      new Date(Date.now() - 120_000).toISOString(), relay.id,
+    ]);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
+    expect(deliveredSeq()).toBeNull();
+    const originalList = f.store.listConversationLogShown;
+    f.store.listConversationLogShown = () => { throw new Error("injected reclaimed relay read failure"); };
+    try {
+      expect(daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log).toBeUndefined();
+    } finally {
+      f.store.listConversationLogShown = originalList;
+    }
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "Reclaimed without log" });
+    expect(f.lane()?.cursorSeq).toBe(0);
+  });
+
   it("waits for the final active Issue task regardless of its assignee", () => {
     const f = setup();
     const other = f.store.createAgent({ name: "Contributor", provider: "codex", maxConcurrentTasks: 4 });
@@ -154,6 +243,9 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const directory = JSON.parse(log.content_jsonl.split("\n")[1]!) as { entries: Array<{ seq: number }> };
     expect(directory.entries.length).toBeLessThanOrEqual(100);
     expect(log.content_jsonl).not.toContain("Log item 109");
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "Window summary" });
+    expect(f.lane()?.cursorSeq).toBe(log.to_seq);
   }, 30_000);
 
   it("hides system queue rows from user edits, priority, and removal", () => {

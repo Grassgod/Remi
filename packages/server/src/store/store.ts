@@ -5093,6 +5093,10 @@ runMigrations(this.db);
     return this.tasks.getBoundIssueLogToSeq(taskId);
   }
 
+  markBoundIssueLogDelivered(taskId: string, toSeq: number): void {
+    this.tasks.markBoundIssueLogDelivered(taskId, toSeq);
+  }
+
   sendEnvelopeWithinTransaction(
     env: import("@multiremi/contracts/inbox.js").Envelope,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
