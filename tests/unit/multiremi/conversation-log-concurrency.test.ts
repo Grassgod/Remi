@@ -692,6 +692,23 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       assertContiguous(db);
     });
   });
+  // 30 s budget for the two cases below; their assertions are untouched.
+  //
+  // MUL-405 wraps the whole migration run in a session-level advisory lock
+  // (`advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, …)` in `runMigrations`), so
+  // four processes that each open the store serialize on it instead of
+  // migrating in parallel. That is deliberate — the lock is what makes
+  // concurrent startup safe — but it costs wall time here: measured against an
+  // already-migrated database, four concurrent opens take 3666 / 2738 / 1778 /
+  // 925 ms (wall 3.88 s) where the pre-merge tree ran the same four in parallel
+  // at ~930 ms each (wall 1.15 s), and a single open is 976 ms. The file goes
+  // from ~3.2 s to ~5.3 s against the 5 s default budget.
+  //
+  // The budget is not what the cases assert (one migration row, and a
+  // contiguous seq per reader), and the lock is main's design, so the timeout
+  // moves rather than the assertion. Parent ruling on the MUL-402 sync round,
+  // overturnable: if ~950 ms per open on an already-migrated database is judged
+  // a defect in MUL-405's lock, it gets its own issue and this budget reverts.
   it.skipIf(!pgAdminUrl)("Postgres: four processes cold-start the migration", async () => {
     await withPostgres(async (db, url) => {
       resetMigration(db);
@@ -700,13 +717,13 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
     });
-  });
+  }, 30_000);
   it.skipIf(!pgAdminUrl)("Postgres: four processes append without duplicate or missing seq", async () => {
     await withPostgres(async (db, url) => {
       await runFour("pg", url, "append");
       assertContiguous(db);
     });
-  });
+  }, 30_000); // same migration-advisory-lock serialization; see the note above
   it.skipIf(!pgAdminUrl)("Postgres: rolls back a comment and its mirrored log row together", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
