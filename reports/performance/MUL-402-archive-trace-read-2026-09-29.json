@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-09-29T02:10:43.242Z",
+  "generated_at": "2026-09-29T07:52:35.711Z",
   "issue": "MUL-432 item 10 (MUL-402 B8)",
   "commit": {
-    "head": "0f239c6bbd959a089d7881e8b3edb7e25d0bb7f4",
+    "head": "90a31e0b00d63fb9ac38bbf9f18f7a55d788c166",
     "dirty": false
   },
   "machine": {
@@ -10,7 +10,17 @@
     "arch": "x64",
     "cpus": 32,
     "mem_gib": 63,
-    "bun": "1.3.14"
+    "bun": "1.3.14",
+    "loadavg_start": [
+      2.12,
+      2.78,
+      4.05
+    ],
+    "loadavg_end": [
+      4.22,
+      3.97,
+      3.71
+    ]
   },
   "params": {
     "corpus": {
@@ -54,7 +64,7 @@
       "bytes": 2200000
     }
   },
-  "target_source": "PRODUCTION_TRACE_SHAPE.taskRows / taskBytes (MUL-402 cmt_z0j166q2zbx9, snapshot 2026-09-26T19:19Z; ADR 0006)",
+  "target_source": "PRODUCTION_TRACE_SHAPE.taskRows / taskBytes: ADR 0006 (docs/adr/0006-conversation-log-and-daemon-owned-traces.md, from ADR comment cmt_94esdskv3s3y); group, type and seq-gap shape: MUL-402 cmt_z0j166q2zbx9, snapshot 2026-09-26T19:19Z",
   "pools": {
     "prose": {
       "from": "docs, reports **/*.md",
@@ -65,12 +75,12 @@
     "code": {
       "from": "packages/server/src, scripts **/*.ts",
       "files": 291,
-      "bytes": 5804510,
+      "bytes": 5813844,
       "deflate6_ratio": 4.63
     },
     "shell": {
       "from": "cat -n / grep -n / diff / test-run / CLI JSON built from the code and prose pools",
-      "bytes": 4195806,
+      "bytes": 4196097,
       "deflate6_ratio": 2.72
     }
   },
@@ -95,28 +105,28 @@
         "staging": 1032500260,
         "archives": 1032500260,
         "total": 4977543320,
-        "database_path": "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/sqlite/sqlite",
-        "files_path": "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/sqlite"
+        "database_path": "/tmp/m432-s1fix2-bench/sqlite/sqlite",
+        "files_path": "/tmp/m432-s1fix2-bench/sqlite"
       },
       "postgres": {
         "database": 2586565000,
         "staging": 1032500260,
         "archives": 1032500260,
         "total": 4651565520,
-        "database_path": "/tmp/m432-s1fix-pg/data",
-        "files_path": "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/postgres"
+        "database_path": "/tmp/m432-s1fix2-pg/data",
+        "files_path": "/tmp/m432-s1fix2-bench/postgres"
       }
     },
     "by_filesystem": [
       {
         "paths": [
-          "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/sqlite",
-          "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/sqlite/sqlite",
-          "/tmp/m432-s1fix-tmp/m432-bench-vlS0gQ/postgres",
-          "/tmp/m432-s1fix-pg/data"
+          "/tmp/m432-s1fix2-bench/sqlite",
+          "/tmp/m432-s1fix2-bench/sqlite/sqlite",
+          "/tmp/m432-s1fix2-bench/postgres",
+          "/tmp/m432-s1fix2-pg/data"
         ],
         "needed_bytes": 9629108840,
-        "free_bytes": 274727358464,
+        "free_bytes": 277788561408,
         "reserve_bytes": 5368709120,
         "fits": true
       }
@@ -133,16 +143,16 @@
       "reserve_bytes": 5368709120
     }
   },
-  "total_ms": 3114485,
+  "total_ms": 3132027,
   "backends": [
     {
       "backend": "sqlite",
       "database": "SQLite file (WAL), bun:sqlite",
       "corpus": {
-        "generate_ms": 57808,
+        "generate_ms": 59687,
         "rows": {
           "total": 3101379,
-          "bytes": 455445356,
+          "bytes": 455444987,
           "by_type": {
             "thinking": 1852285,
             "tool_use": 371032,
@@ -170,7 +180,7 @@
         "warmup_tasks": 20
       },
       "backfill": {
-        "ms": 279230,
+        "ms": 283246,
         "execution": {
           "chat": {
             "subjects": 11,
@@ -246,54 +256,60 @@
           }
         },
         "archives": 261,
-        "archive_bytes": 211758850
+        "archive_bytes": 211887536
       },
       "disk": {
-        "database_after_generate_bytes": 2408833024,
-        "database_after_backfill_bytes": 2409398272,
-        "archives_bytes": 215539712,
+        "database_after_generate_bytes": 2408849408,
+        "database_after_backfill_bytes": 2409414656,
+        "archives_bytes": 215666688,
         "staging_left_bytes": 4096,
         "database_measure": "SQLite 目录（remi.db + -wal + -shm）按块占用"
       },
       "reconcile_sample": {
-        "ms": 27932,
+        "ms": 26788,
         "sample": {
           "seed": "mul-432-reconcile-sample-v1",
           "requested": 200,
-          "tasks": 174,
+          "tasks": 200,
+          "refilled": 26,
+          "note": null,
           "by_group": {
             "chat": {
               "quota": 50,
               "candidates": 24,
               "sampled": 24,
+              "refill": 0,
               "sampled_render": 24,
               "sampled_none": 0
             },
             "task": {
               "quota": 50,
               "candidates": 213,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 59,
+              "refill": 9,
+              "sampled_render": 59,
               "sampled_none": 0
             },
             "issue_without_archive": {
               "quota": 50,
               "candidates": 151,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 59,
+              "refill": 9,
+              "sampled_render": 59,
               "sampled_none": 0
             },
             "issue_with_archive": {
               "quota": 50,
               "candidates": 142,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 58,
+              "refill": 8,
+              "sampled_render": 58,
               "sampled_none": 0
             }
           }
         },
-        "checked_tasks": 174,
-        "checked_rows": 1154285,
+        "checked_tasks": 200,
+        "checked_rows": 1102953,
         "checked_by_group": {
           "chat": {
             "tasks": 24,
@@ -301,19 +317,19 @@
             "rows": 113238
           },
           "task": {
-            "tasks": 50,
+            "tasks": 59,
             "none": 0,
-            "rows": 393732
+            "rows": 429237
           },
           "issue_without_archive": {
-            "tasks": 50,
+            "tasks": 59,
             "none": 0,
-            "rows": 272596
+            "rows": 294966
           },
           "issue_with_archive": {
-            "tasks": 50,
+            "tasks": 58,
             "none": 0,
-            "rows": 374719
+            "rows": 265512
           }
         },
         "mismatch_total": 0,
@@ -326,6 +342,8 @@
           "index": 0,
           "pointer": 0,
           "pointer_owned_by_daemon_unexpected": 0,
+          "active_pointer": 0,
+          "active_member_unreadable": 0,
           "member_missing": 0,
           "member_unreadable": 0,
           "archive_missing": 0,
@@ -345,7 +363,7 @@
         "violation_samples": []
       },
       "validation_failures": [],
-      "measure_ms": 1111808,
+      "measure_ms": 1099824,
       "tiers": {
         "p50": {
           "tasks": 170,
@@ -371,50 +389,50 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 46552,
-            "p50": 48513,
-            "p90": 50863,
-            "p95": 51184,
-            "p99": 51414,
-            "max": 51438,
+            "min": 46554,
+            "p50": 48511,
+            "p90": 50870,
+            "p95": 51183,
+            "p99": 51410,
+            "max": 51483,
             "mean": 48824
           },
-          "max_bytes_error_vs_jittered_target": 0.00098,
+          "max_bytes_error_vs_jittered_target": 0.001,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 64758,
-            "p50": 67504,
-            "p90": 70158,
-            "p95": 70480,
-            "p99": 70926,
-            "max": 71121,
-            "mean": 67734
+            "min": 64765,
+            "p50": 67515,
+            "p90": 70152,
+            "p95": 70489,
+            "p99": 70954,
+            "max": 71114,
+            "mean": 67726
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 17145,
-            "p50": 21311,
-            "p90": 23335,
-            "p95": 23826,
-            "p99": 25033,
-            "max": 25392,
-            "mean": 21301
+            "min": 16572,
+            "p50": 21415,
+            "p90": 23484,
+            "p95": 23705,
+            "p99": 24775,
+            "max": 24952,
+            "mean": 21348
           },
-          "member_ratio": 3.18,
-          "payload_ratio": 2.51,
+          "member_ratio": 3.17,
+          "payload_ratio": 2.5,
           "envelope_share": 0.279,
           "results": {
             "full_cold": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.887,
-                "p50": 3.477,
-                "p90": 5.074,
-                "p95": 5.436,
-                "p99": 7.956,
-                "max": 8.352,
-                "mean": 3.546
+                "min": 1.864,
+                "p50": 3.469,
+                "p90": 5.102,
+                "p95": 5.66,
+                "p99": 10.177,
+                "max": 11.629,
+                "mean": 3.601
               },
               "calls_per_read": {
                 "n": 170,
@@ -438,23 +456,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -471,13 +489,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.317,
-                "p50": 1.775,
-                "p90": 2.062,
-                "p95": 2.254,
-                "p99": 3.333,
-                "max": 3.665,
-                "mean": 1.833
+                "min": 1.391,
+                "p50": 1.727,
+                "p90": 2.005,
+                "p95": 2.155,
+                "p99": 3.403,
+                "max": 5.491,
+                "mean": 1.79
               },
               "calls_per_read": {
                 "n": 170,
@@ -501,23 +519,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -534,13 +552,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.6,
-                "p50": 2.139,
-                "p90": 3.238,
-                "p95": 3.701,
-                "p99": 4.249,
-                "max": 4.691,
-                "mean": 2.288
+                "min": 1.712,
+                "p50": 2.135,
+                "p90": 3.289,
+                "p95": 3.838,
+                "p99": 4.778,
+                "max": 7.51,
+                "mean": 2.337
               },
               "calls_per_read": {
                 "n": 170,
@@ -564,23 +582,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -597,13 +615,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.273,
-                "p50": 1.722,
-                "p90": 3.108,
-                "p95": 3.198,
-                "p99": 3.614,
-                "max": 3.799,
-                "mean": 1.952
+                "min": 1.315,
+                "p50": 1.711,
+                "p90": 2.818,
+                "p95": 3.195,
+                "p99": 3.721,
+                "max": 4.303,
+                "mean": 1.883
               },
               "calls_per_read": {
                 "n": 170,
@@ -627,23 +645,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -682,34 +700,34 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 404227,
-            "p50": 425937,
-            "p90": 442130,
-            "p95": 444132,
-            "p99": 445954,
-            "max": 446309,
-            "mean": 425994
+            "min": 404209,
+            "p50": 425904,
+            "p90": 442128,
+            "p95": 444131,
+            "p99": 445943,
+            "max": 446318,
+            "mean": 425992
           },
           "max_bytes_error_vs_jittered_target": 0.00098,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 524540,
-            "p50": 553133,
-            "p90": 571266,
-            "p95": 575102,
-            "p99": 577618,
-            "max": 578023,
-            "mean": 553889
+            "min": 524522,
+            "p50": 553364,
+            "p90": 571618,
+            "p95": 574939,
+            "p99": 577378,
+            "max": 577423,
+            "mean": 553900
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 142086,
-            "p50": 170812,
-            "p90": 179419,
-            "p95": 181370,
-            "p99": 184877,
-            "max": 185896,
-            "mean": 170377
+            "min": 143318,
+            "p50": 171092,
+            "p90": 180314,
+            "p95": 182271,
+            "p99": 184819,
+            "max": 184827,
+            "mean": 170597
           },
           "member_ratio": 3.25,
           "payload_ratio": 2.72,
@@ -719,13 +737,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 16.565,
-                "p50": 20.297,
-                "p90": 23.483,
-                "p95": 24.77,
-                "p99": 30.863,
-                "max": 32.573,
-                "mean": 20.778
+                "min": 16.567,
+                "p50": 20.277,
+                "p90": 24.203,
+                "p95": 25.899,
+                "p99": 27.675,
+                "max": 28.403,
+                "mean": 20.771
               },
               "calls_per_read": {
                 "n": 170,
@@ -749,46 +767,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 284172,
-                "p50": 341624,
-                "p90": 358838,
-                "p95": 362740,
-                "p99": 369754,
-                "max": 371792,
-                "mean": 340754
+                "min": 286636,
+                "p50": 342184,
+                "p90": 360628,
+                "p95": 364542,
+                "p99": 369638,
+                "max": 369654,
+                "mean": 341194
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
                 "min": 147456,
                 "p50": 176128,
                 "p90": 188416,
-                "p95": 303104,
+                "p95": 299008,
                 "p99": 311296,
                 "max": 315392,
-                "mean": 185549
+                "mean": 185934
               }
             },
             "full_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 16.297,
-                "p50": 18.562,
-                "p90": 20.379,
-                "p95": 20.72,
-                "p99": 24.38,
-                "max": 27.483,
-                "mean": 18.714
+                "min": 15.72,
+                "p50": 18.534,
+                "p90": 20.712,
+                "p95": 21.493,
+                "p99": 23.168,
+                "max": 25.067,
+                "mean": 18.761
               },
               "calls_per_read": {
                 "n": 170,
@@ -812,23 +830,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 284172,
-                "p50": 341624,
-                "p90": 358838,
-                "p95": 362740,
-                "p99": 369754,
-                "max": 371792,
-                "mean": 340754
+                "min": 286636,
+                "p50": 342184,
+                "p90": 360628,
+                "p95": 364542,
+                "p99": 369638,
+                "max": 369654,
+                "mean": 341194
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -845,13 +863,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 7.504,
-                "p50": 9.455,
-                "p90": 11.025,
-                "p95": 11.546,
-                "p99": 14.348,
-                "max": 14.692,
-                "mean": 9.509
+                "min": 7.291,
+                "p50": 9.337,
+                "p90": 10.66,
+                "p95": 11.17,
+                "p99": 12.447,
+                "max": 12.488,
+                "mean": 9.321
               },
               "calls_per_read": {
                 "n": 170,
@@ -875,46 +893,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
                 "min": 147456,
                 "p50": 176128,
                 "p90": 188416,
-                "p95": 303104,
+                "p95": 299008,
                 "p99": 311296,
                 "max": 315392,
-                "mean": 185549
+                "mean": 185934
               }
             },
             "tail_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 6.645,
-                "p50": 8.479,
-                "p90": 9.964,
-                "p95": 10.544,
-                "p99": 12.5,
-                "max": 12.795,
-                "mean": 8.543
+                "min": 6.706,
+                "p50": 8.333,
+                "p90": 9.888,
+                "p95": 10.202,
+                "p99": 11.63,
+                "max": 14.079,
+                "mean": 8.49
               },
               "calls_per_read": {
                 "n": 170,
@@ -938,23 +956,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -993,50 +1011,50 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 2092321,
-            "p50": 2191455,
-            "p90": 2288951,
-            "p95": 2299555,
-            "p99": 2302922,
-            "max": 2307448,
-            "mean": 2198514
+            "min": 2092350,
+            "p50": 2191486,
+            "p90": 2288982,
+            "p95": 2299543,
+            "p99": 2302944,
+            "max": 2307440,
+            "mean": 2198513
           },
-          "max_bytes_error_vs_jittered_target": 0.00098,
+          "max_bytes_error_vs_jittered_target": 0.00099,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 4845474,
-            "p50": 5061877,
-            "p90": 5214769,
-            "p95": 5254647,
-            "p99": 5292425,
-            "max": 5302310,
-            "mean": 5063714
+            "min": 4844800,
+            "p50": 5061742,
+            "p90": 5215169,
+            "p95": 5254036,
+            "p99": 5293167,
+            "max": 5301899,
+            "mean": 5063754
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 995153,
-            "p50": 1047569,
-            "p90": 1086558,
-            "p95": 1091161,
-            "p99": 1102783,
-            "max": 1102986,
-            "mean": 1049583
+            "min": 999326,
+            "p50": 1048124,
+            "p90": 1087705,
+            "p95": 1091845,
+            "p99": 1107670,
+            "max": 1108540,
+            "mean": 1050049
           },
           "member_ratio": 4.82,
-          "payload_ratio": 2.77,
+          "payload_ratio": 2.76,
           "envelope_share": 0.566,
           "results": {
             "full_cold": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2768.488,
-                "p50": 3135.535,
-                "p90": 3391.129,
-                "p95": 3480.953,
-                "p99": 3564.141,
-                "max": 3647.675,
-                "mean": 3150.576
+                "min": 2740.097,
+                "p50": 3090.571,
+                "p90": 3415.616,
+                "p95": 3479.734,
+                "p99": 3605.449,
+                "max": 3617.705,
+                "mean": 3117.31
               },
               "calls_per_read": {
                 "n": 170,
@@ -1060,46 +1078,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 33963110,
-                "p50": 36865584,
-                "p90": 39257814,
-                "p95": 39700188,
-                "p99": 40534795,
-                "max": 40810482,
-                "mean": 37056154
+                "min": 34113186,
+                "p50": 36929736,
+                "p90": 39184200,
+                "p95": 39804119,
+                "p99": 40671769,
+                "max": 41015980,
+                "mean": 37072852
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
-                "min": 999424,
+                "min": 1003520,
                 "p50": 1056768,
-                "p90": 1097728,
+                "p90": 1101824,
                 "p95": 1511424,
                 "p99": 1609728,
-                "max": 1626112,
-                "mean": 1088163
+                "max": 1634304,
+                "mean": 1088717
               }
             },
             "full_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2751.493,
-                "p50": 3128.896,
-                "p90": 3380.214,
-                "p95": 3429.307,
-                "p99": 3601.074,
-                "max": 3607.566,
-                "mean": 3141.267
+                "min": 2761.521,
+                "p50": 3060.155,
+                "p90": 3392.352,
+                "p95": 3481.372,
+                "p99": 3557.755,
+                "max": 3710.277,
+                "mean": 3104.73
               },
               "calls_per_read": {
                 "n": 170,
@@ -1123,23 +1141,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 33963110,
-                "p50": 36865584,
-                "p90": 39257814,
-                "p95": 39700188,
-                "p99": 40534795,
-                "max": 40810482,
-                "mean": 37056154
+                "min": 34113186,
+                "p50": 36929736,
+                "p90": 39184200,
+                "p95": 39804119,
+                "p99": 40671769,
+                "max": 41015980,
+                "mean": 37072852
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1156,13 +1174,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 79.744,
-                "p50": 90.689,
-                "p90": 97.033,
-                "p95": 99.783,
-                "p99": 102.46,
-                "max": 103.85,
-                "mean": 90.863
+                "min": 80.928,
+                "p50": 89.123,
+                "p90": 98.527,
+                "p95": 102.394,
+                "p99": 112.903,
+                "max": 122.071,
+                "mean": 90.621
               },
               "calls_per_read": {
                 "n": 170,
@@ -1186,46 +1204,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
-                "min": 999424,
+                "min": 1003520,
                 "p50": 1056768,
-                "p90": 1097728,
+                "p90": 1101824,
                 "p95": 1511424,
                 "p99": 1609728,
-                "max": 1626112,
-                "mean": 1088163
+                "max": 1634304,
+                "mean": 1088717
               }
             },
             "tail_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 75.441,
-                "p50": 86.577,
-                "p90": 91.697,
-                "p95": 94.22,
-                "p99": 96.58,
-                "max": 98.115,
-                "mean": 86.441
+                "min": 77.638,
+                "p50": 86.057,
+                "p90": 93.111,
+                "p95": 95.527,
+                "p99": 101.773,
+                "max": 104.295,
+                "mean": 86.602
               },
               "calls_per_read": {
                 "n": 170,
@@ -1249,23 +1267,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1286,10 +1304,10 @@
       "backend": "postgres",
       "database": "PostgreSQL 18.4 on 127.0.0.1 through PostgresSyncDatabase (the server's bridge)",
       "corpus": {
-        "generate_ms": 119348,
+        "generate_ms": 124266,
         "rows": {
           "total": 3101379,
-          "bytes": 455445356,
+          "bytes": 455444987,
           "by_type": {
             "thinking": 1852285,
             "tool_use": 371032,
@@ -1317,7 +1335,7 @@
         "warmup_tasks": 20
       },
       "backfill": {
-        "ms": 354882,
+        "ms": 361138,
         "execution": {
           "chat": {
             "subjects": 11,
@@ -1393,54 +1411,60 @@
           }
         },
         "archives": 261,
-        "archive_bytes": 211758850
+        "archive_bytes": 211887536
       },
       "disk": {
-        "database_after_generate_bytes": 1401886399,
-        "database_after_backfill_bytes": 1403188927,
-        "archives_bytes": 215539712,
+        "database_after_generate_bytes": 1402009279,
+        "database_after_backfill_bytes": 1403270847,
+        "archives_bytes": 215666688,
         "staging_left_bytes": 4096,
         "database_measure": "pg_database_size（不含共享的 pg_wal）"
       },
       "reconcile_sample": {
-        "ms": 35764,
+        "ms": 35250,
         "sample": {
           "seed": "mul-432-reconcile-sample-v1",
           "requested": 200,
-          "tasks": 174,
+          "tasks": 200,
+          "refilled": 26,
+          "note": null,
           "by_group": {
             "chat": {
               "quota": 50,
               "candidates": 24,
               "sampled": 24,
+              "refill": 0,
               "sampled_render": 24,
               "sampled_none": 0
             },
             "task": {
               "quota": 50,
               "candidates": 213,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 59,
+              "refill": 9,
+              "sampled_render": 59,
               "sampled_none": 0
             },
             "issue_without_archive": {
               "quota": 50,
               "candidates": 151,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 59,
+              "refill": 9,
+              "sampled_render": 59,
               "sampled_none": 0
             },
             "issue_with_archive": {
               "quota": 50,
               "candidates": 142,
-              "sampled": 50,
-              "sampled_render": 50,
+              "sampled": 58,
+              "refill": 8,
+              "sampled_render": 58,
               "sampled_none": 0
             }
           }
         },
-        "checked_tasks": 174,
-        "checked_rows": 1154285,
+        "checked_tasks": 200,
+        "checked_rows": 1102953,
         "checked_by_group": {
           "chat": {
             "tasks": 24,
@@ -1448,19 +1472,19 @@
             "rows": 113238
           },
           "task": {
-            "tasks": 50,
+            "tasks": 59,
             "none": 0,
-            "rows": 393732
+            "rows": 429237
           },
           "issue_without_archive": {
-            "tasks": 50,
+            "tasks": 59,
             "none": 0,
-            "rows": 272596
+            "rows": 294966
           },
           "issue_with_archive": {
-            "tasks": 50,
+            "tasks": 58,
             "none": 0,
-            "rows": 374719
+            "rows": 265512
           }
         },
         "mismatch_total": 0,
@@ -1473,6 +1497,8 @@
           "index": 0,
           "pointer": 0,
           "pointer_owned_by_daemon_unexpected": 0,
+          "active_pointer": 0,
+          "active_member_unreadable": 0,
           "member_missing": 0,
           "member_unreadable": 0,
           "archive_missing": 0,
@@ -1492,7 +1518,7 @@
         "violation_samples": []
       },
       "validation_failures": [],
-      "measure_ms": 1125098,
+      "measure_ms": 1139174,
       "tiers": {
         "p50": {
           "tasks": 170,
@@ -1518,50 +1544,50 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 46552,
-            "p50": 48513,
-            "p90": 50863,
-            "p95": 51184,
-            "p99": 51414,
-            "max": 51438,
+            "min": 46554,
+            "p50": 48511,
+            "p90": 50870,
+            "p95": 51183,
+            "p99": 51410,
+            "max": 51483,
             "mean": 48824
           },
-          "max_bytes_error_vs_jittered_target": 0.00098,
+          "max_bytes_error_vs_jittered_target": 0.001,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 64758,
-            "p50": 67504,
-            "p90": 70158,
-            "p95": 70480,
-            "p99": 70926,
-            "max": 71121,
-            "mean": 67734
+            "min": 64765,
+            "p50": 67515,
+            "p90": 70152,
+            "p95": 70489,
+            "p99": 70954,
+            "max": 71114,
+            "mean": 67726
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 17145,
-            "p50": 21311,
-            "p90": 23335,
-            "p95": 23826,
-            "p99": 25033,
-            "max": 25392,
-            "mean": 21301
+            "min": 16572,
+            "p50": 21415,
+            "p90": 23484,
+            "p95": 23705,
+            "p99": 24775,
+            "max": 24952,
+            "mean": 21348
           },
-          "member_ratio": 3.18,
-          "payload_ratio": 2.51,
+          "member_ratio": 3.17,
+          "payload_ratio": 2.5,
           "envelope_share": 0.279,
           "results": {
             "full_cold": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2.144,
-                "p50": 4.3,
-                "p90": 7.422,
-                "p95": 8.625,
-                "p99": 12.522,
-                "max": 12.948,
-                "mean": 4.881
+                "min": 2.075,
+                "p50": 4.364,
+                "p90": 7.197,
+                "p95": 8.042,
+                "p99": 10.651,
+                "max": 14.064,
+                "mean": 4.778
               },
               "calls_per_read": {
                 "n": 170,
@@ -1585,23 +1611,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1618,13 +1644,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.813,
-                "p50": 2.949,
-                "p90": 4.487,
-                "p95": 5.441,
-                "p99": 6.173,
-                "max": 6.214,
-                "mean": 3.175
+                "min": 1.792,
+                "p50": 3.062,
+                "p90": 4.485,
+                "p95": 5.298,
+                "p99": 6.107,
+                "max": 6.313,
+                "mean": 3.233
               },
               "calls_per_read": {
                 "n": 170,
@@ -1648,23 +1674,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1681,13 +1707,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2.071,
-                "p50": 3.197,
-                "p90": 4.563,
-                "p95": 5.067,
-                "p99": 5.858,
-                "max": 5.867,
-                "mean": 3.412
+                "min": 2.187,
+                "p50": 3.165,
+                "p90": 4.697,
+                "p95": 5.332,
+                "p99": 6.912,
+                "max": 7.035,
+                "mean": 3.432
               },
               "calls_per_read": {
                 "n": 170,
@@ -1711,23 +1737,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1744,13 +1770,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 1.72,
-                "p50": 2.626,
-                "p90": 3.911,
-                "p95": 4.122,
-                "p99": 4.918,
-                "max": 5.922,
-                "mean": 2.822
+                "min": 1.734,
+                "p50": 2.679,
+                "p90": 3.935,
+                "p95": 4.364,
+                "p99": 5.437,
+                "max": 5.619,
+                "mean": 2.878
               },
               "calls_per_read": {
                 "n": 170,
@@ -1774,23 +1800,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 17145,
-                "p50": 21311,
-                "p90": 23335,
-                "p95": 23826,
-                "p99": 25033,
-                "max": 25392,
-                "mean": 21301
+                "min": 16572,
+                "p50": 21415,
+                "p90": 23484,
+                "p95": 23705,
+                "p99": 24775,
+                "max": 24952,
+                "mean": 21348
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1829,34 +1855,34 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 404227,
-            "p50": 425937,
-            "p90": 442130,
-            "p95": 444132,
-            "p99": 445954,
-            "max": 446309,
-            "mean": 425994
+            "min": 404209,
+            "p50": 425904,
+            "p90": 442128,
+            "p95": 444131,
+            "p99": 445943,
+            "max": 446318,
+            "mean": 425992
           },
           "max_bytes_error_vs_jittered_target": 0.00098,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 524540,
-            "p50": 553133,
-            "p90": 571266,
-            "p95": 575102,
-            "p99": 577618,
-            "max": 578023,
-            "mean": 553889
+            "min": 524522,
+            "p50": 553364,
+            "p90": 571618,
+            "p95": 574939,
+            "p99": 577378,
+            "max": 577423,
+            "mean": 553900
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 142086,
-            "p50": 170812,
-            "p90": 179419,
-            "p95": 181370,
-            "p99": 184877,
-            "max": 185896,
-            "mean": 170377
+            "min": 143318,
+            "p50": 171092,
+            "p90": 180314,
+            "p95": 182271,
+            "p99": 184819,
+            "max": 184827,
+            "mean": 170597
           },
           "member_ratio": 3.25,
           "payload_ratio": 2.72,
@@ -1866,13 +1892,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 17.261,
-                "p50": 22.921,
-                "p90": 27.396,
-                "p95": 30.83,
-                "p99": 32.905,
-                "max": 33.513,
-                "mean": 23.618
+                "min": 18.625,
+                "p50": 23.225,
+                "p90": 28.82,
+                "p95": 30.794,
+                "p99": 31.686,
+                "max": 33.142,
+                "mean": 24.159
               },
               "calls_per_read": {
                 "n": 170,
@@ -1896,46 +1922,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 284172,
-                "p50": 341624,
-                "p90": 358838,
-                "p95": 362740,
-                "p99": 369754,
-                "max": 371792,
-                "mean": 340754
+                "min": 286636,
+                "p50": 342184,
+                "p90": 360628,
+                "p95": 364542,
+                "p99": 369638,
+                "max": 369654,
+                "mean": 341194
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
                 "min": 147456,
                 "p50": 176128,
                 "p90": 188416,
-                "p95": 303104,
+                "p95": 299008,
                 "p99": 311296,
                 "max": 315392,
-                "mean": 185549
+                "mean": 185934
               }
             },
             "full_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 17.883,
-                "p50": 20.643,
-                "p90": 23.695,
-                "p95": 25.04,
-                "p99": 27.323,
-                "max": 27.358,
-                "mean": 21.031
+                "min": 18.03,
+                "p50": 21.111,
+                "p90": 25.054,
+                "p95": 26.501,
+                "p99": 28.775,
+                "max": 33.922,
+                "mean": 21.606
               },
               "calls_per_read": {
                 "n": 170,
@@ -1959,23 +1985,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 284172,
-                "p50": 341624,
-                "p90": 358838,
-                "p95": 362740,
-                "p99": 369754,
-                "max": 371792,
-                "mean": 340754
+                "min": 286636,
+                "p50": 342184,
+                "p90": 360628,
+                "p95": 364542,
+                "p99": 369638,
+                "max": 369654,
+                "mean": 341194
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -1992,13 +2018,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 7.857,
-                "p50": 10.151,
-                "p90": 12.234,
-                "p95": 12.897,
-                "p99": 16.016,
-                "max": 16.057,
-                "mean": 10.47
+                "min": 8.232,
+                "p50": 10.431,
+                "p90": 12.689,
+                "p95": 13.806,
+                "p99": 15.09,
+                "max": 15.252,
+                "mean": 10.656
               },
               "calls_per_read": {
                 "n": 170,
@@ -2022,46 +2048,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
                 "min": 147456,
                 "p50": 176128,
                 "p90": 188416,
-                "p95": 303104,
+                "p95": 299008,
                 "p99": 311296,
                 "max": 315392,
-                "mean": 185549
+                "mean": 185934
               }
             },
             "tail_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 7.238,
-                "p50": 9.742,
-                "p90": 11.098,
-                "p95": 11.949,
-                "p99": 13.496,
-                "max": 13.871,
-                "mean": 9.722
+                "min": 7.483,
+                "p50": 9.956,
+                "p90": 11.903,
+                "p95": 12.713,
+                "p99": 16.196,
+                "max": 16.881,
+                "mean": 10.092
               },
               "calls_per_read": {
                 "n": 170,
@@ -2085,23 +2111,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 142086,
-                "p50": 170812,
-                "p90": 179419,
-                "p95": 181370,
-                "p99": 184877,
-                "max": 185896,
-                "mean": 170377
+                "min": 143318,
+                "p50": 171092,
+                "p90": 180314,
+                "p95": 182271,
+                "p99": 184819,
+                "max": 184827,
+                "mean": 170597
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -2140,50 +2166,50 @@
           },
           "column_bytes": {
             "n": 170,
-            "min": 2092321,
-            "p50": 2191455,
-            "p90": 2288951,
-            "p95": 2299555,
-            "p99": 2302922,
-            "max": 2307448,
-            "mean": 2198514
+            "min": 2092350,
+            "p50": 2191486,
+            "p90": 2288982,
+            "p95": 2299543,
+            "p99": 2302944,
+            "max": 2307440,
+            "mean": 2198513
           },
-          "max_bytes_error_vs_jittered_target": 0.00098,
+          "max_bytes_error_vs_jittered_target": 0.00099,
           "member_uncompressed_bytes": {
             "n": 170,
-            "min": 4845474,
-            "p50": 5061877,
-            "p90": 5214769,
-            "p95": 5254647,
-            "p99": 5292425,
-            "max": 5302310,
-            "mean": 5063714
+            "min": 4844800,
+            "p50": 5061742,
+            "p90": 5215169,
+            "p95": 5254036,
+            "p99": 5293167,
+            "max": 5301899,
+            "mean": 5063754
           },
           "member_compressed_bytes": {
             "n": 170,
-            "min": 995153,
-            "p50": 1047569,
-            "p90": 1086558,
-            "p95": 1091161,
-            "p99": 1102783,
-            "max": 1102986,
-            "mean": 1049583
+            "min": 999326,
+            "p50": 1048124,
+            "p90": 1087705,
+            "p95": 1091845,
+            "p99": 1107670,
+            "max": 1108540,
+            "mean": 1050049
           },
           "member_ratio": 4.82,
-          "payload_ratio": 2.77,
+          "payload_ratio": 2.76,
           "envelope_share": 0.566,
           "results": {
             "full_cold": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2847.704,
-                "p50": 3155.3,
-                "p90": 3428.101,
-                "p95": 3460.918,
-                "p99": 3596.945,
-                "max": 3652.993,
-                "mean": 3180.047
+                "min": 2854.984,
+                "p50": 3222.132,
+                "p90": 3467.22,
+                "p95": 3526.723,
+                "p99": 3871.334,
+                "max": 3871.823,
+                "mean": 3225.068
               },
               "calls_per_read": {
                 "n": 170,
@@ -2207,46 +2233,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 33963110,
-                "p50": 36865584,
-                "p90": 39257814,
-                "p95": 39700188,
-                "p99": 40534795,
-                "max": 40810482,
-                "mean": 37056154
+                "min": 34113186,
+                "p50": 36929736,
+                "p90": 39184200,
+                "p95": 39804119,
+                "p99": 40671769,
+                "max": 41015980,
+                "mean": 37072852
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
-                "min": 999424,
+                "min": 1003520,
                 "p50": 1056768,
-                "p90": 1097728,
+                "p90": 1101824,
                 "p95": 1511424,
                 "p99": 1609728,
-                "max": 1626112,
-                "mean": 1088163
+                "max": 1634304,
+                "mean": 1088717
               }
             },
             "full_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 2869.495,
-                "p50": 3161.991,
-                "p90": 3405.052,
-                "p95": 3448.772,
-                "p99": 3521.876,
-                "max": 3605.488,
-                "mean": 3172.393
+                "min": 2867.033,
+                "p50": 3200.97,
+                "p90": 3449.801,
+                "p95": 3512.112,
+                "p99": 3586.54,
+                "max": 3738.408,
+                "mean": 3208.186
               },
               "calls_per_read": {
                 "n": 170,
@@ -2270,23 +2296,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 33963110,
-                "p50": 36865584,
-                "p90": 39257814,
-                "p95": 39700188,
-                "p99": 40534795,
-                "max": 40810482,
-                "mean": 37056154
+                "min": 34113186,
+                "p50": 36929736,
+                "p90": 39184200,
+                "p95": 39804119,
+                "p99": 40671769,
+                "max": 41015980,
+                "mean": 37072852
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
@@ -2303,13 +2329,13 @@
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 82.834,
-                "p50": 91.281,
-                "p90": 98.111,
-                "p95": 99.784,
-                "p99": 141.531,
-                "max": 157.775,
-                "mean": 92.623
+                "min": 82.757,
+                "p50": 92.401,
+                "p90": 98.717,
+                "p95": 100.573,
+                "p99": 107.319,
+                "max": 109.516,
+                "mean": 92.791
               },
               "calls_per_read": {
                 "n": 170,
@@ -2333,46 +2359,46 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
-                "min": 999424,
+                "min": 1003520,
                 "p50": 1056768,
-                "p90": 1097728,
+                "p90": 1101824,
                 "p95": 1511424,
                 "p99": 1609728,
-                "max": 1626112,
-                "mean": 1088163
+                "max": 1634304,
+                "mean": 1088717
               }
             },
             "tail_warm": {
               "reads": 170,
               "latency_ms": {
                 "n": 170,
-                "min": 80.636,
-                "p50": 87.021,
-                "p90": 92.699,
-                "p95": 94.941,
-                "p99": 110.867,
-                "max": 137.823,
-                "mean": 87.658
+                "min": 78.226,
+                "p50": 87.765,
+                "p90": 93.504,
+                "p95": 96.815,
+                "p99": 98.894,
+                "max": 101.354,
+                "mean": 88.084
               },
               "calls_per_read": {
                 "n": 170,
@@ -2396,23 +2422,23 @@
               },
               "file_bytes_per_read": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "file_bytes_per_call_max": {
                 "n": 170,
-                "min": 995153,
-                "p50": 1047569,
-                "p90": 1086558,
-                "p95": 1091161,
-                "p99": 1102783,
-                "max": 1102986,
-                "mean": 1049583
+                "min": 999326,
+                "p50": 1048124,
+                "p90": 1087705,
+                "p95": 1091845,
+                "p99": 1107670,
+                "max": 1108540,
+                "mean": 1050049
               },
               "storage_bytes_per_read": {
                 "n": 170,
