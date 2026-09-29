@@ -31,10 +31,12 @@ export const CONVERSATION_LOG_SHOWN_KINDS = [
 ] as const;
 
 /**
- * Lifecycle facts the agent projections and the wake-up rules depend on. Each
- * hidden row carries `metadata.target_seq`. `head` is deliberately absent: it is
- * a row, never an event, so `cursor_seq = 0` still means "nothing read" and no
- * lane is woken by it.
+ * Lifecycle facts the agent projections and the wake-up rules depend on. A
+ * hidden row that describes an earlier row on the same session carries
+ * `metadata.target_seq`; `session_created` and `delegation_report` describe no
+ * such row (a delegated child's task runs in another Issue's session), so they
+ * carry none. `head` is deliberately absent: it is a row, never an event, so
+ * `cursor_seq = 0` still means "nothing read" and no lane is woken by it.
  */
 export const CONVERSATION_LOG_HIDDEN_KINDS = [
   "task_completed",
@@ -46,6 +48,7 @@ export const CONVERSATION_LOG_HIDDEN_KINDS = [
   "message_deleted",
   "thread_resolved",
   "thread_unresolved",
+  "delegation_report",
 ] as const;
 
 /** Every `kind` the table stores: the production kinds plus `head`. */
@@ -75,6 +78,7 @@ export const CONVERSATION_LOG_KIND_VISIBILITY = {
   message_deleted: "hidden",
   thread_resolved: "hidden",
   thread_unresolved: "hidden",
+  delegation_report: "hidden",
 } as const satisfies Record<ConversationLogKind, ConversationLogVisibility>;
 
 /** One `(type, tool)` bucket of a turn card's process-event histogram. */
@@ -112,6 +116,18 @@ export interface ConversationLogEntryMetadata {
   /** `session_created`: the actor that opened the session. */
   created_by_type?: string;
   created_by_id?: string | null;
+  /**
+   * `delegation_report` (ADR 0005): a cross-issue delegated child reached a
+   * terminal state. Copied verbatim from the session event; a present
+   * `result_comment_id: null` is authoritative, so the key is never dropped.
+   */
+  source_issue_id?: string | null;
+  source_issue_key?: string | null;
+  source_task_id?: string;
+  delegate_agent_id?: string;
+  terminal_status?: "completed" | "failed" | "cancelled";
+  result_comment_id?: string | null;
+  delegation_id?: string | null;
   /**
    * Chat `system` rows: pending agent-Issue-update delivery. The next task's
    * prompt is built from the rows where this is still true, so the wake-up port

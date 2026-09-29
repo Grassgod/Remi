@@ -171,6 +171,7 @@ import {
 } from "@multiremi/store/repos/analytics-repo.js";
 import {
   WorkspacesRepo,
+  type GatewayModelContextDecl,
   type GatewayModelReasoningDecl,
   type GatewayModelsSnapshot,
   type RelayConfigForBrowser,
@@ -179,6 +180,7 @@ import {
 } from "@multiremi/store/repos/workspaces-repo.js";
 // The relay/gateway config types used to be declared here; keep the public surface unchanged.
 export type {
+  GatewayModelContextDecl,
   GatewayModelReasoningDecl,
   GatewayModelsSnapshot,
   RelayConfigForBrowser,
@@ -1541,6 +1543,24 @@ runMigrations(this.db);
     input: { models?: GatewayModelsSnapshot["models"]; sourceRevision: number; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string | null },
   ): void {
     return this.workspaces.saveGatewayModels(workspaceId, engine, input);
+  }
+
+  listGatewayModelContext(workspaceId: string, engine: RelayEngine): GatewayModelContextDecl[] {
+    return this.workspaces.listGatewayModelContext(workspaceId, engine);
+  }
+
+  getGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): GatewayModelContextDecl | null {
+    return this.workspaces.getGatewayModelContext(workspaceId, engine, modelId);
+  }
+
+  saveGatewayModelContext(
+    workspaceId: string, engine: RelayEngine, input: { modelId: string; updatedBy?: string | null },
+  ): GatewayModelContextDecl {
+    return this.workspaces.saveGatewayModelContext(workspaceId, engine, input);
+  }
+
+  deleteGatewayModelContext(workspaceId: string, engine: RelayEngine, modelId: string): boolean {
+    return this.workspaces.deleteGatewayModelContext(workspaceId, engine, modelId);
   }
 
   listGatewayModelReasoning(workspaceId: string, engine: RelayEngine): GatewayModelReasoningDecl[] {
@@ -3734,6 +3754,18 @@ runMigrations(this.db);
     return this.issues.createIssueComment(issueId, input);
   }
 
+  createIssueCommentWithinTransaction(
+    issueId: string,
+    input: CreateIssueCommentInput,
+    options: { withinTransaction: true; deferredEvents: import("./context.js").CommitEventQueue },
+  ): import("./context.js").CreatedIssueComment {
+    return this.issues.createIssueCommentWithinTransaction(issueId, input, options);
+  }
+
+  runIssueCommentPostCommit(created: import("./context.js").CreatedIssueComment, input: CreateIssueCommentInput): void {
+    this.issues.runIssueCommentPostCommit(created, input);
+  }
+
   createTaskFailureSystemComment(
     issueId: string,
     issueSessionId: string | null,
@@ -4040,6 +4072,11 @@ runMigrations(this.db);
 
   getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
     return this.sessions.getOrCreateDefaultIssueSession(issueId, createdById);
+  }
+
+  /** For callers that already own the transaction (Senior ruling cmt_96e1yqxgifms §2). */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    return this.sessions.getOrCreateDefaultIssueSessionWithinTransaction(issueId, createdById);
   }
 
   createIssueSession(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
@@ -5344,8 +5381,9 @@ runMigrations(this.db);
       let replacementTask: MultiremiTask | null = null;
       let message: MultiremiTaskSteerMessage | null = null;
       if (input.action === "cancel") {
-        // Caller-owned transaction: `cancelTask` would open a second BEGIN and
-        // its COMMIT would end this one early on Postgres (no savepoints).
+        // Caller-owned transaction: inside it `cancelTask`'s own transaction is
+        // only a SAVEPOINT (B1, MUL-426), so its child-status replay and events
+        // would run before this COMMIT.
         cancelledResult = this.tasks.cancelTaskWithinTransaction(target.id, childStatusChanges, deferredEvents);
         task = cancelledResult.task;
       } else if (input.action === "redispatch") {

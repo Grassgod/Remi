@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multiremi/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { detail, deletePin, pathname, pins } = vi.hoisted(() => ({
+const { detail, deletePin, pathname, pins, observedQueries } = vi.hoisted(() => ({
+  observedQueries: [] as Array<{ queryKey: readonly unknown[]; enabled?: boolean }>,
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   pathname: { current: "/acme/issues" },
@@ -145,20 +146,43 @@ vi.mock("@multiremi/core/pins/queries", () => ({ pinListOptions: () => ({ queryK
 vi.mock("@multiremi/core/projects/queries", () => ({ projectDetailOptions: () => ({ queryKey: ["project"] }) }));
 vi.mock("@multiremi/core/runtimes/hooks", () => ({ useMyRuntimesNeedUpdate: () => false }));
 vi.mock("@multiremi/core/workspace/queries", () => ({
-  myInvitationListOptions: () => ({ queryKey: ["invitations"] }),
+  myInvitationListOptions: (options?: { enabled?: boolean }) => ({
+    queryKey: ["invitations"],
+    ...(options ?? {}),
+  }),
   workspaceKeys: { myInvitations: () => ["invitations"] },
   workspaceListOptions: () => ({ queryKey: ["workspaces"] }),
 }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useMutation: () => ({ isPending: false, mutate: vi.fn() }),
-  useQuery: ({ queryKey }: { queryKey: readonly unknown[] }) => {
-    if (queryKey[0] === "pins") return { data: pins.current };
-    if (queryKey[0] === "issue") return detail.current;
+  useQuery: (options: { queryKey: readonly unknown[]; enabled?: boolean }) => {
+    observedQueries.push(options);
+    if (options.queryKey[0] === "pins") return { data: pins.current };
+    if (options.queryKey[0] === "issue") return detail.current;
     return { data: [] };
   },
   useQueryClient: () => ({ fetchQuery: vi.fn(), invalidateQueries: vi.fn() }),
 }));
+
+describe("shell gate wiring (MUL-472 b rework)", () => {
+  beforeEach(() => {
+    observedQueries.length = 0;
+    pathname.current = "/acme/issues";
+  });
+
+  it("passes the shell gate's value into the invitation query instead of leaving it always-on", () => {
+    render(<AppSidebar />);
+    const invitations = observedQueries.filter((query) => query.queryKey[0] === "invitations");
+    expect(invitations.length).toBeGreaterThan(0);
+    // QA caught this one missing the gate entirely: `/api/invitations` left
+    // 865 ms (issues) / 1540 ms (detail) before the first content row.
+    for (const query of invitations) {
+      expect(query.enabled).toBeDefined();
+      expect(query.enabled).not.toBe(true);
+    }
+  });
+});
 
 describe("PinRow", () => {
   beforeEach(() => {

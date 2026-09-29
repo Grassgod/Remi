@@ -1,7 +1,5 @@
 import type { Hono } from "hono";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename,
   stringFormValue } from "../helpers/uploads.js";

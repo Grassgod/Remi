@@ -203,6 +203,64 @@ function waitForWorkerMessage<T extends Record<string, unknown>>(
   });
 }
 
+/**
+ * `maxTransactionDepth` counts every `transaction()` frame, SAVEPOINTs included
+ * (MUL-405), so a depth-1 case has no nested level at all
+ * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md). The same
+ * window's control statements are checked as well: before the outer COMMIT
+ * there is no second BEGIN and no early COMMIT, and a nested level sends only
+ * SAVEPOINT, then one RELEASE SAVEPOINT or ROLLBACK TO SAVEPOINT that ends it.
+ * Same recording as B5's multiremi-parent-status-pg-depth.test.ts.
+ */
+function recordTransactionControl(database: PostgresSyncDatabase): (label: string) => void {
+  let controls: Array<{ sql: string; inTransaction: boolean }> = [];
+  const target = database as unknown as { execute(sql: string, params: unknown[]): unknown };
+  const execute = target.execute.bind(database);
+  target.execute = (sql, params) => {
+    const command = sql.trim().toUpperCase();
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
+      controls.push({ sql: command, inTransaction: database.inTransaction });
+    }
+    return execute(sql, params);
+  };
+  // The log covers the same window as the depth peak.
+  const reset = database.resetTransactionDepthStats.bind(database);
+  database.resetTransactionDepthStats = () => {
+    reset();
+    controls = [];
+  };
+  return (label) => {
+    let outerOpen = false;
+    const savepoints: string[] = [];
+    for (const control of controls) {
+      const detail = `${label}: ${control.sql}`;
+      if (control.sql === "BEGIN") {
+        expect(outerOpen, detail).toBe(false);
+        expect(control.inTransaction, detail).toBe(false);
+        outerOpen = true;
+      } else if (control.sql === "COMMIT" || control.sql === "ROLLBACK") {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(savepoints, detail).toHaveLength(0);
+        outerOpen = false;
+      } else {
+        expect(outerOpen, detail).toBe(true);
+        expect(control.inTransaction, detail).toBe(true);
+        expect(control.sql, detail).toMatch(/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT) \w+$/);
+        const name = control.sql.split(" ").at(-1)!;
+        if (control.sql.startsWith("SAVEPOINT ")) savepoints.push(name);
+        else {
+          // RELEASE or ROLLBACK TO ends the level; main's skeleton sends no RELEASE after a ROLLBACK TO.
+          expect(savepoints.at(-1), detail).toBe(name);
+          savepoints.pop();
+        }
+      }
+    }
+    expect(outerOpen, label).toBe(false);
+    expect(savepoints, label).toHaveLength(0);
+  };
+}
+
 // Decide skip-vs-run at collection time (top-level await); the throwaway DB and
 // store are built in beforeAll so a probe failure never leaves half-open state.
 const pgAvailable = await probePostgres();
@@ -216,6 +274,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
   let pointerQueryCount = 0;
+  let assertTransactionControl: (label: string) => void;
 
   beforeAll(async () => {
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
@@ -225,6 +284,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // Constructing the store runs migrate(): all CREATE TABLE / ALTER / index DDL
     // flows through translateSqliteToPg. A mis-translation would throw right here.
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
+    assertTransactionControl = recordTransactionControl(db);
     store = new MultiremiStore(db, {
       taskTraceQuery: (sql, params) => {
         pointerQueryCount++;
@@ -241,99 +301,6 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     await admin.end();
   });
 
-  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
-    "writes the %s dependency exemption after commit (PG)",
-    (source) => {
-      const runtime = store.registerRuntime({
-        id: `rt_pg_exemption_${++wsCounter}`, name: `PG exemption ${source}`, provider: "claude",
-      });
-      const agent = store.createAgent({ name: `PG exemption ${source} ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-      const prerequisite = store.createIssue({ title: `PG prerequisite ${source}`, status: "in_progress" });
-      const issue = store.createIssue({ title: `PG earlier work ${source}`, status: "in_progress" });
-      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
-      if (source === "redispatch") store.cancelTask(previous.id);
-      if (source === "retry") {
-        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
-        store.startTask(previous.id);
-        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
-      }
-      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-      store.updateIssue(issue.id, { status: "backlog" });
-      const eventStates: boolean[] = [];
-      const stop = store.onWorkspaceEvent((event) => {
-        if (event.type === "activity:created"
-          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
-          eventStates.push(db.inTransaction);
-        }
-      });
-      db.resetTransactionDepthStats();
-      const task = store.createTask({
-        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
-        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
-        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
-        ...(source === "delegation_return" ? {
-          delegationId: `dlg_exemption_${wsCounter}`, delegatedByAgentId: agent.id, parentTaskId: previous.id,
-        } : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
-      });
-      stop();
-      expect(db.maxTransactionDepth).toBe(1);
-      expect(eventStates).toEqual([false]);
-      expect(store.getTask(task.id)?.status).toBe("queued");
-      const activities = store.listIssueActivity(issue.id).filter((row) => row.type === "dependency_gate_exempted");
-      expect(activities).toHaveLength(1);
-      expect(activities[0]!.data).toMatchObject({
-        source, taskId: task.id, task_id: task.id,
-        previousTaskId: previous.id, previous_task_id: previous.id,
-        unmet: [{ key: prerequisite.key }],
-      });
-    },
-  );
-
-  it("does not auto-claim a backlog issue with an active exempt round (PG)", () => {
-    const runtime = store.registerRuntime({ id: `rt_pg_active_${++wsCounter}`, name: "Active exemption", provider: "claude" });
-    const agent = store.createAgent({ name: `Active exemption ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-    const prerequisite = store.createIssue({ title: "Active prerequisite", status: "in_progress" });
-    const issue = store.createIssue({
-      title: "Active dependent", status: "backlog", blockedBy: [prerequisite.id],
-      assigneeType: "agent", assigneeId: agent.id,
-    });
-    const task = store.createTask({
-      agentId: agent.id, issueId: issue.id, prompt: "existing continuation",
-      attempt: 2, preserveIssueStatus: true,
-    });
-    db.resetTransactionDepthStats();
-    store.updateIssue(prerequisite.id, { status: "done" });
-    expect(db.maxTransactionDepth).toBe(1);
-    expect(store.getIssue(issue.id)?.status).toBe("backlog");
-    expect(store.listTasksForIssue(issue.id).map((row) => row.id)).toEqual([task.id]);
-    expect(store.listIssueActivity(issue.id).filter((row) =>
-      row.type === "dependency_auto_started" || row.type === "dependency_auto_start_skipped")).toEqual([]);
-    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
-    store.startTask(task.id);
-    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
-  });
-
-  it("maps a waiting session task request to 409 with unmet prerequisites (PG)", async () => {
-    const agent = store.createAgent({ name: `Session gate ${++wsCounter}`, provider: "claude" });
-    const prerequisite = store.createIssue({ title: "Session prerequisite", status: "in_progress" });
-    const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
-    const session = store.getOrCreateDefaultIssueSession(issue.id);
-    const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: agent.id, prompt: "blocked" }),
-    });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prerequisite.key }] });
-    expect(store.listTasksForIssue(issue.id)).toEqual([]);
-    expect(store.getIssue(issue.id)?.status).toBe("backlog");
-    const unknownAgent = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: "agt_not_found", prompt: "blocked" }),
-    });
-    expect(unknownAgent.status).toBe(404);
-  });
   it("writes and reads trace pointers and routes hot and archive traces on Postgres", async () => {
     const root = mkdtempSync(join(tmpdir(), "multiremi-pg-trace-reader-"));
     try {
@@ -382,6 +349,104 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
+    "writes the %s dependency exemption after commit (PG)",
+    (source) => {
+      const runtime = store.registerRuntime({
+        id: `rt_pg_exemption_${++wsCounter}`, name: `PG exemption ${source}`, provider: "claude",
+      });
+      const agent = store.createAgent({ name: `PG exemption ${source} ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+      const prerequisite = store.createIssue({ title: `PG prerequisite ${source}`, status: "in_progress" });
+      const issue = store.createIssue({ title: `PG earlier work ${source}`, status: "in_progress" });
+      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
+      if (source === "redispatch") store.cancelTask(previous.id);
+      if (source === "retry") {
+        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
+        store.startTask(previous.id);
+        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
+      }
+      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+      store.updateIssue(issue.id, { status: "backlog" });
+      const eventStates: boolean[] = [];
+      const stop = store.onWorkspaceEvent((event) => {
+        if (event.type === "activity:created"
+          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
+          eventStates.push(db.inTransaction);
+        }
+      });
+      db.resetTransactionDepthStats();
+      const task = store.createTask({
+        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
+        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
+        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
+        ...(source === "delegation_return" ? {
+          delegationId: `dlg_exemption_${wsCounter}`, delegatedByAgentId: agent.id, parentTaskId: previous.id,
+        } : {}),
+        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
+      });
+      stop();
+      expect(db.maxTransactionDepth).toBe(1);
+      // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+      assertTransactionControl(`${source} exemption`);
+      expect(eventStates).toEqual([false]);
+      expect(store.getTask(task.id)?.status).toBe("queued");
+      const activities = store.listIssueActivity(issue.id).filter((row) => row.type === "dependency_gate_exempted");
+      expect(activities).toHaveLength(1);
+      expect(activities[0]!.data).toMatchObject({
+        source, taskId: task.id, task_id: task.id,
+        previousTaskId: previous.id, previous_task_id: previous.id,
+        unmet: [{ key: prerequisite.key }],
+      });
+    },
+  );
+
+  it("does not auto-claim a backlog issue with an active exempt round (PG)", () => {
+    const runtime = store.registerRuntime({ id: `rt_pg_active_${++wsCounter}`, name: "Active exemption", provider: "claude" });
+    const agent = store.createAgent({ name: `Active exemption ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
+    const prerequisite = store.createIssue({ title: "Active prerequisite", status: "in_progress" });
+    const issue = store.createIssue({
+      title: "Active dependent", status: "backlog", blockedBy: [prerequisite.id],
+      assigneeType: "agent", assigneeId: agent.id,
+    });
+    const task = store.createTask({
+      agentId: agent.id, issueId: issue.id, prompt: "existing continuation",
+      attempt: 2, preserveIssueStatus: true,
+    });
+    db.resetTransactionDepthStats();
+    store.updateIssue(prerequisite.id, { status: "done" });
+    expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("active exempt round");
+    expect(store.getIssue(issue.id)?.status).toBe("backlog");
+    expect(store.listTasksForIssue(issue.id).map((row) => row.id)).toEqual([task.id]);
+    expect(store.listIssueActivity(issue.id).filter((row) =>
+      row.type === "dependency_auto_started" || row.type === "dependency_auto_start_skipped")).toEqual([]);
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+  });
+
+  it("maps a waiting session task request to 409 with unmet prerequisites (PG)", async () => {
+    const agent = store.createAgent({ name: `Session gate ${++wsCounter}`, provider: "claude" });
+    const prerequisite = store.createIssue({ title: "Session prerequisite", status: "in_progress" });
+    const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id, prompt: "blocked" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "dependencies_unmet", unmet: [{ key: prerequisite.key }] });
+    expect(store.listTasksForIssue(issue.id)).toEqual([]);
+    expect(store.getIssue(issue.id)?.status).toBe("backlog");
+    const unknownAgent = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "agt_not_found", prompt: "blocked" }),
+    });
+    expect(unknownAgent.status).toBe(404);
+  });
 
   // Real PostgreSQL performs repeated full startup migrations plus classification
   // fixtures and their cleanup; allow for database round trips.
@@ -2949,6 +3014,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       },
     });
 
+    // Earlier cases in this shared database leave pending system events behind.
+    // With v2-B's added cases they outnumber dispatch's default batch of 25, and
+    // the oldest-first claim would never reach this event (MUL-402 sync, (x)).
+    db.run("UPDATE multiremi_system_events SET status = 'processed' WHERE status = 'pending' AND workspace_id <> ?", [ws]);
     store.updateIssue(issue.id, { status: "done" });
     const [run] = store.dispatchPendingSystemEvents();
     expect(run).toMatchObject({ issueId: issue.id, source: "system_event", status: "running" });
@@ -3192,10 +3261,12 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   /**
    * MUL-409 fix round, blocking 2: issue creation is one transaction on this
-   * bridge. Postgres has no savepoint here, so a nested `BEGIN` would commit the
-   * issue row early and let it survive the rollback — exactly the orphan the QA
-   * pass found. The depth counter is asserted alongside the data, so a future
-   * refactor that reintroduces nesting fails here rather than in production.
+   * bridge. When the QA pass found the orphan, a nested `transaction()` here was
+   * a bare `BEGIN` that committed the issue row early and let it survive the
+   * rollback. A nested `transaction()` is now a SAVEPOINT inside the outer unit
+   * (MUL-405), and `maxTransactionDepth` still counts it as a frame, so the
+   * depth-1 assertion keeps catching a reintroduced nesting; the data
+   * assertions below pin the rollback itself.
    */
   it("rolls a rejected blocked_by creation back and stays a single transaction (PG)", () => {
     const parent = store.createIssue({ title: "PG rollback parent", status: "in_progress" });
@@ -3234,11 +3305,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   /**
    * MUL-409 fix round 2, blocking 4: the automatic-start chain must not nest a
-   * transaction on this bridge. `transaction()` is a bare BEGIN/COMMIT with no
-   * savepoint, so a nested BEGIN lets the inner COMMIT end the outer unit and a
-   * later ROLLBACK cannot undo it. S1 moved the E1/E2 hook post-commit; these
-   * three scenarios pin that the S2 dependency logic (auto-start on `done`, the
-   * two-prerequisite case, and the member forced start) now runs at depth 1.
+   * transaction on this bridge. When this was written `transaction()` was a
+   * bare BEGIN/COMMIT, so a nested BEGIN let the inner COMMIT end the outer unit
+   * and a later ROLLBACK could not undo it; a nested `transaction()` is now a
+   * SAVEPOINT inside the outer unit, and still counts as a frame. S1 moved the
+   * E1/E2 hook post-commit; these three scenarios pin that the S2 dependency
+   * logic (auto-start on `done`, the two-prerequisite case, and the member
+   * forced start) runs at depth 1 and sends no second BEGIN or early COMMIT.
    */
   it("keeps the automatic-start chain at one transaction (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_dep_depth", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
@@ -3262,6 +3335,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(prereq.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("(a) prerequisite done");
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
@@ -3279,6 +3354,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(first.id, { status: "done" });
     store.updateIssue(second.id, { status: "done" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("(b) two prerequisites");
     expect(store.getIssue(bothWaiting.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(bothWaiting.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
@@ -3294,6 +3371,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     store.updateIssue(forced.id, { status: "todo", force: true, actorType: "member", actorId: "local" });
     expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("(c) member forced start");
     expect(store.getIssue(forced.id)?.status).toBe("todo");
     expect(store.listTasksForIssue(forced.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
   });
@@ -3323,6 +3402,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     store.updateIssue(prereq.id, { status: "done" });
 
     expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("auto-start dispatch fails");
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     // Still waiting, so the automatic path can pick it up again once a human
     // fixes the owner: backlog + unmet prerequisite is the retryable state.
@@ -3605,8 +3686,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    *
    * The automatic start is one transaction: the claim, the status write, the
    * round and both activities commit together or not at all. These cases assert
-   * that on the real bridge, where a nested BEGIN would silently end the outer
-   * transaction early.
+   * that on the real bridge, where a nested `transaction()` is a SAVEPOINT
+   * inside the outer unit since B1 (MUL-426); before that, a nested BEGIN
+   * silently ended the outer transaction early.
    */
   it("rolls the whole automatic start back when a step fails (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });
@@ -3663,6 +3745,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     // The prerequisite's own transition is untouched, and the depth stayed 1.
     expect(store.getIssue(prereq.id)?.status).toBe("done");
     expect(db.maxTransactionDepth).toBe(1);
+    // ADR 0011: one BEGIN…COMMIT, no second BEGIN or early COMMIT.
+    assertTransactionControl("automatic start step fails");
 
     // And the retry after a fixed owner really starts it, through public assign.
     db.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [owner.id]);

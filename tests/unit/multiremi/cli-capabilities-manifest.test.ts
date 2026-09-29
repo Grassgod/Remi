@@ -170,7 +170,9 @@ describe("CLI capabilities manifest", () => {
     // The 14 subject-scoped daemon upload routes (Issue, Chat and Task) are
     // machine-to-server protocol, so they raise the exempt count with the total.
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 682,
+      // MUL-479's context-window PUT maps to `remi workspace relay context-window
+      // update`, so it raises the mapped count with the total.
+      mapped: 683,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -183,7 +185,7 @@ describe("CLI capabilities manifest", () => {
       // traffic between two API processes with no user-facing command.
       exempt: 111,
       missing: 0,
-      total: 793,
+      total: 794,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
@@ -206,6 +208,8 @@ describe("CLI capabilities manifest", () => {
       .toEqual({ command: "workspace.relay.reasoning-levels.get" });
     expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/reasoning-levels"])
       .toEqual({ command: "workspace.relay.reasoning-levels.update" });
+    expect(manifest.routes["PUT /api/workspaces/:id/relay-config/:engine/context-window"])
+      .toEqual({ command: "workspace.relay.context-window.update" });
     expect(manifest.commands["workspace.relay.reasoning-levels.update"]).toMatchObject({
       command: "remi workspace relay reasoning-levels update",
       mutation: "write",

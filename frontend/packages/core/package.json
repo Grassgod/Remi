@@ -126,6 +126,7 @@
     "./platform": "./platform/index.ts",
     "./platform/ssr-workspace": "./platform/ssr-workspace.tsx",
     "./platform/replica-env": "./platform/replica-env.tsx",
+    "./platform/use-after-first-screen": "./platform/use-after-first-screen.ts",
     "./platform-lifecycle": "./platform-lifecycle/index.ts",
     "./feishu": "./feishu/index.ts",
     "./feishu/queries": "./feishu/queries.ts",

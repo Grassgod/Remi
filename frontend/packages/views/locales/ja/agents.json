@@ -128,7 +128,7 @@
   "fallback": {
     "model_label": "予備モデル",
     "thinking_label": "予備モデルの推論強度",
-    "description": "主モデルのゲートウェイリソースが利用できない場合にのみ、現在のタスクを引き継ぎます。",
+    "description": "主モデル、モデルサービス、または実行可能な Runtime が利用できない場合に、現在のタスクを引き継ぎます。",
     "unconfigured": "未設定",
     "same_as_primary": "主モデルとは異なるモデルを選択してください",
     "clear": "予備モデルを解除",
@@ -137,6 +137,9 @@
     "switch_count": "切り替え {{count}} 回",
     "reason_gateway": "ゲートウェイリソースが利用不可",
     "reason_no_account": "利用可能なゲートウェイアカウントなし",
+    "reason_model_unavailable": "主モデルが利用不可",
+    "reason_server": "モデルプロバイダーのサーバーエラー",
+    "reason_queued": "主モデルをサポートする Runtime なし",
     "reason_unknown": "リソースが利用不可"
   },
   "inspector": {

@@ -32,17 +32,28 @@ export type WorkspaceAgentAvailability = "loading" | "none" | "available";
  * role to decide visibility for `private` agents — without member data,
  * a freshly-loaded agent list could still produce wrong answers.
  */
-export function useWorkspaceAgentAvailability(): WorkspaceAgentAvailability {
+export function useWorkspaceAgentAvailability(
+  /**
+   * MUL-472 b: `false` defers `GET /api/agents?include_archived` (and the member
+   * list it needs) for a caller that is not on screen yet — the minimised chat
+   * window, which is mounted on every dashboard page but shows nothing.
+   * The state stays "loading" while disabled, which is exactly the neutral
+   * value the three-state contract already defines.
+   */
+  enabled = true,
+): WorkspaceAgentAvailability {
   const wsId = useWorkspaceId();
   const userId = useAuthStore((s) => s.user?.id);
-  const { data: agents, isFetched: agentsFetched } = useQuery(
-    agentListOptions(wsId),
-  );
-  const { data: members, isFetched: membersFetched } = useQuery(
-    memberListOptions(wsId),
-  );
+  const { data: agents, isFetched: agentsFetched } = useQuery({
+    ...agentListOptions(wsId),
+    enabled,
+  });
+  const { data: members, isFetched: membersFetched } = useQuery({
+    ...memberListOptions(wsId),
+    enabled,
+  });
 
-  if (!agentsFetched || !membersFetched) return "loading";
+  if (!enabled || !agentsFetched || !membersFetched) return "loading";
 
   const rawRole = members?.find((m) => m.user_id === userId)?.role;
   const role =

@@ -10,9 +10,11 @@ import {
 } from "@multiremi/ui/components/ui/hover-card";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import type { AgentTask } from "@multiremi/core/types";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { AgentActivityHoverContent } from "../../agents/components/agent-activity-hover-content";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 interface WorkspaceAgentWorkingChipProps {
@@ -63,7 +65,14 @@ export function WorkspaceAgentWorkingChip({
 }: WorkspaceAgentWorkingChipProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  const { pathname } = useNavigation();
+  // MUL-472 b: the chip is shell-looking chrome but the snapshot is page data,
+  // so it rides the page gate. When the running filter is on the snapshot *is*
+  // the row set, so the chip must not defer it (see issues-page.tsx).
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname, scope: "page" });
+  const { data: snapshot = [] } = useQuery(
+    agentTaskSnapshotOptions(wsId, { enabled: afterFirstScreen || value }),
+  );
 
   const { runningTasks, agentIds } = useMemo(() => {
     const running: AgentTask[] = [];

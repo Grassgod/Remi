@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresReplyTooLargeError, PostgresSyncDatabase, resetDbReplyLimitForTest, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { resetLockOrderSentinelEnabledCache } from "@multiremi/store/lock-order-sentinel.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -196,13 +197,23 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   }
 }
 
-function verifyBestEffortQueueRollback(db: SqlDatabase): void {
+/**
+ * Senior ruling cmt_96e1yqxgifms §2: the agent-issue-update queue is a
+ * best-effort side effect, so it rides `afterCommit` instead of a savepoint
+ * around the caller's transaction. The queue write therefore runs *after* the
+ * COMMIT — it cannot be rolled back into the comment's atomic unit, and a
+ * failure there must leave the comment, its Session event, its log row and its
+ * activity row durable while only the queue row is missing.
+ */
+function verifyBestEffortQueueAfterCommit(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
   const issue = store.createIssue({ title: "Best effort queue", workspaceId: "local" });
   db.exec("CREATE TABLE best_effort_queue_case (n INTEGER PRIMARY KEY)");
+  const queueRun: { inTransaction: boolean | null } = { inTransaction: null };
   store.queueAgentIssueUpdate = () => {
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
+    queueRun.inTransaction = db.inTransaction ?? null;
+    // One statement, so a failure leaves no partial queue row either way.
+    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1),(1)");
   };
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -211,24 +222,62 @@ function verifyBestEffortQueueRollback(db: SqlDatabase): void {
     const comment = store.createIssueComment(issue.id, { body: "comment survives queue error" });
     expect(store.getIssueComment(comment.id)?.body).toBe("comment survives queue error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives queue error");
-    expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
     expect(warnings.some((line) => line.includes("agent issue update queue skipped"))).toBe(true);
   } finally {
     console.warn = originalWarn;
   }
+  // The queue call itself ran after the commit, with no transaction left to
+  // poison; its own SQL failure left no queue row and reached nobody.
+  expect(queueRun.inTransaction).toBe(false);
+  expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
 }
 
-function verifyBestEffortWorkspaceLookups(db: SqlDatabase): void {
+/**
+ * Senior ruling cmt_96e1yqxgifms §2: the workspace lookup behind the two
+ * best-effort broadcasts is a plain read now, with no savepoint around it. On
+ * PostgreSQL that means a *real* SQL error poisons the caller's transaction and
+ * the write must fail (see the outer-transaction case below); what still has to
+ * be survived is the failure the database classifies as non-aborting —
+ * `PgBridgeFailure(abortsTransaction: false)` from an oversized bridge reply.
+ * The SQLite handle does not abort on a statement error, so it keeps exercising
+ * the plain-error path unchanged.
+ */
+function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "pg"): void {
   const store = new MultiremiStore(db);
   const issue = store.createIssue({ title: "Best effort lookups", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
-  context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  const previousReplyLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  if (backend === "pg") {
+    context.issueWorkspaceId = (id) => {
+      // The limit is narrowed for this one statement and restored in `finally`,
+      // so only the lookup overflows the bridge — the rest of the transaction
+      // keeps the default and the failure stays a single reply-level one.
+      process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "64";
+      resetDbReplyLimitForTest();
+      try {
+        return db.query("SELECT id, repeat('x', 4000) AS payload FROM multiremi_issues WHERE id = ?").get(id);
+      } finally {
+        if (previousReplyLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+        else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousReplyLimit;
+        resetDbReplyLimitForTest();
+      }
+    };
+  } else {
+    context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  }
   const warnings: string[] = [];
   const originalWarn = console.warn;
   console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+  let comment: { id: string };
   try {
-    const comment = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_lookup", "system survives query error");
+    try {
+      comment = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_lookup", "system survives query error");
+    } finally {
+      if (previousReplyLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousReplyLimit;
+      resetDbReplyLimitForTest();
+    }
     expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("system survives query error");
     expect(warnings.some((line) => line.includes("activity:created broadcast skipped"))).toBe(true);
@@ -323,6 +372,119 @@ function verifyFinalReplyReference(db: SqlDatabase, backend: "sqlite" | "pg"): v
   store.completeTask(failed.id, { output: "Blocked answer" });
   expect(store.findTurnEntry(failed.id)?.metadata).toMatchObject({ status: "completed", final_entry_id: null });
   expect(store.listIssueComments(issue.id)).toHaveLength(1);
+}
+
+// F1 (MUL-402 QA): `postAgentReplyComment` owns one transaction for the reply
+// (comment, Session event, log row) and its turn card's `final_entry_id`; the
+// reply's pushes, notifications and agent dispatch run after that COMMIT, in
+// MUL-427's shape (95d9be9e).
+function startLeaderRound(store: MultiremiStore, runtimeId: string) {
+  const runtime = store.registerRuntime({ id: runtimeId, name: "Reply runtime", provider: "codex", workspaceId: "local" });
+  const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
+  const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
+  const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
+  const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  store.startTask(task.id);
+  return { issue, task, teammate };
+}
+
+function verifyReplyDispatchAfterCommit(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const { issue, task, teammate } = startLeaderRound(store, "rt_reply_after_commit");
+  const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
+  const enqueued: Array<{ agentId: string; inTransaction: boolean | undefined }> = [];
+  const unsubscribers = [
+    store.onWorkspaceEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+    store.onTaskEvent((event) => events.push({ type: event.type, inTransaction: db.inTransaction })),
+    store.onTaskEnqueued((queued) => enqueued.push({ agentId: queued.agentId, inTransaction: db.inTransaction })),
+  ];
+  try {
+    store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+    const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id)!;
+    expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.triggerCommentId === reply.id)
+      .map((candidate) => candidate.agentId)).toEqual([teammate.id]);
+    expect(enqueued).toEqual([{ agentId: teammate.id, inTransaction: false }]);
+    expect(events.map((event) => event.type)).toContain("comment:created");
+    expect(events.map((event) => event.inTransaction)).toEqual(events.map(() => false));
+  } finally { for (const unsubscribe of unsubscribers) unsubscribe(); }
+}
+
+function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "pg"): void {
+  const store = new MultiremiStore(db);
+  const runtime = store.registerRuntime({ id: "rt_reply_final_entry", name: "Reply runtime", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
+  const issue = store.createIssue({ title: "Final entry", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const completeRound = (output: string) => {
+    const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output });
+    return task;
+  };
+  const committed = completeRound("Committed answer");
+  const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === committed.id)!;
+  expect(reply.body).toBe("Committed answer");
+  expect(store.findTurnEntry(committed.id)?.metadata.final_entry_id).toBe(reply.id);
+
+  // Reject only the reply's own card update; the terminal transaction writes
+  // `final_entry_id: null` and must still go through.
+  rejectWrite(db, backend, "multiremi_conversation_log", "UPDATE", backend === "pg"
+    ? "NEW.kind = 'turn' AND (NEW.metadata::jsonb ->> 'final_entry_id') IS NOT NULL"
+    : "NEW.kind = 'turn' AND json_extract(NEW.metadata, '$.final_entry_id') IS NOT NULL");
+  const emitted: string[] = [];
+  const unsubscribe = store.onWorkspaceEvent((event) => emitted.push(event.type));
+  try {
+    const rejected = completeRound("Rolled back answer");
+    expect(store.getTask(rejected.id)?.status).toBe("completed");
+    expect(store.listIssueComments(issue.id).map((comment) => comment.id)).toEqual([reply.id]);
+    // Comment log rows carry no task_id, so count the session's message rows.
+    expect(store.listConversationLogEntries(session.id).filter((entry) => entry.kind === "message")
+      .map((entry) => entry.id)).toEqual([reply.id]);
+    expect(store.findTurnEntry(rejected.id)?.metadata.final_entry_id).toBeNull();
+    expect(db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)
+      .map((row) => JSON.parse((row as { data: string }).data).commentId)).toEqual([reply.id]);
+    expect(emitted).not.toContain("comment:created");
+  } finally { unsubscribe(); }
+}
+
+// QA's F1 scenario: with the lock-order sentinel off, a real SQL failure in the
+// reply's dispatch (the teammate task INSERT) arrives after the reply's COMMIT.
+// The leader's task completes, the reply and its log row stay, and the failure
+// is logged once.
+function verifyLateReplyDispatchFailure(db: SqlDatabase, backend: "sqlite" | "pg"): void {
+  const previousSentinel = process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL;
+  process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = "0";
+  resetLockOrderSentinelEnabledCache();
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  try {
+    const store = new MultiremiStore(db);
+    const { issue, task, teammate } = startLeaderRound(store, "rt_reply_late_dispatch");
+    rejectWrite(db, backend, "multiremi_tasks", "INSERT", `NEW.agent_id = '${teammate.id}'`);
+    console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      store.completeTask(task.id, { output: `[@Reply teammate](mention://agent/${teammate.id}) Please verify` });
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    const reply = store.listIssueComments(issue.id).find((comment) => comment.taskId === task.id);
+    expect(reply?.body).toBe(`[@Reply teammate](mention://agent/${teammate.id}) Please verify`);
+    expect(store.getConversationLogEntryById(reply!.id)).toMatchObject({ kind: "message", body_md: reply!.body });
+    expect(store.findTurnEntry(task.id)?.metadata.final_entry_id).toBe(reply!.id);
+    expect(store.listTasksForIssue(issue.id).filter((candidate) => candidate.agentId === teammate.id)).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`agent reply comment skipped for ${task.id}`);
+    expect(warnings[0]).toContain("write rejected");
+  } finally {
+    if (previousSentinel === undefined) delete process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL;
+    else process.env.MULTIREMI_TEST_LOCK_ORDER_SENTINEL = previousSentinel;
+    resetLockOrderSentinelEnabledCache();
+  }
 }
 
 function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
@@ -463,6 +625,24 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: final reply card links to its comment and ignores a failed comment", async () => {
     await withPostgres(async (db) => verifyFinalReplyReference(db, "pg"));
   });
+  it("SQLite: an automatic reply pushes and dispatches only after its own COMMIT", async () => {
+    await withSqlite(async (db) => verifyReplyDispatchAfterCommit(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: an automatic reply pushes and dispatches only after its own COMMIT", async () => {
+    await withPostgres(async (db) => verifyReplyDispatchAfterCommit(db));
+  }, 30_000);
+  it("SQLite: an automatic reply commits with its turn card's final_entry_id or not at all", async () => {
+    await withSqlite(async (db) => verifyReplyCommitsWithFinalEntry(db, "sqlite"));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: an automatic reply commits with its turn card's final_entry_id or not at all", async () => {
+    await withPostgres(async (db) => verifyReplyCommitsWithFinalEntry(db, "pg"));
+  }, 30_000);
+  it("SQLite: a late automatic-reply dispatch failure keeps the reply and completes the task", async () => {
+    await withSqlite(async (db) => verifyLateReplyDispatchFailure(db, "sqlite"));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a late automatic-reply dispatch failure keeps the reply and completes the task", async () => {
+    await withPostgres(async (db) => verifyLateReplyDispatchFailure(db, "pg"));
+  }, 30_000);
   it("SQLite: pending delivery changes patch the hidden log metadata", async () => {
     await withSqlite(async (db) => verifyPendingDeliveryMetadata(db));
   });
@@ -481,6 +661,61 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: nested transactions roll back only failed savepoints", async () => {
     await withPostgres(async (db) => verifyNestedTransactions(db));
   });
+  // MUL-402 QA F3 (cmt_1khg3kqww3q5): the peak was raised only on the outer
+  // BEGIN, so a helper that added a SAVEPOINT frame still read as depth 1 and
+  // every PG `maxTransactionDepth` guard missed it. Main (01810898) raises the
+  // peak on every frame; the depth-1 guards depend on that (ADR 0011).
+  it.skipIf(!pgAdminUrl)("Postgres: maxTransactionDepth counts every nested frame, as on main", async () => {
+    await withPostgres(async (db) => {
+      const depthNow = () => (db as unknown as { transactionDepth: number }).transactionDepth;
+      let observed = 0;
+      db.resetTransactionDepthStats();
+      db.transaction(() => db.transaction(() => { observed = depthNow(); })())();
+      expect(observed).toBe(2);
+      expect(db.maxTransactionDepth).toBe(2);
+
+      db.resetTransactionDepthStats();
+      db.transaction(() => {})();
+      expect(db.maxTransactionDepth).toBe(1);
+
+      // A nested frame that rolls back is still a frame.
+      db.resetTransactionDepthStats();
+      db.transaction(() => {
+        try { db.transaction(() => db.transaction(() => { throw new Error("inner"); })())(); } catch { /* outer continues */ }
+      })();
+      expect(db.maxTransactionDepth).toBe(3);
+    });
+  });
+  // Senior ruling cmt_96e1yqxgifms §3: main's rollback path, without the extra
+  // RELEASE SAVEPOINT that B1 sent after ROLLBACK TO SAVEPOINT.
+  it.skipIf(!pgAdminUrl)("Postgres: a failed savepoint rolls back to itself with no second RELEASE, as on main", async () => {
+    await withPostgres(async (db) => {
+      db.exec("CREATE TABLE savepoint_control_case (n INTEGER PRIMARY KEY)");
+      const controls: string[] = [];
+      const target = db as unknown as { execute(sql: string, params: unknown[]): unknown };
+      const execute = target.execute.bind(db);
+      target.execute = (sql, params) => {
+        if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql.trim())) controls.push(sql.trim());
+        return execute(sql, params);
+      };
+      db.transaction(() => {
+        db.run("INSERT INTO savepoint_control_case (n) VALUES (1)");
+        try {
+          db.transaction(() => db.run("INSERT INTO savepoint_control_case (n) VALUES (1)"))();
+        } catch { /* the outer transaction continues */ }
+        db.transaction(() => db.run("INSERT INTO savepoint_control_case (n) VALUES (2)"))();
+      })();
+      expect(controls).toEqual([
+        "BEGIN",
+        "SAVEPOINT multiremi_sp_1",
+        "ROLLBACK TO SAVEPOINT multiremi_sp_1",
+        "SAVEPOINT multiremi_sp_1",
+        "RELEASE SAVEPOINT multiremi_sp_1",
+        "COMMIT",
+      ]);
+      expect(db.query("SELECT n FROM savepoint_control_case ORDER BY n").all().map((row: any) => Number(row.n))).toEqual([1, 2]);
+    });
+  });
   for (const nested of [false, true]) {
     const label = nested ? "inside a savepoint" : "in the outer transaction";
     it(`SQLite: a caught local reply failure ${label} still commits`, async () => {
@@ -490,19 +725,19 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       await withPostgres(async (db) => verifyCaughtLocalReplyFailure(db, nested));
     });
   }
-  it("SQLite: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withSqlite(async (db) => verifyBestEffortQueueRollback(db));
+  it("SQLite: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
+    await withSqlite(async (db) => verifyBestEffortQueueAfterCommit(db));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withPostgres(async (db) => verifyBestEffortQueueRollback(db));
+  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
+    await withPostgres(async (db) => verifyBestEffortQueueAfterCommit(db));
   });
   it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
-    await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db));
+    await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db, "sqlite"));
   });
   it.skipIf(!pgAdminUrl)("Postgres: failed best-effort workspace queries keep a system comment", async () => {
-    await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db));
+    await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db, "pg"));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: failed workspace SQL inside an outer transaction preserves the system comment", async () => {
+  it.skipIf(!pgAdminUrl)("Postgres: a real workspace SQL error inside an outer transaction fails the write", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
       const issue = store.createIssue({ title: "Outer transaction lookup", workspaceId: "local" });
@@ -513,25 +748,25 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         failedQueries += 1;
         return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
       };
-      const warnings: string[] = [];
-      const originalWarn = console.warn;
-      console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
-      try {
-        const comment = db.transaction(() => {
-          expect(db.inTransaction).toBe(true);
-          const result = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_outer_lookup", "system survives outer query error");
-          expect(db.inTransaction).toBe(true);
-          expect(store.getIssueComment(result.id)?.body).toBe(result.body);
-          return result;
-        })();
-        expect(failedQueries).toBeGreaterThan(0);
-        expect(db.inTransaction).toBe(false);
-        expect(store.getIssueComment(comment.id)?.body).toBe("system survives outer query error");
-        expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe(comment.body);
-        expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
-      } finally {
-        console.warn = originalWarn;
-      }
+      // Senior ruling cmt_96e1yqxgifms §2: with the savepoint gone, a real SQL
+      // error is no longer a survivable best-effort miss — it aborts the
+      // caller's transaction and `failedAtDepth` refuses the COMMIT, so the
+      // system comment must not be written. Only the bridge-reply failure above
+      // is classified as non-aborting.
+      expect(() => db.transaction(() => {
+        expect(db.inTransaction).toBe(true);
+        store.createTaskFailureSystemComment(issue.id, session.id, "tsk_outer_lookup", "system must not survive");
+      })()).toThrow(/unrecovered statement failure|current transaction is aborted/);
+      expect(failedQueries).toBeGreaterThan(0);
+      expect(db.inTransaction).toBe(false);
+      expect(db.query("SELECT id FROM multiremi_issue_comments WHERE issue_id = ?").all(issue.id)).toEqual([]);
+      // The session's head counter row (`head_…`) is written before the
+      // transaction and is not part of the atomic unit; every mirrored entry
+      // would carry the comment's `cmt_…` id.
+      expect(db.query("SELECT id FROM multiremi_conversation_log WHERE session_id = ? AND id NOT LIKE 'head_%'").all(session.id)).toEqual([]);
+      // `issue_created` predates the transaction; the comment's own activity is
+      // the one that must not survive the rollback.
+      expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
     });
   });
   it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
@@ -598,11 +833,29 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: a caught bare SQL failure aborts the outer transaction", async () => {
     await withPostgres(async (db) => {
       db.exec("CREATE TABLE bare_failure_case (n INTEGER PRIMARY KEY)");
+      // The message is the point: main used to hand the COMMIT to PostgreSQL and
+      // treat its `ROLLBACK` label as success (silent data loss). B1's
+      // `failedAtDepth` must surface the swallowed failure before that.
       expect(() => db.transaction(() => {
         db.run("INSERT INTO bare_failure_case (n) VALUES (1)");
         try { db.run("INSERT INTO bare_failure_case (n) VALUES (1)"); } catch { /* deliberately swallowed */ }
-      })()).toThrow();
+      })()).toThrow("unrecovered statement failure");
       expect(db.query("SELECT n FROM bare_failure_case").all()).toEqual([]);
+    });
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a COMMIT whose reply says ROLLBACK is refused", async () => {
+    await withPostgres(async (db) => {
+      db.exec("CREATE TABLE commit_label_case (n INTEGER PRIMARY KEY)");
+      expect(() => db.transaction(() => {
+        db.run("INSERT INTO commit_label_case (n) VALUES (1)");
+        try { db.run("INSERT INTO commit_label_case (n) VALUES (1)"); } catch { /* swallowed */ }
+        // Second net under the one above: with failedAtDepth cleared, the
+        // transaction is still aborted server-side and COMMIT answers
+        // `ROLLBACK`. Treating that reply as success would report a committed
+        // write that PostgreSQL threw away.
+        (db as unknown as { failedAtDepth: number | null }).failedAtDepth = null;
+      })()).toThrow("Postgres rolled back an aborted transaction at COMMIT");
+      expect(db.query("SELECT n FROM commit_label_case").all()).toEqual([]);
     });
   });
   it("SQLite: cold migration continues legacy issue and chat sequences, including concurrent first writes", async () => {
@@ -619,13 +872,33 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
     });
-  });
+  }, 30_000);
   it("SQLite: four processes append without duplicate or missing seq", async () => {
     await withSqlite(async (db, path) => {
       await runFour("sqlite", path, "append");
       assertContiguous(db);
     });
   });
+  // 30 s budget for the two cases below; their assertions are untouched.
+  //
+  // MUL-405 wraps the whole migration run in a session-level advisory lock
+  // (`advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, …)` in `runMigrations`), so
+  // four processes that each open the store serialize on it instead of
+  // migrating in parallel. That is deliberate — the lock is what makes
+  // concurrent startup safe — but it costs wall time here: measured against an
+  // already-migrated database, four concurrent opens take 3666 / 2738 / 1778 /
+  // 925 ms (wall 3.88 s) where the pre-merge tree ran the same four in parallel
+  // at ~930 ms each (wall 1.15 s), and a single open is 976 ms. The two cases
+  // below therefore go from 5.84 s wall together (2.9 s each, pre-merge tree)
+  // to 11.43 s with the lock, 5.88 s and 6.03 s for the two of them on their
+  // own — each one crosses the 5 s default budget. The whole file goes from
+  // 61.5 s to 69-71 s; the file total is dominated by the other PG cases.
+  //
+  // The budget is not what the cases assert (one migration row, and a
+  // contiguous seq per reader), and the lock is main's design, so the timeout
+  // moves rather than the assertion. Parent ruling on the MUL-402 sync round,
+  // overturnable: if ~950 ms per open on an already-migrated database is judged
+  // a defect in MUL-405's lock, it gets its own issue and this budget reverts.
   it.skipIf(!pgAdminUrl)("Postgres: four processes cold-start the migration", async () => {
     await withPostgres(async (db, url) => {
       resetMigration(db);
@@ -634,13 +907,13 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         .get(migrationId) as { count: number | string };
       expect(Number(row.count)).toBe(1);
     });
-  });
+  }, 30_000);
   it.skipIf(!pgAdminUrl)("Postgres: four processes append without duplicate or missing seq", async () => {
     await withPostgres(async (db, url) => {
       await runFour("pg", url, "append");
       assertContiguous(db);
     });
-  });
+  }, 30_000); // same migration-advisory-lock serialization; see the note above
   it.skipIf(!pgAdminUrl)("Postgres: rolls back a comment and its mirrored log row together", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);

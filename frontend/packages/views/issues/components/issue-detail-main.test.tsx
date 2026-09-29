@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue } from "@multiremi/core/types";
 import type { UseIssueActionsResult } from "../actions";
 import type { IssueSessionSelection } from "../hooks/use-issue-session-selection";
+import { NavigationProvider } from "../../navigation";
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multiremi/core/issues/mutations", () => ({ useUpdateIssue: () => ({ mutateAsync: vi.fn(), isPending: false }) }));
@@ -67,6 +68,7 @@ function renderMain(
 
   const result = render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <NavigationProvider value={{ pathname: "/test/issues/issue-1", searchParams: new URLSearchParams(), push: vi.fn(), replace: vi.fn(), back: vi.fn(), getShareableUrl: (path) => path }}>
     <IssueDetailMain
       issue={issue}
       issueId={issue.id}
@@ -87,6 +89,7 @@ function renderMain(
       onScrollContainerRef={vi.fn()}
       scrollContainerEl={null}
     />
+    </NavigationProvider>
     </QueryClientProvider>,
   );
 
