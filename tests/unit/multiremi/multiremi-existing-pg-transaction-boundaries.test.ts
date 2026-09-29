@@ -248,7 +248,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       db.run = originalRun;
       unsubscribe();
     }
-    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(1);
+    expect(store.getPendingChatTask(wake.chatSessionId!)?.id).toBe(wake.id);
+    expect(store.listTaskSteerMessages(wake.id)).toHaveLength(0);
     expect(workspaceLocks.length).toBeGreaterThanOrEqual(2);
     expect(workspaceLocks.every(inTransaction => inTransaction)).toBe(true);
     expect(maxDepth).toBe(1);
@@ -258,11 +259,9 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     expect(chatEvents[0].actorId).toBe(store.getChatSession(wake.chatSessionId!)!.creatorId);
     expect(events[0]).toBe(chatEvents[0]);
     expect(events.findIndex(event => event.type === "activity:created")).toBeGreaterThan(0);
-    expect(chatEvents[0].payload).toMatchObject({
-      chat_session_id: wake.chatSessionId, role: "system", task_id: null,
-      content: store.listChatMessages(wake.chatSessionId!)
-        .find(message => message.id === chatEvents[0].payload.message_id)!.body,
-    });
+    const message = chatEvents[0].payload.message as { id: string; body: string };
+    expect(store.listChatMessages(wake.chatSessionId!).find(entry => entry.id === message.id)?.body).toBe(message.body);
+    expect(message.body).toContain(leader.id);
   });
 
   const roleUpdates = [
