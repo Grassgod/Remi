@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssueLockSetStaleError, IssuesRepo, IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { RelationLockInput } from "./fixtures/postgres-relation-lock-worker.js";
@@ -86,7 +87,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         url.pathname = `/${databaseName}`;
         databaseUrl = url.toString();
         db = new PostgresSyncDatabase(databaseUrl);
-      } else db = new Database(":memory:");
+      } else db = openSqliteDatabase(":memory:");
       store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
     });

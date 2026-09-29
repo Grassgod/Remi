@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssueWorkspaceMoveError } from "@multiremi/store/repos/issues-repo.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -23,7 +24,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         url.pathname = `/${databaseName}`;
         db = new PostgresSyncDatabase(url.toString());
       } else {
-        db = new Database(":memory:");
+        db = openSqliteDatabase(":memory:");
       }
       store = new MultiremiStore(db);
       store.ensureLocalWorkspace();

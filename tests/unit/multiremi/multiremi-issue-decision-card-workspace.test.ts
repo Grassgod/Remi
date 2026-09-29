@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const sideEffectTables = [
@@ -36,7 +37,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const url = new URL(pgUrl!);
         url.pathname = `/${databaseName}`;
         db = new PostgresSyncDatabase(url.toString());
-      } else db = new Database(":memory:");
+      } else db = openSqliteDatabase(":memory:");
       store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
     });
