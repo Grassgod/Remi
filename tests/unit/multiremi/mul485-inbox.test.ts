@@ -43,13 +43,33 @@ async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
     expect(complete.body_md).toBe(plan);
     expect(complete.body_md.length).toBe(plan.length);
     expect(complete.metadata).toEqual(entry.metadata);
-    expect(complete).toHaveProperty("delivered");
+    expect(complete.delivered).toBe(false);
   }
   for (const query of ["", "?seq=-1", "?seq=1.5", `?seq=${entry.seq}&id=${entry.id}`]) {
     expect((await app.request(`/api/sessions/${session.id}/log/entry${query}`)).status).toBe(400);
   }
   expect((await app.request(`/api/sessions/${session.id}/log/entry?id=missing`)).status).toBe(404);
   expect((await app.request(`/api/sessions/ises_other/log/entry?seq=${entry.seq}`)).status).not.toBe(200);
+}
+
+async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
+  const agent = store.createAgent({ name: "MUL485 recipient", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Receipt", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Decide" });
+  const entry = store.getConversationLogEntryById(comment.id)!;
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
+    fields: { metadata: { ...entry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, source: {},
+    } } },
+  }))();
+  const app = createMultiremiApp({ store });
+  const path = `/api/sessions/${session.id}/log/entry?seq=${entry.seq}`;
+  expect((await (await app.request(path)).json()).delivered).toBe(false);
+  store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent",
+    authorId: agent.id, metadata: { inbox: { delivered_to_seq: entry.seq } } });
+  expect((await (await app.request(path)).json()).delivered).toBe(true);
 }
 
 async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<void> {
@@ -137,6 +157,10 @@ describe("MUL-485 SQLite", () => {
 
   it("limits issue entry expansion to its workspace", async () => {
     await verifyIssueWorkspaceAccess(createStore());
+  });
+
+  it("derives the delivery flag from a recipient turn receipt", async () => {
+    await verifyDeliveryReceipt(createStore());
   });
 });
 
@@ -234,5 +258,9 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
 
   it("limits issue entry expansion to its workspace on real PostgreSQL", async () => {
     await verifyIssueWorkspaceAccess(store);
+  });
+
+  it("derives the delivery flag from a recipient turn receipt on real PostgreSQL", async () => {
+    await verifyDeliveryReceipt(store);
   });
 });

@@ -1634,7 +1634,20 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (seq == null) return c.json({ error: "entry not found" }, 404);
     const entry = store.getConversationLogEntry(sessionId, seq);
     if (!entry || entry.visibility !== "shown" || entry.deleted_at !== null) return c.json({ error: "entry not found" }, 404);
-    return c.json({ ...entry, delivered: entry.metadata.inbox ?? null });
+    const recipient = entry.metadata.envelope?.to;
+    const agentId = recipient?.role === "agent" && recipient.issueSessionId === sessionId
+      ? recipient.agentId
+      : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null;
+    const delivered = agentId !== null && (
+      (store.getSessionAgentLane(sessionId, agentId)?.cursorSeq ?? 0) >= entry.seq
+      || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
+        if (turn.kind !== "turn" || turn.author_id !== agentId) return false;
+        const receipt = turn.metadata.inbox;
+        return receipt !== null && typeof receipt === "object"
+          && Number((receipt as Record<string, unknown>).delivered_to_seq) >= entry.seq;
+      })
+    );
+    return c.json({ ...entry, delivered });
   });
   app.get("/api/sessions/:sessionId/log", (c) => {
     const sessionId = logSessionAccess(c);
