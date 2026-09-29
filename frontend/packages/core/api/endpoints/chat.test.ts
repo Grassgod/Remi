@@ -89,6 +89,14 @@ describe("ChatEndpoints contracts", () => {
     }));
   });
 
+  it("sends the optimistic identity with the message", async () => {
+    const api = endpointsWithResponse({ message_id: "message-2", task_id: "task-2", created_at: session.created_at, supports_queue: true, queued: false });
+    await api.sendChatMessage("chat-1", "hello", undefined, "send-1");
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      body: JSON.stringify({ content: "hello", client_id: "send-1" }),
+    }));
+  });
+
   it.each([
     { task_id: "task-2", created_at: session.created_at, supports_queue: true, queued: true },
     { message_id: "message-2", task_id: "task-2", created_at: session.created_at, supports_queue: true, queued: "true" },

@@ -41,7 +41,7 @@ const logger = createLogger("realtime-sync");
  * new WSClient instance is detected (workspace switch) to recover events
  * missed while disconnected.
  */
-function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
+function invalidateWorkspaceScopedQueries(qc: QueryClient, includeChat = true): void {
   const wsId = getCurrentWsId();
   if (wsId) {
     qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
@@ -61,7 +61,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
-    qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
+    if (includeChat) qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: issueKeys.workspacesAll() });
@@ -146,7 +146,9 @@ export function useRealtimeSync(
     const refetch = async () => {
       logger.info("reconnected, refetching all data");
       try {
-        invalidateWorkspaceScopedQueries(qc);
+        // The log stream resumes from its cursor; invalidating every Chat cache
+        // here would discard the optimistic row before its client_id is matched.
+        invalidateWorkspaceScopedQueries(qc, false);
       } catch (e) {
         logger.error("reconnect refetch failed", e);
       }

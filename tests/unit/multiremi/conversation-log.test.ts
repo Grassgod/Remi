@@ -183,6 +183,48 @@ describe("conversation log (MUL-426)", () => {
     expect(store.getConversationLogEntryById(body.message_id)?.metadata.client_id).toBe("client-42");
   });
 
+  it("hydrates Chat user, push and final attachments from current message links", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Attachment agent", provider: "codex", visibility: "workspace" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Attachments" });
+    const attachment = (filename: string) => store.createAttachment({
+      chatSessionId: chat.id, workspaceId: "local", filename,
+      url: `/api/attachments/${filename}/content`, contentType: "text/plain", sizeBytes: 12,
+    });
+    const userFile = attachment("user.txt");
+    const sent = store.sendChatMessage(chat.id, { content: "user upload", attachmentIds: [userFile.id] });
+    const push = store.appendChatMessageWithinTransaction({
+      chatSessionId: chat.id, taskId: sent.task.id, role: "assistant", body: "push upload",
+    });
+    const pushFile = attachment("push.txt");
+    store.linkAttachmentsToChatMessage(chat.id, push.id, [pushFile.id]);
+    const final = store.appendChatMessageWithinTransaction({
+      chatSessionId: chat.id, taskId: sent.task.id, role: "assistant", body: "final reply", elapsedMs: 10,
+    });
+    const finalFile = attachment("final.txt");
+    store.linkAttachmentsToChatMessage(chat.id, final.id, [finalFile.id]);
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request(`/api/sessions/${chat.id}/log?before=30`);
+    expect(response.status).toBe(200);
+    const rows = (await response.json()).entries as Array<{ id: string; metadata: {
+      attachments: Array<{ id: string; filename: string }>; reactions?: unknown[]; elapsed_ms?: number | null;
+    } }>;
+    for (const [id, file] of [[sent.message.id, userFile], [push.id, pushFile], [final.id, finalFile]] as const) {
+      expect(rows.find(row => row.id === id)?.metadata.attachments).toMatchObject([{ id: file.id, filename: file.filename }]);
+      expect(rows.find(row => row.id === id)?.metadata).not.toHaveProperty("reactions");
+    }
+    expect(rows.find(row => row.id === push.id)?.metadata.elapsed_ms).toBeNull();
+    expect(rows.find(row => row.id === final.id)?.metadata.elapsed_ms).toBe(10);
+    const seq = store.getConversationLogEntryById(push.id)!.seq;
+    const one = await app.request(`/api/sessions/${chat.id}/log?anchor=${seq}&before=1&after=0`);
+    expect((await one.json()).entries[0].metadata.attachments).toMatchObject([{ id: pushFile.id }]);
+
+    db!.run("UPDATE multiremi_attachments SET chat_message_id = NULL WHERE id = ?", [pushFile.id]);
+    const updated = await app.request(`/api/sessions/${chat.id}/log?anchor=${seq}&before=1&after=0`);
+    expect((await updated.json()).entries[0].metadata.attachments).toEqual([]);
+  });
+
   it("keeps unbackfilled chat history in the legacy list and seq page", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "History agent", provider: "codex", visibility: "workspace" });

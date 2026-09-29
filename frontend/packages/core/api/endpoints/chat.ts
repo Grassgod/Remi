@@ -106,11 +106,13 @@ export class ChatEndpoints {
     sessionId: string,
     content: string,
     attachmentIds?: string[],
+    clientId?: string,
   ): Promise<SendChatMessageResponse> {
-    const body: { content: string; attachment_ids?: string[] } = { content };
+    const body: { content: string; attachment_ids?: string[]; client_id?: string } = { content };
     if (attachmentIds && attachmentIds.length > 0) {
       body.attachment_ids = attachmentIds;
     }
+    if (clientId) body.client_id = clientId;
     const raw = await this.http.fetch<unknown>(`/api/chat/sessions/${sessionId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),

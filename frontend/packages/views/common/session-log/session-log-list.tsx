@@ -85,7 +85,13 @@ export interface SessionLogListProps {
   /** Additional content above the anchor must settle before the list reveals. */
   contentReady?: boolean;
   afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
+  header?: React.ReactNode;
   footer?: React.ReactNode;
+  transformEntries?: (entries: readonly SessionLogEntry[]) => readonly SessionLogEntry[];
+  entryKey?: (entry: SessionLogEntry) => string;
+  showPendingSkeleton?: boolean;
+  /** A local send can be displayed before an empty session's first server window arrives. */
+  localDataReady?: boolean;
   onReturnToLatest?: () => void;
   onScrollRoot?: (el: HTMLDivElement | null) => void;
 }
@@ -141,7 +147,12 @@ export function SessionLogList({
   initialPositioned = false,
   contentReady = true,
   afterEntry,
+  header,
   footer,
+  transformEntries,
+  entryKey,
+  showPendingSkeleton = true,
+  localDataReady = false,
   onReturnToLatest,
   onScrollRoot,
 }: SessionLogListProps): React.ReactElement {
@@ -184,9 +195,9 @@ export function SessionLogList({
    * window in the replica, so `head`-relative counts stay correct.
    */
   const entries = useMemo(() => {
-    const all = snapshot.entries;
+    const all = transformEntries ? transformEntries(snapshot.entries) : snapshot.entries;
     return all.length > SESSION_LOG_DOM_LIMIT ? all.slice(all.length - SESSION_LOG_DOM_LIMIT) : all;
-  }, [snapshot.entries]);
+  }, [snapshot.entries, transformEntries]);
 
   const anchorId = anchor.kind === "element" ? anchor.id : null;
   const [highlighted, setHighlighted] = useState(Boolean(anchorId));
@@ -204,7 +215,7 @@ export function SessionLogList({
     scrollEl,
     contentEl,
     resetKey: resetKey ?? `${sessionId}:${anchorId ?? "bottom"}`,
-    dataReady: snapshot.ready && contentReady,
+    dataReady: (snapshot.ready || localDataReady) && contentReady,
     anchor,
     // Trivially true: the flat list has no virtualizer whose measurement window
     // has to close before the anchor position is final (plan 3/6 §3).
@@ -340,7 +351,7 @@ export function SessionLogList({
             `visibility: hidden` rather than unmounting because the hook measures
             real heights to know where "final" is. */}
         <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className="relative mx-auto w-full max-w-4xl px-4 py-6">
-          {reveal.state === "pending" && (
+          {showPendingSkeleton && reveal.state === "pending" && (
             <div
               data-slot="skeleton"
               data-testid={`${testIdPrefix}-skeleton`}
@@ -352,12 +363,13 @@ export function SessionLogList({
             </div>
           )}
           {!snapshot.ready && renderPending ? renderPending() : null}
+          {header}
           {entries.map((entry) => {
             const reservedHeight = reserve(entry);
             const isLatest = entry === latestEntry;
             return (
               <div
-                key={entry.seq}
+                key={entryKey?.(entry) ?? entry.seq}
                 ref={setRowRef(entry.seq)}
                 id={`comment-${entry.id}`}
                 data-perf-item="message"

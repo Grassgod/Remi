@@ -14,7 +14,10 @@ import { BodyHtmlBackfillTask } from "../../packages/server/src/render/body-html
 const root = resolve(import.meta.dir, "../..");
 const webDir = join(root, "frontend/apps/web");
 const step2 = process.argv.includes("--step2");
-const out = join(root, `reports/performance/MUL-444-step${step2 ? 2 : 1}${process.argv.includes("--dev") ? "-dev" : ""}`);
+const outArg = process.argv.indexOf("--out");
+const out = outArg >= 0 && process.argv[outArg + 1]
+  ? resolve(process.argv[outArg + 1])
+  : join(root, `reports/performance/MUL-444-step${step2 ? 2 : 1}${process.argv.includes("--dev") ? "-dev" : ""}`);
 mkdirSync(out, { recursive: true });
 const results: Array<Record<string, unknown>> = [];
 const check = (name: string, ok: boolean, detail: Record<string, unknown> = {}) => {

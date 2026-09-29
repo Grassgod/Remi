@@ -1,11 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { Virtuoso } from "react-virtuoso";
 import { cn } from "@multiremi/ui/lib/utils";
-import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Collapsible,
@@ -17,10 +15,13 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
-import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
-import { useScrollFade } from "@multiremi/ui/hooks/use-scroll-fade";
+import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy, LoaderCircle, Check } from "lucide-react";
 import { isTaskMessageTaskId, taskMessagesOptions } from "@multiremi/core/chat/queries";
+import { AttachmentSchema } from "@multiremi/core/api/schemas";
+import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
+import { SessionLogList } from "../../common/session-log/session-log-list";
+import { EntryHtml } from "../../common/session-log/entry-html";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multiremi/core/agents";
@@ -28,65 +29,78 @@ import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { toChatTimeline } from "../lib/chat-timeline";
-import { chatMessageMarkdown, isAgentAttachmentMessage } from "../lib/message-attachments";
+import { chatMessageMarkdown } from "../lib/message-attachments";
 import { TaskStatusPill } from "./task-status-pill";
 import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
+import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
 
 // ─── Public component ────────────────────────────────────────────────────
 
 interface ChatMessageListProps {
-  messages: ChatMessage[];
-  /**
-   * Server-authoritative pending-task snapshot. `null` / undefined means
-   * no in-flight task — list renders without StatusPill.
-   */
+  sessionId: string;
+  replica: SessionReplicaPort;
+  optimisticRows: readonly OptimisticChatRow[];
   pendingTask: ChatPendingTask | null | undefined;
-  /** Resolved presence; pass `undefined` while loading to keep the pill copy neutral. */
   availability: AgentAvailability | undefined;
-  firstItemIndex?: number;
   hasOlderMessages?: boolean;
   isFetchingOlderMessages?: boolean;
   onLoadOlderMessages?: () => void;
+  onRetrySend?: (clientId: string) => void;
+  initialPositioned?: boolean;
 }
 
 export function ChatMessageList({
-  messages,
+  sessionId,
+  replica,
+  optimisticRows,
   pendingTask,
   availability,
-  firstItemIndex = 0,
   hasOlderMessages = false,
   isFetchingOlderMessages = false,
   onLoadOlderMessages,
+  onRetrySend,
+  initialPositioned = false,
 }: ChatMessageListProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
-  const [isNearBottom, setIsNearBottom] = useState(true);
-  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
-    scrollRef.current = node;
-    setScrollContainerEl(node);
-  }, []);
-  const fadeStyle = useScrollFade(scrollRef);
   const { t } = useT("chat");
-
-  const pendingTaskId = pendingTask?.task_id ?? null;
-
-  // Once the assistant message for this pending task has landed in the
-  // messages list, AssistantMessage owns its rendering — suppress the live
-  // timeline (and pill) to avoid rendering the same content in two places
-  // during the invalidate → refetch window.
-  //
-  // Attachments the agent pushes mid-run also land as assistant rows carrying
-  // the running task's id; they are not the reply, so they must not retire the
-  // live timeline or the pill while the task is still working.
-  const pendingAlreadyPersisted = !!pendingTaskId && messages.some(
-    (m) => m.role === "assistant" && m.task_id === pendingTaskId
-      && !isAgentAttachmentMessage(m),
+  const scrollRoot = useRef<HTMLElement | null>(null);
+  const prependAnchor = useRef<{ id: string; top: number } | null>(null);
+  const snapshot = useSyncExternalStore(
+    useCallback(listener => replica.subscribe(sessionId, listener), [replica, sessionId]),
+    useCallback(() => replica.getSnapshot(sessionId), [replica, sessionId]),
+    useCallback(() => replica.getSnapshot(sessionId), [replica, sessionId]),
   );
-
-  // Live timeline for the in-flight task. useRealtimeSync keeps this cache
-  // current via setQueryData on task:message events.
+  useLayoutEffect(() => {
+    const anchor = prependAnchor.current;
+    const root = scrollRoot.current;
+    if (!anchor || !root) return;
+    const row = [...root.querySelectorAll<HTMLElement>('[data-perf-item="message"]')]
+      .find(item => item.dataset.perfKey === anchor.id);
+    if (!row) return;
+    root.scrollTop += row.getBoundingClientRect().top - anchor.top;
+    prependAnchor.current = null;
+  }, [snapshot.entries]);
+  const loadOlder = useCallback(() => {
+    const root = scrollRoot.current;
+    if (root) {
+      const top = root.getBoundingClientRect().top;
+      const row = [...root.querySelectorAll<HTMLElement>('[data-perf-item="message"]')]
+        .find(item => item.getBoundingClientRect().bottom > top);
+      if (row?.dataset.perfKey) prependAnchor.current = { id: row.dataset.perfKey,
+        top: row.getBoundingClientRect().top };
+    }
+    onLoadOlderMessages?.();
+  }, [onLoadOlderMessages]);
+  const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
+    mergeOptimisticChatRows(entries.filter(entry => entry.seq > 0), optimisticRows), [optimisticRows]);
+  const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
+  const pendingTaskId = pendingTask?.task_id ?? null;
+  const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
+    const row = entry as SessionLogEntry & { task_id?: string; metadata?: Record<string, unknown> };
+    return row.kind === "turn" && row.task_id === pendingTaskId
+      && !isNonterminalTurn(row.metadata);
+  });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
   const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
   const { data: liveTaskMessages } = useQuery({
@@ -97,120 +111,77 @@ export function ChatMessageList({
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
   const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
 
-  const totalCount = messages.length + (hasLive || showStatusPill ? 1 : 0);
-  const firstIndex = totalCount > 0 ? firstItemIndex : 0;
-  // The terminal anchor is keyed by identity so it survives the logical-index
-  // offset Virtuoso applies (see the `itemContent` comment below).
-  const latestMessageId = messages.length > 0 ? messages[messages.length - 1]!.id : null;
-
-  return (
-    <div
-      ref={setScrollContainerRef}
-      data-tab-scroll-root
-      data-perf-scroll="chat"
-      style={fadeStyle}
-      className="flex-1 overflow-y-auto"
-    >
-      {!scrollContainerEl ? (
-        <div className="mx-auto w-full max-w-4xl px-5 pt-4 space-y-3">
-          <ChatMessageSkeleton />
-        </div>
-      ) : (
-      <Virtuoso
-        customScrollParent={scrollContainerEl}
-        data={messages}
-        firstItemIndex={firstIndex}
-        increaseViewportBy={{ top: 400, bottom: 600 }}
-        atBottomThreshold={120}
-        atBottomStateChange={setIsNearBottom}
-        followOutput={() => (!isFetchingOlderMessages && isNearBottom ? "smooth" : false)}
-        startReached={() => {
-          if (hasOlderMessages && !isFetchingOlderMessages) {
-            onLoadOlderMessages?.();
-          }
-        }}
-        computeItemKey={(_, msg) => msg.id}
-        components={{
-          Header: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pt-4">
-              {isFetchingOlderMessages && (
-                <div className="text-center text-xs text-muted-foreground">{t(($) => $.message_list.loading_older)}</div>
-              )}
-            </div>
-          ),
-          Footer: () => (
-            <div className="mx-auto w-full max-w-4xl px-5 pb-4 space-y-4">
-              {hasLive && (
-                <div className="w-full space-y-1.5">
-                  <TimelineView items={liveTimeline} isStreaming />
-                </div>
-              )}
-              {showStatusPill && pendingTask && (
-                <TaskStatusPill
-                  pendingTask={pendingTask}
-                  taskMessages={liveTaskMessages ?? []}
-                  availability={availability}
-                />
-              )}
-            </div>
-          ),
-        }}
-        itemContent={(_index, msg) => (
-          // MUL-384 measurement contract: `data-perf-item` marks a real message,
-          // `data-perf-key` keys it, and the last one carries the terminal anchor.
-          // Attributes only — nothing here changes rendering or behavior.
-          // The newest message by identity, not by index: Virtuoso hands this
-          // renderer a logical index offset by `firstItemIndex` (1_000_000 in
-          // chat-window), so `index === messages.length - 1` never matches and the
-          // terminal anchor would silently never render.
-          <div
-            className="mx-auto w-full max-w-4xl px-5 py-2"
-            data-perf-item="message"
-            data-perf-key={msg.id}
-            {...(msg.id === latestMessageId ? { "data-perf-anchor": "latest-message" } : null)}
-          >
-            <MessageBubble
-              message={msg}
-              isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
-            />
-          </div>
-        )}
-      />
-      )}
-    </div>
-  );
+  return <SessionLogList sessionId={sessionId} replica={replica} perfScroll="session-log"
+    onScrollRoot={element => { scrollRoot.current = element; }}
+    initialPositioned={initialPositioned} showPendingSkeleton={false}
+    localDataReady={optimisticRows.length > 0}
+    transformEntries={transformEntries}
+    entryKey={entryKey}
+    header={<div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
+      {hasOlderMessages ? <button type="button" data-chat-earlier disabled={isFetchingOlderMessages}
+        onClick={loadOlder} className="h-full hover:text-foreground">
+        {isFetchingOlderMessages ? t(($) => $.message_list.loading_older) : t(($) => $.message_list.expand_older)}
+      </button> : t(($) => $.message_list.earliest)}
+    </div>}
+    renderEntry={({ entry }) => {
+      const row = entry as SessionLogEntry & {
+        author_type?: string; task_id?: string | null; created_at?: string;
+        metadata?: Record<string, unknown>;
+      };
+      if (row.kind !== "message" && row.kind !== "turn") {
+        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
+      }
+      const isUser = row.kind === "message" && row.author_type === "member";
+      if (row.kind === "message" && !isUser) {
+        return <div className="text-xs text-muted-foreground"><EntryHtml html={row.body_html} markdown={row.body_md} /></div>;
+      }
+      const message: ChatMessage = {
+        id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",
+        content: isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md),
+        task_id: row.task_id ?? null, created_at: row.created_at ?? "",
+        failure_reason: typeof row.metadata?.failure_reason === "string" ? row.metadata.failure_reason : null,
+          elapsed_ms: typeof row.metadata?.elapsed_ms === "number" ? row.metadata.elapsed_ms : null,
+          attachments: AttachmentSchema.array().safeParse(row.metadata?.attachments).data as ChatMessage["attachments"],
+      };
+      const clientId = clientIdOf(entry);
+      const local = optimisticRows.find((item) => item.clientId === clientId);
+      const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
+      return <div className="py-2">
+        <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
+          isPush={isPush} />
+        {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
+          onRetry={() => onRetrySend?.(local.clientId)} /></div>}
+      </div>;
+    }}
+    footer={<div className="space-y-4 pb-4">
+      {hasLive && <TimelineView items={liveTimeline} isStreaming />}
+      {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
+        taskMessages={liveTaskMessages ?? []} availability={availability} />}
+    </div>} />;
 }
 
-/**
- * Placeholder shown while `chat_message` for a session is being fetched
- * (initial refresh, or switching to an un-cached session). Shape roughly
- * mirrors an assistant → user → assistant exchange so the window doesn't
- * shift under the user when real messages arrive.
- */
-export function ChatMessageSkeleton() {
-  return (
-    <div className="flex-1 overflow-hidden">
-      <div className="mx-auto w-full max-w-4xl px-5 py-4 space-y-5">
-        <div className="space-y-2">
-          <Skeleton className="h-3.5 w-3/4" />
-          <Skeleton className="h-3.5 w-1/2" />
-        </div>
-        <div className="flex justify-end">
-          <Skeleton className="h-8 w-48 rounded-2xl" />
-        </div>
-        <div className="space-y-2">
-          <Skeleton className="h-3.5 w-2/3" />
-          <Skeleton className="h-3.5 w-5/6" />
-          <Skeleton className="h-3.5 w-1/3" />
-        </div>
-      </div>
-    </div>
-  );
+function isNonterminalTurn(metadata?: Record<string, unknown>): boolean {
+  return metadata?.elapsed_ms == null && metadata?.failure_reason == null;
+}
+
+function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; onRetry: () => void }) {
+  const { t } = useT("chat");
+  return <div aria-live="polite" className="flex h-5 items-center text-xs text-muted-foreground max-md:h-6"
+    style={status === "hidden" ? { visibility: "hidden" } : undefined}>
+    {status === "sending" && <><LoaderCircle className="mr-1 size-3 animate-spin" aria-hidden="true" />{t(($) => $.message_list.sending)}</>}
+    {(status === "sent" || status === "hidden") && <><Check className="mr-1 size-3" aria-hidden="true" />{t(($) => $.message_list.sent)}</>}
+    {status === "failed" && <><AlertCircle className="mr-1 size-3 text-destructive" aria-hidden="true" />
+      <span className="text-destructive">{t(($) => $.message_list.send_failed)}</span>
+      <button type="button" onClick={onRetry} aria-label={t(($) => $.message_list.retry_send)}
+        className="relative inline-flex h-5 items-center justify-center px-1 text-destructive underline after:absolute after:-inset-y-3 after:inset-x-0">
+        {t(($) => $.message_list.retry)}
+      </button></>}
+  </div>;
 }
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
-function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
+function MessageBubble({ message, isPending, isPush }: { message: ChatMessage; isPending: boolean; isPush: boolean }) {
   if (message.role === "user") {
     const markdown = chatMessageMarkdown(message);
     return (
@@ -233,23 +204,24 @@ function MessageBubble({ message, isPending }: { message: ChatMessage; isPending
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} />;
+  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} />;
 }
 
 function AssistantMessage({
   message,
   isPending,
+  isPush,
 }: {
   message: ChatMessage;
   isPending: boolean;
+  isPush: boolean;
 }) {
   const taskId = message.task_id;
   // A mid-run attachment push shares its task id with the terminal reply that
   // follows. The timeline belongs to that reply: drawing it here would both
   // displace this row's own caption and, once the reply lands, repeat the
   // whole timeline a second time.
-  const isAttachmentPush = isAgentAttachmentMessage(message);
-  const canFetchTaskMessages = isTaskMessageTaskId(taskId) && !isAttachmentPush;
+  const canFetchTaskMessages = isTaskMessageTaskId(taskId) && !isPush;
 
   // Use the shared taskMessagesOptions so this cache entry is the same one
   // seeded by useRealtimeSync during task execution — zero refetch when the
@@ -259,7 +231,7 @@ function AssistantMessage({
     enabled: canFetchTaskMessages,
   });
 
-  const timeline: ChatTimelineItem[] = isAttachmentPush
+  const timeline: ChatTimelineItem[] = isPush
     ? []
     : toChatTimeline(taskMessages ?? []);
 

@@ -1,36 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 import { chatKeys } from "@multiremi/core/chat/queries";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-
-// jsdom has no layout, so the real Virtuoso measures a 0-height viewport and
-// renders nothing. Render every row (plus Footer, which owns the live timeline
-// and the status pill) inline instead.
-//
-// The mock reproduces Virtuoso's `firstItemIndex` contract, which the real
-// component relies on: `itemContent` receives the *logical* index, i.e. the data
-// index plus the offset (`react-virtuoso` adds `firstItemIndex` before calling
-// the renderer). A mock that passed the data index would hide any bug keyed on
-// logical indices — which is exactly how `data-perf-anchor="latest-message"`
-// silently never rendered for months of green tests.
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, firstItemIndex = 0, components }: {
-    data: ChatMessage[];
-    itemContent: (index: number, item: ChatMessage) => ReactNode;
-    firstItemIndex?: number;
-    components?: { Footer?: () => ReactNode };
-  }) => (
-    <div>
-      {data.map((item, index) => (
-        <div key={item.id}>{itemContent(index + firstItemIndex, item)}</div>
-      ))}
-      {components?.Footer ? <components.Footer /> : null}
-    </div>
-  ),
-}));
+import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
 
@@ -94,7 +68,7 @@ const pendingTask = { task_id: TASK_ID, status: "running" } as ChatPendingTask;
 function renderList(
   messages: ChatMessage[],
   pending: ChatPendingTask | null,
-  firstItemIndex = 0,
+  includeHead = false,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -102,27 +76,37 @@ function renderList(
   // Seed the transcript the way useRealtimeSync does during the run, so no
   // component in the tree needs to fetch.
   client.setQueryData(chatKeys.taskMessages(TASK_ID), taskMessages);
+  const entries = messages.map((message, index) => ({
+    session_id: "cs-1", seq: index + 1, id: message.id, revision: 1,
+    kind: message.role === "user" ? "message" : "turn",
+    author_type: message.role === "user" ? "member" : "agent",
+    body_md: message.content, body_html: null, render_version: null,
+    task_id: message.task_id,
+    metadata: { final_reply_md: message.content, attachments: message.attachments,
+      elapsed_ms: message.elapsed_ms, failure_reason: message.failure_reason },
+    created_at: message.created_at,
+  })) as SessionLogEntry[];
+  if (includeHead) entries.unshift({ session_id: "cs-1", seq: 0, id: "chat-head", revision: 1,
+    kind: "head", body_md: "Chat title", body_html: null, render_version: null } as SessionLogEntry);
+  const replica = new MemorySessionReplica({ "cs-1": { entries } });
   return render(
     <QueryClientProvider client={client}>
       <ChatMessageList
-        messages={messages}
+        sessionId="cs-1"
+        replica={replica}
+        optimisticRows={[]}
         pendingTask={pending}
         availability={undefined}
-        firstItemIndex={firstItemIndex}
       />
     </QueryClientProvider>,
   );
 }
 
 describe("ChatMessageList measurement contract", () => {
-  it("marks exactly one terminal anchor, on the last message, despite the firstItemIndex offset", () => {
-    // ChatWindow passes firstItemIndex = 1_000_000 - olderMessageCount, so
-    // `itemContent`'s index is offset. Keying the anchor on the logical index made
-    // it never render; keying it on the message id is what this pins.
+  it("marks exactly one terminal anchor on the last log row", () => {
     const { container } = renderList(
       [attachmentPush("msg-1", "first"), terminalReply("msg-2")],
       null,
-      1_000_000,
     );
 
     const anchors = container.querySelectorAll('[data-perf-anchor="latest-message"]');
@@ -134,8 +118,14 @@ describe("ChatMessageList measurement contract", () => {
   });
 
   it("has no terminal anchor when there are no messages", () => {
-    const { container } = renderList([], null, 1_000_000);
+    const { container } = renderList([], null);
     expect(container.querySelectorAll('[data-perf-anchor="latest-message"]')).toHaveLength(0);
+  });
+
+  it("does not render Chat's seq 0 title as a message after client recovery", () => {
+    const { container } = renderList([terminalReply("msg-1")], null, true);
+    expect(container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(1);
+    expect(container).not.toHaveTextContent("Chat title");
   });
 });
 
@@ -174,6 +164,13 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     const reply = { ...terminalReply("msg-1"), attachments: [attachment("att-x")] };
     renderList([reply], null);
 
+    expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
+  });
+
+  it("keeps a nonterminal turn without attachments separate from the final reply", () => {
+    const push = { ...attachmentPush("msg-1", "Progress update"), attachments: [] };
+    renderList([push, terminalReply("msg-2")], null);
+    expect(screen.getByText("Progress update")).toBeInTheDocument();
     expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
   });
 });

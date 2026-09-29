@@ -12,7 +12,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
   pending: {} as Record<string, unknown>,
-  create: vi.fn(), update: vi.fn(), send: vi.fn(),
+  create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
@@ -50,6 +50,10 @@ vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a"
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
 vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {} }));
+vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string) => ({
+  replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: [] }) },
+  snapshot: { entries: [], head: null, ready: true }, error: false,
+}) }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ chat: () => "/chat" }) }));
 vi.mock("@multiremi/views/issues/components", () => ({ canAssignAgent: () => true }));
 vi.mock("../../navigation", () => ({ useNavigation: () => ({ push: vi.fn() }) }));
@@ -110,6 +114,7 @@ beforeEach(() => {
     return backend.sessions[0];
   });
   backend.send.mockReset().mockResolvedValue({ task_id: "task-a", message_id: "message-a", created_at: "2026-09-17", supports_queue: true, queued: false });
+  backend.refresh.mockReset().mockResolvedValue(undefined);
   apiLogger.error.mockReset();
 });
 
@@ -132,7 +137,8 @@ describe("ChatWindow plain HTTP sends", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
   });
 
   it("sends a follow-up in an existing session without randomUUID", async () => {
@@ -143,7 +149,7 @@ describe("ChatWindow plain HTTP sends", () => {
     expect(globalThis.crypto.randomUUID).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
     expect(backend.create).not.toHaveBeenCalled();
   });
 
@@ -216,7 +222,7 @@ describe("ChatWindow project settings", () => {
     expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
     expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
   });
@@ -254,7 +260,7 @@ describe("ChatWindow project settings", () => {
     expect(backend.update).not.toHaveBeenCalled();
     expect(backend.create).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
   });
 
   it("keeps no location strip for an existing chat with nothing bound", async () => {

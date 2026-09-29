@@ -1625,6 +1625,17 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       return c.json({ error: "invalid log window" }, 400);
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
+    if (!store.getIssueSession(sessionId)) {
+      const messageIds = window.entries.filter(entry => entry.kind === "message" || entry.kind === "turn")
+        .map(entry => entry.id);
+      const attachments = store.listAttachmentsForChatMessages(messageIds);
+      return c.json({ ...window, entries: window.entries.map(entry =>
+        entry.kind === "message" || entry.kind === "turn"
+          ? { ...entry, metadata: { ...entry.metadata,
+            attachments: (attachments.get(entry.id) ?? []).map(attachmentCompatibilityResponse),
+          } }
+          : entry) });
+    }
     const commentIds = window.entries.filter(entry => entry.kind === "message").map(entry => entry.id);
     const reactions = store.listCommentReactionsForComments(commentIds);
     const attachments = store.listAttachmentsForComments(commentIds);

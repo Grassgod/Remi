@@ -47,6 +47,19 @@ describe("chat attachment drafts", () => {
     expect(store.getState().inputDraftAttachments).toEqual({ "chat-1": { "url-a": "attachment-a" }, "chat-2": { "url-b": "attachment-b" } });
   });
 
+  it("shares local upload details across chat surfaces without persisting or crossing workspaces", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    const attachment = { id: "attachment-a", filename: "report.pdf" } as import("../types").Attachment;
+    store.getState().setInputDraftAttachment("chat-1", "url-a", attachment.id);
+    store.getState().setLocalAttachmentDetail(attachment);
+    expect(store.getState().localAttachmentDetails[attachment.id]).toBe(attachment);
+    expect(createChatStore({ storage }).getState().localAttachmentDetails).toEqual({});
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().localAttachmentDetails).toEqual({});
+  });
+
   it("clears attachment-only drafts after send/delete while preserving other conversations", () => {
     const storage = memoryStorage();
     const store = createChatStore({ storage });
