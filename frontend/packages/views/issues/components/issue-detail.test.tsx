@@ -1346,6 +1346,44 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
+  it("locates an inbox comment after the Issue resolves behind a ready log window", async () => {
+    let resolveIssue!: (issue: Issue) => void;
+    mockApiObj.getIssue.mockReturnValue(new Promise<Issue>((resolve) => { resolveIssue = resolve; }));
+    const target: SessionLogRow = {
+      session_id: "session-main", seq: 2, id: "comment-2", revision: 1, kind: "message",
+      visibility: "shown", author_type: "agent", author_id: "agent-1", task_id: null,
+      parent_id: null, body_md: "I can help with this", body_html: "<p>I can help with this</p>",
+      render_version: "test", metadata: { attachments: [], reactions: [] }, resolved_at: null,
+      resolved_by_type: null, resolved_by_id: null, created_at: "2026-01-17T00:00:00Z",
+      updated_at: "2026-01-17T00:00:00Z", deleted_at: null,
+    };
+    const replica = new MemorySessionReplica({
+      "session-main": { entries: [target], ready: true, fresh: true },
+    });
+    issueLogOverride.current = { replica, snapshot: replica.getSnapshot("session-main"), error: false };
+    const queryClient = createTestQueryClient();
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail issueId="issue-1" initialIssueSessionId="session-main"
+            highlightCommentId={target.id} initialLog={{ sessionId: "session-main", head: null,
+              window: { entries: [], head_seq: 2, log_version: 1, has_more_before: false, has_more_after: false } }} />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(["workspaces", "ws-1", "members"])?.status).toBe("success");
+    });
+    expect(document.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+    expect(document.getElementById("comment-comment-2")).toBeNull();
+    resolveIssue(mockIssue);
+    await waitForReveal();
+    expect(document.querySelector('[data-perf-anchor="target-comment"]')).toHaveAttribute("id", "comment-comment-2");
+    expect(document.getElementById("comment-comment-2")).toHaveClass("bg-warning/10");
+    expect(document.querySelector('[data-session-log-scroll]')).toHaveAttribute("data-stick-state", "released");
+  });
+
   it("shows reusable Session results without offering to publish one", async () => {
     mockApiObj.listIssueSessionResults.mockResolvedValue([{
       id: "result-1",
