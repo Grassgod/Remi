@@ -662,17 +662,11 @@ class InvalidChatTaskDestinationError extends ChatIssueTaskConflictError {
  */
 export class TaskSteerPendingError extends Error {}
 
-function executionScopeSql(alias: string): string {
-  return `(CASE WHEN ${alias}.delegated_by_agent_id IS NOT NULL
-    AND ${alias}.agent_id <> ${alias}.delegated_by_agent_id
-    THEN COALESCE(${alias}.delegation_id, '') ELSE '' END)`;
-}
-
 function sameExecutionLaneSql(queued: string, active: string): string {
   return `((${queued}.runtime_workspace_id IS NOT NULL AND ${active}.runtime_workspace_id = ${queued}.runtime_workspace_id)
     OR (${active}.agent_id = ${queued}.agent_id AND (
     (${queued}.issue_session_id IS NOT NULL AND ${active}.issue_session_id = ${queued}.issue_session_id
-      AND ${executionScopeSql(queued)} = ${executionScopeSql(active)})
+      AND ${queued}.execution_scope = ${active}.execution_scope)
     OR (${queued}.chat_session_id IS NOT NULL AND ${active}.chat_session_id = ${queued}.chat_session_id)
     OR (${queued}.issue_id IS NOT NULL AND ${queued}.issue_session_id IS NULL
       AND ${active}.issue_id = ${queued}.issue_id AND ${active}.issue_session_id IS NULL)
@@ -1615,7 +1609,11 @@ export class TasksRepo {
     // owns the ACP lineage. If a local-directory constraint points elsewhere,
     // or the provider/runtime drifted, abandon the cache atomically and cold
     // bootstrap from the canonical event log.
-    const executionScope = taskExecutionScope(input);
+    const executionScope = taskExecutionScope({
+      agentId: input.agentId,
+      delegatedByAgentId: input.delegatedByAgentId ?? input.delegated_by_agent_id,
+      delegationId: input.delegationId ?? input.delegation_id,
+    });
     let issueLane: MultiremiSessionAgentLane | null = null;
     let inheritIssueLane = false;
     if (issueSession) {
@@ -1741,11 +1739,11 @@ export class TasksRepo {
         assignment_event_id, assignment_source_event_id, projection_degrade_level,
         provider, plugin_snapshot, execution_fingerprint, codex_profile, claude_profile,
         session_id, work_dir, created_at, updated_at,
-        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at
+        execution_model, execution_thinking_level, fallback_switched, switch_reason, next_retry_at, execution_scope
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?
       )`,
       [
         runtimeWorkspaceId,
@@ -1827,6 +1825,7 @@ export class TasksRepo {
         normalizeExecutionFlag(input.fallbackSwitched ?? input.fallback_switched),
         cleanOptionalString(input.switchReason ?? input.switch_reason),
         cleanOptionalString(input.nextRetryAt ?? input.next_retry_at),
+        executionScope,
       ],
     );
     if (chatSession) {
@@ -5408,7 +5407,7 @@ ${placementAfter.sql}
       `SELECT * FROM multiremi_tasks
        WHERE agent_id = ? AND issue_session_id = ?
          AND status = 'queued' AND projection_to_seq IS NULL
-         AND ${executionScopeSql("multiremi_tasks")} = ''
+         AND execution_scope = ''
        ORDER BY created_at DESC, id DESC
        LIMIT 1`,
     ).get(delegatorId, issueSessionId) as Row | null;
@@ -6561,6 +6560,7 @@ function toTask(row: Row): MultiremiTask {
   return {
     id: String(row.id),
     taskKind: row.task_kind === "quick_create" ? "quick_create" : "direct",
+    execution_scope: String(row.execution_scope ?? ""),
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
     runtimeWorkspaceId: nullableString(row.runtime_workspace_id),
