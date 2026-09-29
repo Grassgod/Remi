@@ -34,6 +34,19 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("executes assignee grouped lists with the opt-in workspace archive count", async () => {
+    useCliEnv();
+    const spec = specById("issue.grouped");
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/issues/grouped");
+      expect(url.searchParams.get("include_archived_total")).toBe("true");
+      return Response.json({ groups: [], archived_total: 7 });
+    });
+    const output = await capture(() => registryFor([spec]).execute([...spec.path, "--include-archived-total", "--output", "json"]));
+    expect(JSON.parse(output.stdout).archived_total).toBe(7);
+  });
+
   it("requires confirmation for orphaned Issue workspace abandonment and preserves the read command", async () => {
     useCliEnv();
     const abandon = specById("issue.workspace.abandon");
@@ -69,6 +82,53 @@ describe("native collaboration CLI contracts", () => {
       return Response.json({ groups: [], total: 0 });
     });
     await capture(() => registryFor([spec]).execute([...spec.path, "--assignee-type", "member", "--output", "json"]));
+  });
+
+  it("issue grouped filters assignee types through the real route with the archive opt-in", async () => {
+    useCliEnv();
+    process.env.MULTIREMI_WORKSPACE_ID = "local";
+    const database = openSqliteDatabase(":memory:");
+    try {
+      const store = new MultiremiStore(database);
+      store.ensureLocalWorkspace();
+      const member = store.createWorkspaceMember({ name: "Grouped CLI member" });
+      const agent = store.createAgent({ name: "Grouped CLI agent", provider: "codex" });
+      const squad = store.createSquad({ name: "Grouped CLI squad" });
+      const assignments = [
+        { type: "member", id: member.id },
+        { type: "agent", id: agent.id },
+        { type: "squad", id: squad.id },
+      ] as const;
+      const issues = assignments.map(({ type, id }) => store.createIssue({
+        title: `Grouped ${type}`, assigneeType: type, assigneeId: id,
+      }));
+      store.createIssue({ title: "Grouped unassigned" });
+      const app = createMultiremiApp({ store, authToken: "test-token" });
+      const spec = specById("issue.grouped");
+      const requests: URL[] = [];
+      globalThis.fetch = capabilityFetch(spec.id, (request) => {
+        requests.push(new URL(request.url));
+        return app.request(request);
+      });
+      for (const [index, { type }] of assignments.entries()) {
+        const output = await capture(() => registryFor([spec]).execute([
+          ...spec.path, "--assignee-type", type, "--include-archived-total", "--output", "json",
+        ]));
+        const result = JSON.parse(output.stdout);
+        expect(output.stderr).toBe("");
+        expect(result.groups).toHaveLength(1);
+        expect(result.groups[0].assigneeType).toBe(type);
+        expect(result.groups[0].total).toBe(1);
+        expect(result.groups[0].issues.map((issue: { id: string }) => issue.id)).toEqual([issues[index]!.id]);
+        expect(result.archived_total).toBe(0);
+      }
+      expect(requests.map((url) => url.pathname)).toEqual(Array(3).fill("/api/issues/grouped"));
+      expect(requests.map((url) => url.searchParams.get("assignee_types"))).toEqual(["member", "agent", "squad"]);
+      expect(requests.every((url) => !url.searchParams.has("assignee_type")
+        && url.searchParams.get("include_archived_total") === "true")).toBe(true);
+    } finally {
+      database.close();
+    }
   });
 
   it("executes status-pages with list filters and optional archived total", async () => {

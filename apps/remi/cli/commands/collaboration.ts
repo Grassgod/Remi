@@ -378,8 +378,14 @@ function issueExtendedSpecs(): CommandSpec[] {
           .map((name) => [name.replaceAll("-", "_"), invocation.options[name] === true ? true : undefined])),
       });
     }),
-    nativeSpec("issue.grouped", ["issue", "grouped"], "List issues grouped for planning", "read", HUMAN_TASK, [], ISSUE_LIST_OPTIONS, async (invocation) => {
-      await getAndRender(invocation, "/api/issues/grouped", ["groups", "issues"], issueQuery(invocation));
+    nativeSpec("issue.grouped", ["issue", "grouped"], "List issues grouped for planning", "read", HUMAN_TASK, [], [
+      ...ISSUE_LIST_OPTIONS,
+      { name: "include-archived-total", type: "boolean", description: "Include the workspace-wide archived count" },
+    ], async (invocation) => {
+      await getAndRender(invocation, "/api/issues/grouped", ["groups", "issues"], {
+        ...issueQuery(invocation),
+        include_archived_total: invocation.options["include-archived-total"] === true ? true : undefined,
+      });
     }),
     nativeSpec("issue.children", ["issue", "children"], "List child issues", "read", HUMAN_TASK, [refPositional("issue")], [], async (invocation) => {
       await getAndRender(invocation, "/api/issues/children", ["issues"], { parent_ids: positional(invocation, 0, "issue") });

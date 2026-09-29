@@ -555,7 +555,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const query = issueListQuery(store, c, "native", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
-    return c.json(store.listGroupedIssues(query));
+    const result = store.listGroupedIssues(query);
+    return c.json(c.req.query("include_archived_total") === "true"
+      ? { ...result, archived_total: store.countIssues({ workspaceId: query.workspaceId ?? "local", archivedOnly: true }) }
+      : result);
   });
   app.get("/api/issues/grouped", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspace_id"));
@@ -563,7 +566,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const query = issueListQuery(store, c, "compat", workspaceId);
     const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
     if (denied) return denied;
-    return c.json(store.listGroupedIssues(query));
+    const result = store.listGroupedIssues(query);
+    return c.json(c.req.query("include_archived_total") === "true"
+      ? { ...result, archived_total: store.countIssues({ workspaceId: query.workspaceId ?? "local", archivedOnly: true }) }
+      : result);
   });
   app.get("/api/assignee-frequency", (c) => {
     const workspaceId = resolveRequestWorkspaceId(c, store, c.req.query("workspaceId") ?? c.req.query("workspace_id"));
