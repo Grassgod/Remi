@@ -120,6 +120,11 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
     });
     expect(otherMethod.status).toBe(404);
     await otherMethod.text();
+    const retiredHead = await fetch(`http://127.0.0.1:${server.port}/api/daemon/tasks/${task.id}/messages`, {
+      method: "HEAD", headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(retiredHead.status).toBe(404);
+    await retiredHead.text();
     for (const path of ["/api/daemon/qa-never-existed", "/api/daemon/heartbeat/extra", "/api/daemon"]) {
       const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { headers: { Authorization: `Bearer ${authToken}` } });
       expect(response.status, path).toBe(apiRole === "runtime" && path === "/api/daemon" ? 421 : 404);

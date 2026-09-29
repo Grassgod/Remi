@@ -227,9 +227,11 @@ export const RETIRED_DAEMON_HTTP_ROUTES = [
 
 // The snapshot excludes this handler by identity, while still recording any
 // live handler accidentally registered at the same method and path.
-export const retiredDaemonRouteHandler: Handler = c => c.json({
-  code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN,
-}, 426);
+export const retiredDaemonRouteHandler: Handler = c => {
+  // Hono dispatches HEAD as GET; no retired HEAD route exists in the v1 inventory.
+  if (c.req.method === "HEAD") return c.notFound();
+  return c.json({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN }, 426);
+};
 
 /**
  * Adapt Bun's server socket to the session's narrow socket interface (MUL-417).
