@@ -4219,6 +4219,17 @@ runMigrations(this.db);
     return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
   }
 
+  recordTaskInboxDelivery(taskId: string, fromSeq: number, toSeq: number): void {
+    this.ctx.db.transaction(() => {
+      this.conversationLog.updateTurnCardWithinTransaction(taskId, { inbox: {
+        delivered_from_seq: fromSeq,
+        delivered_to_seq: toSeq,
+        delivered_at: new Date().toISOString(),
+        task_id: taskId,
+      } });
+    })();
+  }
+
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
     return this.conversationLog.append(input);
   }

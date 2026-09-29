@@ -100,6 +100,8 @@ export interface ConversationLogModel {
 export interface ConversationLogEntryMetadata {
   /** Cross-agent inbox message stored on a system comment or system chat message. */
   envelope?: EnvelopeMetadata["envelope"];
+  /** Best-effort receipt for the range projected into this turn. */
+  inbox?: { delivered_from_seq: number; delivered_to_seq: number; delivered_at: string; task_id: string };
   /** Hidden rows: seq of the row this marker describes. */
   target_seq?: number;
   /** `head`: Issue or chat title. `result_published`: published result title. */
