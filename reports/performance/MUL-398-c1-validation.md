@@ -4,7 +4,7 @@
 
 此报告固定记录 `231a2b2f` 交付时的 393 条 HTTP + 后台项及其同口径测量。后续同步 main `5e3417b4` 后的 403 条 HTTP + 后台项、新增读路径和验证见 [同步报告](MUL-398-c1-main-sync-2026-09-29.md)。
 
-日期：2026-09-29。任务 `tsk_499cfoxcyliw` 续跑。PR [#318](https://github.com/Grassgod/Remi/pull/318)，保持 Draft，等待 QA 与带头大哥合入。数据库目标仅本地 `postgres://…`；本报告不是 209 实测或上线证明。
+日期：2026-09-29。任务 `tsk_499cfoxcyliw` 续跑。PR [#318](https://github.com/Grassgod/Remi/pull/318)，保持 Draft，等待 QA 与带头大哥合入。数据库目标仅本地 loopback PG；本报告不是 209 实测或上线证明。
 
 ## 基线、授权与停止条件解决
 
