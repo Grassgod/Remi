@@ -30,6 +30,14 @@ const largeColumns = new Map(tableNames.map(table => [table,
     .filter(column => /TEXT|JSON|BLOB|BYTEA/i.test(column.type)).map(column => column.name),
 ] as const).filter(([, columns]) => columns.length > 0));
 schema.close();
+if (process.argv.includes("--list-routes")) {
+  console.log(JSON.stringify([...runtimeRoutes].sort(), null, 2));
+  process.exit(0);
+}
+if (process.argv.includes("--list-schema")) {
+  console.log(JSON.stringify(Object.fromEntries(largeColumns), null, 2));
+  process.exit(0);
+}
 type Callable = ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction;
 function callable(declaration: ts.Declaration): Callable | null {
   if (ts.isVariableDeclaration(declaration) && declaration.initializer
@@ -178,6 +186,7 @@ if (process.argv.includes("--list-missing")) {
   }));
   process.exit(0);
 }
+// Conservative candidates still need projection and writer-limit review.
 if (process.argv.includes("--enforce") && (missing.length || unclassified.length || stale.length)) throw new Error(JSON.stringify({
   missingCount: missing.length, missing: missing.slice(0, 12).map(row => row.key),
   unclassified, stale: stale.map(row => row.key),
