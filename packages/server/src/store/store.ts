@@ -4281,6 +4281,10 @@ runMigrations(this.db);
     return this.conversationLog.listAll(sessionId, input);
   }
 
+  listConversationLogRangePage(sessionId: string, afterSeq: number, toSeq: number, limit: number): ConversationLogEntry[] {
+    return this.conversationLog.listRangePage(sessionId, afterSeq, toSeq, limit);
+  }
+
   listConversationLogEntriesByTask(taskId: string): ConversationLogEntry[] {
     return this.conversationLog.listByTask(taskId);
   }

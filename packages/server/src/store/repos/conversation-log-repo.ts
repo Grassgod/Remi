@@ -31,6 +31,11 @@ export const CONVERSATION_LOG_MAX_WINDOW = 100;
 /** Default window when the caller passes neither `before` nor `after`. */
 export const CONVERSATION_LOG_DEFAULT_WINDOW = 30;
 
+export const CONVERSATION_LOG_HEAD_SQL = "SELECT * FROM multiremi_conversation_heads WHERE session_id = ?";
+export const CONVERSATION_LOG_RANGE_SQL =
+  "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC";
+export const CONVERSATION_LOG_RANGE_PAGE_SQL = `${CONVERSATION_LOG_RANGE_SQL} LIMIT ?`;
+
 /**
  * Read-only query seam. `window` and `locate` funnel every statement through
  * this so MUL-403's read pool can be wired in at v2-integration without
@@ -315,7 +320,7 @@ export class ConversationLogRepo {
     logVersion: number;
     updatedAt: string;
   } | null {
-    const row = this.runQuery(query, "SELECT * FROM multiremi_conversation_heads WHERE session_id = ?", [sessionId]).get() as Row | null;
+    const row = this.runQuery(query, CONVERSATION_LOG_HEAD_SQL, [sessionId]).get() as Row | null;
     if (!row) return null;
     return {
       sessionId: String(row.session_id),
@@ -602,9 +607,14 @@ export class ConversationLogRepo {
       ? this.ctx.db.query(
         "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
       ).all(sessionId, since)
-      : this.ctx.db.query(
-        "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
-      ).all(sessionId, since, to)) as Row[];
+      : this.ctx.db.query(CONVERSATION_LOG_RANGE_SQL).all(sessionId, since, to)) as Row[];
+    return rows.map(toConversationLogEntry);
+  }
+
+  /** The bounded range page shared by SQLite fill and the Postgres read pool. */
+  listRangePage(sessionId: string, afterSeq: number, toSeq: number, limit: number): ConversationLogEntry[] {
+    const rows = this.ctx.db.query(CONVERSATION_LOG_RANGE_PAGE_SQL)
+      .all(sessionId, afterSeq, toSeq, limit) as Row[];
     return rows.map(toConversationLogEntry);
   }
 

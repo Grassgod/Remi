@@ -62,6 +62,8 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 `apiRole` 同时决定路由守卫、健康响应和 Hub 角色，具体接入见
 [Live Hub 对接说明](live-hub-a6-integration.md)。
 
+服务端自建 Hub 默认使用 [会话日志 fill reader](../../packages/server/src/api/hub/conversation-log-fill-reader.ts)：冷流订阅和 peer head 补齐均读取 `log:` 的 B1 head 与有界范围页，包含隐藏标记以保留 seq 连续性；Postgres 走异步 read pool，SQLite 走 store。`trace:` 的 head 返回 `null`，不从数据库补帧。关停时先解除日志 listener、关闭 Hub，再关闭读池，避免进行中的 fill 访问已关闭的连接。
+
 实现在 [hub/stream-auth.ts](../../packages/server/src/api/hub/stream-auth.ts)，规则只写一次，两种后端各自提供事实：
 
 - `log:` 按会话归属。chat 会话只允许 `creatorId` 本人；issue 会话要求请求者是该会话所属工作区的成员。socket 的 workspace 绑定仍然生效，跨工作区一律拒绝。
@@ -97,5 +99,6 @@ Postgres 下每条订阅走 C4 只读池一条 `SELECT`（`LOG_STREAM_FACTS_SQL`
 
 - 服务端协议与鉴权：`bun test tests/unit/multiremi/multiremi-browser-stream-protocol.test.ts`（假 Hub，覆盖三种 log 归属、trace 四种可见性、ack/gap、续传、`wrong_endpoint`、resync）。
 - 服务端端点接线与 chat 归属：`bun test tests/unit/multiremi/multiremi-browser-stream-socket.test.ts`。
+- 冷流、真实 PG peer 补帧与关停顺序：`bun test tests/unit/multiremi/conversation-log-server-wiring.test.ts`。
 - 客户端：`cd frontend/packages/core && bunx vitest run api/ws-client-streams.test.ts api/trace-socket.test.ts`。
 - 路由清单：`bun run scripts/snapshot-api-routes.ts --check`；角色守卫计数：`bun test tests/unit/multiremi/api-role-guard.test.ts`。
