@@ -76,10 +76,10 @@ try {
       output], repo);
     if (await probe.exited !== 0) throw new Error(`Row-position recorder failed: ${phase}`);
     const sample = await Bun.file(output).json() as { results: {
-      scenario: string; listRequests: number; archivedCountRequests: number;
+      name: string; listRequests: number; archivedCountRequests: number;
     }[] };
     if (sample.results.length !== (lifecycle ? 18 : 6) || sample.results.some((row) =>
-      row.listRequests !== (row.scenario === "my-issues-all" ? 3 : 1) || row.archivedCountRequests !== 0)) {
+      row.listRequests !== (row.name === "my-issues-all" ? 3 : 1) || row.archivedCountRequests !== 0)) {
       throw new Error(`First-screen request count regression: ${phase}`);
     }
     await stop(web);
