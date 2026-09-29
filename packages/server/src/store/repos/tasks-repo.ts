@@ -3,6 +3,8 @@
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget } from "@multiremi/contracts/task-execution.js";
+import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
+import { appendPendingTurnAuditWithinTransaction } from "@multiremi/store/pending-turns.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
@@ -564,6 +566,25 @@ export interface ChildStatusChange {
  * makes the compiler ask every call site which transaction owns the write.
  */
 export type ChildStatusChangeCollector = ChildStatusChange[];
+
+export interface EnsurePendingTurnInput {
+  agentId: string;
+  issueSessionId?: string | null;
+  chatSessionId?: string | null;
+  executionScope?: string;
+  entryId: string;
+  entrySeq: number;
+  reason: string;
+  triggerCommentId?: string | null;
+  wake?: EnvelopeWake;
+  childStatusChanges: ChildStatusChangeCollector;
+  deferredEvents: CommitEventQueue;
+}
+
+export interface PendingTurnResult {
+  task: MultiremiTask | null;
+  created: boolean;
+}
 
 type DependencyForceInput = NonNullable<CreateTaskInput["dependencyForce"]>;
 
@@ -1350,6 +1371,71 @@ export class TasksRepo {
     return this.createTaskWithinWorkspaceLock(input, childStatusChanges, deferredEvents);
   }
 
+  ensurePendingTurnWithinTransaction(input: EnsurePendingTurnInput): PendingTurnResult {
+    if (!this.ctx.db.inTransaction) throw new Error("ensurePendingTurnWithinTransaction requires an open transaction");
+    if (!Number.isSafeInteger(input.entrySeq) || input.entrySeq < 1 || !input.entryId || !input.reason) {
+      throw new Error("A pending turn requires an entry pointer and reason");
+    }
+    const initialAgent = this.ctx.agents().getAgent(input.agentId);
+    if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(initialAgent.workspaceId);
+    const agent = this.ctx.agents().getAgent(input.agentId);
+    if (!agent || agent.archivedAt || agent.workspaceId !== initialAgent.workspaceId) {
+      throw new Error("Pending turn agent is unavailable");
+    }
+    const session = input.issueSessionId ? this.ctx.issueSessions().getIssueSession(input.issueSessionId) : null;
+    const chat = input.chatSessionId ? this.ctx.chat().getChatSession(input.chatSessionId) : null;
+    if (input.issueSessionId && (!session || session.workspaceId !== agent.workspaceId)) {
+      throw new Error("Pending turn Issue session is unavailable in this workspace");
+    }
+    if (input.chatSessionId && (!chat || chat.workspaceId !== agent.workspaceId || chat.agentId !== agent.id || chat.status === "archived")) {
+      throw new Error("Pending turn Chat session is unavailable for this agent");
+    }
+    if (!session && !chat) throw new Error("Pending turn requires a recipient session");
+    if (input.wake === "inbox_only") return { task: null, created: false };
+    const scope = input.executionScope ?? "";
+    const predicate = session
+      ? "issue_session_id = ? AND execution_scope = ?"
+      : "chat_session_id = ? AND issue_session_id IS NULL";
+    const key = session ? [session.id, scope] : [chat!.id];
+    const rows = this.ctx.db.query(`SELECT id, status FROM multiremi_tasks
+      WHERE workspace_id = ? AND agent_id = ? AND ${predicate} AND status IN ('queued', 'running')
+      ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at ASC, id ASC`)
+      .all(agent.workspaceId, agent.id, ...key) as Array<{ id: string; status: string }>;
+    if (input.wake === "next_turn" && rows.length > 0) {
+      return { task: this.getTask(rows[0]!.id), created: false };
+    }
+    const queued = rows.find(row => row.status === "queued");
+    if (queued) {
+      this.ctx.db.run(`UPDATE multiremi_tasks SET updated_at = ?,
+        wake_seq = CASE WHEN wake_seq < ? THEN ? ELSE wake_seq END
+        WHERE id = ? AND status = 'queued'`, [nowIso(), input.entrySeq, input.entrySeq, queued.id]);
+      const task = this.getTask(queued.id)!;
+      appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_coalesced", {
+        entry_seq: input.entrySeq, reason: input.reason,
+      });
+      return { task, created: false };
+    }
+    const task = this.createTaskWithinWorkspaceLock({
+      agentId: agent.id,
+      issueId: session?.issueId ?? null,
+      issueSessionId: session?.id ?? null,
+      chatSessionId: chat?.id ?? null,
+      prompt: `读收件箱\n\n${session?.id ?? chat!.id}:${input.entrySeq} (${input.entryId})`,
+      parentTaskId: null,
+      wakeSource: input.reason,
+      preserveIssueStatus: true,
+      triggerCommentId: input.triggerCommentId ?? null,
+    }, input.childStatusChanges, input.deferredEvents, undefined, scope);
+    this.ctx.db.run("UPDATE multiremi_tasks SET wake_seq = ? WHERE id = ?", [input.entrySeq, task.id]);
+    const stored = this.getTask(task.id)!;
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, stored, "pending_turn_created", {
+      entry_seq: input.entrySeq, reason: input.reason,
+    });
+    input.deferredEvents.enqueuedTasks.push(stored);
+    return { task: stored, created: true };
+  }
+
   /** Caller holds the task workspace row lock in an open transaction. */
   /**
    * MUL-400 E3 gate 3: no first task for an issue that is still waiting.
@@ -1402,6 +1488,7 @@ export class TasksRepo {
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
     gateIssueBeforeReplacement?: MultiremiIssue | null,
+    executionScopeOverride?: string,
   ): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -1609,7 +1696,7 @@ export class TasksRepo {
     // owns the ACP lineage. If a local-directory constraint points elsewhere,
     // or the provider/runtime drifted, abandon the cache atomically and cold
     // bootstrap from the canonical event log.
-    const executionScope = taskExecutionScope({
+    const executionScope = executionScopeOverride ?? taskExecutionScope({
       agentId: input.agentId,
       delegatedByAgentId: input.delegatedByAgentId ?? input.delegated_by_agent_id,
       delegationId: input.delegationId ?? input.delegation_id,

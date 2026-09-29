@@ -3945,15 +3945,16 @@ export class IssuesRepo {
    * Postgres would see a nested BEGIN, whose COMMIT would end the caller's
    * transaction early.
    */
-  private createSystemIssueCommentWithinTransaction(
+  createSystemIssueCommentWithinTransaction(
     issueId: string,
     body: string,
     data: Record<string, unknown>,
     deferredEvents: CommitEventQueue,
     taskId: string | null = null,
     issueSessionId: string | null = null,
+    entryId?: string,
   ): MultiremiIssueComment {
-    const id = createId("cmt");
+    const id = entryId ?? createId("cmt");
     const now = nowIso();
     const issueSession = issueSessionId
       ? this.ctx.issueSessions().getIssueSession(issueSessionId)

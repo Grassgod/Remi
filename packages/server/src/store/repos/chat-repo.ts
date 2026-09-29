@@ -504,6 +504,7 @@ export class ChatRepo {
     createdAt?: string;
     /** Sender-supplied key for the optimistic message, kept in log metadata. */
     clientId?: string | null;
+    metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata;
   }): MultiremiChatMessage {
     const sequenceRow = this.ctx.db.query(
       `UPDATE multiremi_chat_sessions
@@ -532,7 +533,7 @@ export class ChatRepo {
         input.createdAt ?? nowIso(),
       ],
     );
-    this.mirrorChatMessageWithinTransaction(id, input.clientId ?? null);
+    this.mirrorChatMessageWithinTransaction(id, input.clientId ?? null, input.metadata);
     return this.getChatMessage(id)!;
   }
 
@@ -542,7 +543,11 @@ export class ChatRepo {
    * axes stay identical; the user-facing reads move to the log now, while the
    * agent-issue-update delivery remains on the legacy columns until B2.
    */
-  private mirrorChatMessageWithinTransaction(messageId: string, clientId: string | null): void {
+  private mirrorChatMessageWithinTransaction(
+    messageId: string,
+    clientId: string | null,
+    metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata,
+  ): void {
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_chat_messages WHERE id = ?",
     ).get(messageId) as Row | null;
@@ -560,7 +565,7 @@ export class ChatRepo {
       authorId: mapped.authorId,
       taskId: mapped.taskId,
       bodyMd: mapped.bodyMd,
-      metadata: mapped.metadata,
+      metadata: { ...mapped.metadata, ...metadata },
       createdAt: mapped.createdAt,
     });
   }
@@ -703,19 +708,22 @@ export class ChatRepo {
   createPendingAgentIssueUpdateWithinTransaction(
     chatSessionId: string,
     bodyInput: string,
+    options: { id?: string; metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata } = {},
   ): PendingAgentIssueUpdateWriteResult {
     const session = this.getChatSession(chatSessionId);
     if (!session) throw new Error(`Chat session not found: ${chatSessionId}`);
     if (session.status === "archived") throw new Error(`Chat session is archived: ${chatSessionId}`);
-    const body = bodyInput.trim();
-    if (!body) throw new Error("Chat message body is required");
+    const body = options.metadata?.envelope ? bodyInput : bodyInput.trim();
+    if (!body.trim()) throw new Error("Chat message body is required");
     const now = nowIso();
     const message = this.appendChatMessageWithinTransaction({
+      id: options.id,
       chatSessionId: session.id,
       role: "system",
       body,
       pendingAgentDelivery: true,
       createdAt: now,
+      metadata: options.metadata,
     });
     this.ctx.db.run(
       `UPDATE multiremi_chat_sessions

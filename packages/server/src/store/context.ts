@@ -243,6 +243,10 @@ export type WorkspaceEvent = Parameters<WorkspaceEventListener>[0];
 // not-yet-carved domain owes the rest; when that domain is carved the accessor below is repointed
 // at its repo and nothing else changes.
 export interface IssuesSurface {
+  createSystemIssueCommentWithinTransaction(
+    issueId: string, body: string, data: Record<string, unknown>, deferredEvents: CommitEventQueue,
+    taskId?: string | null, issueSessionId?: string | null, entryId?: string,
+  ): MultiremiIssueComment;
   createIssue(input: CreateIssueInput, transaction?: {
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector;
     deferredEvents: CommitEventQueue;
@@ -538,6 +542,7 @@ export interface AccessTokensSurface {
 }
 
 export interface TasksSurface {
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").PendingTurnResult;
   createTask(input: CreateTaskInput): MultiremiTask;
   /**
    * Internal primitive for a caller that already owns a database transaction.
@@ -633,7 +638,10 @@ export interface ChatSurface {
     workspaceId?: string | null,
     options?: { creatorId?: string | null; excludeTransportSessions?: boolean },
   ): import("./repos/chat-repo.js").PendingChatTaskCandidate[];
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string, options?: {
+    id?: string;
+    metadata?: import("@multiremi/contracts/conversation-log").ConversationLogEntryMetadata;
+  }): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   };

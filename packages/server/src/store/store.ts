@@ -82,6 +82,7 @@ import {
 import { resolveRepositoryWikiAutomation } from "@multiremi/repository-wiki/automation.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo, type PendingChatTaskCandidate } from "@multiremi/store/repos/chat-repo.js";
+import { InboxRepo } from "@multiremi/store/repos/inbox-repo.js";
 import {
   ConversationLogRepo,
   type AppendConversationLogInput,
@@ -532,6 +533,7 @@ export class MultiremiStore {
   private knowledge: KnowledgeRepo;
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
+  private inbox: InboxRepo;
   private conversationLog: ConversationLogRepo;
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
@@ -600,6 +602,7 @@ export class MultiremiStore {
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.conversationLog = new ConversationLogRepo(this.ctx);
+    this.inbox = new InboxRepo(this.ctx);
     this.agentIssueUpdates = new AgentIssueUpdatesRepo(this.ctx, {
       debounceMs: options.agentIssueUpdateDebounceMs,
     });
@@ -5025,11 +5028,14 @@ runMigrations(this.db);
     return this.chat.appendChatMessageWithinTransaction(input);
   }
 
-  createPendingAgentIssueUpdateWithinTransaction(chatSessionId: string, body: string): {
+  createPendingAgentIssueUpdateWithinTransaction(
+    chatSessionId: string, body: string,
+    options?: Parameters<ChatRepo["createPendingAgentIssueUpdateWithinTransaction"]>[2],
+  ): {
     session: MultiremiChatSession;
     message: MultiremiChatMessage;
   } {
-    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body);
+    return this.chat.createPendingAgentIssueUpdateWithinTransaction(chatSessionId, body, options);
   }
 
   preparePendingAgentIssueUpdatesForTask(chatSessionId: string, taskId: string): {
@@ -5069,6 +5075,24 @@ runMigrations(this.db);
     deferredEvents: import("./context.js").CommitEventQueue,
   ): MultiremiTask {
     return this.tasks.createTaskWithinTransaction(input, childStatusChanges, deferredEvents);
+  }
+
+  ensurePendingTurnWithinTransaction(input: import("./repos/tasks-repo.js").EnsurePendingTurnInput): import("./repos/tasks-repo.js").PendingTurnResult {
+    return this.tasks.ensurePendingTurnWithinTransaction(input);
+  }
+
+  sendEnvelopeWithinTransaction(
+    env: import("@multiremi/contracts/inbox.js").Envelope,
+    collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): import("./repos/inbox-repo.js").EnvelopeDelivery[] {
+    return this.inbox.sendEnvelopeWithinTransaction(env, collector, deferredEvents);
+  }
+
+  createSystemIssueCommentWithinTransaction(
+    ...args: Parameters<IssuesRepo["createSystemIssueCommentWithinTransaction"]>
+  ): MultiremiIssueComment {
+    return this.issues.createSystemIssueCommentWithinTransaction(...args);
   }
 
   ensureDelegationWakeup(input: {
