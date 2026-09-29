@@ -16,7 +16,7 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
     () => replica.getSnapshot(sessionId), () => replica.getSnapshot(sessionId),
   );
   const [error, setError] = useState(false);
-  const ws = useWS();
+  const { subscribeStream, onReconnect } = useWS();
   const userId = useAuthStore(s => s.user?.id);
   const workspaceId = useWorkspaceId();
   const env = useReplicaEnv();
@@ -33,14 +33,14 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
   }, [replica, sessionId, initial, commentId, enabled]);
 
   useEffect(() => {
-    if (!sessionId || !enabled || !userId || !workspaceId || !ws) return;
+    if (!sessionId || !enabled || !userId || !workspaceId) return;
     const subscriptions = new Map<string, StreamSubscription>();
     let active = true;
     let disconnect: (() => void) | undefined;
     void replica.connect({ userId, workspaceId, env,
       subscribe: (id, fromSeq) => {
         subscriptions.get(id)?.unsubscribe();
-        const subscription = ws.subscribeStream("log", id, {
+        const subscription = subscribeStream("log", id, {
           onFrames: frames => { void replica.hydratedFrames(id, frames).catch(() => setError(true)); },
           onAck: ack => replica.ack(id, ack),
           onGap: () => { void replica.refreshVisible().catch(() => setError(true)); },
@@ -49,8 +49,8 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
       },
       unsubscribe: id => { subscriptions.get(id)?.unsubscribe(); subscriptions.delete(id); },
     }).then(cleanup => { if (active) disconnect = cleanup; else cleanup(); }).catch(() => { if (active) setError(true); });
-    const offReconnect = ws.onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
+    const offReconnect = onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
     return () => { active = false; offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
-  }, [replica, sessionId, enabled, userId, workspaceId, ws, env]);
+  }, [replica, sessionId, enabled, userId, workspaceId, subscribeStream, onReconnect, env]);
   return { replica, snapshot, error };
 }
