@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+
+import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
+import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES, traceFiniteEventBytes } from "./trace-budget-fixtures.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -10,67 +14,109 @@ const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}`
 
 describe("Multiremi API - issue sharing", () => {
   for (const endpoint of ["page", "share"] as const) {
-    it(`QA B5 P2: ${endpoint} trace bounds oversized tool_call_id and keeps pagination`, async () => {
+    for (const { name, input } of oversizedTraceCases) {
+      it(`${endpoint} trace returns ${name} byte-for-byte alone and keeps pagination`, async () => {
+        const store = createStore();
+        store.ensureLocalWorkspace();
+        const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+        const runtime = store.registerRuntime({ id: "rt_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
+        const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Budget issue", workspaceId: "local" });
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+        store.markTaskTraceDaemon(task.id, runtime.id);
+        if (name === "contract-limit event" || input.type === "x") {
+          expect(sanitizeStoredEvent(input, input.ts ?? TRACE_BUDGET_FIXTURE_TS)).toEqual({ ts: TRACE_BUDGET_FIXTURE_TS, ...input });
+        }
+        const original = trace.append(task.id, [input, { type: "text", content: "last" }]).events;
+        const eventBytes = Buffer.byteLength(JSON.stringify(original[0]));
+        expect(eventBytes).toBeGreaterThan(TRACE_READ_MAX_BYTES);
+        expect(isTraceFileEvent(original[0])).toBe(true);
+        expect(original[0]!.ts).toBe(input.ts ?? TRACE_BUDGET_FIXTURE_TS);
+        expect(traceFiniteEventBytes(original[0]!)).toBeLessThanOrEqual(TRACE_SANITIZED_EVENT_MAX_BYTES);
+        const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
+        const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+        expect(shared.status).toBe(201);
+        const token = (await shared.json()).share.token;
+        const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+        const response = await app.request(path, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        const page = JSON.parse(text);
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(eventBytes + 512);
+        expect(page).toMatchObject({ state: "ok", head: 2, next_after_seq: original[0]!.seq, eof: false });
+        expect(page.events).toHaveLength(1);
+        expect(JSON.stringify(page.events[0])).toBe(JSON.stringify(original[0]));
+        const next = await app.request(`${path}?after_seq=${page.next_after_seq}`, { headers: { "X-Remi-Share": token } });
+        expect(next.status).toBe(200);
+        const last = await next.json();
+        expect(last).toMatchObject({ state: "ok", head: 2, next_after_seq: original[1]!.seq, eof: true });
+        expect(JSON.stringify(last.events)).toBe(JSON.stringify([original[1]!]));
+        console.log(`B5 r9 ${name} HTTP ${endpoint}: event=${eventBytes}, finite=${traceFiniteEventBytes(original[0]!)}, events=${Buffer.byteLength(JSON.stringify(page.events))}, body=${Buffer.byteLength(text)}`);
+      });
+    }
+
+    it(`${endpoint} trace returns normal, oversized, normal events on exact successive pages`, async () => {
       const store = createStore();
       store.ensureLocalWorkspace();
-      const trace = new InMemoryTraceStore(() => "2026-09-28T00:00:00Z");
-      const runtime = store.registerRuntime({ id: "rt_identity_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
-      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
-      const issue = store.createIssue({ title: "Identity budget issue", workspaceId: "local" });
-      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
-      store.markTaskTraceDaemon(task.id, runtime.id);
+      const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+      const agent = store.createAgent({ name: "Mixed trace agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Mixed trace", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Mixed trace" });
       const original = trace.append(task.id, [
-        { type: "tool_result", tool: "Bash", tool_call_id: "i".repeat(1024 * 1024 + 1000), status: "completed", output: "" },
+        { type: "text", content: "first" },
+        { type: "text", content: "\u0001".repeat(180_000) },
         { type: "text", content: "last" },
       ]).events;
+      store.markTaskTraceDaemon(task.id, "rt_budget");
       const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
       const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
       expect(shared.status).toBe(201);
       const token = (await shared.json()).share.token;
       const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
-      const response = await app.request(path, { headers: { "X-Remi-Share": token } });
-      expect(response.status).toBe(200);
-      const text = await response.text();
-      const page = JSON.parse(text);
-      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1_049_088);
-      expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(1_048_576);
-      expect(page).toMatchObject({ state: "ok", head: 2, next_after_seq: original[0]!.seq, eof: false });
-      expect(page.events).toHaveLength(1);
-      expect(page.events[0]).toMatchObject({ seq: original[0]!.seq, truncated: true,
-        original_bytes: Buffer.byteLength(JSON.stringify(original[0])), truncated_fields: ["tool_call_id"] });
-      const next = await app.request(`${path}?after_seq=${page.next_after_seq}`, { headers: { "X-Remi-Share": token } });
-      expect(next.status).toBe(200);
-      expect(await next.json()).toMatchObject({ state: "ok", head: 2, next_after_seq: original[1]!.seq, eof: true, events: [original[1]!] });
-      console.log(`QA B5 P2 HTTP ${endpoint}: events=${Buffer.byteLength(JSON.stringify(page.events))}, body=${Buffer.byteLength(text)}`);
-    });
-
-    it(`${endpoint} trace keeps the JSON-expanded event within 1MiB and pages through last`, async () => {
-      const store = createStore();
-      store.ensureLocalWorkspace();
-      const trace = new InMemoryTraceStore(() => "2026-09-28T00:00:00Z");
-      const runtime = store.registerRuntime({ id: "rt_budget", name: "Budget runtime", provider: "codex", workspaceId: "local" });
-      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
-      const issue = store.createIssue({ title: "Budget issue", workspaceId: "local" });
-      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
-      store.markTaskTraceDaemon(task.id, runtime.id);
-      const original = trace.append(task.id, [
-        { type: "text", content: "first" }, { type: "text", content: "\u0001".repeat(180_000) }, { type: "text", content: "last" },
-      ]).events;
-      const app = createMultiremiApp({ store, daemonTraceReader: new InMemoryDaemonTraceReader(() => trace), shareSecret: "test-share-secret" });
-      const share = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
-      expect(share.status).toBe(201);
-      const token = (await share.json()).share.token;
-      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
-      for (const after of [0, 1, 2]) {
-        const response = await app.request(`${path}?after_seq=${after}`, { headers: { "X-Remi-Share": token } });
+      let afterSeq = 0;
+      for (const event of original) {
+        const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
         expect(response.status).toBe(200);
         const text = await response.text();
-        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(1024 * 1024 + 512);
         const page = JSON.parse(text);
-        expect(page).toMatchObject({ state: "ok", head: 3, next_after_seq: after + 1, eof: after === 2 });
-        expect(page.events.map((event: { seq: number }) => event.seq)).toEqual([after + 1]);
-        if (after === 1) expect(page.events[0]).toMatchObject({ truncated: true, original_bytes: Buffer.byteLength(JSON.stringify(original[1])) });
-        else expect(page.events[0].content).toBe(after === 0 ? "first" : "last");
+        expect(page).toMatchObject({ state: "ok", head: 3, next_after_seq: event.seq, eof: event.seq === 3 });
+        expect(JSON.stringify(page.events)).toBe(JSON.stringify([event]));
+        if (event.seq !== 2) {
+          expect(Buffer.byteLength(JSON.stringify(page.events))).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES);
+          expect(Buffer.byteLength(text)).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+        }
+        afterSeq = page.next_after_seq;
+      }
+    });
+
+    it(`${endpoint} trace keeps two 600KiB events on separate bounded pages`, async () => {
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+      const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Multi-event budget", workspaceId: "local" });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Budget" });
+      const original = trace.append(task.id, [
+        { type: "text", content: "\u0001".repeat(100_000) }, { type: "text", content: "\u0001".repeat(100_000) },
+      ]).events;
+      expect(Buffer.byteLength(JSON.stringify(original[0]))).toBeGreaterThan(600_000);
+      const daemon = new InMemoryDaemonTraceReader(() => trace);
+      // This source intentionally ignores the byte budget, exercising B5 itself.
+      daemon.read = async () => ({ ok: true, events: original, next_after_seq: 2, head: 2, eof: true, closed: true });
+      store.markTaskTraceDaemon(task.id, "rt_budget");
+      const app = createMultiremiApp({ store, daemonTraceReader: daemon, shareSecret: "test-share-secret" });
+      const shared = await app.request(`/api/issues/${issue.id}/share`, { method: "POST" });
+      const token = (await shared.json()).share.token;
+      const path = endpoint === "page" ? `/api/tasks/${task.id}/trace` : `/api/shares/${encodeURIComponent(token)}/tasks/${task.id}/trace`;
+      for (const afterSeq of [0, 1]) {
+        daemon.read = async () => ({ ok: true, events: original.slice(afterSeq), next_after_seq: 2, head: 2, eof: true, closed: true });
+        const response = await app.request(`${path}?after_seq=${afterSeq}`, { headers: { "X-Remi-Share": token } });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(TRACE_READ_MAX_BYTES + 512);
+        const page = JSON.parse(text);
+        expect(page).toMatchObject({ next_after_seq: afterSeq + 1, eof: afterSeq === 1 });
+        expect(JSON.stringify(page.events)).toBe(JSON.stringify([original[afterSeq]!]));
       }
     });
   }

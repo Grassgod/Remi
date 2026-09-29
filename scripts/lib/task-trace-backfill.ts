@@ -104,6 +104,8 @@ export interface TraceBackfillTaskInfo {
   chatWorkspaceId: string | null;
   traceLocation: string | null;
   traceArchiveId: string | null;
+  /** Writer of an `archive` pointer: `daemon` (NULL before MUL-432 P1) or `trace_backfill`. */
+  traceSource: string | null;
   traceEventCount: number | null;
   traceHeadSeq: number | null;
 }
@@ -130,10 +132,17 @@ export interface TraceBackfillPlannedSubject {
   daemonId: string;
   tasks: TraceBackfillPlannedTask[];
   noneTaskIds: string[];
+  /** Rendered tasks that are cross-switch (see {@link TraceBackfillPlanReport.cross_switch}). */
+  crossSwitchTaskIds: string[];
   rowCount: number;
   bytes: number;
   digest: string;
 }
+
+export type TraceBackfillCrossSwitchReason =
+  | "ended_at_or_after_cutoff"
+  | "ended_at_unknown"
+  | "daemon_archive_pointer";
 
 export interface TraceBackfillStop {
   code: string;
@@ -219,6 +228,24 @@ export interface TraceBackfillPlanReport {
     eligible_ignoring_cutoff: number;
     ineligible: Record<string, number>;
   };
+  /**
+   * Terminal tasks with rows whose trace may also exist on a daemon: they ended
+   * at or after the old table stopped (or their end is unknown), or their
+   * pointer already reads a daemon's archive. The backfill still writes their
+   * rows as a prefix backup, but the daemon's trace keeps or takes the pointer
+   * and their `turn` cards are not rewritten. Execution stops on them unless
+   * `--cross-switch-ack` equals `count`.
+   */
+  cross_switch: {
+    /** Whether the ended-at condition could be evaluated (a cutoff was given). */
+    cutoff_evaluated: boolean;
+    count: number;
+    /** A task counts once per reason it meets. */
+    by_reason: Record<TraceBackfillCrossSwitchReason, number>;
+    task_ids: string[];
+    /** `--cross-switch-ack` as given; null when absent. */
+    ack: number | null;
+  };
   json: {
     json_unparseable_input: number;
     json_unparseable_meta: number;
@@ -251,6 +278,11 @@ export interface TraceBackfillPlan {
 export interface TraceBackfillPlanOptions {
   /** Moment A stopped writing the old table; required before `none` pointers can be planned. */
   oldTableStoppedAt?: string | null;
+  /**
+   * The operator's acknowledgement of the cross-switch count. Without it the
+   * plan stops on any cross-switch task; with it, only when it differs.
+   */
+  crossSwitchAck?: number | null;
   maxSourceBytes?: number;
   chunkBytes?: number;
   batchRows?: number;
@@ -380,12 +412,17 @@ export class TraceTaskDigest {
   }
 }
 
-/** Digest of a subject: every rendered task by id, then the tasks that get a `none` pointer. */
+/**
+ * Digest of a subject: every rendered task by id, then the tasks that get a
+ * `none` pointer, then — only when there are any — the cross-switch tasks, whose
+ * `turn` cards the run leaves alone. A change in that set redoes the subject.
+ */
 export function traceSubjectDigest(
   kind: TraceBackfillSubjectKind,
   id: string,
   tasks: ReadonlyArray<{ taskId: string; digest: string }>,
   noneTaskIds: readonly string[],
+  crossSwitchTaskIds: readonly string[] = [],
 ): string {
   const hash = createHash("sha256");
   putField(hash, kind);
@@ -396,6 +433,10 @@ export function traceSubjectDigest(
   }
   hash.update("|none|");
   for (const taskId of [...noneTaskIds].sort(compareText)) putField(hash, taskId);
+  if (crossSwitchTaskIds.length > 0) {
+    hash.update("|cross_switch|");
+    for (const taskId of [...crossSwitchTaskIds].sort(compareText)) putField(hash, taskId);
+  }
   return hash.digest("hex");
 }
 
@@ -844,6 +885,7 @@ function hydrateTask(raw: Record<string, unknown>): TraceBackfillTaskInfo {
     chatWorkspaceId: text(raw.chat_workspace_id),
     traceLocation: text(raw.trace_location),
     traceArchiveId: text(raw.trace_archive_id),
+    traceSource: text(raw.trace_source),
     traceEventCount: num(raw.trace_event_count),
     traceHeadSeq: num(raw.trace_head_seq),
   };
@@ -863,7 +905,7 @@ export function loadTraceBackfillTasks(db: SqlDatabase): Map<string, TraceBackfi
               a.provider AS agent_provider,
               i.id AS issue_row_id, i.workspace_id AS issue_workspace_id, i.lifecycle_state AS issue_lifecycle,
               c.id AS chat_row_id, c.workspace_id AS chat_workspace_id,
-              tt.location AS trace_location, tt.archive_id AS trace_archive_id,
+              tt.location AS trace_location, tt.archive_id AS trace_archive_id, tt.source AS trace_source,
               tt.event_count AS trace_event_count, tt.head_seq AS trace_head_seq
        FROM multiremi_tasks t
        LEFT JOIN multiremi_runtimes r ON r.id = t.runtime_id
@@ -975,6 +1017,8 @@ export interface TraceBackfillAssignedSubject {
   renderTaskIds: string[];
   /** Tasks with no rows that meet all five conditions, by id. */
   noneTaskIds: string[];
+  /** Rendered tasks that are cross-switch, by id. */
+  crossSwitchTaskIds: string[];
   runtimeId: string;
   daemonId: string;
 }
@@ -988,9 +1032,28 @@ export interface TraceBackfillAssignment {
   subjectOfTask: Map<string, TraceBackfillAssignedSubject>;
   source: TraceBackfillPlanReport["source"];
   none: TraceBackfillPlanReport["none"];
+  crossSwitch: Omit<TraceBackfillPlanReport["cross_switch"], "ack">;
   archiveRuntimeMissing: number;
   archiveDaemonMissing: number;
   stops: Array<{ code: string; sample: unknown }>;
+}
+
+/**
+ * Why a terminal task with rows is cross-switch: its trace may continue on a
+ * daemon, whose seq restarts where the old table's does not. With no cutoff the
+ * ended-at conditions cannot be evaluated and only the pointer counts.
+ */
+function crossSwitchReasons(task: TraceBackfillTaskInfo, cutoffMs: number | null): TraceBackfillCrossSwitchReason[] {
+  const reasons: TraceBackfillCrossSwitchReason[] = [];
+  if (cutoffMs != null) {
+    const endedMs = Date.parse(deriveTraceEnd(task)?.endedAt ?? "");
+    if (!Number.isFinite(endedMs)) reasons.push("ended_at_unknown");
+    else if (endedMs >= cutoffMs) reasons.push("ended_at_or_after_cutoff");
+  }
+  if (task.traceLocation === "archive" && (task.traceSource ?? "daemon") === "daemon") {
+    reasons.push("daemon_archive_pointer");
+  }
+  return reasons;
 }
 
 /**
@@ -1028,6 +1091,12 @@ export function assignTraceBackfillSubjects(
     eligible_by_pointer: {},
     eligible_ignoring_cutoff: 0,
     ineligible: {},
+  };
+  const crossSwitch: TraceBackfillAssignment["crossSwitch"] = {
+    cutoff_evaluated: cutoffMs != null,
+    count: 0,
+    by_reason: { ended_at_or_after_cutoff: 0, ended_at_unknown: 0, daemon_archive_pointer: 0 },
+    task_ids: [],
   };
   for (const [taskId, stats] of rowStats) {
     source.rows += stats.rows;
@@ -1069,6 +1138,7 @@ export function assignTraceBackfillSubjects(
         members: [],
         renderTaskIds: [],
         noneTaskIds: [],
+        crossSwitchTaskIds: [],
         runtimeId: "",
         daemonId: "",
       };
@@ -1086,6 +1156,13 @@ export function assignTraceBackfillSubjects(
       if (task.traceLocation === "lost") source.tasks_with_lost_pointer++;
       subject.renderTaskIds.push(task.id);
       subjectOfTask.set(task.id, subject);
+      const crossReasons = crossSwitchReasons(task, cutoffMs);
+      if (crossReasons.length > 0) {
+        subject.crossSwitchTaskIds.push(task.id);
+        crossSwitch.task_ids.push(task.id);
+        crossSwitch.count++;
+        for (const reason of crossReasons) crossSwitch.by_reason[reason]++;
+      }
       continue;
     }
 
@@ -1123,6 +1200,7 @@ export function assignTraceBackfillSubjects(
     }
     subject.renderTaskIds.sort(compareText);
     subject.noneTaskIds.sort(compareText);
+    subject.crossSwitchTaskIds.sort(compareText);
     // The archive records the Runtime of the subject's most recent task that still has one.
     const runtimeTask = subject.members
       .filter((task) => task.runtimeExists && nonEmpty(task.runtimeId))
@@ -1138,6 +1216,7 @@ export function assignTraceBackfillSubjects(
   subjects.sort((a, b) =>
     TRACE_BACKFILL_GROUPS.indexOf(a.group) - TRACE_BACKFILL_GROUPS.indexOf(b.group)
     || compareText(a.id, b.id));
+  crossSwitch.task_ids.sort(compareText);
   return {
     tasks,
     rowStats,
@@ -1145,6 +1224,7 @@ export function assignTraceBackfillSubjects(
     subjectOfTask,
     source,
     none,
+    crossSwitch,
     archiveRuntimeMissing,
     archiveDaemonMissing,
     stops,
@@ -1285,6 +1365,7 @@ export function buildTraceBackfillPlan(db: SqlDatabase, options: TraceBackfillPl
       ended_at_from: { status_timestamp: 0, other_terminal_timestamp: 0, updated_at: 0, missing: 0 },
     },
     none: assignment.none,
+    cross_switch: { ...assignment.crossSwitch, ack: options.crossSwitchAck ?? null },
     json: {
       json_unparseable_input: 0,
       json_unparseable_meta: 0,
@@ -1411,9 +1492,12 @@ export function buildTraceBackfillPlan(db: SqlDatabase, options: TraceBackfillPl
       daemonId: assigned.daemonId,
       tasks: plannedTasks,
       noneTaskIds: assigned.noneTaskIds,
+      crossSwitchTaskIds: assigned.crossSwitchTaskIds,
       rowCount,
       bytes,
-      digest: traceSubjectDigest(assigned.kind, assigned.id, plannedTasks, assigned.noneTaskIds),
+      digest: traceSubjectDigest(
+        assigned.kind, assigned.id, plannedTasks, assigned.noneTaskIds, assigned.crossSwitchTaskIds,
+      ),
     });
     const groupReport = report.groups[assigned.group];
     groupReport.subjects++;
@@ -1427,9 +1511,25 @@ export function buildTraceBackfillPlan(db: SqlDatabase, options: TraceBackfillPl
   }
   report.subjects = subjects.length;
 
+  const crossSwitch = report.cross_switch;
+  if (crossSwitch.ack == null ? crossSwitch.count > 0 : crossSwitch.ack !== crossSwitch.count) {
+    stopCounts.set("cross_switch_tasks", crossSwitch.count);
+    stopSamples.set("cross_switch_tasks", crossSwitch.task_ids.slice(0, sampleLimit));
+  }
+
   const stops: TraceBackfillStop[] = [...stopCounts.entries()]
     .sort(([a], [b]) => compareText(a, b))
-    .map(([code, count]) => ({ code, count, ...(stopSamples.has(code) ? { samples: stopSamples.get(code) } : {}) }));
+    .map(([code, count]) => ({
+      code,
+      count,
+      ...(code === "cross_switch_tasks"
+        ? {
+          detail: `${count} cross-switch task(s)${crossSwitch.ack == null ? "" : `, acknowledged ${crossSwitch.ack}`}; `
+            + `review report.cross_switch and rerun with --cross-switch-ack=${count}`,
+        }
+        : {}),
+      ...(stopSamples.has(code) ? { samples: stopSamples.get(code) } : {}),
+    }));
   report.stops = stops;
   log(`plan: ${report.traced_tasks} traced tasks, ${report.none.eligible} none, ${stops.length} stop codes`);
   return { subjects, tasks, report, stops };

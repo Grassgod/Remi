@@ -12,6 +12,13 @@
  * without an archive, then Issues that already have one. Each group is
  * reconciled against the source rows before the next one starts.
  *
+ * Cross-switch tasks (ended at or after the old table stopped, or already
+ * pointing at a daemon's archive) stop execution until
+ * `--cross-switch-ack=<n>` repeats the count the dry run reported. Their rows
+ * are still written as a prefix backup, but the daemon's own trace keeps or
+ * takes the pointer (seq is never compared across the two sources) and their
+ * `turn` cards are not rewritten.
+ *
  * Per subject: render `traces/<task_id>.jsonl` from the stored rows (header,
  * events with their original seq, trailer), build the zip with the
  * session-archive writer, re-read and verify every member, then in one
@@ -64,6 +71,8 @@ export interface TraceBackfillRunOptions {
   execute: boolean;
   /** Moment A stopped writing the old table. Required to execute. */
   oldTableStoppedAt?: string | null;
+  /** Must equal the plan's cross-switch count for execution to proceed when there are any. */
+  crossSwitchAck?: number | null;
   /** Execute only: reused when given, otherwise built on `db`. */
   store?: MultiremiStore;
   service?: SessionArchiveService;
@@ -89,10 +98,14 @@ export interface TraceBackfillGroupResult {
   archives_created: number;
   archives_reused: number;
   pointers: number;
+  /** Members the swap rule left on their current pointer, by reason (`daemon_owned`, `lost`, ...). */
+  pointers_kept: Record<string, number>;
   none_pointers: number;
   turn_cards_updated: number;
   turn_cards_unchanged: number;
   turn_cards_missing: number;
+  /** Cross-switch tasks whose card was left alone. */
+  turn_cards_skipped_cross_switch: number;
   orphan_archive_dirs_removed: number;
 }
 
@@ -128,10 +141,12 @@ function emptyGroupResult(): TraceBackfillGroupResult {
     archives_created: 0,
     archives_reused: 0,
     pointers: 0,
+    pointers_kept: {},
     none_pointers: 0,
     turn_cards_updated: 0,
     turn_cards_unchanged: 0,
     turn_cards_missing: 0,
+    turn_cards_skipped_cross_switch: 0,
     orphan_archive_dirs_removed: 0,
   };
 }
@@ -153,6 +168,7 @@ export async function runTraceBackfill(options: TraceBackfillRunOptions): Promis
   }
   const plan = buildTraceBackfillPlan(options.db, {
     oldTableStoppedAt: options.oldTableStoppedAt ?? null,
+    crossSwitchAck: options.crossSwitchAck ?? null,
     maxSourceBytes: options.maxSourceBytes,
     chunkBytes: options.chunkBytes,
     batchRows: options.batchRows,
@@ -261,6 +277,10 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
   try {
     const turnSummaries: TraceBackfillTurnSummary[] = [];
     const prepared = await stageSubject(run, stage, turnSummaries);
+    // A cross-switch task's card describes its whole run; the old rows are only a prefix of it.
+    const crossSwitch = new Set(subject.crossSwitchTaskIds);
+    const cardSummaries = turnSummaries.filter((summary) => !crossSwitch.has(summary.taskId));
+    result.turn_cards_skipped_cross_switch += turnSummaries.length - cardSummaries.length;
     await run.options.hooks?.afterStage?.(subject, prepared.archivePath);
     const existing = new Set(store.listSessionArchivesForSubject(subject.kind, subject.id).map((archive) => archive.id));
     const committed = await service.ingestTraceBackfill({
@@ -285,13 +305,23 @@ async function backfillSubject(run: SubjectRun): Promise<void> {
       noneTaskIds: subject.noneTaskIds,
       progress: progressInput,
       taskDigests: subject.tasks.map((task) => ({
-        taskId: task.taskId, rowCount: task.rowCount, headSeq: task.headSeq, digest: task.digest,
+        taskId: task.taskId,
+        rowCount: task.rowCount,
+        headSeq: task.headSeq,
+        digest: task.digest,
+        crossSwitch: crossSwitch.has(task.taskId),
       })),
-      turnSummaries: [...turnSummaries, ...noneSummaries],
+      turnSummaries: [...cardSummaries, ...noneSummaries],
     });
     if (committed.archive && existing.has(committed.archive.id)) result.archives_reused++;
     else result.archives_created++;
     result.pointers += committed.pointerCount;
+    for (const rejection of committed.rejectedPointers) {
+      result.pointers_kept[rejection.reason] = (result.pointers_kept[rejection.reason] ?? 0) + 1;
+      run.log(`pointer kept: ${rejection.taskId} stays on ${rejection.currentLocation}`
+        + `${rejection.currentSource ? `/${rejection.currentSource}` : ""}`
+        + `${rejection.currentArchiveId ? ` ${rejection.currentArchiveId}` : ""} (${rejection.reason})`);
+    }
     countTurnCards(committed.turnCards);
     result.none_pointers += subject.noneTaskIds.length;
     result.written++;
@@ -437,6 +467,16 @@ function positiveInt(name: string): number | undefined {
   return value;
 }
 
+function nonNegativeInt(name: string): number | undefined {
+  const raw = argValue(name);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (raw.trim() === "" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`--${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
 /** What a human reads first: counts and stops, not every sample. */
 export function summarizeTraceBackfillPlan(report: TraceBackfillPlanReport) {
   return {
@@ -449,6 +489,7 @@ export function summarizeTraceBackfillPlan(report: TraceBackfillPlanReport) {
     traced_rows: report.traced_rows,
     largest_subject_bytes: report.largest_subject_bytes,
     none: report.none,
+    cross_switch: report.cross_switch,
     json: {
       json_unparseable_input: report.json.json_unparseable_input,
       json_unparseable_meta: report.json.json_unparseable_meta,
@@ -483,6 +524,7 @@ async function main(): Promise<void> {
         db,
         execute,
         oldTableStoppedAt,
+        crossSwitchAck: nonNegativeInt("cross-switch-ack") ?? null,
         stagingDir: argValue("staging-dir"),
         maxSourceBytes: positiveInt("max-source-bytes"),
         chunkBytes: positiveInt("chunk-bytes"),
@@ -517,7 +559,8 @@ async function main(): Promise<void> {
     if (!execute) {
       if (report.plan.stops.length) process.exitCode = 2;
       process.stdout.write(
-        `Dry run only. Execution requires explicit authorization and --execute --confirm=${TRACE_BACKFILL_CONFIRMATION} --old-table-stopped-at=<ISO>.\n`,
+        `Dry run only. Execution requires explicit authorization and --execute --confirm=${TRACE_BACKFILL_CONFIRMATION} --old-table-stopped-at=<ISO>`
+          + ` (plus --cross-switch-ack=<n> when plan.cross_switch.count is not 0).\n`,
       );
     }
   } finally {

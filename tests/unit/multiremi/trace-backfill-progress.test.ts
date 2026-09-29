@@ -93,7 +93,8 @@ for (const backend of backends) {
           name: string;
         }>).map((column) => column.name);
         expect([...columns].sort()).toEqual([
-          "archive_id", "digest", "head_seq", "row_count", "subject_id", "subject_kind", "task_id", "updated_at",
+          "archive_id", "cross_switch", "digest", "head_seq", "row_count", "subject_id", "subject_kind", "task_id",
+          "updated_at",
         ]);
         opened.db.transaction(() => {
           store.replaceTraceBackfillTasks("chat", "chs_a", "sar_1", [

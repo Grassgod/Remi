@@ -50,6 +50,7 @@ import {
 } from "@multiremi/session-archive/ingest.js";
 import type { TaskTraceArchivePointer } from "@multiremi/store/repos/task-traces-repo.js";
 import {
+  SessionArchivePointerInvariantError,
   SessionArchiveTraceOwnershipError,
   TraceBackfillSubjectError,
   type TraceBackfillCommitResult,
@@ -746,6 +747,22 @@ export class SessionArchiveService {
           "session_archive_attempt_conflict",
         );
       }
+      if (completed.rejectedPointers.length > 0) {
+        // The archive is ready; these members keep the pointer they already had
+        // (a longer archive of the same source, or `lost`).
+        log.warn(`Session archive ${archive.id} is ready; ${completed.rejectedPointers.length} trace pointer(s) kept`, {
+          archiveId: archive.id,
+          rejectedPointers: completed.rejectedPointers.map((rejection) => ({
+            taskId: rejection.taskId,
+            reason: rejection.reason,
+            incomingHeadSeq: rejection.incomingHeadSeq,
+            currentLocation: rejection.currentLocation,
+            currentSource: rejection.currentSource,
+            currentArchiveId: rejection.currentArchiveId,
+            currentHeadSeq: rejection.currentHeadSeq,
+          })),
+        });
+      }
       return completed.archive;
     } catch (error) {
       const current = this.store.getSessionArchive(archive.id);
@@ -781,6 +798,12 @@ export class SessionArchiveService {
       });
       if (error instanceof SessionArchiveTraceOwnershipError) {
         throw new SessionArchiveError(error.message, 422, "session_archive_trace_ownership_mismatch");
+      }
+      if (error instanceof SessionArchivePointerInvariantError) {
+        log.error(`Session archive ${archive.id} rolled back: ${error.message}`, {
+          archiveId: archive.id,
+          rejectedPointers: error.rejections,
+        });
       }
       throw error;
     }

@@ -108,11 +108,17 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    the reply stays a threadable `message`), `summary`, `tool_call_count`,
    `event_count`, `type_histogram` bucketed by `(type, tool)` (matching what the
    organizer computes today; `tool` is null outside `tool_use`/`tool_result`),
-   `usage` and `model`. `final_reply_md` comes from a shared `deriveFinalReply`
-   helper, which the historical backfill reuses so old and new cards reconcile.
-   The figures arrive in the daemon's completion report; the server never derives
-   them from the trace. The terminal lifecycle events keep their own names and
-   seq, as decision 2 requires.
+   `usage` and `model`. `final_reply_md` is the task's result text as the
+   daemon reports it in `output` (every `text` event concatenated,
+   `Task completed.` when empty), the same text today's chat message and the
+   auto-posted Issue reply carry; the historical backfill copies the assistant
+   message body verbatim. `deriveFinalReply` is the Feishu CoT timeline's answer
+   rule and is not a card field; the `final_reply_md` on `task.complete` /
+   `task.fail` is not written to any card. The four trace figures on historical
+   cards are recomputed from `task_messages` with the same `trace-derive`
+   functions the daemon uses. The figures arrive in the daemon's completion
+   report; the server never derives them from the trace. The terminal lifecycle
+   events keep their own names and seq, as decision 2 requires.
 5. **Traces have one owner at a time.** While hot, the daemon appends a
    normalised JSONL file
    `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`
@@ -135,28 +141,60 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
    missing card statistics or unavailable live reads retain the legacy-table
    fallback until MUL-432 removes that table.
-   B5's page/share trace endpoints and their CLI readers return `TraceReadEvent`:
-   a first event exceeding the serialized page budget is shortened by Unicode
-   code point in `content`, `output`, then string values inside `input`, and
-   returned alone with `truncated: true` and `original_bytes` (the original
-   event JSON's UTF-8 size). If payload removal is insufficient, only identity
-   fields and these markers remain. If that minimum still exceeds the budget,
-   string identity fields `tool_call_id`, `tool`, `type`, `status`, `ts` are
-   shortened from longest to shortest by their current UTF-8 byte size, using
-   the same code-point binary prefix search as payload strings. `seq` and the
-   real head/cursor never change. `truncated_fields: string[]` lists only identity
-   fields actually shortened and is absent when none were shortened. The final
-   `Buffer.byteLength(JSON.stringify(events))` check includes array punctuation
-   and all markers; marker overhead is reclaimed from identity strings if needed.
-   `TRACE_READ_MIN_BYTES = 256`: an event with all five identity strings empty,
-   all three markers, all five names in `truncated_fields`, and `seq` and
-   `original_bytes` equal to `Number.MAX_SAFE_INTEGER` measures 197 UTF-8 bytes,
-   or 199 including array brackets, leaving 57 bytes of margin. `readTrace`
-   rejects smaller `maxBytes` values with `RangeError` before accessing any source.
-   These read-only markers are not persisted or added to daemon frames; A's
-   write/sanitize contract is unchanged (MUL-402 `cmt_037dbjdd5rxs`, ruling (t)).
-   The share view displays shortened identity values, keeps the existing
-   truncation notice, and continues paging to `eof` without additional controls.
+   B5's page/share trace endpoints and CLI return the original `TraceEvent`.
+   Multi-event pages stay within the serialized events-array budget (default
+   1MiB, including brackets and commas). If the first event alone exceeds that
+   budget, it is returned alone, byte-for-byte, even over 1MiB. No field is
+   shortened or removed; `state=ok`, the cursor equals that event's `seq`,
+   the real `head` is retained, and subsequent pages continue normally to `eof`.
+   The share view displays the full event with its existing type/pre rendering,
+   automatically pages to `eof`, and adds no size notice or controls.
+   MUL-402 `cmt_9y4qvdn2ytng` and `cmt_1u7d8q41zsdp` revoke the read-time
+   truncation in (n) and all of (t). The unpublished read projection fields and
+   its minimum budget are removed; positive integer `maxBytes` remains required.
+
+   `TRACE_SANITIZED_EVENT_MAX_BYTES` in
+   [budget fixture](../../tests/unit/multiremi/trace-budget-fixtures.ts) computes the
+   conditional bound of sanitized fields plus the JSON skeleton from
+   [sanitize constants](../../packages/shared/src/trace-sanitize.ts):
+   `6 * (TRACE_CONTENT_MAX_BYTES + TRACE_OUTPUT_MAX_BYTES + TRACE_TOOL_MAX_BYTES)`
+   plus three serialized write-truncation markers (excluding their quotes),
+   plus `TRACE_INPUT_MAX_BYTES + TRACE_META_MAX_BYTES`, plus the actual serialized
+   skeleton (all field names, punctuation, quotes and the largest safe `seq`).
+   Every nullable field uses the larger of `null` and `""` in the skeleton;
+   each bounded field replaces that placeholder with its largest serialized
+   representation, including the longest accepted `status`. String fields use UTF-8
+   caps, so one-byte control characters escaping to six-byte JSON are the worst
+   case. The marker is included because the existing write sanitizer appends it
+   after its UTF-8 cut. Structured `input` and `meta` are capped by serialized
+   JSON bytes; capped invalid JSON becomes null, so their caps are not multiplied
+   by six. The conditional finite portion is **2,297,014 bytes**: assume the
+   string contents of `type`, `tool_call_id` and `ts` are empty, and all other
+   fields are maximal. Their names and quotes remain counted; a null
+   `tool_call_id` counts four bytes. `traceFiniteEventBytes` subtracts only the
+   escaped contents of those three strings from an actual event for comparison.
+   At the largest safe `seq`, adding a 27-byte timestamp gives QA4's
+   **2,297,041 bytes**; adding its legal 121-byte timestamp gives **2,297,135**.
+   MUL-402 QA4 `cmt_1452lgej5n06` and ruling `cmt_zjfw9qrsbemk` establish this
+   applicability condition and the nullable correction.
+   A contract-limit fixture fills all five bounded fields, remains unchanged
+   through A's sanitizer, and exceeds 1MiB; HTTP response size is checked against
+   its actual serialized event bytes plus the existing 512-byte envelope margin.
+
+   **Three gaps:** the write sanitizer does not bound `type` or `tool_call_id`,
+   and A-0 uses the caller's `ts` verbatim. B4's timestamp validator accepts
+   arbitrarily long fractional seconds, so `ts` has no fixed 27-byte limit.
+   All three string contents are excluded from this conditional calculation;
+   their actual escaped JSON bytes must be added when
+   determining an event's total size. There is no universal finite event bound
+   or read-time fallback for these fields. Oversized values are returned intact.
+   A-0's store admits the first over-budget event and its daemon reader forwards
+   it. `DAEMON_TRACE_READ_MAX_BYTES=1MiB` is the request budget; the declared WS
+   maximum is 4MiB. Real A-6 RPC/WS validation, including the separately declared
+   `DAEMON_FRAME_MAX_BYTES=1MiB`, is **integration-time verification**: no
+   transport implementation enforces these constants on this parent baseline.
+   If integration discards, splits or rejects the contract-limit event, stop
+   and obtain an A-side ruling; B5 does not alter A's transport or sanitizer.
 6. **Session Archive v2 is a ZIP with an offset index.** Each member is deflated
    independently; `index.json` records `data_offset`, sizes and sha256 per member
    and marks trace members with their `task_id`, `head`, `event_count` and
@@ -165,7 +203,11 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    of the blob, so the GC and hard-delete barriers are unchanged. Archives gain a
    subject (`issue`, `chat`, `task`) and a `format`; ingest validates the index
    against the central directory and writes the task pointers in the same
-   transaction that marks the row `ready`. The writer uses `lstat`-based
+   transaction that marks the row `ready`. A pointer moves by the rule of its
+   source and never across sources: within a source a larger or equal `head`
+   wins, a daemon archive replaces a backfilled one whatever the heads, and a
+   backfilled archive never replaces a daemon one, because old-table seqs and
+   daemon trace seqs are different axes (MUL-432). The writer uses `lstat`-based
    traversal so macOS daemons can archive.
 7. **v1 rows are left untouched.** Backfilled trace archives are additional
    `ready` rows (`metadata.kind = "trace_backfill"`), not supersessions, because
