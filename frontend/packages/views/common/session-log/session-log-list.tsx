@@ -84,6 +84,7 @@ export interface SessionLogListProps {
   initialPositioned?: boolean;
   /** Additional content above the anchor must settle before the list reveals. */
   contentReady?: boolean;
+  onRevealed?: () => void;
   afterEntry?: (entry: SessionLogEntry) => React.ReactNode;
   header?: React.ReactNode;
   footer?: React.ReactNode;
@@ -146,6 +147,7 @@ export function SessionLogList({
   latestAnchor = "latest-message",
   initialPositioned = false,
   contentReady = true,
+  onRevealed,
   afterEntry,
   header,
   footer,
@@ -225,6 +227,7 @@ export function SessionLogList({
     fresh: snapshot.fresh,
     initialPositioned,
   });
+  useEffect(() => { if (reveal.revealed) onRevealed?.(); }, [reveal.revealed, onRevealed]);
 
   const stick = useStickToBottom({
     scrollEl,

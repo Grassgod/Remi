@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { appendTaskMessagesToHydratedCache } from "@multiremi/core/chat/queries";
+import { createTaskHandlers } from "../../test/task-handlers";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import enAgents from "../../locales/en/agents.json";
@@ -111,6 +112,18 @@ beforeEach(() => {
 });
 
 describe("session agent stream row", () => {
+  it("still refetches the visible issue transcript on a degraded header", async () => {
+    listTasksByIssue.mockResolvedValue([task()]);
+    const { qc, unmount } = renderRow();
+    const sync = createTaskHandlers({ qc } as Parameters<typeof createTaskHandlers>[0]);
+    try {
+      await waitFor(() => expect(listTaskMessages).toHaveBeenCalledTimes(1));
+      listTaskMessages.mockClear();
+      await act(async () => { sync.handlers["task:message"]?.({ task_id: "tsk_abc123", degraded: true, seq_start: 1, seq_end: 2 }); });
+      expect(listTaskMessages).toHaveBeenCalledTimes(1);
+    } finally { unmount(); sync.dispose?.(); qc.clear(); }
+  });
+
   it("keeps current-step history separate and reads 61 trace calls only after opening", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
     listTaskMessages.mockResolvedValue(productionMessages());

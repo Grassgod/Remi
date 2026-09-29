@@ -141,6 +141,19 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("notifies the route only after the log becomes visible", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)], ready: true } });
+    const onRevealed = vi.fn();
+    const view = renderList(replica, { contentReady: false, onRevealed });
+    reveal();
+    expect(onRevealed).not.toHaveBeenCalled();
+    view.rerender(<SessionLogList sessionId={SESSION} replica={replica} contentReady onRevealed={onRevealed} />);
+    reveal();
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    expect(onRevealed).toHaveBeenCalledTimes(1);
+    view.restore();
+  });
+
   it("publishes fresh=0 while the replica's window is behind the server", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1)], ready: true, fresh: false },

@@ -18,6 +18,8 @@ import { IssueDecisionPanel } from "./issue-decision-panel";
 import { IssueSessionList } from "./issue-session-list";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useT } from "../../i18n";
+import { useNavigation } from "../../navigation";
+import { useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 
 /** Gate (i) and gate (ii) as the activity section reports them. */
 export interface RevealGates {
@@ -90,6 +92,11 @@ export function IssueDetailMain({
   canForceStart = false,
 }: IssueDetailMainProps) {
   const { t } = useT("issues");
+  const { pathname } = useNavigation();
+  const readyKey = `${issueId}:${sessions.activeId}:${highlightCommentId ?? ""}`;
+  const [revealedKey, setRevealedKey] = useState("");
+  useRouteContentReady(pathname, revealedKey === readyKey);
+  const onContentReady = useCallback(() => setRevealedKey(readyKey), [readyKey]);
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const updateIssue = useUpdateIssue();
@@ -229,6 +236,7 @@ export function IssueDetailMain({
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <IssueActivitySection
+              onContentReady={onContentReady}
               issueId={issueId}
               projectId={issue.project_id}
               currentUserId={currentUserId}

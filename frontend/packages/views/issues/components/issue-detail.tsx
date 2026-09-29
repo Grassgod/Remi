@@ -39,6 +39,7 @@ import { IssueDetailMain } from "./issue-detail-main";
 import { IssueDetailSidebar } from "./issue-detail-sidebar";
 import { IssueDetailSkeleton } from "./issue-detail-skeleton";
 import { useT } from "../../i18n";
+import { useAfterFirstScreen, useRouteContentReady } from "@multiremi/core/platform/use-after-first-screen";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -83,6 +84,7 @@ export function IssueDetail({
   const { t } = useT("issues");
   const id = issueId;
   const router = useNavigation();
+  const { pathname } = router;
   const { user } = useSSRUser();
   const paths = useWorkspacePaths();
 
@@ -90,7 +92,8 @@ export function IssueDetail({
   const queryClient = useQueryClient();
   const membersQuery = useQuery(memberListOptions(wsId));
   const members = membersQuery.data ?? [];
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const afterFirstScreen = useAfterFirstScreen({ routeKey: pathname });
+  const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: afterFirstScreen }));
   const resolveDeepLinkSession = Boolean(highlightCommentId && !initialIssueSessionId
     && initialLog?.targetCommentId !== highlightCommentId);
   const sessions = useIssueSessionSelection(
@@ -259,6 +262,7 @@ export function IssueDetail({
   const loading = issueLoading
     || membersQuery.isPending
     || (!!issue && childIssuesQuery.isPending);
+  useRouteContentReady(pathname, !issueLoading && !issue);
 
   // Shared issue actions (mutations, pin, copy-link, modal dispatch, etc.).
   // Called before the `if (!issue)` early return so hook order stays stable.

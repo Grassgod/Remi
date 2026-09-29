@@ -46,6 +46,7 @@ interface IssueActivitySectionProps {
   initialLog?: IssueLogBootstrap;
   onShowKeyResults: () => void;
   onScrollRoot: (el: HTMLDivElement | null) => void;
+  onContentReady?: () => void;
 }
 
 export function logRowToComment(row: SessionLogRow): TimelineEntry {
@@ -61,7 +62,7 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
 }
 
 export function IssueActivitySection({ issueId, projectId, members, agents, onShowKeyResults, currentUserId, canModerateComments, activeIssueSessionId: sessionId,
-  activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot,
+  activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
   const [activeCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
@@ -78,6 +79,9 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   const resolve = useResolveComment(issueId, sessionId);
   const reaction = useToggleCommentReaction(issueId, sessionId);
   const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
+  useEffect(() => {
+    if ((!sessionId && !sessionsPending) || (error && !snapshot.ready)) onContentReady?.();
+  }, [sessionId, sessionsPending, error, snapshot.ready, onContentReady]);
   const onLegacyUpdate = useCallback((payload: unknown) => {
     const p = payload as { issue_id?: string; comment?: { issue_id?: string; issue_session_id?: string } };
     if ((p.issue_id ?? p.comment?.issue_id) === issueId && (!p.comment?.issue_session_id || p.comment.issue_session_id === sessionId)) refresh();
@@ -112,6 +116,7 @@ export function IssueActivitySection({ issueId, projectId, members, agents, onSh
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
+    onRevealed={onContentReady}
     perfScroll="issue-detail" latestAnchor="latest-comment"
     contentReady={initialLog?.sessionId === sessionId || tasksReadySessionId === sessionId}
     anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
