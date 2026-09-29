@@ -1371,32 +1371,40 @@ export class StoreContext {
     // shape of GET /api/issues/:id/timeline. Best-effort: the activity is
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
+    const event: WorkspaceEvent = {
+      type: "activity:created",
+      workspaceId: "",
+      actorType: input.actorType,
+      actorId: input.actorId ?? null,
+      payload: {
+        issue_id: issueId,
+        entry: {
+          type: "activity",
+          id,
+          actor_type: input.actorType,
+          actor_id: input.actorId ?? null,
+          created_at: now,
+          action: input.type,
+          details: input.data ?? (input.body == null ? null : { body: input.body }),
+        },
+      },
+    };
+    // Reserve the caller's event order now; optional routing is resolved only
+    // after COMMIT, before the owner can flush its queue.
+    if (deferredEvents) deferredEvents.workspace.push(event);
     afterCommit(this.db, () => {
       try {
         const workspaceId = this.issueWorkspaceId(issueId);
         if (!workspaceId) return;
-        const event: WorkspaceEvent = {
-          type: "activity:created",
-          workspaceId,
-          actorType: input.actorType,
-          actorId: input.actorId ?? null,
-          payload: {
-            issue_id: issueId,
-            entry: {
-              type: "activity",
-              id,
-              actor_type: input.actorType,
-              actor_id: input.actorId ?? null,
-              created_at: now,
-              action: input.type,
-              details: input.data ?? (input.body == null ? null : { body: input.body }),
-            },
-          },
-        };
-        if (deferredEvents) deferredEvents.workspace.push(event);
-        else this.emitWorkspaceEvent(event);
+        event.workspaceId = workspaceId;
+        if (!deferredEvents) this.emitWorkspaceEvent(event);
       } catch (err) {
         log.warn(`activity:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        if (deferredEvents && !event.workspaceId) {
+          const index = deferredEvents.workspace.indexOf(event);
+          if (index >= 0) deferredEvents.workspace.splice(index, 1);
+        }
       }
     });
   }

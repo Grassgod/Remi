@@ -175,6 +175,54 @@ describe("MUL-427 merge rulings", () => {
       });
     }, 30_000);
 
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: caller queue preserves interleaved activity and comment order after routing`, async () => {
+      await withStore(backend, (store, db) => {
+        const issue = store.createIssue({ title: "Ordered caller queue", workspaceId: "local" });
+        store.getOrCreateDefaultIssueSession(issue.id);
+        const queue = createCommitEventQueue();
+        const emitted: string[] = [];
+        const unsubscribe = store.onWorkspaceEvent(event => emitted.push(event.type));
+        try {
+          db.transaction(() => {
+            for (const body of ["First", "Second"]) {
+              (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, { authorType: "agent", body }, {
+                withinTransaction: true, deferAgentMentionDispatch: true, deferredEvents: queue,
+              });
+            }
+            expect(emitted).toEqual([]);
+          })();
+          expect(queue.workspace.map(event => event.type)).toEqual([
+            "activity:created", "comment:created", "activity:created", "comment:created",
+          ]);
+          expect(queue.workspace.map(event => event.workspaceId)).toEqual(Array(4).fill(issue.workspaceId));
+          expect(emitted).toEqual([]);
+          (store as unknown as { ctx: StoreContext }).ctx.emitCommitEvents(queue);
+          expect(emitted).toEqual(queue.workspace.map(event => event.type));
+        } finally { unsubscribe(); }
+      });
+    }, 30_000);
+
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: failed optional activity routing removes only its reserved caller event`, async () => {
+      await withStore(backend, (store, db) => {
+        const issue = store.createIssue({ title: "Failed activity route", workspaceId: "local" });
+        store.getOrCreateDefaultIssueSession(issue.id);
+        const context = (store as unknown as { ctx: StoreContext }).ctx;
+        const originalWorkspaceId = context.issueWorkspaceId.bind(context);
+        context.issueWorkspaceId = id => db.inTransaction ? originalWorkspaceId(id)
+          : db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+        const queue = createCommitEventQueue();
+        let commentId = "";
+        context.db.transaction(() => {
+          commentId = (store as unknown as { issues: IssuesRepo }).issues.createIssueComment(issue.id, {
+            authorType: "agent", body: "Comment survives optional routing failure",
+          }, { withinTransaction: true, deferAgentMentionDispatch: true, deferredEvents: queue }).id;
+        })();
+        expect(store.getIssueComment(commentId)?.body).toBe("Comment survives optional routing failure");
+        expect(queue.workspace.map(event => event.type)).toEqual(["comment:created"]);
+        expect(queue.workspace[0]?.workspaceId).toBe(issue.workspaceId);
+      });
+    }, 30_000);
+
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: all three main-produced kinds preserve the dense seq axis and marker targets`, async () => {
       await withStore(backend, (store) => {
         const issue = store.createIssue({ title: "Ruling ③", workspaceId: "local" });
