@@ -313,19 +313,19 @@
       "route": "/api/cli/capabilities",
       "main": {
         "status": 200,
-        "bytes": 79901,
+        "bytes": 80064,
         "maxReplyBytes": 18874718,
         "reason": "requested"
       },
       "observe": {
         "status": 200,
-        "bytes": 79901,
+        "bytes": 80064,
         "maxReplyBytes": 18874718,
         "reason": "requested"
       },
       "enforced": {
         "status": 200,
-        "bytes": 79901,
+        "bytes": 80064,
         "maxReplyBytes": 18874718,
         "reason": "requested"
       }
@@ -403,13 +403,13 @@
         "status": 503,
         "bytes": 40,
         "maxReplyBytes": 0,
-        "reason": "handler error in fixture"
+        "reason": "integration configuration absent"
       },
       "observe": {
         "status": 503,
         "bytes": 40,
         "maxReplyBytes": 0,
-        "reason": "handler error in fixture"
+        "reason": "integration configuration absent"
       },
       "enforced": {
         "status": 503,
@@ -425,13 +425,13 @@
         "status": 503,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "handler error in fixture"
+        "reason": "integration configuration absent"
       },
       "observe": {
         "status": 503,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "handler error in fixture"
+        "reason": "integration configuration absent"
       },
       "enforced": {
         "status": 503,
@@ -1635,13 +1635,13 @@
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,
@@ -1657,13 +1657,13 @@
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,
@@ -1679,13 +1679,13 @@
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,
@@ -1701,13 +1701,13 @@
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,
@@ -1723,13 +1723,13 @@
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 77,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,
@@ -1745,13 +1745,13 @@
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "observe": {
         "status": 426,
         "bytes": 0,
         "maxReplyBytes": 0,
-        "reason": "route redirects or has another non-2xx result"
+        "reason": "requires a WebSocket upgrade"
       },
       "enforced": {
         "status": 426,

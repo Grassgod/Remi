@@ -6,6 +6,7 @@ This report implements Senior ruling B (`cmt_q2m2lomd48pm`) and the continuation
 
 - Archive `84101310` preserves HEAD-to-GET lookup and the 15 QA messaging exceptions. The exception set is frozen there: 418 HTTP keys plus one independent background key. Workspace context, source allowlist and MUL-487 human-request card findings are not added.
 - Archived the current 57-column probe work in `a03b2d0a`, then merged main `57f42dec5db6a03fb555ba5a764aa3b5a099c2bb` in `1b1a0392`. The only conflict was the blank line after `MeteredDb`'s constructor in `bench-repository-wikis-a2-scale.ts`; its delegated dialect marker and main's SQLite factory migration both remain. MUL-460's `markSqliteDialect(getDb())` change affects the SQLite branch, not the PostgreSQL policy or parse guard.
+- Subsequently archived the route evidence in `1765ecd4` and merged main `8492617cf743e7300b25d711e969653baf3efcd5` (MUL-467) in `dbb0998f`, without conflicts. The new POST `/api/issues/:id/workspace/abandon` reaches the whole issue and issue-workspace row; runtime deletion guards/cancellation also read runtime/task rows. These are C-2 projection/budget candidates, not exception additions. All bridge calls still share the same policy; neither product guardrail file changed in this main update.
 - Product edits remain in `request-metrics.ts` and `postgres.ts`. No repo projection or pagination algorithm was changed.
 - `MULTIREMI_PG_REPLY_MAX_BYTES`: unset/empty = 8,388,608; 0 disables the configured threshold; invalid values fall back and warn with only the raw value as variable information.
 - `MULTIREMI_PG_REPLY_ENFORCE`: unset/empty/0 = observe; 1 = enforce; invalid = observe and one warning at cached resolution. Production default is off. C-2 needs fresh authorization to change that default.
@@ -28,6 +29,8 @@ env -u MULTIREMI_TOKEN bun tests/manual/report-pg-reply-c1-probe.ts
 ```
 
 The full fixture populates 57 representative payload columns at >=9 MiB; task transcript is 96 x 256 KiB = 24 MiB, within its writer's row cap. An isolated matrix reruns every GET/HEAD per column to attribute failures to a root instead of hiding later reads behind workspace context. Actual app registration is used, including template messaging routes. This is coverage of payload categories, not a claim that every one of 1,562 schema columns (including identifiers, enums, credentials and internal records) has a reachable long row.
+
+The final three complete-fixture runs compare merged source against main `8492617c`. The supplementary isolated matrix and writer line references were collected at `57f42dec`; MUL-467 changes deletion/abandonment writes, with no change to the 329 GET patterns or the readers exercised by that matrix. On the final merge the runtime/schema audit reports 777 routes, 776 source handlers, 132 schema tables, 724 conservative callers, 309 unreviewed candidates, four unmapped loop registrations and zero stale source routes. It remains a report, not a completeness gate.
 
 `maxReplyBytes` is the largest single bridge reply while a request runs. Successful statements use the same `JSON.stringify({rows,count})` serialization as the worker; rejected statements use the exact logged bridge length. This is neither HTTP body length nor aggregate request `db_bytes`. Raw attachments contain patterns, statuses, byte counts and reasons; no bodies, real IDs, SQL, credentials or connection strings.
 
@@ -89,8 +92,8 @@ All runtime GET patterns were requested. Non-2xx rows were exercised, not silent
 
 | Pattern | Method | Main / observe / enforced | Reason on main |
 |---|---|---|---|
-| `/auth/lark/url` | GET | 503 / 503 / 503 | handler error in fixture |
-| `/auth/lark/url` | HEAD | 503 / 503 / 503 | handler error in fixture |
+| `/auth/lark/url` | GET | 503 / 503 / 503 | integration configuration absent |
+| `/auth/lark/url` | HEAD | 503 / 503 / 503 | integration configuration absent |
 | `/api/remi/releases/latest/version` | GET | 404 / 404 / 404 | fixture id absent or route not found |
 | `/api/remi/releases/latest/version` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
 | `/api/remi/releases/latest/:filename` | GET | 404 / 404 / 404 | fixture id absent or route not found |
@@ -111,12 +114,12 @@ All runtime GET patterns were requested. Non-2xx rows were exercised, not silent
 | `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
 | `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content` | GET | 405 / 405 / 405 | route does not accept this method |
 | `/api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
-| `/api/daemon/ws` | GET | 426 / 426 / 426 | route redirects or has another non-2xx result |
-| `/api/daemon/ws` | HEAD | 426 / 426 / 426 | route redirects or has another non-2xx result |
-| `/ws` | GET | 426 / 426 / 426 | route redirects or has another non-2xx result |
-| `/ws` | HEAD | 426 / 426 / 426 | route redirects or has another non-2xx result |
-| `/api/realtime/ws` | GET | 426 / 426 / 426 | route redirects or has another non-2xx result |
-| `/api/realtime/ws` | HEAD | 426 / 426 / 426 | route redirects or has another non-2xx result |
+| `/api/daemon/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/daemon/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/realtime/ws` | GET | 426 / 426 / 426 | requires a WebSocket upgrade |
+| `/api/realtime/ws` | HEAD | 426 / 426 / 426 | requires a WebSocket upgrade |
 | `/api/workspaces/:id/runtime-provisions/:provisionId` | GET | 404 / 404 / 404 | fixture id absent or route not found |
 | `/api/workspaces/:id/runtime-provisions/:provisionId` | HEAD | 404 / 404 / 404 | fixture id absent or route not found |
 | `/api/workspaces/:id/runtime-provisions/:provisionId/states` | GET | 404 / 404 / 404 | fixture id absent or route not found |

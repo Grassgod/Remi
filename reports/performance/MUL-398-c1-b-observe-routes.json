@@ -119,7 +119,7 @@
       "status": 200,
       "maxReplyBytes": 18874718,
       "reason": "requested",
-      "bytes": 79901
+      "bytes": 80064
     },
     {
       "method": "HEAD",
@@ -150,7 +150,7 @@
       "route": "/auth/lark/url",
       "status": 503,
       "maxReplyBytes": 0,
-      "reason": "handler error in fixture",
+      "reason": "integration configuration absent",
       "bytes": 40
     },
     {
@@ -158,7 +158,7 @@
       "route": "/auth/lark/url",
       "status": 503,
       "maxReplyBytes": 0,
-      "reason": "handler error in fixture",
+      "reason": "integration configuration absent",
       "bytes": 0
     },
     {
@@ -598,7 +598,7 @@
       "route": "/api/daemon/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 77
     },
     {
@@ -606,7 +606,7 @@
       "route": "/api/daemon/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 0
     },
     {
@@ -614,7 +614,7 @@
       "route": "/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 77
     },
     {
@@ -622,7 +622,7 @@
       "route": "/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 0
     },
     {
@@ -630,7 +630,7 @@
       "route": "/api/realtime/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 77
     },
     {
@@ -638,7 +638,7 @@
       "route": "/api/realtime/ws",
       "status": 426,
       "maxReplyBytes": 0,
-      "reason": "route redirects or has another non-2xx result",
+      "reason": "requires a WebSocket upgrade",
       "bytes": 0
     },
     {
