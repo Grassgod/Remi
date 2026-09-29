@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe } from "bun:test";
 import { Database } from "bun:sqlite";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { collapsePendingTurnsWithinTransaction, createPendingTurnIndexesWithinTransaction } from "@multiremi/store/pending-turns.js";
+import { preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 export interface PendingTurnTestFixture {
   db: SqlDatabase;
@@ -14,8 +14,7 @@ export interface PendingTurnTestFixture {
 
 export function installPendingTurnTestConstraints(fixture: PendingTurnTestFixture): void {
   fixture.transaction(() => {
-    collapsePendingTurnsWithinTransaction(fixture.db);
-    createPendingTurnIndexesWithinTransaction(fixture.db);
+    preparePendingTurnConstraintsWithinTransaction(fixture.db);
   });
 }
 

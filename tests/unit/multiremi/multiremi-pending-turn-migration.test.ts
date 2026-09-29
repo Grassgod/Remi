@@ -16,7 +16,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     const chat = store.createChatSession({ agentId: agent.id });
     let ordinal = 0;
     const add = (prompt: string, input: Record<string, unknown> = {}) => {
-      const task = fixture().store.createTask({ agentId: agent.id, issueId: issue.id, prompt, ...input });
+      const task = fixture().store.createTask({ agentId: agent.id, issueId: issue.id, prompt, wakeSource: "child_status", ...input });
       fixture().db.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?",
         [`2026-09-29T00:00:0${ordinal++}.000Z`, task.id]);
       return task;
@@ -129,12 +129,13 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     expect(f.add("fourth").status).toBe("queued");
   });
 
-  it("rejects a second queued issue lane, including continuations, then admits one after the first is running", () => {
+  it("T2: rejects a second platform turn but permits human rows and continuations, then admits one after running", () => {
     const f = legacyFixture();
     const first = f.add("first");
     migrate();
     expect(() => f.add("second")).toThrow();
-    expect(() => f.add("continuation", { continuedFromTaskId: first.id })).toThrow();
+    expect(f.add("human", { wakeSource: null }).status).toBe("queued");
+    expect(f.add("continuation", { continuedFromTaskId: first.id }).status).toBe("queued");
     f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.id]);
     expect(f.add("allowed").status).toBe("queued");
   });
@@ -151,10 +152,60 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     const at = "2026-09-29T00:00:00.000Z";
     for (const id of ["mixed_a", "mixed_b"]) {
       f.db.run(`INSERT INTO multiremi_tasks
-        (id, agent_id, issue_id, issue_session_id, chat_session_id, execution_scope, status, prompt, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'queued', 'mixed', ?, ?)`,
+        (id, agent_id, issue_id, issue_session_id, chat_session_id, execution_scope, wake_source, status, prompt, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'relay', 'queued', 'mixed', ?, ?)`,
       [id, f.agent.id, f.issue.id, f.session.id, f.chat.id, id, at, at]);
     }
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_tasks WHERE id IN ('mixed_a', 'mixed_b')").get()).toEqual({ count: 2 });
+  });
+
+  it("T1: preserves user Chat queues, human mentions and continuations while collapsing only platform turns", () => {
+    const f = legacyFixture();
+    const users = ["user first", "user second", "user third"].map(content => f.store.sendChatMessage(f.chat.id, { content }).task);
+    for (const body of ["First mention", "Second mention"]) {
+      f.store.createIssueComment(f.issue.id, { authorType: "member",
+        body: `${body} [@Migration owner](mention://agent/${f.agent.id})` });
+    }
+    const human = f.store.listTasksForIssue(f.issue.id).filter(task => task.triggerCommentId);
+    expect(human).toHaveLength(2);
+    const continuation = f.add("continuation unchanged", { continuedFromTaskId: human[0]!.id });
+    const first = f.add("platform first");
+    const later = f.add("platform later");
+    const preservedIds = [...users, ...human, continuation].map(task => task.id);
+    const snapshot = () => f.db.query(`SELECT id, status, prompt, chat_queue_order, updated_at
+      FROM multiremi_tasks WHERE id NOT IN (?, ?) ORDER BY id`).all(first.id, later.id);
+    const before = snapshot();
+    expect(before).toHaveLength(preservedIds.length);
+    migrate();
+    expect(snapshot()).toEqual(before);
+    expect(f.store.getTask(first.id)!.prompt).toContain(later.prompt);
+    expect(f.store.getTask(later.id)!.status).toBe("cancelled");
+    const collapsed = f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_collapsed'").all();
+    expect(collapsed.map(row => JSON.parse(row.data))).toEqual([{ task_id: later.id, kept_task_id: first.id }]);
+  });
+
+  it("T3: rejects duplicate relay rows while all three user Chat sends remain legal", () => {
+    const f = legacyFixture();
+    f.add("relay first", { issueId: null, chatSessionId: f.chat.id, wakeSource: "relay" });
+    migrate();
+    expect(() => f.add("relay duplicate", { issueId: null, chatSessionId: f.chat.id, wakeSource: "relay" })).toThrow();
+    const sent = ["one", "two", "three"].map(content => f.store.sendChatMessage(f.chat.id, { content }).task);
+    expect(sent.map(task => task.status)).toEqual(["queued", "queued", "queued"]);
+    expect(sent.map(task => task.wakeSource)).toEqual([null, null, null]);
+  });
+
+  it("rolls back the fold if its post-check still finds a duplicate group", () => {
+    const f = legacyFixture();
+    f.add("kept");
+    f.add("not cancelled");
+    const before = f.db.query("SELECT id, status, prompt FROM multiremi_tasks ORDER BY id").all();
+    const original = f.db.run.bind(f.db);
+    f.db.run = (sql, params) => sql.includes("SET status = 'cancelled'")
+      ? { changes: 0, lastInsertRowid: 0 } : original(sql, params);
+    try {
+      expect(() => installPendingTurnTestConstraints(fixture())).toThrow("left duplicate platform turns");
+    } finally { f.db.run = original; }
+    expect(f.db.query("SELECT id, status, prompt FROM multiremi_tasks ORDER BY id").all()).toEqual(before);
+    expect(f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_collapsed'").all()).toEqual([]);
   });
 });

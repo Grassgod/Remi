@@ -11,15 +11,21 @@ export function executionScopeSql(alias: string): string {
 }
 
 export function createPendingTurnIndexesWithinTransaction(db: SqlDatabase): void {
-  // Stage two tests use the original chat predicate. Its final scope awaits
-  // the stage-three plan, which must preserve the user-visible Chat queue.
+  if (!db.inTransaction) throw new Error("Pending-turn indexes require an open transaction");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_tasks_one_pending_turn_session
       ON multiremi_tasks(issue_session_id, agent_id, execution_scope)
-      WHERE status = 'queued' AND issue_session_id IS NOT NULL;
+      WHERE status = 'queued'
+        AND wake_source IS NOT NULL
+        AND continued_from_task_id IS NULL
+        AND issue_session_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_tasks_one_pending_turn_chat
       ON multiremi_tasks(chat_session_id, agent_id)
-      WHERE status = 'queued' AND chat_session_id IS NOT NULL AND issue_session_id IS NULL;
+      WHERE status = 'queued'
+        AND wake_source IS NOT NULL
+        AND continued_from_task_id IS NULL
+        AND chat_session_id IS NOT NULL
+        AND issue_session_id IS NULL;
   `);
 }
 
@@ -58,13 +64,7 @@ export function appendPendingTurnAuditWithinTransaction(
   }
 }
 
-export function collapsePendingTurnsWithinTransaction(db: SqlDatabase): void {
-  const rows = db.query(`SELECT t.id, t.workspace_id, t.issue_id, t.issue_session_id,
-    t.chat_session_id, t.agent_id, t.execution_scope, t.delegation_id, t.prompt,
-    a.name AS agent_name FROM multiremi_tasks t
-    LEFT JOIN multiremi_agents a ON a.id = t.agent_id
-    WHERE t.status = 'queued' AND (t.issue_session_id IS NOT NULL OR t.chat_session_id IS NOT NULL)
-    ORDER BY t.created_at ASC, t.id ASC`).all() as PendingTurnRow[];
+function pendingTurnLanes(rows: PendingTurnRow[]): Map<string, PendingTurnRow[]> {
   const lanes = new Map<string, PendingTurnRow[]>();
   for (const row of rows) {
     const key = JSON.stringify(row.issue_session_id != null
@@ -74,6 +74,19 @@ export function collapsePendingTurnsWithinTransaction(db: SqlDatabase): void {
     lane.push(row);
     lanes.set(key, lane);
   }
+  return lanes;
+}
+
+export function collapsePendingTurnsWithinTransaction(db: SqlDatabase): void {
+  if (!db.inTransaction) throw new Error("Pending-turn collapse requires an open transaction");
+  const candidates = () => db.query(`SELECT t.id, t.workspace_id, t.issue_id, t.issue_session_id,
+    t.chat_session_id, t.agent_id, t.execution_scope, t.delegation_id, t.prompt,
+    a.name AS agent_name FROM multiremi_tasks t
+    LEFT JOIN multiremi_agents a ON a.id = t.agent_id
+    WHERE t.status = 'queued' AND t.wake_source IS NOT NULL AND t.continued_from_task_id IS NULL
+      AND (t.issue_session_id IS NOT NULL OR t.chat_session_id IS NOT NULL)
+    ORDER BY t.created_at ASC, t.id ASC`).all() as PendingTurnRow[];
+  const lanes = pendingTurnLanes(candidates());
   const at = nowIso();
   for (const lane of lanes.values()) {
     if (lane.length < 2) continue;
@@ -98,4 +111,13 @@ export function collapsePendingTurnsWithinTransaction(db: SqlDatabase): void {
         "pending_turn_collapsed", { kept_task_id: kept.id }, at);
     }
   }
+  if ([...pendingTurnLanes(candidates()).values()].some(lane => lane.length > 1)) {
+    throw new Error("Pending-turn collapse left duplicate platform turns");
+  }
+}
+
+/** Stage three registers this operation under its own migration id. */
+export function preparePendingTurnConstraintsWithinTransaction(db: SqlDatabase): void {
+  collapsePendingTurnsWithinTransaction(db);
+  createPendingTurnIndexesWithinTransaction(db);
 }
