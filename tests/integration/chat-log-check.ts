@@ -82,7 +82,8 @@ try {
   const bridged = await fetch(`http://127.0.0.1:${proxyPort}/api/sessions/${chat.id}/log?before=30`, { headers: authHeaders });
   check("real Chat log endpoint survives the local API proxy", direct.status === 200 && bridged.status === 200,
     { direct: direct.status, proxy: bridged.status });
-  const webEnv = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`, NEXT_BUILD_CPUS: "8" };
+  const webEnv = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`,
+    NEXT_PUBLIC_WS_URL: `ws://127.0.0.1:${apiPort}/ws`, NEXT_BUILD_CPUS: "8" };
   if (!process.argv.includes("--skip-build")) {
     const build = Bun.spawn({ cmd: ["bun", "run", "build"], cwd: join(root, "frontend/apps/web"),
       env: webEnv, stdout: "pipe", stderr: "pipe" });
@@ -168,6 +169,91 @@ try {
   check("final page has no JavaScript errors", errors.length === 0, errors);
   await page.screenshot({ path: join(out, "chat-page.png") });
   await context.close();
+
+  const floating = await mktContext(browser, credential, [], origin);
+  await floating.addCookies([{ name: "multimira_auth", value: credential, url: origin, httpOnly: true, sameSite: "Strict" }]);
+  await floating.addInitScript(({ sessionId, slug }) => {
+    localStorage.setItem("multimira:chat:isOpen", "false");
+    localStorage.setItem(`multimira:chat:activeSessionId:${slug}`, sessionId);
+  }, { sessionId: chat.id, slug: fixture.workspaceSlug });
+  const floatingPage = await floating.newPage();
+  const floatingLogRequests: string[] = [];
+  const floatingStreamFrames: Array<{ direction: string; type: string; fromSeq?: number; seqs?: number[]; head?: number; gap?: unknown }> = [];
+  floatingPage.on("websocket", socket => {
+    const record = (direction: string, payload: string) => {
+      try {
+        const frame = JSON.parse(payload) as { type?: string; payload?: { stream?: string; id?: string; from_seq?: number; frames?: Array<{ seq: number }>; head_seq?: number; gap?: unknown } };
+        if (frame.type?.startsWith("stream.") && frame.payload?.stream === "log" && frame.payload.id === chat.id)
+          floatingStreamFrames.push({ direction, type: frame.type, fromSeq: frame.payload.from_seq,
+            seqs: frame.payload.frames?.map(entry => entry.seq), head: frame.payload.head_seq, gap: frame.payload.gap });
+      } catch {}
+    };
+    socket.on("framesent", event => record("sent", String(event.payload)));
+    socket.on("framereceived", event => record("received", String(event.payload)));
+  });
+  floatingPage.on("request", request => {
+    if (new URL(request.url()).pathname === `/api/sessions/${chat.id}/log`) floatingLogRequests.push(request.url());
+  });
+  const floatingIssue = await floatingPage.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.parentIssueId}`, { waitUntil: "domcontentloaded" });
+  check("floating Chat fixture opens its Issue page", floatingIssue?.ok() === true, floatingIssue?.status());
+  await floatingPage.waitForSelector('[data-session-log-scroll][data-perf-state="ready"]');
+  await Bun.sleep(300);
+  check("hidden floating Chat does not read its log", floatingLogRequests.length === 0, floatingLogRequests.length);
+  check("hidden floating Chat does not subscribe to its log", !floatingStreamFrames.some(frame =>
+    frame.direction === "sent" && frame.type === "stream.subscribe"), floatingStreamFrames);
+  const fab = floatingPage.locator("button.absolute.bottom-2.right-2");
+  const activeLogSubscriptions = () => floatingStreamFrames.reduce((count, frame) =>
+    count + (frame.direction === "sent" && frame.type === "stream.subscribe" ? 1 : 0)
+      - (frame.direction === "sent" && frame.type === "stream.unsubscribe" ? 1 : 0), 0);
+  const waitForActive = async (expected: number) => {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && activeLogSubscriptions() !== expected) await Bun.sleep(20);
+    return activeLogSubscriptions() === expected;
+  };
+  await fab.click();
+  await floatingPage.waitForFunction(text => [...document.querySelectorAll('[data-perf-scroll="session-log"] [data-perf-item="message"]')]
+    .some(row => row.textContent?.includes(text)), "Chat history 40");
+  check("visible floating Chat has one log subscription", await waitForActive(1), floatingStreamFrames);
+  const sendToFloatingChat = async (body: string) => fetch(`${upstream}/api/chat/sessions/${chat.id}/messages`, {
+    method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+  });
+  const appearsOnce = async (body: string) => {
+    const appeared = await floatingPage.waitForFunction(text => [...document.querySelectorAll('[data-perf-scroll="session-log"] [data-perf-item="message"]')]
+      .some(row => row.textContent?.includes(text)), body, { timeout: 2_000 }).then(() => true, () => false);
+    return appeared && await floatingPage.locator('[data-perf-scroll="session-log"] [data-perf-item="message"]').evaluateAll(
+      (rows, text) => rows.filter(row => row.textContent?.includes(text)).length === 1, body);
+  };
+  for (let cycle = 1; cycle <= 3; cycle++) {
+    const cachedFloatingRows = await floatingPage.locator('[data-perf-scroll="session-log"] [data-perf-item="message"]').count();
+    await floatingPage.locator("button:has(svg.lucide-minus)").click();
+    await fab.waitFor({ state: "visible" });
+    check(`cycle ${cycle}: hidden floating Chat has no log subscription`, await waitForActive(0), floatingStreamFrames);
+    const requestsWhileClosed = floatingLogRequests.length;
+    const hiddenBody = `Hidden interval message ${cycle}`;
+    const hiddenSend = await sendToFloatingChat(hiddenBody);
+    check(`cycle ${cycle}: hidden message uses the real API`, hiddenSend.status === 201, hiddenSend.status);
+    const hiddenHead = store.getConversationLogHead(chat.id)?.headSeq;
+    await Bun.sleep(100);
+    check(`cycle ${cycle}: closed floating Chat keeps its log network idle`, floatingLogRequests.length === requestsWhileClosed,
+      { before: requestsWhileClosed, after: floatingLogRequests.length });
+    await fab.click();
+    const reopened = await floatingPage.locator('[data-perf-scroll="session-log"]').evaluate(element => ({
+      rows: element.querySelectorAll('[data-perf-item="message"]').length,
+      skeletons: element.querySelectorAll('[data-slot="skeleton"]').length,
+      visible: element.getBoundingClientRect().height > 0,
+    }));
+    check(`cycle ${cycle}: reopening shows cached rows without blank or skeleton`, reopened.visible
+      && reopened.rows === cachedFloatingRows && reopened.skeletons === 0, { ...reopened, cachedFloatingRows });
+    check(`cycle ${cycle}: hidden message catches up once within 2 seconds`, await appearsOnce(hiddenBody),
+      { hiddenHead, floatingStreamFrames });
+    check(`cycle ${cycle}: visible floating Chat has one log subscription`, await waitForActive(1), floatingStreamFrames);
+    const liveBody = `Visible interval message ${cycle}`;
+    const liveSend = await sendToFloatingChat(liveBody);
+    check(`cycle ${cycle}: visible message uses the real API`, liveSend.status === 201, liveSend.status);
+    check(`cycle ${cycle}: live stream delivers once within 2 seconds`, await appearsOnce(liveBody), floatingStreamFrames);
+  }
+  await floatingPage.screenshot({ path: join(out, "chat-floating-reopened.png") });
+  await floating.close();
 
   for (const mode of ["no-cookie", "401", "503", "timeout"] as const) {
     ssrMode = mode === "no-cookie" ? "ok" : mode;

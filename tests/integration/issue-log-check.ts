@@ -134,7 +134,8 @@ try {
   check("forged body_html is absent from persisted log", persisted.entries.find(e => e.id === written.id)?.body_html === html
     && !persisted.entries.some(e => e.body_html?.includes(forgedHtml)));
 
-  const env = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`, NEXT_BUILD_CPUS: "8" };
+  const env = { ...process.env, REMOTE_API_URL: `http://127.0.0.1:${proxyPort}`,
+    NEXT_PUBLIC_WS_URL: `ws://127.0.0.1:${apiPort}/ws`, NEXT_BUILD_CPUS: "8" };
   const dev = process.argv.includes("--dev");
   if (!dev && !process.argv.includes("--skip-build")) {
     console.log("Building production Next app");
@@ -330,6 +331,23 @@ try {
     }
     await page.screenshot({ path: join(out, `${entry}-${round}.png`), fullPage: false });
     writeFileSync(join(out, `${entry}-${round}.frames.json`), JSON.stringify(recorded));
+    await context.close();
+  }
+  if (!process.argv.includes("--one-cold")) {
+    const context = await mktContext(browser, credential, [], origin);
+    await context.addCookies([{ name: "multimira_auth", value: credential, url: origin, httpOnly: true, sameSite: "Strict" }]);
+    const page = await context.newPage();
+    await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.longIssueId}`);
+    await ready(page);
+    const body = "MUL-444 realtime Issue comment";
+    const response = await fetch(`${upstream}/api/issues/${fixture.longIssueId}/comments`, { method: "POST", headers,
+      body: JSON.stringify({ content: body, issue_session_id: fixture.longDefaultSessionId }) });
+    check("realtime Issue comment uses the real API", response.status === 201, { status: response.status });
+    const comment = await response.json() as { id: string };
+    const appeared = await page.locator(`[data-perf-key="${comment.id}"]`).waitFor({ timeout: 2_000 })
+      .then(() => true, () => false);
+    check("open Issue page receives the comment within 2 seconds without reload", appeared
+      && await page.locator(`[data-perf-key="${comment.id}"]`).getByText(body).count() === 1);
     await context.close();
   }
   for (const failure of process.argv.includes("--one-cold") ? [] : ["no-cookie", "401", "timeout", "503"]) {
