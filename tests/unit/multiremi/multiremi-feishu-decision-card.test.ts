@@ -18,7 +18,7 @@ import {
   resolveDecisionRecipient,
 } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { decodeDecisionCardBody } from "@shared/feishu-task-card.js";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import type { FeishuConciergeHost, FeishuConciergeSupervisor } from "@multiremi/worker/feishu-concierge.js";
@@ -28,7 +28,7 @@ import {
   sendDecisionLane as sendDecisionLaneForTest,
 } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
-import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
+import { handleTaskInteractionEvent, interactionMarker, registerQuestionCardClient } from "@connectors/feishu/task-interaction.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
@@ -488,9 +488,14 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(read.status).toBe(200);
     expect(await read.json()).toMatchObject({ request: { id: request.id, status: "pending" } });
     // (2) The topic's host may answer it.
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_card", interactionOpenId: "ou_the_person",
+    });
     const respond = await app.request(`${requestPath}/respond`, {
       method: "POST", headers: host,
-      body: JSON.stringify({ response: { answers: { "Continue?": "Yes" } } }),
+      body: JSON.stringify({ token: questionCardAction(decodeDecisionCardBody(card.body)!.card)!.t,
+        operator_open_id: "ou_the_person", response: { answers: { "Continue?": "Yes" } } }),
     });
     expect(respond.status).toBe(200);
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
@@ -1280,16 +1285,26 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(result.messageId).toBe("om_card");
     expect(handle.sentCards).toHaveLength(1);
 
-    // No restart: the registration made during the send answers the click.
+    store.reportFeishuBotOutbound("local", "rt_bot", delivered.id, {
+      claimToken: delivered.claimToken, status: "sent", externalMessageId: result.messageId, interactionOpenId: "ou_the_person",
+    });
+    const stop = registerQuestionCardClient("cli_decision_card", {
+      getRequest: async () => store.getTaskHumanRequest(request.id),
+      respond: async (_taskId, requestId, response, credential) => store.respondTaskHumanRequest(requestId, { response, cardCredential: credential })!,
+      getDecision: async () => null, answer: async () => { throw new Error("not a decision"); },
+    });
+    // Application routing answers clicks without relying on message registration.
     const response = await handleTaskInteractionEvent("cli_decision_card", {
       operator: { open_id: "ou_the_person" },
       context: { open_chat_id: "oc_decision_card", open_message_id: "om_card" },
       action: {
+        value: questionCardAction(decodeDecisionCardBody(delivered.body)!.card),
         tag: "button",
         name: interactionMarker(taskId, request.id),
         form_value: { q0_option0: "true" },
       },
     });
+    stop();
     expect(response).toMatchObject({ toast: { type: "success", content: "已提交" } });
     expect(store.getTaskHumanRequest(request.id)!.status).toBe("responded");
   });
