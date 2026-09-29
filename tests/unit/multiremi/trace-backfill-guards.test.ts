@@ -3,7 +3,7 @@
  * the SQL `LIKE` cross-check of the truncated JSON counts, clearing a killed
  * run's staging before a `running` subject is restaged, and committing the
  * turn cards and the done mark in the transaction that makes the archive
- * ready. On SQLite and Postgres.
+ * ready, at transaction depth 1. On SQLite and Postgres.
  */
 import { afterAll, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
@@ -240,6 +240,55 @@ function failAfterWriting(world: World, step: CommitStep) {
   };
 }
 
+/**
+ * Record the deepest `transaction()` nesting of each `commitTraceBackfill`
+ * call, counting every frame, outer and nested (ADR 0011: the outermost caller
+ * owns the only transaction). The store's database proxy forwards
+ * `transaction` to this handle on every read. On Postgres the driver's own
+ * `maxTransactionDepth` is recorded too. Returns the undo.
+ */
+function commitDepths(world: World) {
+  const target = world.db as unknown as { transaction: (fn: (...args: never[]) => unknown) => (...args: unknown[]) => unknown };
+  const original = target.transaction;
+  let depth = 0;
+  let max = 0;
+  target.transaction = (fn) => {
+    const run = original.call(target, fn);
+    return (...args: unknown[]) => {
+      depth += 1;
+      max = Math.max(max, depth);
+      try {
+        return run(...args);
+      } finally {
+        depth -= 1;
+      }
+    };
+  };
+  const pg = world.db as unknown as { maxTransactionDepth?: number; resetTransactionDepthStats?: () => void };
+  const store = world.opened.store as unknown as { commitTraceBackfill: (...args: unknown[]) => unknown };
+  const commit = store.commitTraceBackfill;
+  const frames: number[] = [];
+  const driver: number[] = [];
+  store.commitTraceBackfill = (...args: unknown[]) => {
+    max = 0;
+    pg.resetTransactionDepthStats?.();
+    try {
+      return commit.apply(store, args);
+    } finally {
+      frames.push(max);
+      if (pg.maxTransactionDepth !== undefined) driver.push(pg.maxTransactionDepth);
+    }
+  };
+  return {
+    frames,
+    driver,
+    restore: () => {
+      delete (target as Partial<typeof target>).transaction;
+      delete (store as Partial<typeof store>).commitTraceBackfill;
+    },
+  };
+}
+
 const COMMIT_STEPS: Array<{ step: CommitStep; name: string }> = [
   { step: "fillTurnCards", name: "the turn-card write (fillTurnCards)" },
   { step: "markDone", name: "the done mark (markDone)" },
@@ -313,6 +362,22 @@ for (const backend of backends) {
         expect(existsSync(stage)).toBe(false);
         expect(rerun.reconcile.issue_without_archive).toMatchObject({ ok: true, mismatch_total: 0 });
         expect((await reconcileFull(world)).ok).toBe(true);
+      });
+    }, TIMEOUT);
+
+    it("commits every subject at transaction depth 1", async () => {
+      await withWorld(backend, async (world) => {
+        const depths = commitDepths(world);
+        try {
+          const report = await world.run();
+          expect(report.execution!.chat).toMatchObject({ archives_created: 1 });
+          expect(report.execution!.issue_without_archive).toMatchObject({ archives_created: 1 });
+        } finally {
+          depths.restore();
+        }
+        expect(depths.frames.length).toBeGreaterThanOrEqual(2);
+        expect(depths.frames).toEqual(depths.frames.map(() => 1));
+        if (backend.name === "postgres") expect(depths.driver).toEqual(depths.frames);
       });
     }, TIMEOUT);
 

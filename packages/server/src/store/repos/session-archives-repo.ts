@@ -640,28 +640,29 @@ export class SessionArchivesRepo {
    * pointers (through the one swap-rule implementation) and the `none`
    * pointers land in the caller's transaction or not at all. Every task must
    * still belong to the subject and its workspace; an Issue must be active.
+   *
+   * The caller owns the one transaction (ADR 0011); this opens no frame of its
+   * own. The store's `commitTraceBackfill` is that caller.
    */
-  commitTraceBackfill(input: TraceBackfillCommitInput): TraceBackfillCommitResult {
-    return this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(input.workspaceId);
-      this.assertTraceBackfillSubject(input);
-      const taskIds = [...input.pointers.map((pointer) => pointer.taskId), ...input.noneTaskIds];
-      for (const taskId of taskIds) this.assertTraceBackfillTask(input, taskId);
-      let archive: MultiremiSessionArchive | null = null;
-      if (input.archive) {
-        for (const pointer of input.pointers) {
-          if (pointer.archiveId !== input.archive.id || pointer.runtimeId !== input.archive.runtimeId) {
-            throw new SessionArchiveTraceOwnershipError(pointer.taskId);
-          }
+  commitTraceBackfillWithinTransaction(input: TraceBackfillCommitInput): TraceBackfillCommitResult {
+    this.ctx.lockWorkspaceRuntimeLifecycle(input.workspaceId);
+    this.assertTraceBackfillSubject(input);
+    const taskIds = [...input.pointers.map((pointer) => pointer.taskId), ...input.noneTaskIds];
+    for (const taskId of taskIds) this.assertTraceBackfillTask(input, taskId);
+    let archive: MultiremiSessionArchive | null = null;
+    if (input.archive) {
+      for (const pointer of input.pointers) {
+        if (pointer.archiveId !== input.archive.id || pointer.runtimeId !== input.archive.runtimeId) {
+          throw new SessionArchiveTraceOwnershipError(pointer.taskId);
         }
-        archive = this.insertTraceBackfillArchive(input, input.archive);
-      } else if (input.pointers.length > 0) {
-        throw new TraceBackfillSubjectError("trace pointers need an archive");
       }
-      const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
-      for (const taskId of input.noneTaskIds) this.ctx.taskTraces().markTaskTraceNone(taskId);
-      return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
-    })();
+      archive = this.insertTraceBackfillArchive(input, input.archive);
+    } else if (input.pointers.length > 0) {
+      throw new TraceBackfillSubjectError("trace pointers need an archive");
+    }
+    const written = this.ctx.taskTraces().writeTaskTraceArchivePointers(input.pointers, "trace_backfill");
+    for (const taskId of input.noneTaskIds) this.ctx.taskTraces().markTaskTraceNone(taskId);
+    return { archive, pointerCount: written.written, rejectedPointers: written.rejected };
   }
 
   private assertTraceBackfillSubject(input: TraceBackfillCommitInput): void {

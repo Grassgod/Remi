@@ -1018,6 +1018,8 @@ runMigrations(this.db);
    * One subject of the trace backfill in one transaction: the `ready`
    * `trace_backfill` row, its pointers, the `none` pointers, the progress mark,
    * the per-task digests and the summary fields of the tasks' `turn` cards.
+   * This owns the only transaction (ADR 0011); every step inside it is a
+   * WithinTransaction write, so the backfill commit stays at depth 1.
    */
   commitTraceBackfill(
     input: TraceBackfillCommitInput & {
@@ -1027,7 +1029,7 @@ runMigrations(this.db);
     },
   ): TraceBackfillCommitResult & { turnCards: TraceBackfillTurnCardCounts } {
     return this.db.transaction(() => {
-      const result = this.sessionArchives.commitTraceBackfill(input);
+      const result = this.sessionArchives.commitTraceBackfillWithinTransaction(input);
       const archiveId = result.archive?.id ?? null;
       this.traceBackfillProgress.markDone({ ...input.progress, archiveId });
       if (archiveId) {
