@@ -75,6 +75,12 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 外层回滚会丢弃这些回调。不能在 PostgreSQL 事务内用裸 `try/catch` 吞掉 SQL 错误，否则事务会进入 aborted 状态。
 调用方事件队列先保留活动位置，提交后补齐路由；路由失败时移除该活动，保持其余评论事件的顺序。
 
+[InboxRepo](../packages/server/src/store/repos/inbox-repo.ts)将 E2、E3 通知、E4 和委派回报写成接收会话的系统评论，
+`metadata.envelope` 保留寻址与去重信息。状态、日志条目与 `wake_seq` 在同一深度 1 的事务提交；评论 @ 复用原日志条目。
+平台种下的 queued 行由部分唯一索引约束，人的 Chat 队列、评论轮和续接排除在索引外；
+人的评论按 Q-B 常量并入 queued，编辑触发评论时在同一事务补种 `re_ring`。实现和迁移入口见
+[pending-turns](../packages/server/src/store/pending-turns.ts)，规则见 [ADR 0012](adr/0012-unified-inbox-and-single-pending-turn.md)。
+
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。
 改为异步时需同时处理调用链与事务连接归属，不能只调大连接数。
 性能影响、现有基线脚本和待测项见[性能调查](dev/performance.md)。
