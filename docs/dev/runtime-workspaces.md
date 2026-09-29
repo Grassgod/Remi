@@ -73,6 +73,44 @@ Project 设备绑定（含独享设备）是放置约束，任何亲和都不能
 - **Issue 冻结任务**：需要改绑到数据锚点时，先运行 `remi task redispatch <原任务 ID> --reason '恢复已冻结任务并保留原请求' --yes`，再运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；替代任务保留原请求和会话、没有执行指纹，由锚点机器领取。直接改绑会取消原任务。没有数据锚点时，只有不含代码快照、本机目录的冻结任务才单独收到 redispatch 建议。redispatch 需要 supervisor 角色的任务凭证，工作区 organizer 模式须为 act。
 - **Chat 冻结任务**：只要任务带 `chatSessionId`，即使同时带 `issueId`，也按 Chat 处理。直接改绑会取消这条已冻结的任务。若需改绑，Agent 所有者或工作区 owner/admin 先运行 `remi agent update <Agent ID> --runtime <锚点 Runtime ID>`；能查看该 Chat 的用户运行 `remi chat message list <Chat ID> --output json`，找到 `task_id` 为原任务 ID、`role` 为 `user` 的消息。默认只返回最新 50 条；找不到时，将本页 `next_cursor` 对象序列化为 JSON，运行 `remi chat message list <Chat ID> --output json --cursor '<next_cursor JSON>'` 继续翻更早的消息。将命中消息的 `content` 字段正文原样存成文件，再运行 `remi chat message create <Chat ID> --content-file <文件>` 重发。发送入口会 trim 首尾空白；原消息本身已 trim 时，新消息和新任务 prompt 与原文逐字相同，内部空白保留。改绑与重发可以由不同的人执行；原消息附件需重新上传。Chat 任务不能沿用 Issue 的 redispatch 补救：supervisor 任务凭证无法通过 `canCurrentUserAccessChatTask` 的私有 Chat 访问检查，而 Chat 用户 PAT 不满足 organizer 的 supervisor 要求。重发后会生成新任务，原冻结任务仍为 cancelled。
 
+## Issue 工作区的 Runtime 删除与恢复
+
+删除 Runtime 时，任何 `status != 'cleaned'` 的 Issue 工作区都会阻止删除。
+`DELETE /api/runtimes/:id` 与 `POST /api/runtimes/:id/archive-agents-and-delete`
+返回 409、`runtime_has_active_issue_workspaces` 和 `issues` 列表（id、key、title、status）。
+确认放弃后，DELETE 传 query `abandon_issue_workspaces=true`，级联 POST 传 JSON
+`abandon_issue_workspaces: true`；两者都在原生命周期事务内将记录标为 `cleaned`，
+清空 Runtime 引用并记录 `cleaned_at`。成功响应带 `issue_workspaces_abandoned` 数量。
+已清理的记录只解除 Runtime 引用。自动删除默认拦截；Runtime 迁移先转移记录，
+保留未清理状态与目录信息。活跃任务检查和 daemon 最后一个 Runtime 的退役要求仍然生效。
+
+级联删除在同一个外层事务中取消任务、归档 Agent 和放弃工作区；取消失败或删除失败
+会回滚全部写入。任务通知、子单状态处理、活动与项目更新事件在外层提交后执行，
+事务内不调用独立开事务的公开取消接口。生命周期锁（W）之后立即取得级联编号锁（N），
+拒绝检查之后才取得 Plugin 写锁（D）。提交后的通知顺序仍为任务、子单状态、事件、
+项目默认值；事件沿用 `afterCommit`，此时已不在事务中，因此立即执行。
+
+对应命令是 `remi runtime delete <runtime> --abandon-issue-workspaces --yes`，
+或 `remi runtime archive-agents-and-delete <runtime> --file <plan.json> --abandon-issue-workspaces --yes`。
+前端删除弹窗展示受影响 Issue，并要求确认放弃工作区；级联删除另外确认归档 Agent。
+
+历史记录若已失去 Runtime（`runtime_id IS NULL` 且未 cleaned），可运行
+`remi issue workspace abandon <issue> --yes`，对应
+`POST /api/issues/:id/workspace/abandon`。此操作使用 Issue 写接口的工作区权限，
+在生命周期锁内复查归属；Runtime 引用不为空时返回 409
+`issue_workspace_runtime_attached`，须走删除或退役流程。
+重复放弃已 cleaned 且 Runtime 为空的记录返回计数 0。
+放弃保留本地文件与目录记录，解除任务领取的旧工作区亲和；其他设备、Agent 和快照约束仍适用。
+它不生成归档绑定，也不代表工作区文件已物理清理。
+
+验证入口：`tests/unit/multiremi/runtime-issue-workspace-deletion.test.ts` 同时覆盖 SQLite
+与 `MULTIREMI_TEST_POSTGRES_URL` 指向的真实 PostgreSQL；显式配置 PG 连接失败会报错。
+`runtime-deletion-transaction.test.ts` 覆盖三条 API 路径的事务深度、提交后通知与晚期
+故障回滚；PG 用独立连接读回所有 Multiremi 表。
+调度不变式保留在 `multiremi-store-task-routing.test.ts` 中；SQLite 和已配置的真实 PG
+各覆盖完整 304 个组合（合计 608）。PG 每格使用独立数据库，逐 Runtime 领取探测以
+SAVEPOINT 回滚。
+
 ## 任务私有 /tmp
 
 每个任务执行前，daemon 在本次执行的 provider home 下分配一个独占目录（`task-tmp/<task>-XXXXXX`，0700），执行结束后删除。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
