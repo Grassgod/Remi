@@ -13,9 +13,11 @@ import type { AgentRuntime } from "../types";
 export function useDeleteRuntime(wsId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (runtimeId: string) => api.deleteRuntime(runtimeId),
+    mutationFn: ({ runtimeId, abandonIssueWorkspaces = false }: { runtimeId: string; abandonIssueWorkspaces?: boolean }) =>
+      api.deleteRuntime(runtimeId, abandonIssueWorkspaces),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
     },
   });
 }
@@ -36,14 +38,17 @@ export function useArchiveAgentsAndDeleteRuntime(wsId: string) {
     mutationFn: ({
       runtimeId,
       expectedActiveAgentIds,
+      abandonIssueWorkspaces = false,
     }: {
       runtimeId: string;
       expectedActiveAgentIds: string[];
-    }) => api.archiveAgentsAndDeleteRuntime(runtimeId, expectedActiveAgentIds),
+      abandonIssueWorkspaces?: boolean;
+    }) => api.archiveAgentsAndDeleteRuntime(runtimeId, expectedActiveAgentIds, abandonIssueWorkspaces),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
     },
   });
 }

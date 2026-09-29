@@ -34,6 +34,30 @@ afterEach(() => {
 });
 
 describe("native collaboration CLI contracts", () => {
+  it("requires confirmation for orphaned Issue workspace abandonment and preserves the read command", async () => {
+    useCliEnv();
+    const abandon = specById("issue.workspace.abandon");
+    const read = specById("issue.workspace");
+    const registry = registryFor([read, abandon]);
+    const requests: Request[] = [];
+    const handler = (request: Request) => {
+      requests.push(request);
+      return Response.json({ status: "ok", issue_workspaces_abandoned: 1 });
+    };
+    globalThis.fetch = capabilityFetch(abandon.id, handler);
+    await expect(registry.execute(["issue", "workspace", "abandon", "MUL-467"]))
+      .rejects.toThrow("requires --yes");
+    expect(requests).toHaveLength(0);
+    const result = await capture(() => registry.execute(["issue", "workspace", "abandon", "MUL-467", "--yes", "--output", "json"]));
+    expect(requests[0]!.method).toBe("POST");
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/issues/MUL-467/workspace/abandon");
+    expect(JSON.parse(result.stdout).issue_workspaces_abandoned).toBe(1);
+    globalThis.fetch = capabilityFetch(read.id, handler);
+    await capture(() => registry.execute(["issue", "workspace", "MUL-467", "--output", "json"]));
+    expect(requests[1]!.method).toBe("GET");
+    expect(new URL(requests[1]!.url).pathname).toBe("/api/issues/MUL-467/workspace");
+  });
+
   it("issue grouped sends only the plural assignee type query parameter", async () => {
     useCliEnv();
     const spec = specById("issue.grouped");

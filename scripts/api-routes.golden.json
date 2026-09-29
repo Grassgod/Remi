@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 776,
+    "routeCount": 777,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 548,
+      "compat": 549,
       "root": 16
     },
     "getRoutes": 329,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 447,
+    "mutationRoutes": 448,
     "mutationRoutesCovered": 283,
     "flows": [
       "agents-compat",
@@ -615,6 +615,7 @@
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
     "POST /api/issues/:id/unsubscribe",
+    "POST /api/issues/:id/workspace/abandon",
     "POST /api/issues/:issueId/session-archives/:archiveId/retry",
     "POST /api/issues/:issueId/session-archives/:archiveId/verify",
     "POST /api/issues/batch-delete",
@@ -10030,6 +10031,17 @@
             "id": "issue.workspace",
             "command": "remi issue workspace",
             "capability": "issue.workspace",
+            "outputs": [
+              "table",
+              "json",
+              "jsonl"
+            ],
+            "allowed": true
+          },
+          {
+            "id": "issue.workspace.abandon",
+            "command": "remi issue workspace abandon",
+            "capability": "issue.workspace.abandon",
             "outputs": [
               "table",
               "json",

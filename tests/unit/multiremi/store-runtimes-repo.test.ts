@@ -201,11 +201,19 @@ describe("RuntimesRepo", () => {
     store!.cancelTask(runningTask.id);
     expect(repo.deleteRuntime(runtime.id)).toBeFalse();
     store!.updateAgent(agent.id, { runtimeId: null });
-    expect(repo.deleteRuntime(runtime.id)).toBeTrue();
+    expect(repo.deleteRuntime(runtime.id)).toBeFalse();
+    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id)).toMatchObject({
+      status: "active_issue_workspaces",
+      issues: [{ id: issue.id, key: issue.key, title: issue.title, status: "ready" }],
+    });
+    expect(store!.getIssueWorkspace(issue.id)?.runtimeId).toBe(runtime.id);
+    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id, { abandonIssueWorkspaces: true })).toEqual({
+      status: "deleted", issueWorkspacesAbandoned: 1,
+    });
     expect(store!.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(store!.getIssueWorkspace(issue.id)).toMatchObject({
       runtimeId: null,
-      status: "runtime_offline",
+      status: "cleaned",
     });
     expect(store!.getChatSession(chat.id)).toMatchObject({
       sessionId: null,
@@ -303,7 +311,7 @@ describe("RuntimesRepo", () => {
     expect(store!.getTask(task.id)?.status).toBe("queued");
 
     store!.cancelTask(task.id);
-    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id)).toEqual({ status: "deleted" });
+    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id)).toEqual({ status: "deleted", issueWorkspacesAbandoned: 0 });
     expect(repo.getRuntime(runtime.id)).toBeNull();
     expect(store!.getAgent(agent.id)).toMatchObject({ runtimeId: null });
     expect(store!.getAgent(agent.id)?.archivedAt).not.toBeNull();
