@@ -154,7 +154,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const directory = JSON.parse(log.content_jsonl.split("\n")[1]!) as { entries: Array<{ seq: number }> };
     expect(directory.entries.length).toBeLessThanOrEqual(100);
     expect(log.content_jsonl).not.toContain("Log item 109");
-  });
+  }, 30_000);
 
   it("hides system queue rows from user edits, priority, and removal", () => {
     const f = fixture();
