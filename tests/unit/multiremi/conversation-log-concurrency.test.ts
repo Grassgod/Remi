@@ -310,9 +310,9 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeStatus = store.getIssue(issue.id)?.status;
-  // MUL-406 S1 (ADR 0003): child status commits; the notification hook transaction rolls back in full.
+  // ADR 0012: state, system comment and pending turn roll back together.
   expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
-  expect(store.getIssue(child.id)?.status).toBe("done");
+  expect(store.getIssue(child.id)?.status).toBe(child.status);
   expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);
   expect(parentLog()).toEqual(beforeLog);

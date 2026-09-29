@@ -28,7 +28,13 @@ describe("MUL-427 merge rulings", () => {
           const agent = store.createAgent({ name: "Comment recipient", provider: "codex", workspaceId: "local" });
           const issue = store.createIssue({ title: "Commit queue", workspaceId: "local" });
           store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
+          for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
           const comment = store.createIssueComment(issue.id, { body: "Before" });
+          if (operation === "create") {
+            for (const task of store.listTasksForIssue(issue.id).filter(task => task.status === "queued")) {
+              store.cancelTask(task.id);
+            }
+          }
           if (operation === "unresolve") store.resolveIssueComment(comment.id);
           const triggered = store.listTasksForIssue(issue.id).filter((task) => task.triggerCommentId === comment.id);
           const events: Array<{ type: string; inTransaction: boolean | undefined }> = [];
@@ -67,6 +73,7 @@ describe("MUL-427 merge rulings", () => {
           const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
           const issue = store.createIssue({ title: "Dispatch queue", workspaceId: "local" });
           store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: leader.id });
+          for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
           const source = dispatch === "delegation return" ? store.createTask({
             agentId: worker.id, issueId: issue.id, workspaceId: "local", prompt: "Delegated work",
             delegationId: "dlg_comment_commit", delegatedByAgentId: leader.id,
@@ -99,6 +106,7 @@ describe("MUL-427 merge rulings", () => {
         const agent = store.createAgent({ name: "Assignee", provider: "codex", workspaceId: "local" });
         const issue = store.createIssue({ title: "Delete rollback", workspaceId: "local" });
         store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
+        for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
         const comment = store.createIssueComment(issue.id, { body: "Keep on failure" });
         const task = store.listTasksForIssue(issue.id).find((candidate) => candidate.triggerCommentId === comment.id)!;
         if (backend === "pg") {

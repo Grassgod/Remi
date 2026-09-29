@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { HUMAN_COMMENT_JOINS_QUEUED_ROUND, IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createLocalStore, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -267,7 +267,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     },
   );
 
-  it("creates three rounds but only one force record for three consecutive member comments", async () => {
+  it("follows Q-B for three consecutive member comments while writing only one force record", async () => {
     const fixture = await humanFixture("pat", "three-comments");
     for (const body of ["first", "second", "third"]) {
       const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
@@ -277,7 +277,9 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       });
       expect(response.status).toBe(201);
     }
-    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(3);
+    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 3);
+    expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "pending_turn_coalesced"))
+      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 2 : 0);
     expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
   });
