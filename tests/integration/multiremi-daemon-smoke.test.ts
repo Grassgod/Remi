@@ -2471,6 +2471,78 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("archives an archived Chat's .runtime history under the chat subject before GC reclaims it", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-chat-gc-");
+    const workspacesRoot = join(workDir, "workspaces");
+    const agent = store.createAgent({ name: "Chat GC Claude", provider: "claude" });
+    const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Archived GC chat" });
+    const daemonToken = await store.createAccessToken({
+      name: "Chat GC daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-chat-gc-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const runtimeId = daemonRuntimeIdForTest("daemon-chat-gc", "claude");
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        daemonId: "daemon-chat-gc",
+        runtimeName: "chat-gc-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot,
+        repoCacheRoot: join(workDir, ".repo-cache"),
+        gcEnabled: false,
+        gcTtlMs: 0,
+        providerFactory: messageProviderFactory({
+          text: "Chat GC completed",
+          sessionId: "sess-chat-gc",
+          requestId: "req-chat-gc",
+        }),
+      });
+
+      await daemon.start();
+
+      const meta = { kind: "chat", task_id: "task-chat-gc", chat_session_id: chat.id, workspace_id: "local" };
+      const chatDir = join(workspacesRoot, "chats", chat.id);
+      const runtimeRoot = join(workspacesRoot, ".runtime", chat.id);
+      writeGcFixture(chatDir, meta);
+      writeGcFixture(runtimeRoot, meta);
+      mkdirSync(join(runtimeRoot, agent.id, "1", "home"), { recursive: true });
+      writeFileSync(join(runtimeRoot, agent.id, "1", "home", "history.jsonl"), "{}\n");
+      db!.run(
+        "UPDATE multiremi_chat_sessions SET status = 'archived', session_runtime_id = ?, updated_at = ? WHERE id = ?",
+        [runtimeId, new Date(Date.now() - 10_000).toISOString(), chat.id],
+      );
+      expect(store.listSessionArchivesForSubject("chat", chat.id)).toEqual([]);
+
+      // Past TTL with no archive yet: GC archives `.runtime/<chat id>` under the
+      // chat subject first and only then reclaims both directories.
+      expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
+      expect(existsSync(chatDir)).toBe(false);
+      expect(existsSync(runtimeRoot)).toBe(false);
+      expect(store.listSessionArchivesForSubject("chat", chat.id)).toMatchObject([{
+        subjectKind: "chat",
+        subjectId: chat.id,
+        runtimeId,
+        status: "ready",
+        metadata: { source: ".runtime" },
+      }]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("writes autopilot run metadata and reclaims terminal autopilot workdirs", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-autopilot-gc-");
     const workspacesRoot = join(workDir, "workspaces");
