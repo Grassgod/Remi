@@ -4,9 +4,9 @@
  * The parent kills this process after its phase marker. A resume file lets the
  * concurrent PG test release the normal post-commit path while replay runs.
  */
-import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 
@@ -37,7 +37,7 @@ function holdUntilKilled(): void {
 
 const db: SqlDatabase = /^postgres(?:ql)?:\/\//.test(databaseUrl)
   ? new PostgresSyncDatabase(databaseUrl)
-  : Object.assign(new Database(databaseUrl), { dialect: "sqlite" as const });
+  : openSqliteDatabase(databaseUrl);
 const store = new MultiremiStore(db);
 const { ctx } = store as unknown as { ctx: StoreContext };
 
