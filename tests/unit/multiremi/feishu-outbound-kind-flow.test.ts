@@ -158,6 +158,7 @@ describe("C5 full fake-channel delivery", () => {
     } as unknown as FeishuChannelHandle;
     const daemon = { getFeishuBotHumanRequest: async () => f.store.getTaskHumanRequest(request.id),
       getFeishuBotTaskSnapshot: async () => ({ sessionId: "session_original" }),
+      prepareTaskHumanRequestCard: async () => ({ header: { title: { content: "Kind bot" } } }),
     } as unknown as MultiremiDaemon;
     await expect(sendInteractionCardLane(handle, delivery, { signal: new AbortController().signal,
       onStarted: async id => {

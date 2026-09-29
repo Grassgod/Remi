@@ -1,389 +1,180 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
-import { createMultiremiApp } from "@multiremi/api.js";
+import { beforeEach, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
-import { MultiremiStore } from "@multiremi/store.js";
-import { resetMultiremiTestEnv } from "./helpers.js";
-
+import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
+import { installPendingTurnTestConstraints, pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
-let db: Database | null = null;
+pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
+  beforeEach(() => installPendingTurnTestConstraints(fixture()));
 
-afterEach(() => {
-  db?.close();
-  db = null;
-  resetMultiremiTestEnv();
-});
+  function setup() {
+    const f = fixture();
+    const agent = f.store.createAgent({ name: "Relay", provider: "codex", maxConcurrentTasks: 4 });
+    const issue = f.store.createIssue({ title: "Relay log", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const session = f.store.getOrCreateDefaultIssueSession(issue.id);
+    const chat = f.store.createChatSession({ agentId: agent.id });
+    bindFeishuTopicFixture(f.store, f.db, chat.id, issue.id);
+    const runtime = f.store.registerRuntime({ name: "Relay test runtime", provider: "codex", maxConcurrency: 4 });
+    const legacyRows = () => Number((f.db.query("SELECT COUNT(*) AS count FROM multiremi_agent_issue_update_state").get() as { count: number }).count);
+    const lane = () => f.store.getSessionAgentLane(session.id, agent.id, `relay:${chat.id}`);
+    const reports = () => f.store.listChatMessages(chat.id).filter(message => message.role === "system" && message.body.includes(issue.key));
+    return { ...f, agent, issue, session, chat, runtime, lane, reports, legacyRows };
+  }
 
-function createStore(options: { debounceMs?: number } = {}): MultiremiStore {
-  db = new Database(":memory:");
-  const store = new MultiremiStore(db, {
-    agentIssueUpdateDebounceMs: options.debounceMs,
-  });
-  store.ensureLocalWorkspace();
-  return store;
-}
-
-function scaffold(store: MultiremiStore) {
-  const agent = store.createAgent({
-    name: "Issue update agent",
-    provider: "codex",
-    workspaceId: "local",
-  });
-  const issue = store.createIssue({ title: "Bound progress", workspaceId: "local" });
-  const chat = store.createChatSession({
-    agentId: agent.id,
-    workspaceId: "local",
-    creatorId: "local",
-    title: "Bound progress chat",
-  });
-  bindFeishuTopicFixture(store, db!, chat.id, issue.id);
-  return { agent, issue, chat };
-}
-
-describe("agent-facing Issue update delivery", () => {
-  it("enables Issue updates for a Feishu topic without creating a task", () => {
-    const store = createStore();
-    const { issue, chat } = scaffold(store);
-
-    expect(store.getAgentIssueUpdateSubscription(chat.id)).toMatchObject({
-      chatSessionId: chat.id,
-      issueId: issue.id,
-      channelId: `nch_agent_chat_${chat.id}`,
-      enabled: true,
-      debounceWindowSeconds: 30,
+  for (const status of ["failed", "cancelled"] as const) {
+    it(`reports a ${status} Issue round and advances the cursor only after relay completion`, () => {
+      const f = setup();
+      const before = f.legacyRows();
+      const task = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Work on the Issue" });
+      expect(f.store.claimTask(f.runtime.id)?.id).toBe(task.id);
+      f.store.startTask(task.id);
+      if (status === "failed") f.store.failTask(task.id, { error: "Known failure", failureReason: "agent_error" });
+      else f.store.cancelTask(task.id);
+      expect(f.reports()).toHaveLength(1);
+      expect(f.reports()[0]!.body).toContain(`状态 ${status}`);
+      const entry = f.store.listConversationLogShown(f.chat.id).find(item => item.id === f.reports()[0]!.id)!;
+      expect(entry.metadata.envelope).toMatchObject({ kind: "report", outcome: status, wake: "now" });
+      const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "relay")!;
+      expect(relay).toBeDefined();
+      expect(f.lane()?.cursorSeq).toBe(0);
+      expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
+      const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
+        session_id: string; from_seq: number; to_seq: number; content_jsonl: string;
+      };
+      expect(log.session_id).toBe(f.session.id);
+      expect(log.from_seq).toBe(0);
+      expect(log.to_seq).toBeGreaterThan(0);
+      expect(log.content_jsonl).toContain("inbox_toc");
+      expect(log.content_jsonl).toContain(`"status":"${status}"`);
+      expect(f.lane()?.cursorSeq).toBe(0);
+      f.store.startTask(relay.id);
+      f.store.completeTask(relay.id, { output: "Reported to Feishu" });
+      expect(f.lane()?.cursorSeq).toBe(log.to_seq);
+      expect(f.legacyRows()).toBe(before);
     });
+  }
 
-    store.createIssueComment(issue.id, {
-      authorType: "member",
-      authorId: "local",
-      body: "This should be recorded without waking the agent.",
-    });
-
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
-    expect(store.listChatMessages(chat.id)).toEqual([
-      expect.objectContaining({ role: "system", taskId: null }),
-    ]);
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(0);
-
-    const runtime = store.registerRuntime({ name: "Cold Chat runtime", provider: "codex" });
-    const userTurn = store.sendChatMessage(chat.id, { body: "Open the bound Issue." });
-    expect(store.claimTask(runtime.id)?.id).toBe(userTurn.task.id);
-    const claimed = store.getTaskWithAgent(userTurn.task.id)!;
-    const wire = daemonTaskClaimResponse(store, claimed);
-    expect((wire.session_projection as { mode?: string } | undefined)?.mode).toBe("bootstrap");
-    const prompt = buildTaskPrompt({
-      ...claimed,
-      sessionProjection: wire.session_projection,
-      chatMessage: wire.chat_message,
-      boundIssue: wire.bound_issue,
-      boundIssueUpdates: wire.bound_issue_updates,
-      boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
-    } as any);
-    expect(prompt).toContain("## Bound Issue Updates");
-    expect(prompt).toContain("This should be recorded without waking the agent.");
-  });
-
-  it("delivers same-agent Issue-lane updates while filtering the target Chat lane", () => {
-    const store = createStore({ debounceMs: 10 });
-    const { agent, issue, chat } = scaffold(store);
-    const session = store.getOrCreateDefaultIssueSession(issue.id);
-    const issueTask = store.createSessionTask(session.id, {
-      agentId: agent.id,
-      prompt: "Summarize the Issue lane",
-    });
-    store.createIssueComment(issue.id, {
-      authorType: "agent",
-      authorId: agent.id,
-      taskId: issueTask.id,
-      body: "Issue-lane summary from the same agent",
-    });
-    const chatTask = store.sendChatMessage(chat.id, { body: "Update the Issue" }).task;
-    store.createIssueComment(issue.id, {
-      authorType: "agent",
-      authorId: agent.id,
-      taskId: chatTask.id,
-      body: "Chat-lane comment that must not feed back",
-    });
-
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
-    const delivered = store.listChatMessages(chat.id).filter((message) => message.role === "system");
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]?.body).toContain("Issue-lane summary from the same agent");
-    expect(delivered[0]?.body).not.toContain("Chat-lane comment that must not feed back");
+  it("deduplicates a repeated round trigger and reads only the next interval", () => {
+    const f = setup();
+    const first = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "First round" });
+    f.store.claimTask(f.runtime.id);
+    f.store.startTask(first.id);
+    f.store.completeTask(first.id, { output: "First result" });
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    f.store.claimTask(f.runtime.id);
+    const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as { to_seq: number };
+    f.store.startTask(relay.id);
+    f.store.completeTask(relay.id, { output: "First summary" });
+    expect(f.lane()?.cursorSeq).toBe(firstLog.to_seq);
+    const duplicate = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
+      to: { role: "relay", issueId: f.issue.id }, kind: "report", outcome: "done", wake: "now",
+      dedupeKey: `relay:${f.issue.id}:${first.id}`, body: "Repeated terminal hook", source: { issueId: f.issue.id, taskId: first.id },
+    }, [], createCommitEventQueue()));
+    expect(duplicate).toHaveLength(1);
+    expect(duplicate[0]).toMatchObject({ deduplicated: true, action: "none" });
+    expect(f.reports()).toHaveLength(1);
+    const second = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Second round" });
+    f.store.claimTask(f.runtime.id);
+    f.store.startTask(second.id);
+    f.store.completeTask(second.id, { output: "Second result" });
+    const nextRelay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.status === "queued")!;
+    f.store.claimTask(f.runtime.id);
+    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
+      from_seq: number; to_seq: number; content_jsonl: string;
+    };
+    expect(nextLog.from_seq).toBe(firstLog.to_seq);
+    expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
+    expect(nextLog.content_jsonl).toContain("Second result");
+    expect(nextLog.content_jsonl).not.toContain("First result");
+    expect(JSON.parse(nextLog.content_jsonl.split("\n")[0]!).from_seq).toBe(firstLog.to_seq);
   });
 
-  it("delivers published Session results with task lineage and the existing body cap", async () => {
-    const store = createStore({ debounceMs: 10 });
-    const { agent, issue, chat } = scaffold(store);
-    const session = store.getOrCreateDefaultIssueSession(issue.id);
-    const issueTask = store.createSessionTask(session.id, {
-      agentId: agent.id,
-      prompt: "Publish the implementation result",
-    });
-    const credential = await store.createTaskAccessToken(issueTask, "local");
-    const app = createMultiremiApp({ store });
-    const oversizedBody = `${"result-detail ".repeat(700)}SHOULD_BE_TRUNCATED`;
-
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/results`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${credential.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ title: "Implementation complete", body: oversizedBody }),
-    });
-    expect(response.status).toBe(201);
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
-    const pending = store.listChatMessages(chat.id).filter((message) => message.role === "system");
-    expect(pending).toHaveLength(1);
-    expect(pending[0]?.body).toContain("Published result: Implementation complete");
-    expect(pending[0]?.body).not.toContain("SHOULD_BE_TRUNCATED");
-
-    const userTurn = store.sendChatMessage(chat.id, { body: "What did the team finish?" });
-    const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(userTurn.task.id)!);
-    expect(wire.bound_issue_updates).toEqual([
-      expect.stringContaining("Published result: Implementation complete"),
-    ]);
-    const prompt = buildTaskPrompt({
-      ...store.getTaskWithAgent(userTurn.task.id)!,
-      sessionProjection: wire.session_projection,
-      chatMessage: wire.chat_message,
-      boundIssue: wire.bound_issue,
-      boundIssueUpdates: wire.bound_issue_updates,
-      boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
-    } as any);
-    expect(prompt).toContain("## Bound Issue Updates");
-    expect(prompt).toContain("Published result: Implementation complete");
+  it("waits for the final active Issue task regardless of its assignee", () => {
+    const f = setup();
+    const other = f.store.createAgent({ name: "Contributor", provider: "codex", maxConcurrentTasks: 4 });
+    const first = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "First" });
+    const second = f.store.createSessionTask(f.session.id, { agentId: other.id, prompt: "Second" });
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(first.id);
+    f.store.startTask(first.id);
+    f.store.failTask(first.id, { error: "Failed while contributor is pending", failureReason: "agent_error" });
+    expect(f.reports()).toHaveLength(0);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(second.id);
+    f.store.startTask(second.id);
+    f.store.cancelTask(second.id);
+    expect(f.reports()).toHaveLength(1);
+    expect(f.reports()[0]!.body).toContain(second.id);
   });
 
-  it("rejects the removed Chat subscription API and keeps ordinary Chats independent", async () => {
-    const store = createStore();
-    const { issue, agent, chat: topic } = scaffold(store);
-    const privateChat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
-    const token = await store.createAccessToken({ name: "subscription API test", type: "pat", workspaceId: "local", userId: "local" });
-    const app = createMultiremiApp({ store });
-    for (const method of ["GET", "PUT"]) {
-      expect((await app.request(`/api/chat/sessions/${privateChat.id}/issue-updates`, {
-        method,
-        headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-        ...(method === "PUT" ? { body: JSON.stringify({ enabled: true }) } : {}),
-      })).status).toBe(404);
-    }
-    expect(() => store.setAgentIssueUpdateSubscription({ chatSessionId: privateChat.id, enabled: true }))
-      .toThrow("only available for Feishu Issue topics");
-    store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Topic-only update" });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 1, dropped: 0 });
-    expect(store.listChatMessages(topic.id)).toHaveLength(1);
-    expect(store.listChatMessages(privateChat.id)).toHaveLength(0);
-    expect(store.getAgentChatNotificationChannel(privateChat.id)).toBeNull();
+  it("does not advance the relay lane after a failed chat task", () => {
+    const f = setup();
+    const first = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Issue work" });
+    f.store.claimTask(f.runtime.id);
+    f.store.startTask(first.id);
+    f.store.completeTask(first.id, { output: "First result" });
+    const relay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.wakeSource === "relay")!;
+    f.store.claimTask(f.runtime.id);
+    const firstLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as { to_seq: number };
+    f.store.startTask(relay.id);
+    f.store.failTask(relay.id, { error: "Delivery failed", failureReason: "agent_error" });
+    expect(f.lane()?.cursorSeq).toBe(0);
+    const second = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Another round" });
+    f.store.claimTask(f.runtime.id);
+    f.store.startTask(second.id);
+    f.store.completeTask(second.id, { output: "Second result" });
+    const nextRelay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.status === "queued")!;
+    f.store.claimTask(f.runtime.id);
+    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
+      from_seq: number; to_seq: number; content_jsonl: string;
+    };
+    expect(nextLog.from_seq).toBe(0);
+    expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
+    expect(nextLog.content_jsonl).toContain("First result");
+    expect(nextLog.content_jsonl).toContain("Second result");
   });
 
-  it("drops queued updates when the Feishu topic binding is removed", () => {
-    const store = createStore();
-    const { issue, chat } = scaffold(store);
-    store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "Stale binding" });
-    db!.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = NULL WHERE chat_session_id = ?", [chat.id]);
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 60_000))).toEqual({ delivered: 0, dropped: 1 });
-    expect(store.listChatMessages(chat.id)).toHaveLength(0);
-  });
-
-  it("debounces dense Issue activity into one Chat message", () => {
-    const store = createStore({ debounceMs: 1_000 });
-    const { issue, chat } = scaffold(store);
-
-    store.createIssueComment(issue.id, {
-      authorType: "member",
-      authorId: "member_alice",
-      body: "First progress detail",
-    });
-    store.createIssueComment(issue.id, {
-      authorType: "member",
-      authorId: "member_bob",
-      body: "Latest progress detail",
-    });
-
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 100))).toEqual({
-      delivered: 0,
-      dropped: 0,
-    });
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 2_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
-    const messages = store.listChatMessages(chat.id);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ role: "system" });
-    expect(messages[0]?.body).toContain("Updates aggregated: 2");
-    expect(messages[0]?.body).toContain("Latest progress detail");
-    expect(messages[0]?.taskId).toBeNull();
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(0);
-  });
-
-  it("delivers a human Issue comment on the next user turn and clears it only after success", () => {
-    const store = createStore({ debounceMs: 10 });
-    const runtime = store.registerRuntime({
-      id: "rt_issue_updates",
-      name: "Issue update runtime",
-      provider: "codex",
-      workspaceId: "local",
-    });
-    const { issue, chat } = scaffold(store);
-
-    const warmup = store.sendChatMessage(chat.id, { body: "Establish the Chat session" });
-    expect(store.claimTask(runtime.id)?.id).toBe(warmup.task.id);
-    store.startTask(warmup.task.id);
-    store.completeTask(warmup.task.id, {
-      output: "Chat session established",
-      sessionId: "sess_issue_updates",
-      workDir: "/tmp/multiremi-agent-issue-updates",
-    });
-    store.createIssueComment(issue.id, {
-      authorType: "member",
-      authorId: "member_reviewer",
-      body: "The reviewer approved the API contract.",
-    });
-    const issueSessionCountBeforeDelivery = store.listIssueSessions(issue.id).length;
-    const taskCountBeforeDelivery = store.listTasks().length;
-    expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 1_000))).toEqual({
-      delivered: 1,
-      dropped: 0,
-    });
-    expect(store.listTasks()).toHaveLength(taskCountBeforeDelivery);
-    expect(store.listChatMessages(chat.id).at(-1)).toMatchObject({
-      role: "system",
-      taskId: null,
-    });
-
-    const userTurn = store.sendChatMessage(chat.id, { body: "Review the latest status." });
-    const pendingSystemMessage = store.listChatMessages(chat.id)
-      .find((message) => message.role === "system" && message.taskId === null)!;
-    const tiedAt = userTurn.message.createdAt;
-    db!.run(
-      "UPDATE multiremi_chat_messages SET id = ?, created_at = ? WHERE id = ?",
-      ["msg_zzzzzzzzzzzz", tiedAt, pendingSystemMessage.id],
-    );
-    db!.run(
-      "UPDATE multiremi_chat_messages SET created_at = ? WHERE id = ?",
-      [tiedAt, userTurn.message.id],
-    );
-    const claimedUserTurn = store.claimTask(runtime.id)!;
-    expect(claimedUserTurn).toMatchObject({
-      id: userTurn.task.id,
-      chatSessionId: chat.id,
-      issueId: issue.id,
-      issueSessionId: null,
-      sessionId: "sess_issue_updates",
-      workDir: "/tmp/multiremi-agent-issue-updates",
-    });
-    const wire = daemonTaskClaimResponse(store, claimedUserTurn);
-    expect((wire.session_projection as { mode?: string } | undefined)?.mode).toBe("delta");
-    const prompt = buildTaskPrompt({
-      ...claimedUserTurn,
-      sessionProjection: wire.session_projection,
-      chatMessage: wire.chat_message,
-      boundIssue: wire.bound_issue,
-      boundIssueUpdates: wire.bound_issue_updates,
-      boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
-    } as any);
-    expect(prompt).toContain(`## Issue\nKey: ${issue.key}`);
-    expect(prompt).toContain("## Bound Issue Updates");
-    expect(prompt).toContain("The reviewer approved the API contract.");
-    expect(prompt.match(/The reviewer approved the API contract\./g)).toHaveLength(1);
-    expect(wire.chat_message).toBe("Review the latest status.");
-    expect(prompt).not.toContain("## Chat Message");
-    expect(prompt).not.toContain("## Agent Instructions");
-    expect(store.listIssueSessions(issue.id)).toHaveLength(issueSessionCountBeforeDelivery);
-
-    store.startTask(claimedUserTurn.id);
-    store.failTask(claimedUserTurn.id, {
-      error: "Transient provider failure",
-      failureReason: "timeout",
-    });
-    const retry = store.listTasks().find((task) => task.parentTaskId === claimedUserTurn.id)!;
-    expect(retry).toBeDefined();
-    expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
-    const retryWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(retry.id)!);
-    expect(retryWire.bound_issue_updates).toEqual(expect.arrayContaining([
-      expect.stringContaining("The reviewer approved the API contract."),
-    ]));
-
-    store.startTask(retry.id);
-    store.completeTask(retry.id, {
-      output: "Reviewed the latest status.",
-      sessionId: "sess_issue_updates",
-      workDir: "/tmp/multiremi-agent-issue-updates",
-    });
-
-    const nextTurn = store.sendChatMessage(chat.id, { body: "Continue." });
-    expect(store.claimTask(runtime.id)?.id).toBe(nextTurn.task.id);
-    const nextWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(nextTurn.task.id)!);
-    expect(nextWire.bound_issue_updates).toBeUndefined();
-    expect(nextWire.bound_issue_updates_omitted_count).toBeUndefined();
-  });
-
-  it("caps a long pending update backlog without waking the agent", () => {
-    const store = createStore({ debounceMs: 1 });
-    const runtime = store.registerRuntime({
-      id: "rt_issue_update_flood",
-      name: "Issue update flood runtime",
-      provider: "codex",
-      workspaceId: "local",
-    });
-    const { issue, chat } = scaffold(store);
-
-    const warmup = store.sendChatMessage(chat.id, { body: "Warm the Chat session." });
-    expect(store.claimTask(runtime.id)?.id).toBe(warmup.task.id);
-    store.startTask(warmup.task.id);
-    store.completeTask(warmup.task.id, {
-      output: "Ready.",
-      sessionId: "sess_issue_update_flood",
-      workDir: "/tmp/multiremi-agent-issue-update-flood",
-    });
-    const taskCountBeforeUpdates = store.listTasks().length;
-
-    for (let index = 0; index < 100; index += 1) {
-      store.createIssueComment(issue.id, {
-        authorType: "member",
-        authorId: "member_reviewer",
-        body: `Flood update ${index}`,
-      });
-      expect(store.flushDueAgentIssueUpdates(new Date(Date.now() + 10_000))).toEqual({
-        delivered: 1,
-        dropped: 0,
+  it("caps claimed Issue log rows at 100 and provides a continuation cursor", () => {
+    const f = setup();
+    for (let index = 0; index < 110; index++) {
+      f.store.createIssueComment(f.issue.id, {
+        issueSessionId: f.session.id, authorType: "system", authorId: null,
+        body: `Log item ${index.toString().padStart(3, "0")}`,
       });
     }
+    const task = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Report the log" });
+    f.store.claimTask(f.runtime.id);
+    f.store.startTask(task.id);
+    f.store.completeTask(task.id, { output: "Done" });
+    const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "relay")!;
+    f.store.claimTask(f.runtime.id);
+    const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
+      from_seq: number; to_seq: number; next_seq: number; has_more: boolean; content_jsonl: string;
+    };
+    expect(log.has_more).toBe(true);
+    expect(log.next_seq).toBeLessThan(log.to_seq);
+    const directory = JSON.parse(log.content_jsonl.split("\n")[1]!) as { entries: Array<{ seq: number }> };
+    expect(directory.entries.length).toBeLessThanOrEqual(100);
+    expect(log.content_jsonl).not.toContain("Log item 109");
+  });
 
-    expect(store.listTasks()).toHaveLength(taskCountBeforeUpdates);
-    expect(store.listChatMessages(chat.id).filter((message) => message.role === "system")).toHaveLength(100);
-
-    const userTurn = store.sendChatMessage(chat.id, { body: "Summarize the accumulated progress." });
-    expect(store.claimTask(runtime.id)?.id).toBe(userTurn.task.id);
-    const claimedUserTurn = store.getTaskWithAgent(userTurn.task.id)!;
-    const wire = daemonTaskClaimResponse(store, claimedUserTurn);
-    expect(wire.bound_issue_updates).toHaveLength(12);
-    expect(wire.bound_issue_updates_omitted_count).toBe(88);
-    const prompt = buildTaskPrompt({
-      ...claimedUserTurn,
-      sessionProjection: wire.session_projection,
-      chatMessage: wire.chat_message,
-      boundIssue: wire.bound_issue,
-      boundIssueUpdates: wire.bound_issue_updates,
-      boundIssueUpdatesOmittedCount: wire.bound_issue_updates_omitted_count,
-    } as any);
-    expect(prompt).toContain("88 earlier bound Issue update(s) omitted.");
-    expect(prompt).toContain("Flood update 99");
-    expect(prompt).not.toContain("Flood update 0\n");
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(64 * 1024);
+  it("hides system queue rows from user edits, priority, and removal", () => {
+    const f = fixture();
+    const agent = f.store.createAgent({ name: "Relay queue", provider: "codex", maxConcurrentTasks: 4 });
+    const issue = f.store.createIssue({ title: "Bound", status: "in_progress" });
+    const chat = f.store.createChatSession({ agentId: agent.id });
+    const runtime = f.store.registerRuntime({ name: "Chat", provider: "codex", maxConcurrency: 4 });
+    const user = f.store.sendChatMessage(chat.id, { content: "Private turn" });
+    f.store.claimTask(runtime.id);
+    f.store.startTask(user.task.id);
+    bindFeishuTopicFixture(f.store, f.db, chat.id, issue.id);
+    const sent = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
+      to: { role: "chat", chatSessionId: chat.id, agentId: agent.id }, kind: "report", wake: "now",
+      body: "Read bound Issue", source: { issueId: issue.id },
+    }, [], createCommitEventQueue()))[0]!;
+    expect(sent.action).toBe("created");
+    expect(sent.task?.wakeSource).not.toBeNull();
+    expect(f.store.listQueuedChatTasks(chat.id)).toEqual([]);
+    expect(() => f.store.updateQueuedChatTask(chat.id, sent.task!.id, "Tampered")).toThrow();
+    expect(() => f.store.prioritizeQueuedChatTask(chat.id, sent.task!.id)).toThrow();
+    expect(() => f.store.removeQueuedChatTasks(chat.id, sent.task!.id)).toThrow();
   });
 });

@@ -3,6 +3,8 @@
 // the two route prefixes are intentionally divergent and must stay diffable.
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT } from "@multiremi/store/helpers.js";
 import { agentAtTaskTarget, taskExecutionScope } from "@multiremi/contracts/task-execution.js";
+import { buildSessionProjection } from "@multiremi/store/session-projection.js";
+import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/store/context.js";
 import type {
   MultiremiChatMessage,
@@ -733,19 +735,37 @@ function appendDaemonClaimBoundIssueLog(
   task: MultiremiTaskWithAgent,
   response: Record<string, unknown>,
 ): void {
-  if (!task.chatSessionId || !task.issueId || !response.bound_issue || task.projectionToSeq == null) return;
+  if (!task.chatSessionId || !task.issueId || !response.bound_issue) return;
   try {
+    const toSeq = store.getBoundIssueLogToSeq(task.id);
+    if (toSeq == null) return;
     const session = store.getOrCreateDefaultIssueSession(task.issueId);
     const lane = store.getSessionAgentLane(session.id, task.agentId, `relay:${task.chatSessionId}`);
     const fromSeq = lane?.cursorSeq ?? 0;
-    const toSeq = task.projectionToSeq;
     const shown = store.listConversationLogShown(session.id, { sinceSeq: fromSeq, toSeq, limit: 101 });
+    const entries = shown.slice(0, 100);
+    const projection = buildSessionProjection({
+      sessionId: session.id,
+      targetAgentId: task.agentId,
+      events: entries.map((entry) => ({
+        id: entry.id, sessionId: session.id, seq: entry.seq, kind: entry.kind,
+        authorType: entry.author_type, authorId: entry.author_id,
+        body: entry.body_md, taskId: entry.task_id, sourceCommentId: null,
+        metadata: entry.metadata, createdAt: entry.created_at,
+      })),
+      cursorSeq: fromSeq, fromSeq, toSeq, providerSessionId: null,
+      perspectiveMode: "inherited",
+      tokenBudget: Math.min(12_000, Math.floor(resolveProjectionTokenBudget({
+        provider: task.agent?.provider, model: task.agent?.model,
+        degradeLevel: task.projectionDegradeLevel ?? 0,
+      }) / 4)),
+    });
     response.bound_issue_log = {
       session_id: session.id,
       from_seq: fromSeq,
       to_seq: toSeq,
-      entries: shown.slice(0, 100).map(({ seq, id, kind, author_type, task_id, body_md, metadata }) =>
-        ({ seq, id, kind, author_type, task_id, body_md, metadata })),
+      content_jsonl: projection.jsonl,
+      next_seq: entries.at(-1)?.seq ?? fromSeq,
       has_more: shown.length > 100,
     };
   } catch (error) {

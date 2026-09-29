@@ -197,26 +197,17 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   }
 }
 
-function verifyBestEffortQueueRollback(db: SqlDatabase): void {
+function verifyLegacyIssueUpdateQueueIsUnused(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Best effort queue", workspaceId: "local" });
-  db.exec("CREATE TABLE best_effort_queue_case (n INTEGER PRIMARY KEY)");
+  const issue = store.createIssue({ title: "No legacy update queue", workspaceId: "local" });
   store.queueAgentIssueUpdate = () => {
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
+    throw new Error("Legacy Issue update queue must not be called");
   };
-  const warnings: string[] = [];
-  const originalWarn = console.warn;
-  console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
-  try {
-    const comment = store.createIssueComment(issue.id, { body: "comment survives queue error" });
-    expect(store.getIssueComment(comment.id)?.body).toBe("comment survives queue error");
-    expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives queue error");
-    expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
-    expect(warnings.some((line) => line.includes("agent issue update queue skipped"))).toBe(true);
-  } finally {
-    console.warn = originalWarn;
-  }
+  const comment = store.createIssueComment(issue.id, { body: "comment survives without legacy queue" });
+  expect(store.getIssueComment(comment.id)?.body).toBe("comment survives without legacy queue");
+  expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives without legacy queue");
+  const count = db.query("SELECT COUNT(*) AS count FROM multiremi_agent_issue_update_state").get() as { count: number | string };
+  expect(Number(count.count)).toBe(0);
 }
 
 function verifyBestEffortWorkspaceLookups(db: SqlDatabase): void {
@@ -491,11 +482,11 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       await withPostgres(async (db) => verifyCaughtLocalReplyFailure(db, nested));
     });
   }
-  it("SQLite: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withSqlite(async (db) => verifyBestEffortQueueRollback(db));
+  it("SQLite: Issue comments do not enter the legacy update queue", async () => {
+    await withSqlite(async (db) => verifyLegacyIssueUpdateQueueIsUnused(db));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withPostgres(async (db) => verifyBestEffortQueueRollback(db));
+  it.skipIf(!pgAdminUrl)("Postgres: Issue comments do not enter the legacy update queue", async () => {
+    await withPostgres(async (db) => verifyLegacyIssueUpdateQueueIsUnused(db));
   });
   it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
     await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db));

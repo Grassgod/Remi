@@ -3005,14 +3005,21 @@ export class TasksRepo {
     const relay = this.relayIssueLane(task);
     if (!relay) return task;
     this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
-    if (task.projectionToSeq != null) return task;
+    if (this.getBoundIssueLogToSeq(task.id) != null) return task;
     const toSeq = this.ctx.conversationLog().getConversationLogHead(relay.sessionId)?.headSeq ?? 0;
-    this.ctx.db.run("UPDATE multiremi_tasks SET projection_to_seq = ? WHERE id = ? AND projection_to_seq IS NULL", [toSeq, task.id]);
-    return { ...task, projectionToSeq: toSeq, projection_to_seq: toSeq };
+    this.ctx.db.run("UPDATE multiremi_tasks SET bound_issue_log_to_seq = ? WHERE id = ? AND bound_issue_log_to_seq IS NULL", [toSeq, task.id]);
+    return task;
+  }
+
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    const row = this.ctx.db.query("SELECT bound_issue_log_to_seq FROM multiremi_tasks WHERE id = ?")
+      .get(taskId) as { bound_issue_log_to_seq: number | null } | null;
+    return row?.bound_issue_log_to_seq ?? null;
   }
 
   private promoteRelayIssueLogCursorWithinTransaction(task: MultiremiTask): void {
-    if (task.projectionToSeq == null) return;
+    const toSeq = this.getBoundIssueLogToSeq(task.id);
+    if (toSeq == null) return;
     const relay = this.relayIssueLane(task);
     if (!relay) return;
     this.ctx.issueSessions().getOrCreateSessionAgentLane(relay.sessionId, task.agentId, relay.executionScope);
@@ -3020,7 +3027,7 @@ export class TasksRepo {
       SET cursor_seq = CASE WHEN cursor_seq < ? THEN ? ELSE cursor_seq END,
           last_task_id = ?, updated_at = ?
       WHERE session_id = ? AND agent_id = ? AND execution_scope = ?`,
-      [task.projectionToSeq, task.projectionToSeq, task.id, nowIso(), relay.sessionId, task.agentId, relay.executionScope]);
+      [toSeq, toSeq, task.id, nowIso(), relay.sessionId, task.agentId, relay.executionScope]);
   }
 
   /**

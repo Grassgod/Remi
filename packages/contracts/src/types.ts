@@ -6,7 +6,6 @@
 
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
-import type { ConversationLogEntry } from "./conversation-log.js";
 
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
@@ -1667,7 +1666,8 @@ export interface MultiremiBoundIssueLog {
   session_id: string;
   from_seq: number;
   to_seq: number;
-  entries: Pick<ConversationLogEntry, "seq" | "id" | "kind" | "author_type" | "task_id" | "body_md" | "metadata">[];
+  content_jsonl: string;
+  next_seq: number;
   has_more: boolean;
 }
 

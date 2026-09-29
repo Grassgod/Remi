@@ -5089,6 +5089,10 @@ runMigrations(this.db);
     return this.tasks.ensurePendingTurnWithinTransaction(input);
   }
 
+  getBoundIssueLogToSeq(taskId: string): number | null {
+    return this.tasks.getBoundIssueLogToSeq(taskId);
+  }
+
   sendEnvelopeWithinTransaction(
     env: import("@multiremi/contracts/inbox.js").Envelope,
     collector: import("./repos/tasks-repo.js").ChildStatusChangeCollector,
