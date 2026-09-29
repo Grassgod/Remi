@@ -1639,7 +1639,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ? recipient.agentId
       : recipient?.role === "chat" && recipient.chatSessionId === sessionId ? recipient.agentId : null;
     const delivered: boolean | null = agentId === null ? null : (
-      (store.getSessionAgentLane(sessionId, agentId)?.cursorSeq ?? 0) >= entry.seq
+      store.getSessionAgentMaxCursorSeq(sessionId, agentId) >= entry.seq
       || store.listConversationLogShown(sessionId, { sinceSeq: entry.seq }).some((turn) => {
         if (turn.kind !== "turn" || turn.author_id !== agentId) return false;
         const receipt = turn.metadata.inbox;

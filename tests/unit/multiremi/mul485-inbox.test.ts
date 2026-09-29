@@ -85,6 +85,42 @@ async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   expect((await (await app.request(path)).json()).delivered).toBe(true);
 }
 
+async function verifyCursorDeliveryAcrossScopes(
+  store: MultiremiStore,
+  lanes: Array<{ scope: string; cursor: number }>,
+  delivered: boolean,
+): Promise<void> {
+  const agent = store.createAgent({ name: "Scoped receipt agent", provider: "codex", visibility: "workspace" });
+  const issue = store.createIssue({ title: "Scoped receipt", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this" });
+  const entry = store.getConversationLogEntryById(comment.id)!;
+  expect(entry.seq).toBe(1);
+  (store as any).db.transaction(() => store.updateConversationLogWithinTransaction(session.id, entry.seq, {
+    fields: { metadata: { ...entry.metadata, envelope: {
+      kind: "decision_needed", wake: "now", priority: 1,
+      to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, source: {},
+    } } },
+  }))();
+  for (const { scope, cursor } of lanes) {
+    store.getOrCreateSessionAgentLane(session.id, agent.id, scope);
+    (store as any).db.run(
+      "UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+      [cursor, session.id, agent.id, scope],
+    );
+  }
+  expect(store.getSessionAgentMaxCursorSeq(session.id, agent.id)).toBe(Math.max(...lanes.map((lane) => lane.cursor)));
+  if (lanes.length === 1 && lanes[0]!.scope) {
+    expect(store.getSessionAgentLane(session.id, agent.id)).toBeNull();
+  }
+  const app = createMultiremiApp({ store });
+  for (const locator of [`seq=${entry.seq}`, `id=${entry.id}`]) {
+    const response = await app.request(`/api/sessions/${session.id}/log/entry?${locator}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).delivered).toBe(delivered);
+  }
+}
+
 async function verifyChatProjectionAndAccess(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "MUL485 chat", provider: "codex", visibility: "workspace" });
   const runtime = store.registerRuntime({ name: "MUL485 runtime", provider: "codex" });
@@ -174,6 +210,20 @@ describe("MUL-485 SQLite", () => {
 
   it("derives the delivery flag from a recipient turn receipt", async () => {
     await verifyDeliveryReceipt(createStore());
+  });
+
+  it("reports a non-default execution scope cursor as delivered without a turn receipt", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "dlg_scoped", cursor: 1 }], true);
+  });
+
+  it("reports the default scope cursor as delivered without a turn receipt", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [{ scope: "", cursor: 1 }], true);
+  });
+
+  it("reports undelivered when every execution scope cursor is behind", async () => {
+    await verifyCursorDeliveryAcrossScopes(createStore(), [
+      { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
+    ], false);
   });
 
   it("reports unknown delivery for a legacy entry without a recipient", async () => {
@@ -286,6 +336,20 @@ describe.skipIf(!pgAdminUrl)("MUL-485 PostgreSQL", () => {
 
   it("derives the delivery flag from a recipient turn receipt on real PostgreSQL", async () => {
     await verifyDeliveryReceipt(store);
+  });
+
+  it("reports a non-default execution scope cursor as delivered on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "dlg_scoped", cursor: 1 }], true);
+  });
+
+  it("reports the default scope cursor as delivered on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [{ scope: "", cursor: 1 }], true);
+  });
+
+  it("reports undelivered when every execution scope cursor is behind on real PostgreSQL", async () => {
+    await verifyCursorDeliveryAcrossScopes(store, [
+      { scope: "", cursor: 0 }, { scope: "dlg_scoped", cursor: 0 },
+    ], false);
   });
 
   it("reports unknown delivery for a legacy entry without a recipient on real PostgreSQL", async () => {

@@ -542,6 +542,13 @@ export class IssueSessionsRepo {
     return row ? toSessionAgentLane(row) : null;
   }
 
+  getSessionAgentMaxCursorSeq(sessionId: string, agentId: string): number {
+    const row = this.ctx.db.query(
+      "SELECT COALESCE(MAX(cursor_seq), 0) AS cursor_seq FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
+    ).get(sessionId, agentId) as { cursor_seq: number };
+    return Number(row.cursor_seq);
+  }
+
   buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
     return this.ctx.db.transaction(() => {
       const task = this.ctx.tasks().getTask(taskId);
