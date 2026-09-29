@@ -195,7 +195,7 @@ export function ChatWindow({
     pendingChatTaskOptions(displayedSessionId ?? "", { enabled: chatVisible }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
-  useChatScopeSubscription(displayedSessionId, chatVisible && !!displayedSessionId);
+  useChatScopeSubscription(displayedSessionId, !!displayedSessionId);
 
   // Archived sessions remain readable; restore them before sending.
   const currentSession = activeSessionId
