@@ -39,6 +39,10 @@ const HUMAN: readonly CliIdentity[] = ["human"];
 const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
 const HUMAN_DAEMON: readonly CliIdentity[] = ["human", "daemon"];
 const DEPRECATED_SINCE = "0.3.0";
+const ABANDON_ISSUE_WORKSPACES_OPTION: CliOptionSpec = {
+  name: "abandon-issue-workspaces", type: "boolean",
+  description: "Explicitly abandon active Issue workspaces and retain their local files",
+};
 
 type OperationPath = string | ((invocation: CommandInvocation, client: CliApiClient) => string | Promise<string>);
 
@@ -118,8 +122,11 @@ function runtimeSpecs(): CommandSpec[] {
     op({ id: "runtime.get", path: ["runtime", "get"], description: "Get a runtime", method: "GET", apiPath: runtime(""), auth: HUMAN_DAEMON, positionals: [ref("runtime")] }),
     op({ id: "runtime.create", path: ["runtime", "create"], description: "Register a runtime", method: "POST", apiPath: "/api/multiremi/runtimes", auth: HUMAN_DAEMON, options: INPUT_OPTIONS, body: withWorkspace }),
     op({ id: "runtime.update", path: ["runtime", "update"], description: "Update a runtime", method: "PATCH", apiPath: runtime(""), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: [...INPUT_OPTIONS, { name: "execution-group", type: "string", valueName: "group-id", description: "Assign this Runtime to an execution group" }], body: (i) => requestBody(i, { execution_group_id: stringOption(i, "execution-group") ?? undefined }) }),
-    op({ id: "runtime.delete", path: ["runtime", "delete"], description: "Delete a runtime after reporting active impact", method: "DELETE", apiPath: runtime(""), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], before: runtimeImpact }),
-    op({ id: "runtime.archive-agents-and-delete", path: ["runtime", "archive-agents-and-delete"], description: "Archive active agents and delete a runtime", method: "POST", apiPath: runtime("/archive-agents-and-delete"), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS, before: runtimeImpact }),
+    op({ id: "runtime.delete", path: ["runtime", "delete"], description: "Delete a runtime after reporting active impact", method: "DELETE", apiPath: runtime(""), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], before: runtimeImpact,
+      options: [ABANDON_ISSUE_WORKSPACES_OPTION],
+      query: i => ({ abandon_issue_workspaces: booleanOption(i, "abandon-issue-workspaces") ? true : undefined }) }),
+    op({ id: "runtime.archive-agents-and-delete", path: ["runtime", "archive-agents-and-delete"], description: "Archive active agents and delete a runtime", method: "POST", apiPath: runtime("/archive-agents-and-delete"), mutation: "destructive", auth: HUMAN, positionals: [ref("runtime")], options: [...INPUT_OPTIONS, ABANDON_ISSUE_WORKSPACES_OPTION], before: runtimeImpact,
+      body: i => requestBody(i, { abandon_issue_workspaces: booleanOption(i, "abandon-issue-workspaces") ? true : undefined }) }),
     op({ id: "runtime.model.list", path: ["runtime", "model", "list"], description: "List runtime models", method: "GET", apiPath: runtime("/models"), auth: HUMAN_DAEMON, positionals: [ref("runtime")], collections: ["models"] }),
     op({ id: "runtime.model.set", path: ["runtime", "model", "set"], description: "Replace runtime model configuration", method: "PUT", apiPath: runtime("/models"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
     op({ id: "runtime.model.refresh", path: ["runtime", "model", "refresh"], description: "Request a runtime model refresh", method: "POST", apiPath: runtime("/models"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),

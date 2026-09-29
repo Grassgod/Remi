@@ -289,6 +289,10 @@
     "visibility_toast_updated": "Visibility set to {{visibility}}",
     "visibility_toast_failed": "Failed to update visibility",
     "delete_dialog": {
+      "workspaces": {
+        "warning": "These issues still have workspaces on this Runtime. Review them before continuing.",
+        "checkbox": "Abandon these workspaces. I understand local files will remain and future tasks may use a new workspace."
+      },
       "light": {
         "title": "Delete Runtime?",
         "description": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",

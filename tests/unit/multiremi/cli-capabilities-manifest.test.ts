@@ -168,7 +168,7 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 679,
+      mapped: 680,
       // MUL-407 adds one daemon-internal route (turning decision cards back into
       // click handlers after a host restart), which the existing `/api/daemon/`
       // rule exempts rather than mapping to a user command.
@@ -177,15 +177,18 @@ describe("CLI capabilities manifest", () => {
       // channel), also exempt under `daemon_internal_protocol`: machine-to-server
       // traffic between two API processes with no user-facing command.
       // MUL-487 adds one daemon-only route to mint a native question card.
+      // MUL-467's mapped workspace abandonment route brings the total to 777.
       exempt: 97,
       missing: 0,
-      total: 776,
+      total: 777,
     });
     expect(manifest.routes["GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.routes["POST /api/daemon/tasks/:taskId/human-requests/:requestId/card"])
       .toMatchObject({ cli_exempt: true, category: "daemon_internal_protocol" });
     expect(manifest.max_planned_routes).toBe(0);
+    expect(manifest.routes["POST /api/issues/:id/workspace/abandon"])
+      .toEqual({ command: "issue.workspace.abandon" });
     for (const [route, command] of [
       ["GET /api/issues/:id/decisions", "issue.decision.list"],
       ["POST /api/issues/:id/decisions", "issue.decision.request"],

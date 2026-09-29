@@ -355,6 +355,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^GET \/api\/issues\/:id\/task-runs$/, "issue.task-runs"],
     [/^GET \/api\/issues\/:id\/usage$/, "issue.usage"],
     [/^GET \/api\/issues\/:id\/workspace$/, "issue.workspace"],
+    [/^POST \/api\/issues\/:id\/workspace\/abandon$/, "issue.workspace.abandon"],
     [/^POST \/api\/issues\/:id\/rerun$/, "issue.rerun"],
     [/^POST \/api\/issues\/:id\/tasks\/:taskId\/cancel$/, "issue.cancel"],
     [/^POST \/api\/issues\/:id\/squad-evaluated$/, "issue.squad-evaluated"],
