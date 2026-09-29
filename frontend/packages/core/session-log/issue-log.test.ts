@@ -52,4 +52,35 @@ describe("Issue log presentation over C7", () => {
     expect(replica.hasWindowFor()).toBe(true);
     expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 80, 81]);
   });
+
+  it("refreshes Chat's tail without discarding manually expanded older rows", async () => {
+    mocks.read.mockReset().mockResolvedValue({ ...windowOf([row(80), row(81), row(82)]), head_seq: 82 });
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: null,
+      window: { ...windowOf([row(78), row(79), row(80), row(81)]), has_more_before: true } });
+    await replica.refreshTailPreservingWindow();
+    expect(mocks.read).toHaveBeenCalledWith("s", { before: 30 });
+    expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([78, 79, 80, 81, 82]);
+    expect(replica.window?.has_more_before).toBe(true);
+  });
+
+  it("hydrates live message metadata before forwarding ordered frames to C7", async () => {
+    mocks.read.mockReset().mockImplementation(async (_sessionId: string, input: { anchor: number }) => {
+      if (input.anchor === 10) await new Promise(resolve => setTimeout(resolve, 10));
+      return windowOf([row(input.anchor)]);
+    });
+    const replica = new IssueLogReplica("s");
+    const delivered: number[][] = [];
+    vi.spyOn(replica, "frames").mockImplementation((_sessionId, frames) => {
+      delivered.push(frames.map(frame => (frame.payload as { seq: number }).seq));
+      for (const frame of frames) {
+        expect((frame.payload as { metadata: { attachments: unknown[] } }).metadata.attachments).toHaveLength(1);
+        expect((frame.payload as { metadata: { reactions: unknown[] } }).metadata.reactions).toEqual([]);
+      }
+    });
+    const frame = (seq: number) => ({ seq, kind: "entry" as const,
+      payload: { session_id: "s", id: `r${seq}`, seq, kind: "message", metadata: {} } });
+    await Promise.all([replica.hydratedFrames("s", [frame(10)]), replica.hydratedFrames("s", [frame(11)])]);
+    expect(mocks.read).toHaveBeenCalledWith("s", { anchor: 10, before: 1, after: 0 });
+    expect(delivered).toEqual([[10], [11]]);
+  });
 });

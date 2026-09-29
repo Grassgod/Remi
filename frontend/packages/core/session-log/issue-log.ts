@@ -4,7 +4,7 @@ import { ReplicaView } from "../replica/view";
 import type { SessionLogEntry } from "../replica/port";
 import type { IssueLogBootstrap, SessionLogRow, SessionLogWindow } from "../api/schemas/session-log";
 import { SessionLogEntrySchema } from "../api/schemas/session-log";
-import type { HubSeqRange } from "@multiremi/contracts/live-hub";
+import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub";
 
 /** A bounded presentation window over C7; persisted coverage may be sparse. */
 export class IssueLogReplica extends ReplicaView {
@@ -16,8 +16,9 @@ export class IssueLogReplica extends ReplicaView {
   private to = Number.MAX_SAFE_INTEGER;
   private targetCommentId: string | null = null;
   private knownWindows: Array<{ range: HubSeqRange; entries: SessionLogRow[] }> = [];
+  private frameQueue: Promise<void> = Promise.resolve();
 
-  constructor(readonly sessionId: string, initial?: IssueLogBootstrap) {
+  constructor(readonly sessionId: string, initial?: IssueLogBootstrap, private readonly preferCached = false) {
     super();
     if (initial?.sessionId === sessionId) {
       this.targetCommentId = initial.targetCommentId ?? null;
@@ -79,6 +80,27 @@ export class IssueLogReplica extends ReplicaView {
     else await this.loadTail();
   }
 
+  /** Chat send acknowledgements refresh the tail without collapsing an expanded history window. */
+  async refreshTailPreservingWindow(): Promise<void> {
+    if (!this.window || this.targetCommentId) { await this.refreshVisible(); return; }
+    const current = this.window;
+    const tail = await api.getSessionLog(this.sessionId, { before: 30 });
+    if (this.disconnected || this.window !== current) return;
+    const last = current.entries.at(-1)?.seq ?? 0;
+    const firstNew = tail.entries.find(entry => entry.seq > last)?.seq;
+    const bridge = firstNew !== undefined && firstNew > last + 1
+      ? (await this.readRange(this.sessionId, { from: last + 1, to: firstNew - 1 }))
+          .map(entry => SessionLogEntrySchema.parse(entry)) : [];
+    if (this.disconnected || this.window !== current) return;
+    this.accept({ ...tail,
+      entries: mergeRows(mergeRows(current.entries, bridge), tail.entries),
+      has_more_before: current.has_more_before,
+      before_visible_count: current.before_visible_count,
+      before_visible_count_capped: current.before_visible_count_capped,
+    }, this.headRow);
+    await this.persist(tail);
+  }
+
   async earlier(): Promise<void> {
     const first = this.window?.entries.find(e => e.seq > 0)?.seq;
     if (first === undefined) return;
@@ -115,13 +137,28 @@ export class IssueLogReplica extends ReplicaView {
     const update = () => {
       const snapshot = browser.port.getSnapshot(this.sessionId);
       const visible = this.getSnapshot(this.sessionId);
-      // The C7 cache can answer before it has imported the SSR window.
-      if (!snapshot.ready || !this.window) return;
+      if (!snapshot.ready) return;
       const current = snapshot.entries.map(e => SessionLogEntrySchema.safeParse(e))
         .filter(p => p.success).map(p => p.data!);
+      // C7 may contain raw Hub entries from an earlier tab or version. The
+      // read route supplies attachment metadata, so never paint raw rows first.
+      const displayable = current.filter(e => (e.kind !== "message" && e.kind !== "turn")
+        || Array.isArray((e.metadata as Record<string, unknown> | undefined)?.attachments));
+      if (!this.window) {
+        if (!this.preferCached) return;
+        if (displayable.length !== current.length) return;
+        const cached = displayable.filter(entry => entry.seq > 0).slice(-30);
+        this.accept({ entries: cached, head_seq: Math.max(0, snapshot.head ?? 0), log_version: 0,
+          has_more_before: (cached[0]?.seq ?? 0) > 1, has_more_after: false },
+          displayable.find(entry => entry.seq === 0) ?? null);
+        this.setWindow(this.sessionId, this.getSnapshot(this.sessionId).entries, {
+          head: snapshot.head, fresh: snapshot.fresh, ready: true,
+        });
+        return;
+      }
       const held = current.find(e => e.seq === 0);
       if (held && held.revision >= (this.headRow?.revision ?? 0)) this.headRow = held;
-      const rows = mergeRows(visible.entries.map(e => SessionLogEntrySchema.parse(e)), current);
+      const rows = mergeRows(visible.entries.map(e => SessionLogEntrySchema.parse(e)), displayable);
       const newerHead = (snapshot.head ?? -1) > (visible.head ?? -1);
       this.setWindow(this.sessionId, this.displayRows(rows), {
         head: Math.max(visible.head ?? 0, snapshot.head ?? 0),
@@ -130,11 +167,29 @@ export class IssueLogReplica extends ReplicaView {
     };
     const off = browser.port.subscribe(this.sessionId, update);
     browser.open(this.sessionId);
+    update();
     if (this.window) await this.persist(this.window);
     return () => { off(); browser.close(this.sessionId); browser.dispose(); if (this.browser === browser) this.browser = null; };
   }
 
   frames(...args: Parameters<BrowserReplica["frames"]>): void { this.browser?.frames(...args); }
+  /** Read-side metadata is authoritative for attachments and reactions. */
+  hydratedFrames(sessionId: string, frames: readonly HubFrame[]): Promise<void> {
+    const job = this.frameQueue.then(async () => {
+      const hydrated = await Promise.all(frames.map(async frame => {
+        if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") return frame;
+        const payload = frame.payload as Record<string, unknown>;
+        if (payload.kind !== "message" && payload.kind !== "turn") return frame;
+        const window = await api.getSessionLog(sessionId, { anchor: frame.seq, before: 1, after: 0 });
+        const entry = window.entries.find(row => row.seq === frame.seq && row.id === payload.id);
+        if (!entry) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
+        return { ...frame, payload: entry };
+      }));
+      if (!this.disconnected) this.frames(sessionId, hydrated);
+    });
+    this.frameQueue = job.catch(() => {});
+    return job;
+  }
   ack(...args: Parameters<BrowserReplica["ack"]>): void { this.browser?.ack(...args); }
   disconnect(): void { this.disconnected = true; this.browser?.dispose(); this.browser = null; }
 

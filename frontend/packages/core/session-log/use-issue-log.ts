@@ -9,8 +9,8 @@ import { useWS } from "../realtime";
 import { useReplicaEnv } from "../platform/replica-env";
 import { IssueLogReplica } from "./issue-log";
 
-export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string) {
-  const replica = useMemo(() => new IssueLogReplica(sessionId, initial), [sessionId, initial]);
+export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, commentId?: string, preferCached = false) {
+  const replica = useMemo(() => new IssueLogReplica(sessionId, initial, preferCached), [sessionId, initial, preferCached]);
   const snapshot = useSyncExternalStore(
     listener => replica.subscribe(sessionId, listener),
     () => replica.getSnapshot(sessionId), () => replica.getSnapshot(sessionId),
@@ -41,7 +41,7 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
       subscribe: (id, fromSeq) => {
         subscriptions.get(id)?.unsubscribe();
         const subscription = ws.subscribeStream("log", id, {
-          onFrames: frames => replica.frames(id, frames),
+          onFrames: frames => { void replica.hydratedFrames(id, frames).catch(() => setError(true)); },
           onAck: ack => replica.ack(id, ack),
           onGap: () => { void replica.refreshVisible().catch(() => setError(true)); },
         }, { fromSeq });
