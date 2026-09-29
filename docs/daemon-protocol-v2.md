@@ -714,11 +714,11 @@ server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
   pending，失败后每次心跳重建直到 daemon 空闲）；
 - ack 只含 `pending_update` 与 `drain: draining`；
 - claim 路由永远返回 `{task: null}`；
-- 其余 v1 路由返回 426 `{code: "daemon_protocol_upgrade_required", min_version}`。
+- 已退役的 v1 路由返回 426 `{code: "daemon_protocol_upgrade_required", min_version}`。
 
-已删除的 `/api/daemon/*` 路由由最后注册的统一 fallback 返回 426，`min_version` 为协议版本 `2`。
-现存按需 HTTP 路由、心跳升级通道和 `update/:id/result` 继续由原 handler 处理；鉴权与角色 guard
-仍在 fallback 之前。回归用固定 main 路由快照与当前快照的差集覆盖删除项，不逐条补兼容路由。
+只有退役路由表中精确匹配 method + path 的 `/api/daemon/*` 请求返回 426，`min_version` 为协议版本 `2`；
+从未存在的地址保持原有 404。现存按需 HTTP 路由、心跳升级通道和 `update/:id/result` 继续由原 handler
+处理；鉴权与角色 guard 仍在退役路由之前。回归用固定 v1 路由快照与当前活路由快照的差集校验退役表。
 
 v1 daemon 因此拿不到任何任务，但会走它自己的 `handleRuntimeUpdate` 升级并重启。**这不是兼容方案**：
 v1 在 v2 服务端上一件活都干不了，保留的唯一能力是「把自己换成 v2」。

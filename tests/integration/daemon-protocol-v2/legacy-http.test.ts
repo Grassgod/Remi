@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { startMultiremiServer } from "@multiremi/api.js";
+import { RETIRED_DAEMON_HTTP_ROUTES, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import baseline from "../../fixtures/daemon-v1-routes.json";
@@ -37,6 +37,13 @@ const removedBy421 = [
   "PUT /api/daemon/runtimes/:runtimeId/models",
 ];
 
+it("keeps the retired method + path table equal to v1 minus live routes", () => {
+  const live = new Set(current.routes);
+  const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
+  expect(retired).toHaveLength(new Set(retired).size);
+  expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !live.has(route)).toSorted());
+});
+
 let removedRoutesServer: ReturnType<typeof startMultiremiServer>;
 let removedRoutesDb: Database;
 const removedRoutesAuthToken = "isolated-removed-v1-routes";
@@ -69,6 +76,14 @@ it.each(removedBy421)("returns the protocol 426 for deleted MUL-421 route %s", a
   expect(await response.json()).toEqual(upgradeRequired);
 });
 
+it.each(removedBy421)("does not disclose retired route %s without authorization", async route => {
+  const [method, pattern] = route.split(" ");
+  const path = pattern!.replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
+  const response = await fetch(`http://127.0.0.1:${removedRoutesServer.port}${path}`, { method });
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthorized" });
+});
+
 it.each(["all", "runtime"] as const)("automatically rejects removed snapshot routes and preserves the HTTP upgrade channel (%s)", async (apiRole) => {
   const db = new Database(":memory:");
   const store = new MultiremiStore(db);
@@ -86,7 +101,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
   const headers = { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" };
   const request = (path: string, method = "GET", body?: unknown) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   try {
-    // The difference grows automatically as MUL-419/MUL-421 delete their HTTP routes.
+    // The table equality test keeps this inventory in sync with v1 minus live routes.
     for (const route of removed) {
       const [method, pattern] = route.split(" ");
       const path = pattern!.replace(/:runtimeId\b/g, runtime.id).replace(/:taskId\b/g, task.id)
@@ -97,8 +112,18 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
     }
     for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
       const response = await request(`/api/daemon/runtimes/${runtime.id}/removed-v1-fixture`, method);
-      expect(response.status).toBe(426);
-      expect(await response.json()).toEqual(upgradeRequired);
+      expect(response.status).toBe(404);
+      await response.text();
+    }
+    const otherMethod = await fetch(`http://127.0.0.1:${server.port}/api/daemon/tasks/${task.id}/messages`, {
+      method: "PATCH", headers: { Authorization: `Bearer ${authToken}` },
+    });
+    expect(otherMethod.status).toBe(404);
+    await otherMethod.text();
+    for (const path of ["/api/daemon/qa-never-existed", "/api/daemon/heartbeat/extra", "/api/daemon"]) {
+      const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { headers: { Authorization: `Bearer ${authToken}` } });
+      expect(response.status, path).toBe(apiRole === "runtime" && path === "/api/daemon" ? 421 : 404);
+      await response.text();
     }
     const heartbeat = await request("/api/daemon/heartbeat", "POST", { runtime_id: runtime.id });
     expect(heartbeat.status).toBe(200);
@@ -120,9 +145,9 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
     const unrelated = await fetch(`http://127.0.0.1:${server.port}/api/not-a-daemon-route`, { headers: { Authorization: `Bearer ${authToken}` } });
     expect(unrelated.status).toBe(apiRole === "runtime" ? 421 : 404);
     await unrelated.text();
-    const unauthorized = await fetch(`http://127.0.0.1:${server.port}/api/daemon/removed-v1-fixture`);
+    const unauthorized = await fetch(`http://127.0.0.1:${server.port}/api/daemon/qa-never-existed`);
     expect(unauthorized.status).toBe(401);
-    await unauthorized.text();
+    expect(await unauthorized.json()).toEqual({ error: "unauthorized" });
   } finally {
     try {
       await waitFor(() => server.pendingRequests === 0, "legacy HTTP requests to drain");
@@ -132,16 +157,20 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
   }
 });
 
-it("keeps UI-role routing rejection ahead of the legacy HTTP fallback", async () => {
+it("keeps UI-role routing rejection ahead of every retired HTTP route", async () => {
   const db = new Database(":memory:");
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const authToken = "isolated-legacy-ui-fixture";
   const server = startMultiremiServer({ store, authToken, backgroundJobs: false, apiRole: "ui", hostname: "127.0.0.1", port: 0 });
   try {
-    const response = await fetch(`http://127.0.0.1:${server.port}/api/daemon/removed-v1-fixture`, { headers: { Authorization: `Bearer ${authToken}` } });
-    expect(response.status).toBe(421);
-    expect(await response.json()).toEqual({ error: "misdirected", role: "ui" });
+    for (const route of removedBy421) {
+      const [method, pattern] = route.split(" ");
+      const path = pattern!.replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
+      const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { Authorization: `Bearer ${authToken}` } });
+      expect(response.status, route).toBe(421);
+      expect(await response.json(), route).toEqual({ error: "misdirected", role: "ui" });
+    }
   } finally {
     try {
       await waitFor(() => server.pendingRequests === 0, "UI legacy HTTP requests to drain");

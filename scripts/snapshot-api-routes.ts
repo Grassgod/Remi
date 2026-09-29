@@ -43,7 +43,7 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node
 import { homedir, hostname, tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { listAgentTemplates } from "@multiremi/api/agent-templates.js";
-import { createMultiremiApp } from "@multiremi/api.js";
+import { createMultiremiApp, retiredDaemonRouteHandler } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { VERSION } from "@shared/version.js";
 import { reportFrame } from "../tests/fixtures/report-session.js";
@@ -403,8 +403,9 @@ export interface RouteRef {
 export function snapshotRouteTable(app: any): RouteRef[] {
   const seen = new Set<string>();
   const out: RouteRef[] = [];
-  for (const route of app.routes as RouteRef[]) {
+  for (const route of app.routes as (RouteRef & { handler?: unknown })[]) {
     if (route.method === "ALL") continue; // middleware, not a route
+    if (route.handler === retiredDaemonRouteHandler) continue; // 426 compatibility, not a live API route
     const key = `${route.method} ${route.path}`;
     if (seen.has(key)) continue;
     seen.add(key);
