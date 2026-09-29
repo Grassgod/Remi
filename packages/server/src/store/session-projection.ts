@@ -220,7 +220,9 @@ function eventPriority(event: MultiremiSessionEvent, targetAgentId: string, targ
     });
   }
   if (event.authorType === "member" && event.kind === "message"
-    && (event.body.includes(`@${targetAgentId}`) || Boolean(targetAgentName && event.body.includes(`@${targetAgentName}`)))) return 1;
+    && (event.body.includes(`@${targetAgentId}`)
+      || event.body.includes(`mention://agent/${targetAgentId}`)
+      || Boolean(targetAgentName && event.body.includes(`@${targetAgentName}`)))) return 1;
   if (event.kind === "task_failed" || event.kind === "task_cancelled") return 2;
   if (event.kind === "task_completed") return 3;
   return 4;
