@@ -261,6 +261,39 @@ describe("RetireDaemonDialog", () => {
     }));
   });
 
+  it("still offers the abandon when the offline daemon also holds unarchived hot traces", async () => {
+    fetchPlan.mockResolvedValue(
+      makePlan({
+        can_retire: false,
+        can_abandon_issue_workspaces: true,
+        blocking_reasons: ["active_issue_workspaces", "unarchived_hot_traces"],
+        issue_workspaces: [{
+          issue_id: "issue-stale",
+          status: "runtime_offline",
+          runtime_id: "runtime-1",
+          root_path: "/work/stale",
+        }],
+      }),
+    );
+    renderDialog();
+
+    const submit = await screen.findByRole("button", {
+      name: "Deactivate and remove",
+    });
+    fireEvent.click(await screen.findByRole("checkbox", {
+      name: /Abandon these issue workspace records/,
+    }));
+    fireEvent.click(screen.getByText(/I understand this daemon ID and its access tokens/));
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(retireDaemon).toHaveBeenCalledWith({
+      daemonId: "daemon-1",
+      expectedSnapshot: "snapshot-1",
+      abandonIssueWorkspaces: true,
+    }));
+  });
+
   it("rejects a conflict plan for another daemon", async () => {
     fetchPlan.mockResolvedValue(makePlan());
     retireDaemon.mockRejectedValue(

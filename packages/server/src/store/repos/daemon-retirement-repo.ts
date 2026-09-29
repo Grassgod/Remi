@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import type { SessionArchiveRequest, SessionArchiveSubjectKind } from "@multiremi/contracts/trace-file.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { RUNTIME_AUXILIARY_TABLES } from "@multiremi/store/runtime-lifecycle-tables.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
+import { SessionArchiveRequestsRepo } from "@multiremi/store/repos/session-archive-requests-repo.js";
 
 type Row = Record<string, unknown>;
 
@@ -25,7 +27,19 @@ const RUNTIME_AUXILIARY_IDENTITY_COLUMNS: Partial<Record<(typeof RUNTIME_AUXILIA
 export type DaemonRetirementBlockingReason =
   | "active_tasks"
   | "local_directory_resources"
-  | "active_issue_workspaces";
+  | "active_issue_workspaces"
+  | "unarchived_hot_traces";
+
+/**
+ * A task that is not in flight whose trace is still only on one of the
+ * daemon's Runtimes: its pointer is `daemon`, so no ready archive holds it yet.
+ */
+export interface DaemonRetirementHotTrace {
+  taskId: string;
+  runtimeId: string;
+  subjectKind: SessionArchiveSubjectKind;
+  subjectId: string;
+}
 
 export interface DaemonRetirementImpact {
   runtimesRemoved: number;
@@ -97,6 +111,9 @@ export interface DaemonRetirementPlan {
     runtimeId: string;
     rootPath: string;
   }>;
+  unarchivedHotTraces: DaemonRetirementHotTrace[];
+  /** The newest archive request of every subject on the Runtimes: the archive progress. */
+  archiveRequests: SessionArchiveRequest[];
   impact: DaemonRetirementImpact;
 }
 
@@ -471,6 +488,8 @@ export class DaemonRetirementRepo {
       ]),
     );
     const localDirectoryResources = this.listLocalDirectoryResources(workspaceId, daemonId);
+    const unarchivedHotTraces = this.listUnarchivedHotTraces(runtimeIds);
+    const archiveRequests = new SessionArchiveRequestsRepo(this.ctx).listLatestForRuntimes(runtimeIds);
     const tokenRows = this.ctx.db.query(
       `SELECT id, revoked_at
        FROM multiremi_access_tokens
@@ -526,11 +545,14 @@ export class DaemonRetirementRepo {
     if (mappedActiveTasks.length) blockingReasons.push("active_tasks");
     if (localDirectoryResources.length) blockingReasons.push("local_directory_resources");
     if (mappedIssueWorkspaces.length) blockingReasons.push("active_issue_workspaces");
+    if (unarchivedHotTraces.length) blockingReasons.push("unarchived_hot_traces");
     const hasOnlineRuntime = mappedRuntimes.some((runtime) => {
       const current = this.ctx.runtimes().getRuntime(runtime.id);
       return current ? isRuntimeEffectivelyOnline(current) : false;
     });
-    const canAbandonIssueWorkspaces = mappedIssueWorkspaces.length > 0
+    // An offline daemon can archive neither its Issue workspaces nor its hot
+    // traces; abandoning gives up both, and the traces become `lost`.
+    const canAbandonIssueWorkspaces = (mappedIssueWorkspaces.length > 0 || unarchivedHotTraces.length > 0)
       && mappedActiveTasks.length === 0
       && localDirectoryResources.length === 0
       && !hasOnlineRuntime;
@@ -556,6 +578,7 @@ export class DaemonRetirementRepo {
       localDirectoryResources,
       issueWorkspaces: mappedIssueWorkspaces,
       cleanedIssueWorkspaces,
+      unarchivedHotTraces,
       sessionLanes,
       chatSessions,
       runtimeAuxiliaryState,
@@ -579,8 +602,48 @@ export class DaemonRetirementRepo {
       queuedTasks: mappedQueuedTasks,
       localDirectoryResources,
       issueWorkspaces: mappedIssueWorkspaces,
+      unarchivedHotTraces,
+      archiveRequests,
       impact,
     };
+  }
+
+  /**
+   * Ask the daemon's Runtimes to archive every subject with a hot trace, reusing
+   * a subject's open request. The caller owns the transaction. Returns the
+   * Runtimes that got a new request, whose downlinks the caller wakes after
+   * commit.
+   */
+  requestHotTraceArchivesWithinTransaction(
+    workspaceId: string,
+    daemonId: string,
+    createdBy: string,
+  ): string[] {
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    if (this.isRetired(workspaceId, daemonId)) return [];
+    const runtimeIds = (this.ctx.db.query(
+      `SELECT id FROM multiremi_runtimes
+       WHERE COALESCE(workspace_id, 'local') = ? AND daemon_id = ?
+       ORDER BY id ASC`,
+    ).all(workspaceId, daemonId) as Row[]).map((row) => String(row.id));
+    const hotTraces = this.listUnarchivedHotTraces(runtimeIds);
+    if (!hotTraces.length) return [];
+    const requests = new SessionArchiveRequestsRepo(this.ctx);
+    requests.expireAcked(runtimeIds);
+    const subjects = new Map<string, DaemonRetirementHotTrace>();
+    for (const trace of hotTraces) {
+      subjects.set(`${trace.runtimeId}\u0000${trace.subjectKind}\u0000${trace.subjectId}`, trace);
+    }
+    const woken = new Set<string>();
+    for (const trace of subjects.values()) {
+      const { created } = requests.ensureOpenWithinTransaction(
+        trace.runtimeId,
+        { kind: trace.subjectKind, id: trace.subjectId },
+        createdBy,
+      );
+      if (created) woken.add(trace.runtimeId);
+    }
+    return [...woken];
   }
 
   retire(
@@ -625,7 +688,7 @@ export class DaemonRetirementRepo {
       const plan = this.getPlan(workspaceId, daemonId);
       if (plan.snapshot !== expectedSnapshot) return { status: "plan_changed", plan };
       const remainingBlockers = plan.blockingReasons.filter((reason) => (
-        reason !== "active_issue_workspaces"
+        (reason !== "active_issue_workspaces" && reason !== "unarchived_hot_traces")
         || !options.abandonIssueWorkspaces
         || !plan.canAbandonIssueWorkspaces
       ));
@@ -685,6 +748,7 @@ export class DaemonRetirementRepo {
              WHERE runtime_id IN (${placeholders}) AND status != 'cleaned'`,
             [now, now, ...runtimeIds],
           ).changes;
+          for (const trace of plan.unarchivedHotTraces) this.ctx.taskTraces().markTaskTraceLost(trace.taskId);
         }
         this.ctx.db.run(
           `UPDATE multiremi_issue_workspaces
@@ -787,6 +851,37 @@ export class DaemonRetirementRepo {
     if (!runtimeIds.length) return [];
     const placeholders = runtimeIds.map(() => "?").join(",");
     return this.ctx.db.query(sql.replace("__RUNTIME_IDS__", placeholders)).all(...runtimeIds, ...trailingParams) as Row[];
+  }
+
+  /**
+   * Tasks whose trace pointer still names one of the Runtimes. An in-flight
+   * task already blocks retirement as `active_tasks` and is listed here once it
+   * stops, so it is left out.
+   */
+  private listUnarchivedHotTraces(runtimeIds: string[]): DaemonRetirementHotTrace[] {
+    const rows = this.rowsForRuntimeIds(
+      `SELECT trace.task_id, trace.runtime_id, task.issue_id, task.chat_session_id
+       FROM multiremi_task_traces trace
+       JOIN multiremi_tasks task ON task.id = trace.task_id
+       WHERE trace.location = 'daemon' AND trace.runtime_id IN (__RUNTIME_IDS__)
+         AND task.status NOT IN (${BLOCKING_TASK_STATUSES.map(() => "?").join(",")})
+       ORDER BY trace.runtime_id ASC, trace.task_id ASC`,
+      runtimeIds,
+      [...BLOCKING_TASK_STATUSES],
+    );
+    return rows.map((row) => {
+      const subject: { kind: SessionArchiveSubjectKind; id: string } = row.issue_id != null
+        ? { kind: "issue", id: String(row.issue_id) }
+        : row.chat_session_id != null
+          ? { kind: "chat", id: String(row.chat_session_id) }
+          : { kind: "task", id: String(row.task_id) };
+      return {
+        taskId: String(row.task_id),
+        runtimeId: String(row.runtime_id),
+        subjectKind: subject.kind,
+        subjectId: subject.id,
+      };
+    });
   }
 
   private runtimeAuxiliarySnapshotRows(

@@ -3882,11 +3882,13 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "a39719439b495a56582d978a433d92f690c0fcf52d8a4e5399eadcbd2f4bb4dd",
+          "snapshot": "efd5f4846927dda045f78644d47085bd587e00b5bb456d318be19788b18ce8c5",
           "already_retired": false,
-          "can_retire": true,
+          "can_retire": false,
           "can_abandon_issue_workspaces": false,
-          "blocking_reasons": [],
+          "blocking_reasons": [
+            "unarchived_hot_traces"
+          ],
           "runtimes": [
             {
               "id": "rt_snapshot",
@@ -3937,6 +3939,26 @@
           ],
           "local_directory_resources": [],
           "issue_workspaces": [],
+          "unarchived_hot_traces": [
+            {
+              "task_id": "tsk_snapshot",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot"
+            }
+          ],
+          "archive_requests": [
+            {
+              "id": "sar_7212d1hv48ko",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot",
+              "status": "pending",
+              "created_by": "local",
+              "created_at": "<timestamp>",
+              "updated_at": "<timestamp>"
+            }
+          ],
           "impact": {
             "runtimes_removed": 1,
             "agents_detached": 1,
@@ -3953,24 +3975,100 @@
       "key": "daemon-retirement#001 POST /api/multiremi/daemons/:daemonId/retire",
       "route": "POST /api/multiremi/daemons/:daemonId/retire",
       "path": "/api/multiremi/daemons/dmn_snapshot/retire",
-      "status": 200,
+      "status": 409,
       "body": {
-        "status": "retired",
-        "workspace_id": "local",
-        "daemon_id": "dmn_snapshot",
-        "retired_at": "<timestamp>",
-        "already_retired": false,
-        "impact": {
-          "runtimes_removed": 1,
-          "agents_detached": 1,
-          "queued_tasks_requeued": 4,
-          "session_lanes_reset": 0,
-          "chat_sessions_reset": 0,
-          "issue_workspaces_abandoned": 0,
-          "tokens_revoked": 0
-        },
-        "ssh_mesh_key_rotation": {
-          "status": "not_required"
+        "error": "daemon retirement is blocked by active dependencies",
+        "code": "daemon_retirement_blocked",
+        "plan": {
+          "workspace_id": "local",
+          "daemon_id": "dmn_snapshot",
+          "owner_user_id": "local",
+          "snapshot": "efd5f4846927dda045f78644d47085bd587e00b5bb456d318be19788b18ce8c5",
+          "already_retired": false,
+          "can_retire": false,
+          "can_abandon_issue_workspaces": false,
+          "blocking_reasons": [
+            "unarchived_hot_traces"
+          ],
+          "runtimes": [
+            {
+              "id": "rt_snapshot",
+              "name": "snapshot-runtime",
+              "provider": "claude",
+              "status": "online"
+            }
+          ],
+          "agents": [
+            {
+              "id": "agt_snapshot",
+              "name": "Snapshot Agent",
+              "provider": "claude",
+              "runtime_id": "rt_snapshot",
+              "archived": false
+            }
+          ],
+          "active_tasks": [],
+          "queued_tasks": [
+            {
+              "id": "tsk_ccpewwo14x7v",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_gbmah1mhgwob"
+            },
+            {
+              "id": "tsk_ebtova4a347t",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_j3m15clzy3p6"
+            },
+            {
+              "id": "tsk_lv85f3t6oap5",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": null
+            },
+            {
+              "id": "tsk_uj5ra15g3kjw",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_snapshot"
+            }
+          ],
+          "local_directory_resources": [],
+          "issue_workspaces": [],
+          "unarchived_hot_traces": [
+            {
+              "task_id": "tsk_snapshot",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot"
+            }
+          ],
+          "archive_requests": [
+            {
+              "id": "sar_7212d1hv48ko",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot",
+              "status": "pending",
+              "created_by": "local",
+              "created_at": "<timestamp>",
+              "updated_at": "<timestamp>"
+            }
+          ],
+          "impact": {
+            "runtimes_removed": 1,
+            "agents_detached": 1,
+            "queued_tasks_requeued": 4,
+            "session_lanes_reset": 0,
+            "chat_sessions_reset": 0,
+            "issue_workspaces_abandoned": 0,
+            "tokens_revoked": 0
+          }
         }
       }
     },
@@ -17839,11 +17937,13 @@
           "workspace_id": "local",
           "daemon_id": "dmn_snapshot",
           "owner_user_id": "local",
-          "snapshot": "a39719439b495a56582d978a433d92f690c0fcf52d8a4e5399eadcbd2f4bb4dd",
+          "snapshot": "efd5f4846927dda045f78644d47085bd587e00b5bb456d318be19788b18ce8c5",
           "already_retired": false,
-          "can_retire": true,
+          "can_retire": false,
           "can_abandon_issue_workspaces": false,
-          "blocking_reasons": [],
+          "blocking_reasons": [
+            "unarchived_hot_traces"
+          ],
           "runtimes": [
             {
               "id": "rt_snapshot",
@@ -17894,6 +17994,26 @@
           ],
           "local_directory_resources": [],
           "issue_workspaces": [],
+          "unarchived_hot_traces": [
+            {
+              "task_id": "tsk_snapshot",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot"
+            }
+          ],
+          "archive_requests": [
+            {
+              "id": "sar_7212d1hv48ko",
+              "runtime_id": "rt_snapshot",
+              "subject_kind": "issue",
+              "subject_id": "iss_snapshot",
+              "status": "pending",
+              "created_by": "local",
+              "created_at": "<timestamp>",
+              "updated_at": "<timestamp>"
+            }
+          ],
           "impact": {
             "runtimes_removed": 1,
             "agents_detached": 1,

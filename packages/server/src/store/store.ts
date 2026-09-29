@@ -2963,6 +2963,20 @@ runMigrations(this.db);
     return this.daemonRetirement.getPlan(workspaceId, daemonId);
   }
 
+  /**
+   * The retirement plan step: ask the daemon to archive every subject with a
+   * hot trace before it goes, and wake the downlinks of each Runtime that got a
+   * new request once the requests are committed.
+   */
+  requestDaemonRetirementArchives(workspaceId: string, daemonId: string, createdBy: string): void {
+    const woken = this.db.transaction(() =>
+      this.daemonRetirement.requestHotTraceArchivesWithinTransaction(workspaceId, daemonId, createdBy))();
+    for (const runtimeId of woken) {
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId, actorType: "system",
+        actorId: null, payload: { runtime_id: runtimeId } });
+    }
+  }
+
   getDaemonRetirementSshMeshRekey(
     workspaceId: string,
     daemonId: string,
