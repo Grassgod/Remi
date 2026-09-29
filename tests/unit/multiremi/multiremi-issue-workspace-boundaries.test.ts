@@ -317,6 +317,12 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.getTask(task.id)?.waitReason).toBeNull();
         expect(store.claimTask(targetRuntime.id)?.id).toBe(task.id);
         expect(store.getTask(task.id)?.runtimeId).toBe(targetRuntime.id);
+        store.startTask(task.id);
+        store.completeTask(task.id, { output: "Target turn finished", sessionId: `session_${target}` });
+        const next = store.createTask({ issueId: issue.id, issueSessionId: session.id,
+          agentId: agent.id, workspaceId: target, prompt: "Resume target turn" });
+        expect(next).toMatchObject({ runtimeId: targetRuntime.id, sessionId: `session_${target}` });
+        expect(store.claimTask(targetRuntime.id)?.id).toBe(next.id);
       });
 
       for (const evidence of ["archive", "abandon", "missing"] as const) {
