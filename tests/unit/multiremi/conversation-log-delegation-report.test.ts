@@ -239,6 +239,83 @@ for (const backend of ["sqlite", "postgres"] as const) {
   });
 }
 
+// --- The bridge dedupe reads the log, not session_events ---------------------
+//
+// Before it appends a cross-issue bridge, `ensureDelegationWakeupWithinWorkspaceLock`
+// looks for a `delegation_report` the return session already holds for the
+// source. MUL-427 moved that lookup onto the log as well (ruling am). As with the
+// drain above, each case rewrites the legacy table alone and leaves the log as it is.
+
+async function startDelegatedChild(store: MultiremiStore, f: ReturnType<typeof fixture>): Promise<MultiremiTask> {
+  const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+  expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
+  store.buildTaskSessionProjection(f.leaderTask.id);
+  store.startTask(f.leaderTask.id);
+  store.completeTask(f.leaderTask.id, { output: "Dispatched." });
+  expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
+  store.buildTaskSessionProjection(childTask.id);
+  store.startTask(childTask.id);
+  return childTask;
+}
+
+for (const backend of ["sqlite", "postgres"] as const) {
+  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-427 bridge dedupe follows the log (${backend})`, () => {
+    it("reuses the log's bridge when the legacy row no longer names the source",
+      async () => withStore(backend, async (store) => {
+        const f = fixture(store);
+        const childTask = await startDelegatedChild(store, f);
+        store.completeTask(childTask.id, { output: "Result details" });
+        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId!;
+        expect(returnId).toEqual(expect.any(String));
+        const log = store.listConversationLogEntries(f.leaderSession.id);
+        const bridge = log.find((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id)!;
+
+        expect(rawDb(store).run("UPDATE multiremi_session_events SET task_id = NULL WHERE session_id = ? AND seq = ?",
+          [bridge.session_id, bridge.seq]).changes).toBe(1);
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        const duplicate = store.ensureDelegationWakeup({ sourceTaskId: childTask.id, requiredEventSeq: 1,
+          terminalStatus: "completed", terminalBody: "Result details" });
+
+        expect(duplicate).toMatchObject({ created: false, covered: true });
+        expect(duplicate.task?.id).toBe(returnId);
+        // No second bridge, and the skip is pinned to the log bridge's seq.
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        const skipped = store.listIssueActivity(f.child.id).filter((activity) =>
+          activity.type === "delegation_return_skipped"
+          && (activity.data as Record<string, unknown>).reason === "already_covered");
+        expect(skipped.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
+          .toEqual([bridge.seq]);
+      }));
+
+    it("appends a bridge when only the legacy table names the source",
+      async () => withStore(backend, async (store) => {
+        const f = fixture(store);
+        const childTask = await startDelegatedChild(store, f);
+        const log = store.listConversationLogEntries(f.leaderSession.id);
+        const newest = log.filter((entry) => entry.kind !== "head").at(-1)!;
+        expect(newest.kind).not.toBe("delegation_report");
+
+        expect(rawDb(store).run(
+          "UPDATE multiremi_session_events SET kind = 'delegation_report', task_id = ? WHERE session_id = ? AND seq = ?",
+          [childTask.id, newest.session_id, newest.seq]).changes).toBe(1);
+        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
+        store.completeTask(childTask.id, { output: "Result details" });
+
+        const bridges = store.listConversationLogEntries(f.leaderSession.id)
+          .filter((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id);
+        expect(bridges).toHaveLength(1);
+        expect(bridges[0]!.seq).toBeGreaterThan(newest.seq);
+        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId;
+        expect(returnId).toEqual(expect.any(String));
+        const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
+          activity.type === "delegation_return_triggered"
+          && (activity.data as Record<string, unknown>).returnTaskId === returnId);
+        expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
+          .toEqual([bridges[0]!.seq]);
+      }));
+  });
+}
+
 // --- Every kind an `appendSessionEvent*` caller can write is mirrored -------
 //
 // A static scan of the server sources: each call's input object is resolved to
