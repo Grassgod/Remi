@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
@@ -29,7 +29,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         db = new PostgresSyncDatabase(url.toString());
         reader = new Bun.SQL(url.toString(), { max: 1 });
       } else {
-        db = new Database(":memory:");
+        db = openSqliteDatabase(":memory:");
       }
       store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
