@@ -68,6 +68,9 @@ const UPLOAD_PROGRESS_HEARTBEAT_MS = 30_000;
 const DEFAULT_ROOT = join(homedir(), ".remi", "multiremi", "session-archives");
 const ISSUE_PURGE_OUTBOX = ".issue-purge-outbox";
 const DEFAULT_PURGE_RECOVERY_INTERVAL_MS = 30_000;
+const DEFAULT_ORPHAN_SWEEP_INTERVAL_MS = 10 * 60_000;
+/** Synchronous filesystem work held under the shared-path lock longer than this is logged. */
+const DEFAULT_LOCKED_FS_WARN_MS = 100;
 /** Present in a backfill archive directory until its row is committed. */
 const TRACE_BACKFILL_PENDING_MARKER = ".trace-backfill-pending";
 const log = createLogger("session-archive");
@@ -305,6 +308,11 @@ export class SessionArchiveService {
   private purgeRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private purgeRecoveryStarted = false;
   private purgeRecoveryIntervalMs = DEFAULT_PURGE_RECOVERY_INTERVAL_MS;
+  private orphanSweepInFlight: Promise<string[]> | null = null;
+  private orphanSweepTimer: ReturnType<typeof setTimeout> | null = null;
+  private orphanSweepStarted = false;
+  private orphanSweepIntervalMs = DEFAULT_ORPHAN_SWEEP_INTERVAL_MS;
+  private lockedFsWarnMs = DEFAULT_LOCKED_FS_WARN_MS;
 
   constructor(
     private readonly store: MultiremiStore,
@@ -691,7 +699,7 @@ export class SessionArchiveService {
       // 2. Derive pointers and durably write the manifest temp file outside the lock.
       const pointers = buildTracePointers(archive, ingest.traces);
       manifestTempPath = await this.writeManifest(finalPath, archive, promotion.sizeBytes);
-      const published = this.store.withLockedSessionArchiveSharedPaths(
+      const published = this.withTimedSharedPaths(
         archive.id, runtimeId, attemptCount, "promote", () => {
           const partial = this.fileIdentitySync(partialPath);
           const existing = this.fileIdentitySync(finalPath);
@@ -882,7 +890,7 @@ export class SessionArchiveService {
     promotedFile: FileIdentity | null,
   ): Promise<void> {
     const manifestPath = join(dirname(finalPath), "manifest.json");
-    this.store.withLockedSessionArchiveSharedPaths(
+    this.withTimedSharedPaths(
       archive.id, archive.runtimeId, attemptCount, "cleanup", () => {
         let ownedManifest = false;
         try {
@@ -903,6 +911,156 @@ export class SessionArchiveService {
         }
       },
     );
+  }
+
+  /**
+   * Run a shared-path mutation under the repo lock and time its synchronous
+   * filesystem work: every other archive write of the workspace waits on it.
+   */
+  private withTimedSharedPaths<T>(
+    archiveId: string,
+    runtimeId: string,
+    attemptCount: number,
+    mode: "promote" | "cleanup" | "orphan",
+    action: (archive: MultiremiSessionArchive) => T,
+  ): T | null {
+    return this.store.withLockedSessionArchiveSharedPaths(archiveId, runtimeId, attemptCount, mode, (archive) => {
+      const started = performance.now();
+      try {
+        return action(archive);
+      } finally {
+        const elapsedMs = performance.now() - started;
+        if (elapsedMs > this.lockedFsWarnMs) {
+          log.warn(
+            `Session archive ${mode} held the shared-path lock for ${Math.round(elapsedMs)}ms of filesystem work `
+            + `(archive ${archiveId}, attempt ${attemptCount}, threshold ${this.lockedFsWarnMs}ms)`,
+          );
+        }
+      }
+    });
+  }
+
+  startOrphanedArchiveFileSweep(intervalMs = DEFAULT_ORPHAN_SWEEP_INTERVAL_MS): void {
+    this.orphanSweepStarted = true;
+    this.orphanSweepIntervalMs = Math.max(10, Math.floor(intervalMs));
+    this.scheduleOrphanedArchiveFileSweep();
+  }
+
+  stopOrphanedArchiveFileSweep(): void {
+    this.orphanSweepStarted = false;
+    if (this.orphanSweepTimer) clearTimeout(this.orphanSweepTimer);
+    this.orphanSweepTimer = null;
+  }
+
+  private scheduleOrphanedArchiveFileSweep(): void {
+    if (!this.orphanSweepStarted || this.orphanSweepTimer) return;
+    this.orphanSweepTimer = setTimeout(() => {
+      this.orphanSweepTimer = null;
+      void this.sweepOrphanedArchiveFiles()
+        .catch((error) => {
+          log.warn(`Session archive orphan sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => this.scheduleOrphanedArchiveFileSweep());
+    }, this.orphanSweepIntervalMs);
+    this.orphanSweepTimer.unref?.();
+  }
+
+  /**
+   * Remove final ZIPs and manifests that no live attempt owns.
+   *
+   * Two kinds are left behind otherwise: a process that crashed after
+   * promotion and before `ready`, and an older attempt's pair that B4 skips
+   * because a manual retry already moved the row back to pending/uploading.
+   * An uploading row is left alone: its attempt either promotes over the pair
+   * or ends failed, and the next sweep takes it then. Rows are read here only
+   * to find candidates; each deletion is decided again under the shared-path
+   * lock from the row as it stands then. Returns the removed paths.
+   */
+  async sweepOrphanedArchiveFiles(): Promise<string[]> {
+    if (this.orphanSweepInFlight) return await this.orphanSweepInFlight;
+    const run = this.sweepOrphanedArchiveFilesOnce();
+    this.orphanSweepInFlight = run;
+    try {
+      return await run;
+    } finally {
+      if (this.orphanSweepInFlight === run) this.orphanSweepInFlight = null;
+    }
+  }
+
+  private async sweepOrphanedArchiveFilesOnce(): Promise<string[]> {
+    const removed: string[] = [];
+    for (const observed of this.store.listOrphanCandidateSessionArchives()) {
+      try {
+        let finalPath: string;
+        try {
+          finalPath = await this.resolveArchivePath(observed.relativePath, false);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        const manifestPath = join(dirname(finalPath), "manifest.json");
+        const present = async (path: string) => await lstat(path).then(() => true, (error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        });
+        if (!await present(finalPath) && !await present(manifestPath)) continue;
+        const unlinked = this.withTimedSharedPaths(
+          observed.id, observed.runtimeId, observed.attemptCount, "orphan",
+          (archive) => this.removeOrphanedFinalFiles(archive, finalPath, manifestPath),
+        );
+        if (unlinked?.length) {
+          log.info(`Removed orphaned Session archive files of ${observed.id} (${observed.status}): ${unlinked.map((path) => basename(path)).join(", ")}`);
+          removed.push(...unlinked);
+        }
+      } catch (error) {
+        log.warn(`Failed to sweep orphaned Session archive files of ${observed.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * Remove the final pair of a locked row that no attempt can publish.
+   *
+   * The lock admits only pending, failed and superseded rows: none of them is
+   * served, and a claim bumps the raw attempt before anything can promote
+   * again, so the pair at the row's own path is dead. A manifest naming another
+   * archive, or one that cannot be read, keeps both files for a human to look at.
+   */
+  private removeOrphanedFinalFiles(
+    archive: MultiremiSessionArchive,
+    finalPath: string,
+    manifestPath: string,
+  ): string[] {
+    let ownedManifest = false;
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+      if (!manifest || typeof manifest !== "object" || (manifest as Record<string, unknown>).archive_id !== archive.id) {
+        log.warn(`Session archive ${archive.id} has a manifest of another archive; leaving its shared files`);
+        return [];
+      }
+      ownedManifest = true;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        log.warn(`Session archive ${archive.id} has an unreadable manifest; leaving its shared files`);
+        return [];
+      }
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const removed: string[] = [];
+    // ZIP first: if the process dies in between, the surviving manifest still
+    // lets the next pass check whose pair this is.
+    for (const path of ownedManifest ? [finalPath, manifestPath] : [finalPath]) {
+      // Only a regular file goes; anything else throws as unsafe and stays.
+      if (!this.fileIdentitySync(path)) continue;
+      try {
+        unlinkSync(path);
+        removed.push(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return removed;
   }
 
   private assertArchiveHash(

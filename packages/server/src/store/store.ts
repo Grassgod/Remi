@@ -842,9 +842,13 @@ runMigrations(this.db);
 
   withLockedSessionArchiveSharedPaths<T>(
     id: string, runtimeId: string, attemptCount: number,
-    mode: "promote" | "cleanup", action: (archive: MultiremiSessionArchive) => T,
+    mode: "promote" | "cleanup" | "orphan", action: (archive: MultiremiSessionArchive) => T,
   ): T | null {
     return this.sessionArchives.withLockedSharedPaths(id, runtimeId, attemptCount, mode, action);
+  }
+
+  listOrphanCandidateSessionArchives(): MultiremiSessionArchive[] {
+    return this.sessionArchives.listOrphanCandidates();
   }
 
   claimSessionArchiveUploadAttempt(id: string, runtimeId: string): MultiremiSessionArchive | null {

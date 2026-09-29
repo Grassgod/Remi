@@ -825,12 +825,18 @@ export class SessionArchivesRepo {
     return this.withWritableArchive(id, runtimeId, (archive) => archive);
   }
 
-  /** Serialize shared ZIP/manifest mutations with claim and retry, even after workspace ownership changes. */
+  /**
+   * Serialize shared ZIP/manifest mutations with claim and retry, even after workspace ownership changes.
+   *
+   * `promote` needs the attempt still uploading, `cleanup` needs it failed, and
+   * `orphan` (the unowned-file sweep) needs a row that is neither served
+   * (`ready`) nor able to promote any more (`uploading`).
+   */
   withLockedSharedPaths<T>(
     id: string,
     runtimeId: string,
     attemptCount: number,
-    mode: "promote" | "cleanup",
+    mode: "promote" | "cleanup" | "orphan",
     action: (archive: MultiremiSessionArchive) => T,
   ): T | null {
     const initial = this.get(id);
@@ -841,9 +847,20 @@ export class SessionArchivesRepo {
       this.ctx.db.run("UPDATE multiremi_session_archives SET updated_at = updated_at WHERE id = ?", [id]);
       const current = this.get(id);
       if (!current || current.attemptCount !== attemptCount || current.runtimeId !== runtimeId
-        || (mode === "promote" ? current.status !== "uploading" : current.status !== "failed")) return null;
+        || (mode === "promote" ? current.status !== "uploading"
+          : mode === "cleanup" ? current.status !== "failed"
+            : current.status === "ready" || current.status === "uploading")) return null;
       return action(current);
     })();
+  }
+
+  /** Rows the orphan sweep may act on: no reader serves them and no attempt of theirs can promote. */
+  listOrphanCandidates(): MultiremiSessionArchive[] {
+    return (this.ctx.db.query(
+      `SELECT * FROM multiremi_session_archives
+       WHERE status IN ('pending', 'failed', 'superseded')
+       ORDER BY updated_at, id`,
+    ).all() as Row[]).map(hydrate);
   }
 
   private normalizeStalledUploads(workspaceId: string): void {

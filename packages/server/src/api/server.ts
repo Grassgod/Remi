@@ -814,6 +814,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
+  if (backgroundJobs) sessionArchives.startOrphanedArchiveFileSweep();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   if (backgroundJobs) repositoryWiki.startStorageWorker?.();
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
@@ -1054,6 +1055,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     requestMetricsSummary?.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
     if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
+    if (backgroundJobs) sessionArchives.stopOrphanedArchiveFileSweep();
     controlPlaneSshMesh?.stop();
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();
