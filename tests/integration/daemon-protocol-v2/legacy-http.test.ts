@@ -1,4 +1,4 @@
-import { expect, it } from "bun:test";
+import { afterAll, beforeAll, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -8,6 +8,66 @@ import current from "../../../scripts/api-routes.golden.json";
 import { waitFor } from "./harness.js";
 
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
+
+const removedBy421 = [
+  "GET /api/daemon/autopilot-runs/:runId/gc-check",
+  "GET /api/daemon/chat-sessions/:sessionId/gc-check",
+  "GET /api/daemon/issues/:issueId/gc-check",
+  "GET /api/daemon/tasks/:taskId/gc-check",
+  "GET /api/daemon/tasks/:taskId/messages",
+  "POST /api/daemon/issues/:issueId/workspace/cleaned",
+  "POST /api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state",
+  "POST /api/daemon/runtimes/:runtimeId/bot-menu/:requestId/result",
+  "POST /api/daemon/runtimes/:runtimeId/commands/:requestId/result",
+  "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
+  "POST /api/daemon/runtimes/:runtimeId/feishu-bot/outbound/:deliveryId/result",
+  "POST /api/daemon/runtimes/:runtimeId/feishu-bot/status",
+  "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
+  "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
+  "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
+  "POST /api/daemon/tasks/:taskId/complete",
+  "POST /api/daemon/tasks/:taskId/fail",
+  "POST /api/daemon/tasks/:taskId/messages",
+  "POST /api/daemon/tasks/:taskId/progress",
+  "POST /api/daemon/tasks/:taskId/prompt",
+  "POST /api/daemon/tasks/:taskId/session",
+  "POST /api/daemon/tasks/:taskId/start",
+  "POST /api/daemon/tasks/:taskId/usage",
+  "POST /api/daemon/tasks/:taskId/workspace",
+  "PUT /api/daemon/runtimes/:runtimeId/models",
+];
+
+let removedRoutesServer: ReturnType<typeof startMultiremiServer>;
+let removedRoutesDb: Database;
+const removedRoutesAuthToken = "isolated-removed-v1-routes";
+
+beforeAll(() => {
+  removedRoutesDb = new Database(":memory:");
+  const store = new MultiremiStore(removedRoutesDb);
+  store.ensureLocalWorkspace();
+  removedRoutesServer = startMultiremiServer({ store, authToken: removedRoutesAuthToken, backgroundJobs: false, apiRole: "all", hostname: "127.0.0.1", port: 0 });
+});
+
+afterAll(async () => {
+  try {
+    await waitFor(() => removedRoutesServer.pendingRequests === 0, "removed v1 route requests to drain");
+  } finally {
+    try { void removedRoutesServer.stop(true); } finally { removedRoutesDb.close(); }
+  }
+});
+
+it.each(removedBy421)("returns the protocol 426 for deleted MUL-421 route %s", async route => {
+  expect(baseline.routes).toContain(route);
+  expect(current.routes).not.toContain(route);
+  const [method, pattern] = route.split(" ");
+  const path = pattern!.replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
+  const response = await fetch(`http://127.0.0.1:${removedRoutesServer.port}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${removedRoutesAuthToken}` },
+  });
+  expect(response.status).toBe(426);
+  expect(await response.json()).toEqual(upgradeRequired);
+});
 
 it.each(["all", "runtime"] as const)("automatically rejects removed snapshot routes and preserves the HTTP upgrade channel (%s)", async (apiRole) => {
   const db = new Database(":memory:");
@@ -31,7 +91,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
       const [method, pattern] = route.split(" ");
       const path = pattern!.replace(/:runtimeId\b/g, runtime.id).replace(/:taskId\b/g, task.id)
         .replace(/:issueId\b/g, issue.id).replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
-      const response = await request(path, method);
+      const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { Authorization: `Bearer ${authToken}` } });
       expect(response.status, route).toBe(426);
       expect(await response.json(), route).toEqual(upgradeRequired);
     }
@@ -48,6 +108,15 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
     expect(result.status).toBe(200);
     await result.json();
     expect(store.getRuntimeUpdateRequest(runtime.id, ack.pending_update.id)?.error).toBe("legacy fixture install failure");
+    const cards = await request(`/api/daemon/runtimes/${runtime.id}/feishu-bot/decision-cards`);
+    expect(cards.status).toBe(200);
+    expect(await cards.json()).toEqual({ cards: [] });
+    const decision = await request(`/api/daemon/issues/${issue.id}/decisions/missing-decision`);
+    expect(decision.status).toBe(403);
+    expect(await decision.json()).toEqual({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" });
+    const masterDecision = await fetch(`http://127.0.0.1:${server.port}/api/daemon/issues/${issue.id}/decisions/missing-decision`, { headers: { Authorization: `Bearer ${authToken}` } });
+    expect(masterDecision.status).toBe(404);
+    expect(await masterDecision.json()).toEqual({ error: "decision not found" });
     const unrelated = await fetch(`http://127.0.0.1:${server.port}/api/not-a-daemon-route`, { headers: { Authorization: `Bearer ${authToken}` } });
     expect(unrelated.status).toBe(apiRole === "runtime" ? 421 : 404);
     await unrelated.text();
