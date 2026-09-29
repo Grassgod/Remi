@@ -20,6 +20,7 @@ import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { daemonReportTransport } from "@multiremi/worker/report-transport.js";
 import { deliverFeishuOutbound } from "@multiremi/worker/feishu-outbound.js";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
 import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
 import {
@@ -211,7 +212,8 @@ describe("Feishu bot control-plane delivery", () => {
     const removed = await test.app.request(`/api/daemon/runtimes/rt_a/feishu-bot/outbound/${first.id}/result`, {
       method: "POST", headers: daemonHeaders(test.tokens.rt_a!), body: JSON.stringify(payload),
     });
-    expect(removed.status).toBe(404);
+    expect(removed.status).toBe(426);
+    expect(await removed.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(first.id)).toEqual(current);
   });
 
@@ -304,9 +306,13 @@ describe("Feishu bot control-plane delivery", () => {
     });
     const taskPath = `/api/daemon/tasks/${submitted.taskId}`;
     for (const endpoint of ["status", "messages"]) {
-      expect((await test.app.request(`${taskPath}/${endpoint}`, {
+      const response = await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_a!),
-      })).status).toBe(endpoint === "messages" ? 404 : 200);
+      });
+      expect(response.status).toBe(endpoint === "messages" ? 426 : 200);
+      if (endpoint === "messages") {
+        expect(await response.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
+      }
       expect((await test.app.request(`${taskPath}/${endpoint}`, {
         headers: daemonHeaders(test.tokens.rt_b!),
       })).status).toBe(403);
@@ -319,7 +325,8 @@ describe("Feishu bot control-plane delivery", () => {
       { runtimeId: "rt_claude", headers: daemonHeaders(executor.token), authToken: "MASTER" });
     expect(sent).toMatchObject({ ok: true, hub_head: 1 });
     const messages = await test.app.request(`${taskPath}/messages`, { headers: daemonHeaders(test.tokens.rt_a!) });
-    expect(messages.status).toBe(404);
+    expect(messages.status).toBe(426);
+    expect(await messages.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     expect(await reportFrame(test.store, "trace.head", { task_id: submitted.taskId },
       { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: true, head: 1 });
     const streamed: TraceEvent[] = [];
