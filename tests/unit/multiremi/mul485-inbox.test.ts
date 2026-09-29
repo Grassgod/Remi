@@ -174,13 +174,19 @@ function verifyPriorityAndCompatibility(): void {
       makeEvent(6, "task_failed", "legacy failure", "system"),
       makeEvent(7, "task_completed", "legacy completion", "system"),
       makeEvent(8, "message", "[@Earlier alias](mention://agent/agt_reader) decide", "member"),
+      makeEvent(9, "system", "lifecycle marked failed", "system", { envelope: {
+        ...envelope("lifecycle", 2, "failed"), wake: "now", lifecycleEvent: "session_created",
+      } }),
+      makeEvent(10, "system", "task failed", "system", { envelope: {
+        ...envelope("lifecycle", 2, "failed"), wake: "now", lifecycleEvent: "task_failed",
+      } }),
     ];
     const projection = buildSessionProjection({ sessionId: "ises_priority", targetAgentId: "agt_reader",
       events, cursorSeq: 0, providerSessionId: null, tokenBudget: 10_000,
       resolveAuthorName: (type, id) => type === "agent" && id === "agt_reader" ? "Reader" : null });
     const toc = JSON.parse(projection.jsonl.split("\n")[1]!);
     expect(toc.entries.map((entry: { seq: number; priority: number }) => [entry.seq, entry.priority]))
-      .toEqual([[4, 1], [5, 1], [8, 1], [3, 2], [6, 2], [2, 3], [7, 3], [1, 4]]);
+      .toEqual([[4, 1], [5, 1], [8, 1], [3, 2], [6, 2], [10, 2], [2, 3], [7, 3], [1, 4], [9, 4]]);
     const task = { id: "tsk_inbox", workspaceId: "local", issueId: "iss_inbox", chatSessionId: null,
       prompt: "Read inbox", issueSession: { id: "ises_priority", title: "Inbox" },
       sessionProjection: projection, repos: [], projectResources: [], project: null,
