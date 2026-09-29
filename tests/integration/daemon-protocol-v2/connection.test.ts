@@ -249,6 +249,7 @@ describe("daemon protocol v2 real connection", () => {
 
   it("re-registers a runtime deleted before hello, reconnects with the new ID and receives an offer", async () => {
     const deletedId = "rt_deleted_previous_registration";
+    const helloSockets: WebSocket[] = [];
     const registerRuntime = MultiremiDaemonClient.prototype.registerDaemonRuntime;
     let releaseRecovery!: () => void;
     const recovery = new Promise<void>(resolve => { releaseRecovery = resolve; });
@@ -261,13 +262,16 @@ describe("daemon protocol v2 real connection", () => {
     const recover = spyOn(MultiremiDaemonClient.prototype, "recoverOrphans");
     const claim = spyOn(MultiremiDaemonClient.prototype, "claimTask");
     try {
-      const h = await fixture({ onReady: (daemon, h) => {
+      const h = await fixture({ beforeSend: (frame, socket) => {
+        if (frame.t === "hello") helloSockets.push(socket.native);
+      }, onReady: (daemon, h) => {
         // Simulate the stale cached ID of an older registration. Current register
         // deterministically returns a different canonical (daemon, provider) ID.
         h.store.registerRuntime({ id: deletedId, name: "previous", provider: "claude", workspaceId: "local", daemonId: "dmn_fixture" });
         expect(h.store.deleteRuntime(deletedId)).toBe(true);
         (daemon as unknown as { options: { runtimeId: string } }).options.runtimeId = deletedId;
       } });
+      const runtimesChanged = spyOn(h.client, "runtimesChanged");
       await h.startDaemon();
       await waitFor(() => recovering, "orphan recovery after runtime_gone");
       // The new identity is registered, but the supervisor readiness barrier
@@ -298,15 +302,23 @@ describe("daemon protocol v2 real connection", () => {
       expect(recover).toHaveBeenCalledTimes(2);
       expect(claim).not.toHaveBeenCalled();
       await waitFor(() => h.store.getTask(task.id)?.status === "completed", "re-registered task completion");
+      await h.settleHeartbeat();
+      expect(runtimesChanged).toHaveBeenCalledTimes(2);
+      expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(2);
+      expect(h.sockets).toHaveLength(2);
+      expect(helloSockets).toEqual(h.sockets.map(socket => socket.native));
     } finally { releaseRecovery(); register.mockRestore(); recover.mockRestore(); claim.mockRestore(); }
   });
 
   it("recovers registry contention only after runtime_gone, registration and a fresh hello", async () => {
     let heldHeartbeat: { text: string; socket: WebSocket } | null = null;
+    const helloSockets: WebSocket[] = [];
     let hold = true;
     const h = await fixture({ runtimeId: "rt_contended", beforeSend: (frame, socket) => {
+      if (frame.t === "hello") helloSockets.push(socket.native);
       if (frame.t === "hb" && hold) { heldHeartbeat = { text: JSON.stringify(frame), socket: socket.native }; return false; }
     } });
+    const runtimesChanged = spyOn(h.client, "runtimesChanged");
     h.store.registerRuntime({ id: "rt_contended", name: "contended", provider: "claude", workspaceId: "local" });
     const incumbent = new WebSocket(`${h.url.replace("http:", "ws:")}/api/daemon/ws?protocol=2`, { headers: { Authorization: "Bearer fixture-master" } } as never);
     try {
@@ -332,6 +344,11 @@ describe("daemon protocol v2 real connection", () => {
       expect(recovered.unavailableRuntimeIds).toEqual([]);
       expect(recovered.sendEvent({ t: "task.offer", rt: "rt_contended", p: { task_id: "offer-after-contention" } }).ok).toBe(true);
       await waitFor(() => h.received.some(frame => frame.p?.task_id === "offer-after-contention"), "contention recovery offer");
+      await h.settleHeartbeat();
+      expect(runtimesChanged).toHaveBeenCalledTimes(2);
+      expect(h.ledger.filter(entry => entry.type === "hello" && entry.frame.p.daemon_id === "dmn_fixture")).toHaveLength(2);
+      expect(h.sockets).toHaveLength(2);
+      expect(helloSockets).toEqual(h.sockets.map(socket => socket.native));
     } finally { incumbent.close(); }
   });
 

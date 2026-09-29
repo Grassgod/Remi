@@ -1750,7 +1750,6 @@ export class MultiremiDaemon {
         this.startRuntimeModelRefresh();
       }
       await this.refreshWorkspaceRepos(workspaceId);
-      this.protocolClient?.runtimesChanged();
       try {
         // The temporary HTTP recovery has no active_task_ids argument. A task
         // still running locally must be protected by runtime.ready instead.
