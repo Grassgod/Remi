@@ -204,12 +204,13 @@ function waitForWorkerMessage<T extends Record<string, unknown>>(
 }
 
 /**
- * MUL-402 ② (cmt_78bx01xhb75x) / (c) (cmt_gestk2r6imjh): `maxTransactionDepth`
- * counts only the top-level BEGIN, so the depth-1 cases also check the control
- * statements the bridge sent in the same window. Before the outer COMMIT there is
- * no second BEGIN and no early COMMIT; nested levels send only SAVEPOINT /
- * RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT. Same recording as B5's
- * multiremi-parent-status-pg-depth.test.ts.
+ * `maxTransactionDepth` counts only the top-level BEGIN (MUL-405), so the
+ * depth-1 cases also check the control statements the bridge sent in the same
+ * window. Before the outer COMMIT there is no second BEGIN and no early COMMIT;
+ * nested levels send only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO
+ * SAVEPOINT, and the guarded entry points have no nested level at all
+ * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md). Same
+ * recording as B5's multiremi-parent-status-pg-depth.test.ts.
  */
 function recordTransactionControl(database: PostgresSyncDatabase): (label: string) => void {
   let controls: Array<{ sql: string; inTransaction: boolean }> = [];
@@ -385,7 +386,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       });
       stop();
       expect(db.maxTransactionDepth).toBe(1);
-      // ② cmt_78bx01xhb75x / (c) cmt_gestk2r6imjh: nested levels are SAVEPOINTs inside the one BEGIN…COMMIT.
+      // ADR 0011: any nested level is a SAVEPOINT inside the one BEGIN…COMMIT.
       assertTransactionControl(`${source} exemption`);
       expect(eventStates).toEqual([false]);
       expect(store.getTask(task.id)?.status).toBe("queued");

@@ -13,6 +13,15 @@ const task = {
 } satisfies AgentTask;
 
 describe("ExecutionModelInfo", () => {
+  it.each([
+    ["agent_error.model_not_found_or_unavailable", "Primary model unavailable"],
+    ["agent_error.provider_server_error", "Provider server error"],
+    ["queued_model_unavailable", "No Runtime supports the primary model"],
+  ])("explains availability switches: %s", (reason, label) => {
+    renderWithI18n(<ExecutionModelInfo task={{ ...task, executionModel: "backup", fallbackSwitched: true,
+      switchReason: `gateway_resource:${reason};provider_session_reset` }} />);
+    expect(screen.getByText(new RegExp(label))).toBeInTheDocument();
+  });
   it("prioritizes the task execution model and effort over the Agent's primary configuration", () => {
     renderWithI18n(<ExecutionModelInfo task={{ ...task, executionModel: "deepseek-flash", executionThinkingLevel: "high",
       fallbackSwitched: true, switchReason: "gateway_resource:agent_error.provider_no_available_account;provider_session_reset" }}

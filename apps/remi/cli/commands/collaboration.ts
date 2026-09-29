@@ -1114,7 +1114,7 @@ function issueQuery(invocation: CommandInvocation): Record<string, string | numb
     status: stringOption(invocation, "status"),
     priority: stringOption(invocation, "priority"),
     assignee_id: stringOption(invocation, "assignee"),
-    assignee_type: stringOption(invocation, "assignee-type"),
+    assignee_types: stringOption(invocation, "assignee-type"),
     project_id: stringOption(invocation, "project"),
     limit: integerOption(invocation, "limit"),
     offset: integerOption(invocation, "offset"),

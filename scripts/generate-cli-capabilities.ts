@@ -256,6 +256,7 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/workspaces\/:id\/relay-config\/:engine\/probe$/, "workspace.relay.probe"],
     [/^GET \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.get"],
     [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/reasoning-levels$/, "workspace.relay.reasoning-levels.update"],
+    [/^PUT \/api\/workspaces\/:id\/relay-config\/:engine\/context-window$/, "workspace.relay.context-window.update"],
     [/^GET \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.get"],
     [/^PUT \/api\/workspaces\/:id\/bot-menu$/, "workspace.bot-menu.update"],
     [/^POST \/api\/workspaces\/:id\/bot-menu\/publish$/, "workspace.bot-menu.publish"],

@@ -30,6 +30,8 @@ import { RuntimeWorkspaceError, RuntimeWorkspacesRepo } from "./runtime-workspac
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
+import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import { INBOX_LEDGER_TYPES, isInboxLedgerType } from "@multiremi/contracts";
@@ -454,6 +456,12 @@ export class IssuesRepo {
    * decides whether it owns the transaction, because callers such as Feishu
    * ingestion and autopilots already hold one, and nested its `transaction()`
    * would only be a SAVEPOINT (B1, MUL-426) that publishes before their COMMIT.
+   *
+   * MUL-405: the body also allocates `issue_number` under the per-workspace
+   * number advisory lock (W -> N -> D, see `store/advisory-locks.ts`), so a peer
+   * blocks instead of reading a maximum this transaction is about to consume.
+   * The `(workspace_id, issue_number)` unique index is the second line of
+   * defense, not the mechanism.
    */
   createIssue(input: CreateIssueInput, transaction?: IssueCreationTransactionOwner): MultiremiIssue {
     // The whole creation is one transaction, and every realtime push it causes
@@ -836,9 +844,17 @@ export class IssuesRepo {
   ): MultiremiIssue {
     assertIssueCreationTransactionOwner({ childStatusChanges, deferredEvents });
     const blockedBy = normalizeIssueRefList(input.blockedBy ?? input.blocked_by);
+
     const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
     const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
     const workspaceId = explicitWorkspaceId ?? "local";
+    // Global lock order (MUL-405, see store/advisory-locks.ts): W then N, before
+    // any domain row lock. Callers that already took them (Feishu ingest,
+    // messaging outcomes, Autopilot create_issue) re-take the same locks for
+    // free inside their transaction; callers that did not (the plain API path)
+    // get them here. N is taken before the MAX(issue_number) read below.
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    advisoryXactLock(this.ctx.db, numberAllocationLockKey(`issue:${workspaceId}`));
     // Child membership and guarded parent decisions serialize on the parent row.
     if (parentIssueId && !lockIssueRowWithinTransaction(this.ctx.db, parentIssueId)) {
       throw new Error(`Parent issue not found: ${parentIssueId}`);
@@ -948,8 +964,10 @@ export class IssuesRepo {
     if (parentIssueId && parentStatusGuardEnabled()) {
       const parent = this.getIssue(parentIssueId);
       if (parent) {
-        // This method owns no transaction of its own; the caller's queue is the
-        // one that is (or will be) drained after the insert commits.
+        // The hops this produces are replayed by the owner of the transaction
+        // after it commits (see `createIssue`); running them here would open a
+        // nested transaction whose work a rollback could still erase.
+
         this.rederiveParentStatus(parent, this.getIssue(id)!, childStatusChanges, deferredEvents);
       }
     }
@@ -2937,7 +2955,11 @@ export class IssuesRepo {
     if (parent.status === "done" || parent.status === "cancelled") {
       if (outcome) {
         const closedQueue = createCommitEventQueue();
-        this.ctx.db.transaction(() => this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue))();
+        this.ctx.db.transaction(() => {
+          // MUL-405: W before the audit activity/comment this branch writes.
+          this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
+          this.recordChildStatusAfterParentClosed(parent, issue, outcome, closedQueue);
+        })();
         this.ctx.emitCommitEvents(closedQueue);
       }
       return;
@@ -2964,6 +2986,12 @@ export class IssuesRepo {
     const staged: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     this.ctx.db.transaction(() => {
+      // Global lock order (MUL-405): W comes before this hook's first domain
+      // write. `notifyParentOfChildOutcome` writes the parent's notification
+      // comment before `enqueueChildDoneParentTask` takes W, which classified as
+      // D -> W; taking W here covers both branches (comment-only, queued round)
+      // and is free for the branches that take it again.
+      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
       if (outcome) {
         // MUL-400 E3 readiness lines for dependents that share this parent ride
         // along in this one report so the parent owner reads a single round.
@@ -2982,10 +3010,11 @@ export class IssuesRepo {
   /** Best-effort live update for a system comment that is already committed. */
   private broadcastSystemComment(issueId: string, comment: MultiremiIssueComment): void {
     try {
-      const lookupWorkspace = () => this.ctx.issueWorkspaceId(issueId);
-      const workspaceId = this.ctx.db.inTransaction
-        ? this.ctx.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      // Plain read, no savepoint (Senior ruling cmt_96e1yqxgifms §2). B1's
+      // bridge-failure classification is what lets this drop the wrapper: a
+      // failed bridge reply no longer aborts the surrounding transaction, so
+      // what reaches the catch below is a real SQL error.
+      const workspaceId = this.ctx.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       this.ctx.emitWorkspaceEvent({
         type: "comment:created",
@@ -4106,7 +4135,11 @@ export class IssuesRepo {
       ? this.ctx.issueSessions().getIssueSession(delegatedSessionId) : null;
     return delegatedSession?.issueId === parentIssueId
       ? delegatedSession.id
-      : this.ctx.issueSessions().getOrCreateDefaultIssueSession(parentIssueId).id;
+      // Both callers are `WithinTransaction` flavours owned by the child-status
+      // transaction, so ask for the within-transaction flavour explicitly
+      // instead of letting the public entry point add a nested frame
+      // (Senior ruling cmt_96e1yqxgifms §2).
+      : this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(parentIssueId, null).id;
   }
 
   private recordChildDoneParentSkipped(
@@ -4534,12 +4567,23 @@ export class IssuesRepo {
     // Notifications and agent dispatch follow that COMMIT, as before B1: a
     // failed forced start (MUL-458) must not roll back the member's comment,
     // and no realtime push may reach clients before the row is durable.
+    //
+    // Frame ownership (Senior ruling cmt_96e1yqxgifms §2): this entry point is
+    // also reached from callers that already own a transaction — the run's
+    // completion transaction in `postAgentReplyComment`, the Organizer action
+    // transaction that passes `withinTransaction` — so it opens a BEGIN only
+    // when it is called from outside one. A second frame there would be a pure
+    // savepoint wrapper over the same writes and would push a guarded path past
+    // the single BEGIN the depth probes assert. When we do own the frame, we
+    // also own the queue; `emitCommitEvents` binds it to the outermost COMMIT,
+    // so a caller-owned rollback still drops every push either way.
     const commitEvents = options.deferredEvents ? null : createCommitEventQueue();
-    const created = this.ctx.db.transaction(() => this.createIssueCommentWithinTransaction(
-      issueId,
-      input,
-      commitEvents ? { ...options, deferredEvents: commitEvents } : options,
-    ))();
+    const deferredEvents = commitEvents ?? options.deferredEvents;
+    const run = () => this.createIssueCommentWithinTransaction(issueId, input, {
+      ...options,
+      ...(deferredEvents ? { deferredEvents } : {}),
+    });
+    const created = this.ctx.db.inTransaction ? run() : this.ctx.db.transaction(run)();
     if (commitEvents) this.ctx.emitCommitEvents(commitEvents);
     this.runIssueCommentPostCommit(created, input, options);
     return created.comment;
@@ -4634,25 +4678,17 @@ export class IssuesRepo {
       }
     }
     const sessionEvents = this.ctx.issueSessions();
-    const commentEvent = options.withinTransaction
-      ? sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      })
-      : sessionEvents.appendSessionEvent(issueSessionId, {
-        authorType,
-        authorId: input.authorId ?? null,
-        kind: "message",
-        body,
-        sourceCommentId: id,
-        metadata: { parent_comment_id: parentId },
-        createdAt: now,
-      });
+    // Always the within-transaction flavour: the public entry point guarantees a
+    // frame (its own or the caller's) is open around every write below.
+    const commentEvent = sessionEvents.appendSessionEventWithinTransaction(issueSessionId, {
+      authorType,
+      authorId: input.authorId ?? null,
+      kind: "message",
+      body,
+      sourceCommentId: id,
+      metadata: { parent_comment_id: parentId },
+      createdAt: now,
+    });
     if (authorType === "member" && input.authorId) {
       // Member authors may use a member row id or a request user id. Resolve
       // explicitly for subscriptions without broadening authorization lookup.

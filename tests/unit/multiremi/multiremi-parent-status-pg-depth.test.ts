@@ -1,9 +1,11 @@
 /**
- * MUL-400 S1 on real PostgreSQL: one outer BEGIN/COMMIT, with nested operations
- * isolated by SAVEPOINT since B1 (MUL-426).
+ * MUL-400 S1 on real PostgreSQL: one outer BEGIN/COMMIT per guarded entry point,
+ * depth 1 as a hard contract rather than a bridge limit
+ * (docs/adr/0011-transaction-ownership-and-side-effect-timing.md).
  *
- * Per MUL-402 cmt_78bx01xhb75x section 2, count outer transaction ownership
- * separately from savepoints and record the actual SQL for every entry point.
+ * Count outer transaction ownership separately from savepoints and record the
+ * actual SQL for every entry point; a savepoint is the cross-repo-reuse safety
+ * net (ADR 0011 §2), not a frame a helper may add.
  * Before the outer COMMIT, no second BEGIN or premature COMMIT is allowed;
  * nested layers may only SAVEPOINT / RELEASE SAVEPOINT / ROLLBACK TO SAVEPOINT.
  * The existing post-commit hook, atomicity, rollback and event checks remain.

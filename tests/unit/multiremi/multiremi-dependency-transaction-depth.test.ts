@@ -6,8 +6,10 @@
  * BEGIN/COMMIT pair, so a nested BEGIN let the inner COMMIT end the outer unit
  * early and a later ROLLBACK could not undo it. Since B1 (MUL-426) a nested
  * `transaction()` is a SAVEPOINT inside the outer unit, and
- * `maxTransactionDepth` counts only the outer BEGIN (MUL-402 rulings
- * cmt_78bx01xhb75x, cmt_gestk2r6imjh). The depth counter is asserted for the
+ * `maxTransactionDepth` counts only the outer BEGIN (MUL-405). The entry points
+ * below still hold depth 1 exactly, savepoints included — see
+ * docs/adr/0011-transaction-ownership-and-side-effect-timing.md. The depth
+ * counter is asserted for the
  * three scenarios the fix round names: auto-start after a prerequisite is done,
  * two prerequisites finishing, and the member forced start.
  */

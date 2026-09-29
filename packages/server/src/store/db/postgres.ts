@@ -17,6 +17,12 @@ import {
   recordDbQuery,
   resolveDbReplyMaxBytes,
 } from "../../observability/request-metrics.js";
+import {
+  lockOrderSentinelNoteNumberLock,
+  lockOrderSentinelNoteStatement,
+  lockOrderSentinelTransactionBegin,
+  lockOrderSentinelTransactionEnd,
+} from "@multiremi/store/lock-order-sentinel.js";
 
 export interface SqlStatement {
   get(...params: unknown[]): any;
@@ -50,6 +56,52 @@ export interface SqlDatabase {
   exec(sql: string): void;
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
   /**
+   * Cross-process mutex keyed by `key`, held for the duration of `fn` and
+   * released on every exit path, including a thrown callback.
+   *
+   * OPTIONAL on purpose. `bun:sqlite`'s `Database` satisfies this interface
+   * structurally, and the whole store is written against that — every repo test
+   * and benchmark hands a raw `Database` to a repo constructor. Demanding the
+   * method here would ripple a mechanical type error through ~80 files for no
+   * behavioral gain, so the interface states what a database *may* provide and
+   * the two call patterns below are the only way the store uses it:
+   *
+   *   advisoryLock(db, key, fn)      — see `advisoryLock`
+   *   advisoryXactLock(db, key)      — see `advisoryXactLock`
+   *
+   * Both fall back to a no-op, which is the documented SQLite behavior. A
+   * database that implements them (Postgres) gets real locks.
+   */
+  advisoryLock?<T>(key: string, fn: () => T): T;
+  /**
+   * Same idea, but scoped to the caller's open transaction instead of a
+   * callback: the lock is held until the transaction commits or rolls back.
+   * The caller must already be inside `transaction()`. Optional for the reason
+   * above; go through `advisoryXactLock(db, key)` rather than calling it here.
+   */
+  advisoryXactLock?(key: string): void;
+  /**
+   * Run `fn` after the transaction that is currently open commits, and drop it
+   * if that transaction rolls back (MUL-405).
+   *
+   * A writer inside a nested `transaction()` has no way to know whether the
+   * outermost caller will commit: on Postgres the inner call only released a
+   * SAVEPOINT, so an event published there can still be invalidated by an outer
+   * ROLLBACK. Handing the event to the outermost transaction's queue is what
+   * makes "publish after COMMIT" true at every nesting depth.
+   *
+   * The callback must not touch the database through the same connection: it
+   * runs after the transaction ended, so a deferred event's readers (listener
+   * registries, not queries) are the intended work. Outside any transaction the
+   * callback runs immediately, which keeps callers that never opened one (and
+   * SQLite, whose writers hold the file lock) on the old path.
+   *
+   * Optional for the same structural-typing reason as the advisory locks: a raw
+   * bun:sqlite handle does not implement it, and the helper below falls back to
+   * running the callback immediately.
+   */
+  afterCommit?(fn: () => void): void;
+  /**
    * True while a `transaction()` callback is open. `BEGIN` cannot nest on
    * either backend (a nested `transaction()` runs as a SAVEPOINT on both), so a
    * helper that may run inside or outside a transaction checks this instead of
@@ -64,7 +116,80 @@ export interface SqlDatabase {
    * unit" asserts this is 1.
    */
   readonly maxTransactionDepth?: number;
+
   close(): void;
+}
+
+/**
+ * Run `fn` while holding the cross-process mutex named `key`.
+ *
+ * SQLite has no cross-process advisory lock, and it does not need one: a writer
+ * takes the database file lock for its whole transaction, so two processes
+ * cannot interleave the read-then-write these locks protect. It is therefore a
+ * documented no-op there, and the same call site expresses "only one process may
+ * be here at a time" for both backends with no dialect branch. Use it for work a
+ * whole process must serialize, such as the startup migration run.
+ */
+export function advisoryLock<T>(db: SqlDatabase, key: string, fn: () => T): T {
+  // Bound explicitly: reading the method off the optional property loses the
+  // receiver, and calling it through `Function.prototype.call` erases `T`.
+  const lock = db.advisoryLock?.bind(db);
+  if (!lock) return fn();
+  return lock(key, fn);
+}
+
+/**
+ * Take the transaction-scoped form of the lock named `key`. The caller must
+ * already be inside `db.transaction()`; it is released by that COMMIT or
+ * ROLLBACK rather than by a callback.
+ *
+ * Use this for a read-then-write that must not interleave with a peer, such as
+ * reading `MAX(issue_number) + 1` and inserting the row that uses it: a
+ * callback-scoped lock would be released before the insert commits. No-op on
+ * SQLite, for the reason on `advisoryLock`.
+ */
+export function advisoryXactLock(db: SqlDatabase, key: string): void {
+  db.advisoryXactLock?.call(db, key);
+}
+
+/**
+ * Run \`fn\` after the transaction that is currently open commits (MUL-405).
+ *
+ * A writer nested inside a caller-owned transaction cannot know whether that
+ * caller will commit — on Postgres the inner \`transaction()\` only released a
+ * SAVEPOINT — so publishing a realtime event there can still be invalidated by an
+ * outer ROLLBACK. Handing the event to the outermost transaction's queue is what
+ * makes "publish only after COMMIT" true at every nesting depth. A database that
+ * cannot queue (a raw \`bun:sqlite\` handle passed straight to a repo by a test)
+ * runs the callback immediately: outside a transaction the two are the same.
+ *
+ * Error semantics differ by when the callback runs, and that is intentional:
+ *
+ *   - outside a transaction it runs inline, so a throw propagates to the caller.
+ *     Nothing is pending at that point - the writes already autocommitted - so
+ *     the caller has to hear about the failure;
+ *   - inside a transaction it is queued, and the queue is drained best-effort
+ *     after COMMIT: a throwing callback is swallowed (see
+ *     `runAfterCommitCallbacks`) so one bad listener cannot roll back a
+ *     committed write or suppress the callbacks behind it.
+ *
+ * Realtime publication is best-effort by contract. `afterCommit` orders a push
+ * after the commit; it does not promise delivery.
+ */
+export function afterCommit(db: SqlDatabase, fn: () => void): void {
+  if (typeof db.afterCommit === "function") db.afterCommit(fn);
+  else fn();
+}
+
+/** Best-effort drain: a failing listener must not fail the caller's commit. */
+function runAfterCommitCallbacks(queue: Array<() => void>): void {
+  for (const callback of queue) {
+    try {
+      callback();
+    } catch {
+      // Realtime publication is best-effort by contract; the write is committed.
+    }
+  }
 }
 
 // ────────────────────────────── sqlite → postgres ──────────────────────────────
@@ -360,6 +485,38 @@ class PgStatement implements SqlStatement {
   }
 }
 
+/**
+ * `PgStatement` that feeds the MUL-405 whole-suite sentinel on every execution.
+ *
+ * Classification happens here, not at construction: a statement prepared
+ * outside a transaction can be executed inside one.
+ */
+class SentinelPgStatement extends PgStatement {
+  constructor(
+    execute: (sql: string, params: unknown[]) => { rows: any[]; count: number },
+    sql: string,
+    private readonly sourceSql: string,
+  ) {
+    super(execute, sql);
+  }
+  get(...params: unknown[]): any {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.get(...params);
+  }
+  all(...params: unknown[]): any[] {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.all(...params);
+  }
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.run(...params);
+  }
+  values(...params: unknown[]): any[][] {
+    lockOrderSentinelNoteStatement(this.sourceSql);
+    return super.values(...params);
+  }
+}
+
 export class PostgresSyncDatabase implements SqlDatabase {
   /**
    * Explicit dialect marker. Migrations must not infer the backend from a
@@ -371,7 +528,18 @@ export class PostgresSyncDatabase implements SqlDatabase {
   private readonly bridge: PgBridge;
   private transactionDepth = 0;
   private failedAtDepth: number | null = null;
+  /**
+   * One frame per open \`transaction()\` call, innermost last (MUL-405).
+   *
+   * An inner frame's callbacks must not run when that frame only released a
+   * SAVEPOINT: the outer transaction can still roll back. On a clean inner exit
+   * the frame is merged into its parent; on an inner ROLLBACK TO SAVEPOINT the
+   * frame is dropped, because the rows it would publish were undone. Only the
+   * outermost frame, after a real COMMIT, runs the merged queue.
+   */
+  private afterCommitFrames: Array<Array<() => void>> = [];
   private peakTransactionDepth = 0;
+
   constructor(url: string, resultBufferBytes = RESULT_BUFFER_BYTES) {
     this.bridge = new PgBridge(url, resultBufferBytes);
   }
@@ -393,6 +561,32 @@ export class PostgresSyncDatabase implements SqlDatabase {
     }
   }
   /**
+   * Session-level `pg_advisory_lock` held for the duration of `fn`.
+   *
+   * The lock is taken and released on this object's single bridge connection,
+   * which is the same connection every statement of a transaction uses, so a
+   * caller's open transaction stays on one session. Both statements are sent as
+   * plain SQL (never `exec`, which would translate/rewrite them) and the unlock
+   * runs in `finally` so a throwing callback cannot leak the lock.
+   *
+   * The hash key is computed by Postgres (`hashtext`) rather than in JS: the
+   * lock identity only has to agree between processes, and letting the server
+   * derive it keeps the key a stable 32-bit integer for both the session and the
+   * transaction forms.
+   */
+  advisoryLock<T>(key: string, fn: () => T): T {
+    this.execute("SELECT pg_advisory_lock(hashtext($1))", [key]);
+    try {
+      return fn();
+    } finally {
+      try {
+        this.execute("SELECT pg_advisory_unlock(hashtext($1))", [key]);
+      } catch {
+        // The connection is gone, which already released the lock with it.
+      }
+    }
+  }
+  /**
    * Deepest top-level nesting reached so far. A caller that must stay a single
    * atomic unit (issue creation, for example) opens its transaction only when it
    * does not already own one and then checks this is 1. Only the outer `BEGIN`
@@ -407,30 +601,53 @@ export class PostgresSyncDatabase implements SqlDatabase {
     this.peakTransactionDepth = this.transactionDepth;
   }
   query(sql: string): SqlStatement {
-    return new PgStatement((statement, params) => this.execute(statement, params), translateSqliteToPg(sql));
+    // MUL-405 whole-suite sentinel: a statement runs later, so classify at each
+    // execution rather than at construction.
+    return new SentinelPgStatement((statement, params) => this.execute(statement, params), translateSqliteToPg(sql), sql);
   }
   prepare(sql: string): SqlStatement {
     return this.query(sql);
   }
   run(sql: string, ...params: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
+    lockOrderSentinelNoteStatement(sql);
     return { changes: this.execute(translateSqliteToPg(sql), normalizeParams(params)).count, lastInsertRowid: 0 };
   }
   exec(sql: string): void {
     for (const stmt of splitStatements(sql)) {
       const translated = translateSqliteToPg(stmt);
-      if (translated.trim()) this.execute(translated, []);
+      if (!translated.trim()) continue;
+      lockOrderSentinelNoteStatement(stmt);
+      this.execute(translated, []);
     }
   }
+  /**
+   * Run `fn` in a transaction, joining the caller's transaction when one is
+   * already open.
+   *
+   * Postgres has no nested `BEGIN`: a second one on an open transaction is
+   * ignored with a warning, and the matching `COMMIT` then commits the OUTER
+   * transaction. Issuing them verbatim turns any nested use into a partial
+   * commit — and the store does nest, e.g. `createIssue` is called by
+   * `FeishuBotRepo.submitMessage` and `MessagingOutcomeService.createIssue`
+   * from inside their own transactions. A savepoint is the correct primitive:
+   * a failing inner block rolls back to the savepoint and leaves the outer
+   * transaction usable, which is the same semantics bun:sqlite gives a nested
+   * `transaction()`. The lock is what callers actually need from the nesting,
+   * and it already covers the outer commit.
+   */
   transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T {
     return (...args: any[]): T => {
       if (this.inTransaction) {
         const savepointDepth = this.transactionDepth;
-        const savepoint = `sp_${savepointDepth}`;
+        const savepoint = `multiremi_sp_${savepointDepth}`;
         this.execute(`SAVEPOINT ${savepoint}`, []);
         this.transactionDepth += 1;
+        this.afterCommitFrames.push([]);
+        let released = false;
         try {
           const result = fn(...args);
           this.execute(`RELEASE SAVEPOINT ${savepoint}`, []);
+          released = true;
           return result;
         } catch (err) {
           try {
@@ -443,21 +660,27 @@ export class PostgresSyncDatabase implements SqlDatabase {
           throw err;
         } finally {
           this.transactionDepth -= 1;
+          const frame = this.afterCommitFrames.pop()!;
+          if (released) this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(...frame);
         }
       }
       this.execute("BEGIN", []);
       this.transactionDepth += 1;
       this.failedAtDepth = null;
       this.peakTransactionDepth = Math.max(this.peakTransactionDepth, this.transactionDepth);
+      lockOrderSentinelTransactionBegin();
+      this.afterCommitFrames.push([]);
+      let committed = false;
       try {
         const result = fn(...args);
         if (this.failedAtDepth != null) {
           throw new Error(`Postgres transaction contains an unrecovered statement failure at depth ${this.failedAtDepth}`);
         }
-        const committed = this.execute("COMMIT", []);
-        if (committed.command?.toUpperCase() === "ROLLBACK") {
+        const reply = this.execute("COMMIT", []);
+        if (reply.command?.toUpperCase() === "ROLLBACK") {
           throw new Error("Postgres rolled back an aborted transaction at COMMIT");
         }
+        committed = true;
         return result;
       } catch (err) {
         try {
@@ -469,8 +692,45 @@ export class PostgresSyncDatabase implements SqlDatabase {
       } finally {
         this.transactionDepth -= 1;
         this.failedAtDepth = null;
+        const frame = this.afterCommitFrames.pop()!;
+        if (committed) runAfterCommitCallbacks(frame);
+        lockOrderSentinelTransactionEnd();
       }
     };
+  }
+  /**
+   * Queue \`fn\` until the OUTERMOST transaction on this connection commits, and
+   * drop it when that transaction rolls back (MUL-405).
+   *
+   * A writer that runs inside a nested \`transaction()\` cannot tell whether the
+   * caller above it will commit: the inner call only released a SAVEPOINT, so a
+   * realtime event published there can still be invalidated by an outer
+   * ROLLBACK. Queueing on the outermost depth is what makes "publish after
+   * COMMIT" true at every nesting level. Outside a transaction the callback runs
+   * immediately, so autocommit callers keep the old behavior.
+   */
+  afterCommit(fn: () => void): void {
+    if (this.transactionDepth === 0) {
+      fn();
+      return;
+    }
+    this.afterCommitFrames[this.afterCommitFrames.length - 1]!.push(fn);
+  }
+
+  /**
+   * Transaction-scoped lock on this bridge's single connection, so it is
+   * released by the caller's COMMIT or ROLLBACK rather than by a callback.
+   *
+   * Refusing to run outside a transaction is deliberate: in autocommit the
+   * lock would be taken and released by the same statement, which reads like a
+   * lock and behaves like nothing at all.
+   */
+  advisoryXactLock(key: string): void {
+    if (this.transactionDepth === 0) {
+      throw new Error("advisoryXactLock must be called inside a transaction");
+    }
+    lockOrderSentinelNoteNumberLock(key);
+    this.execute("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
   }
   close(): void {
     this.bridge.close();

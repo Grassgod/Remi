@@ -168,6 +168,7 @@ function workspaceProviderCatalog(
 export interface GatewayReasoningLevelRow {
   model_id: string;
   label: string;
+  context_window: { one_million: true; updated_by: string | null; updated_at: string } | null;
   /** The administrator's stored declaration, or null when none is stored. */
   manual: GatewayReasoningLevelManual | null;
   /** What routing will use, or null when the model has no reasoning entry. */
@@ -221,6 +222,7 @@ export function gatewayReasoningLevels(
 ): { engine: RelayEngine; allowed_levels: readonly string[]; models: GatewayReasoningLevelRow[] } {
   const snapshot = store.getGatewayModels(workspaceId, engine);
   const declarations = store.listGatewayModelReasoning(workspaceId, engine);
+  const contexts = store.listGatewayModelContext(workspaceId, engine);
   // The provider entry (not just its models) is what says whether a model can be
   // selected at all: the Codex execution catalog's loading state lives here.
   const catalog = workspaceProviderCatalog(store, workspaceId, engine, callerOwnerId);
@@ -228,6 +230,7 @@ export function gatewayReasoningLevels(
   const rows = new Map<string, {
     model_id: string;
     label: string;
+    context_window: GatewayReasoningLevelRow["context_window"];
     decl: {
       modelId: string; levels: string[]; defaultLevel?: string;
       updatedBy: string | null; updatedAt: string;
@@ -236,7 +239,7 @@ export function gatewayReasoningLevels(
     effective: GatewayReasoningLevelRow["effective"];
   }>();
   for (const model of snapshot?.models ?? []) {
-    rows.set(model.id, { model_id: model.id, label: model.label, decl: null, manual: null, effective: null });
+    rows.set(model.id, { model_id: model.id, label: model.label, context_window: null, decl: null, manual: null, effective: null });
   }
   // A declaration outlives the model's gateway entry: the snapshot is replaced on
   // every probe, so an alias that disappears would otherwise become impossible to
@@ -248,10 +251,18 @@ export function gatewayReasoningLevels(
     rows.set(decl.modelId, {
       model_id: decl.modelId,
       label: existing?.label ?? decl.modelId,
+      context_window: null,
       decl,
       manual: null,
       effective: null,
     });
+  }
+  for (const decl of contexts) {
+    const existing = rows.get(decl.modelId) ?? {
+      model_id: decl.modelId, label: decl.modelId, decl: null, manual: null, effective: null, context_window: null,
+    };
+    existing.context_window = { one_million: true, updated_by: decl.updatedBy, updated_at: decl.updatedAt };
+    rows.set(decl.modelId, existing);
   }
   for (const [modelId, row] of rows) {
     const resolved = effectiveModels.get(modelId);
@@ -298,6 +309,15 @@ function manualState(
  * CLI verbatim — an unknown spelling would route as if declared and then fail at
  * execution, which is worse than a 400 here.
  */
+export function validateGatewayContextWindow(
+  input: { model?: unknown; one_million?: unknown },
+): { ok: true; modelId: string; oneMillion: boolean } | { ok: false; error: string } {
+  const modelId = cleanString(typeof input.model === "string" ? input.model : "");
+  if (!modelId) return { ok: false, error: "model is required" };
+  if (typeof input.one_million !== "boolean") return { ok: false, error: "one_million must be a boolean" };
+  return { ok: true, modelId, oneMillion: input.one_million };
+}
+
 export function validateGatewayReasoningLevels(
   engine: RelayEngine,
   input: { model?: unknown; levels?: unknown; default_level?: unknown },

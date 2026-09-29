@@ -10,7 +10,7 @@
 // facade's constructor and resolved at call time.
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { resolveChatWorkspace } from "@multiremi/store/chat-workspace.js";
-import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { afterCommit, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { createLogger } from "@shared/logger.js";
@@ -164,6 +164,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "provider_auth",
   "provider_error",
   "queued_expired",
+  "queued_model_unavailable",
   "registration_failed",
   "runtime_offline",
   "runtime_recovery",
@@ -734,6 +735,8 @@ export interface ConversationLogSurface {
 export interface IssueSessionsSurface {
   getIssueSession(id: string): MultiremiIssueSession | null;
   getOrCreateDefaultIssueSession(issueId: string, createdById?: string | null): MultiremiIssueSession;
+  /** For callers that already own the transaction: never opens a nested frame. */
+  getOrCreateDefaultIssueSessionWithinTransaction(issueId: string, createdById?: string | null): MultiremiIssueSession;
   createIssueSessionWithinTransaction(issueId: string, input?: CreateIssueSessionInput): MultiremiIssueSession;
   getLatestActiveIssueSession(issueId: string): MultiremiIssueSession | null;
   addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant;
@@ -1056,36 +1059,70 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  /**
+   * Publish one realtime event.
+   *
+   * Routed through the database's after-commit hook (MUL-405 QA round 2): while
+   * any transaction is open the event waits for the OUTERMOST COMMIT, and a
+   * rollback drops it. A nested writer cannot tell whether its caller commits,
+   * so without this an outer ROLLBACK could leave a pushed row that never
+   * existed. With no transaction open the hook runs the publish immediately, so
+   * autocommit callers behave exactly as before.
+   */
   emitWorkspaceEvent(event: WorkspaceEvent): void {
-    for (const listener of [...this.workspaceEventListeners]) {
-      try {
-        listener(event);
-      } catch {
-        // Realtime listeners are best-effort and must not roll back mutations.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.workspaceEventListeners]) {
+        try {
+          listener(event);
+        } catch {
+          // Realtime listeners are best-effort and must not roll back mutations.
+        }
+
       }
-    }
+    });
   }
 
   /**
-   * Publish a caller-owned transaction's deferred events, now that it committed.
-   * Callers drain this after their COMMIT; on rollback they drop the queue.
+   * Publish a caller-owned transaction's deferred events once the OUTERMOST
+   * transaction commits (MUL-405 QA round 2).
+   *
+   * Callers drain this right after their own \`transaction()\` returns, but that
+   * is not necessarily a commit: a nested call on Postgres only released a
+   * SAVEPOINT, and the caller above it can still roll back. Publishing there
+   * would push a row the ROLLBACK then erases. So the queue is handed to the
+   * database's after-commit hook, which runs it only after the real COMMIT and
+   * drops it on rollback. With no transaction open the hook runs it
+   * immediately, so autocommit callers are unchanged.
+   *
+   * Ordering is preserved: one call to this method enqueues one callback, and
+   * the hook runs callbacks in the order they were queued.
    */
   emitCommitEvents(queue: CommitEventQueue): void {
-    for (const activity of queue.issueActivities) {
-      try {
-        this.appendIssueActivity(activity.issueId, {
-          actorType: "system",
-          actorId: null,
-          type: activity.type,
-          body: activity.body,
-          data: activity.data,
-        });
-      } catch (error) {
-        log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+    if (
+      queue.workspace.length === 0
+      && queue.enqueuedTasks.length === 0
+      && queue.issueActivities.length === 0
+    ) return;
+    afterCommit(this.db, () => {
+      // MUL-409's post-COMMIT activity writer and MUL-405's realtime pushes both
+      // ride the outermost commit: the queue is drained by the database's
+      // after-commit hook, so a nested caller's rollback drops the whole set.
+      for (const activity of queue.issueActivities) {
+        try {
+          this.appendIssueActivity(activity.issueId, {
+            actorType: "system",
+            actorId: null,
+            type: activity.type,
+            body: activity.body,
+            data: activity.data,
+          });
+        } catch (error) {
+          log.warn(`post-commit issue activity failed for ${activity.issueId}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
-    }
-    for (const event of queue.workspace) this.emitWorkspaceEvent(event);
-    for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
+      for (const event of queue.workspace) this.emitWorkspaceEvent(event);
+      for (const task of queue.enqueuedTasks) this.notifyTaskEnqueued(task);
+    });
   }
 
   emitChatEvent(
@@ -1107,14 +1144,21 @@ export class StoreContext {
     });
   }
 
+  /**
+   * Wake listeners for a newly enqueued task, after the outermost COMMIT for the
+   * same reason as {@link emitWorkspaceEvent}: a phantom wakeup for a task a
+   * ROLLBACK erased makes a daemon claim work that does not exist.
+   */
   notifyTaskEnqueued(task: MultiremiTask): void {
-    for (const listener of [...this.taskEnqueuedListeners]) {
-      try {
-        listener(task);
-      } catch {
-        // Wakeup listeners are best-effort and must not roll back task enqueue.
+    afterCommit(this.db, () => {
+      for (const listener of [...this.taskEnqueuedListeners]) {
+        try {
+          listener(task);
+        } catch {
+          // Wakeup listeners are best-effort and must not roll back task enqueue.
+        }
       }
-    }
+    });
   }
 
   notifyTaskMessages(task: TaskMessageFanoutSubject, messages: MultiremiTaskMessage[]): void {
@@ -1267,22 +1311,28 @@ export class StoreContext {
         now,
       ],
     );
-    try {
-      const queueUpdate = () => this.host.queueAgentIssueUpdate({
-        activityId: id,
-        issueId,
-        actorType: input.actorType,
-        actorId: input.actorId ?? null,
-        type: input.type,
-        body: input.body ?? null,
-        data: input.data ?? null,
-        createdAt: now,
-      });
-      if (this.db.inTransaction) this.db.transaction(queueUpdate)();
-      else queueUpdate();
-    } catch (err) {
-      log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    // Best-effort side effect, so it must not ride the caller's transaction:
+    // a SAVEPOINT here would add two extra bridge round-trips per activity on
+    // the hottest parent-status path and would still be rolled back by an
+    // outer ROLLBACK. `afterCommit` runs it after the outermost COMMIT (or
+    // immediately outside a transaction) and keeps the warn-and-continue
+    // contract. Basis: Senior ruling cmt_96e1yqxgifms §2.
+    afterCommit(this.db, () => {
+      try {
+        this.host.queueAgentIssueUpdate({
+          activityId: id,
+          issueId,
+          actorType: input.actorType,
+          actorId: input.actorId ?? null,
+          type: input.type,
+          body: input.body ?? null,
+          data: input.data ?? null,
+          createdAt: now,
+        });
+      } catch (err) {
+        log.warn(`agent issue update queue skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity
@@ -1290,10 +1340,12 @@ export class StoreContext {
     // already persisted, so a lookup/broadcast failure must not escape and
     // fail the caller's mutation after the fact.
     try {
-      const lookupWorkspace = () => this.issueWorkspaceId(issueId);
-      const workspaceId = this.db.inTransaction
-        ? this.db.transaction(lookupWorkspace)()
-        : lookupWorkspace();
+      // Plain read, no savepoint. After MUL-402 ports B1's bridge-failure
+      // classification a failed bridge reply no longer poisons the
+      // transaction, so the only remaining failure is a real SQL error, and a
+      // broken schema must fail the write rather than be swallowed.
+      // Basis: Senior ruling cmt_96e1yqxgifms §2.
+      const workspaceId = this.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       const event: WorkspaceEvent = {
         type: "activity:created",

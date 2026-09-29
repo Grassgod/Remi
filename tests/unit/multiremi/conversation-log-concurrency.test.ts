@@ -197,13 +197,23 @@ function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): void {
   }
 }
 
-function verifyBestEffortQueueRollback(db: SqlDatabase): void {
+/**
+ * Senior ruling cmt_96e1yqxgifms §2: the agent-issue-update queue is a
+ * best-effort side effect, so it rides `afterCommit` instead of a savepoint
+ * around the caller's transaction. The queue write therefore runs *after* the
+ * COMMIT — it cannot be rolled back into the comment's atomic unit, and a
+ * failure there must leave the comment, its Session event, its log row and its
+ * activity row durable while only the queue row is missing.
+ */
+function verifyBestEffortQueueAfterCommit(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
   const issue = store.createIssue({ title: "Best effort queue", workspaceId: "local" });
   db.exec("CREATE TABLE best_effort_queue_case (n INTEGER PRIMARY KEY)");
+  const queueRun: { inTransaction: boolean | null } = { inTransaction: null };
   store.queueAgentIssueUpdate = () => {
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
-    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1)");
+    queueRun.inTransaction = db.inTransaction ?? null;
+    // One statement, so a failure leaves no partial queue row either way.
+    db.run("INSERT INTO best_effort_queue_case (n) VALUES (1),(1)");
   };
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -212,24 +222,62 @@ function verifyBestEffortQueueRollback(db: SqlDatabase): void {
     const comment = store.createIssueComment(issue.id, { body: "comment survives queue error" });
     expect(store.getIssueComment(comment.id)?.body).toBe("comment survives queue error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("comment survives queue error");
-    expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
     expect(warnings.some((line) => line.includes("agent issue update queue skipped"))).toBe(true);
   } finally {
     console.warn = originalWarn;
   }
+  // The queue call itself ran after the commit, with no transaction left to
+  // poison; its own SQL failure left no queue row and reached nobody.
+  expect(queueRun.inTransaction).toBe(false);
+  expect(db.query("SELECT n FROM best_effort_queue_case").all()).toEqual([]);
 }
 
-function verifyBestEffortWorkspaceLookups(db: SqlDatabase): void {
+/**
+ * Senior ruling cmt_96e1yqxgifms §2: the workspace lookup behind the two
+ * best-effort broadcasts is a plain read now, with no savepoint around it. On
+ * PostgreSQL that means a *real* SQL error poisons the caller's transaction and
+ * the write must fail (see the outer-transaction case below); what still has to
+ * be survived is the failure the database classifies as non-aborting —
+ * `PgBridgeFailure(abortsTransaction: false)` from an oversized bridge reply.
+ * The SQLite handle does not abort on a statement error, so it keeps exercising
+ * the plain-error path unchanged.
+ */
+function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "pg"): void {
   const store = new MultiremiStore(db);
   const issue = store.createIssue({ title: "Best effort lookups", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
-  context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  const previousReplyLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+  if (backend === "pg") {
+    context.issueWorkspaceId = (id) => {
+      // The limit is narrowed for this one statement and restored in `finally`,
+      // so only the lookup overflows the bridge — the rest of the transaction
+      // keeps the default and the failure stays a single reply-level one.
+      process.env.MULTIREMI_PG_REPLY_MAX_BYTES = "64";
+      resetDbReplyLimitForTest();
+      try {
+        return db.query("SELECT id, repeat('x', 4000) AS payload FROM multiremi_issues WHERE id = ?").get(id);
+      } finally {
+        if (previousReplyLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+        else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousReplyLimit;
+        resetDbReplyLimitForTest();
+      }
+    };
+  } else {
+    context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  }
   const warnings: string[] = [];
   const originalWarn = console.warn;
   console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+  let comment: { id: string };
   try {
-    const comment = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_lookup", "system survives query error");
+    try {
+      comment = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_lookup", "system survives query error");
+    } finally {
+      if (previousReplyLimit === undefined) delete process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
+      else process.env.MULTIREMI_PG_REPLY_MAX_BYTES = previousReplyLimit;
+      resetDbReplyLimitForTest();
+    }
     expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("system survives query error");
     expect(warnings.some((line) => line.includes("activity:created broadcast skipped"))).toBe(true);
@@ -491,19 +539,19 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       await withPostgres(async (db) => verifyCaughtLocalReplyFailure(db, nested));
     });
   }
-  it("SQLite: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withSqlite(async (db) => verifyBestEffortQueueRollback(db));
+  it("SQLite: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
+    await withSqlite(async (db) => verifyBestEffortQueueAfterCommit(db));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue SQL failure rolls back only its savepoint", async () => {
-    await withPostgres(async (db) => verifyBestEffortQueueRollback(db));
+  it.skipIf(!pgAdminUrl)("Postgres: a best-effort queue failure after COMMIT keeps the comment and leaves no queue row", async () => {
+    await withPostgres(async (db) => verifyBestEffortQueueAfterCommit(db));
   });
   it("SQLite: failed best-effort workspace queries keep a system comment", async () => {
-    await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db));
+    await withSqlite(async (db) => verifyBestEffortWorkspaceLookups(db, "sqlite"));
   });
   it.skipIf(!pgAdminUrl)("Postgres: failed best-effort workspace queries keep a system comment", async () => {
-    await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db));
+    await withPostgres(async (db) => verifyBestEffortWorkspaceLookups(db, "pg"));
   });
-  it.skipIf(!pgAdminUrl)("Postgres: failed workspace SQL inside an outer transaction preserves the system comment", async () => {
+  it.skipIf(!pgAdminUrl)("Postgres: a real workspace SQL error inside an outer transaction fails the write", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
       const issue = store.createIssue({ title: "Outer transaction lookup", workspaceId: "local" });
@@ -514,25 +562,25 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
         failedQueries += 1;
         return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
       };
-      const warnings: string[] = [];
-      const originalWarn = console.warn;
-      console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
-      try {
-        const comment = db.transaction(() => {
-          expect(db.inTransaction).toBe(true);
-          const result = store.createTaskFailureSystemComment(issue.id, session.id, "tsk_outer_lookup", "system survives outer query error");
-          expect(db.inTransaction).toBe(true);
-          expect(store.getIssueComment(result.id)?.body).toBe(result.body);
-          return result;
-        })();
-        expect(failedQueries).toBeGreaterThan(0);
-        expect(db.inTransaction).toBe(false);
-        expect(store.getIssueComment(comment.id)?.body).toBe("system survives outer query error");
-        expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe(comment.body);
-        expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
-      } finally {
-        console.warn = originalWarn;
-      }
+      // Senior ruling cmt_96e1yqxgifms §2: with the savepoint gone, a real SQL
+      // error is no longer a survivable best-effort miss — it aborts the
+      // caller's transaction and `failedAtDepth` refuses the COMMIT, so the
+      // system comment must not be written. Only the bridge-reply failure above
+      // is classified as non-aborting.
+      expect(() => db.transaction(() => {
+        expect(db.inTransaction).toBe(true);
+        store.createTaskFailureSystemComment(issue.id, session.id, "tsk_outer_lookup", "system must not survive");
+      })()).toThrow(/unrecovered statement failure|current transaction is aborted/);
+      expect(failedQueries).toBeGreaterThan(0);
+      expect(db.inTransaction).toBe(false);
+      expect(db.query("SELECT id FROM multiremi_issue_comments WHERE issue_id = ?").all(issue.id)).toEqual([]);
+      // The session's head counter row (`head_…`) is written before the
+      // transaction and is not part of the atomic unit; every mirrored entry
+      // would carry the comment's `cmt_…` id.
+      expect(db.query("SELECT id FROM multiremi_conversation_log WHERE session_id = ? AND id NOT LIKE 'head_%'").all(session.id)).toEqual([]);
+      // `issue_created` predates the transaction; the comment's own activity is
+      // the one that must not survive the rollback.
+      expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
     });
   });
   it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
@@ -599,11 +647,29 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: a caught bare SQL failure aborts the outer transaction", async () => {
     await withPostgres(async (db) => {
       db.exec("CREATE TABLE bare_failure_case (n INTEGER PRIMARY KEY)");
+      // The message is the point: main used to hand the COMMIT to PostgreSQL and
+      // treat its `ROLLBACK` label as success (silent data loss). B1's
+      // `failedAtDepth` must surface the swallowed failure before that.
       expect(() => db.transaction(() => {
         db.run("INSERT INTO bare_failure_case (n) VALUES (1)");
         try { db.run("INSERT INTO bare_failure_case (n) VALUES (1)"); } catch { /* deliberately swallowed */ }
-      })()).toThrow();
+      })()).toThrow("unrecovered statement failure");
       expect(db.query("SELECT n FROM bare_failure_case").all()).toEqual([]);
+    });
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a COMMIT whose reply says ROLLBACK is refused", async () => {
+    await withPostgres(async (db) => {
+      db.exec("CREATE TABLE commit_label_case (n INTEGER PRIMARY KEY)");
+      expect(() => db.transaction(() => {
+        db.run("INSERT INTO commit_label_case (n) VALUES (1)");
+        try { db.run("INSERT INTO commit_label_case (n) VALUES (1)"); } catch { /* swallowed */ }
+        // Second net under the one above: with failedAtDepth cleared, the
+        // transaction is still aborted server-side and COMMIT answers
+        // `ROLLBACK`. Treating that reply as success would report a committed
+        // write that PostgreSQL threw away.
+        (db as unknown as { failedAtDepth: number | null }).failedAtDepth = null;
+      })()).toThrow("Postgres rolled back an aborted transaction at COMMIT");
+      expect(db.query("SELECT n FROM commit_label_case").all()).toEqual([]);
     });
   });
   it("SQLite: cold migration continues legacy issue and chat sequences, including concurrent first writes", async () => {
