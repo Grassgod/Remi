@@ -1066,7 +1066,8 @@ describe("Multiremi API — daemon endpoints", () => {
 
     expect(store.getTask(task.id)?.acceptedAt).toBeString();
     const lease = await app.request(`/api/daemon/tasks/${task.id}/dispatch-lease`, { method: "POST" });
-    expect(lease.status).toBe(404);
+    expect(lease.status).toBe(426);
+    expect(await lease.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: 2 });
     expect(store.claimTask(runtime.id)).toBeNull();
 
     const start = await reportFrame(store, "task.start", { task_id: task.id,  }, { headers: undefined, authToken: "" });

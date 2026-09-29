@@ -11462,6 +11462,11 @@
       "category": "daemon_internal_protocol",
       "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
     },
+    "POST /api/daemon/runtimes/:runtimeId/tasks/claim": {
+      "cli_exempt": true,
+      "category": "daemon_internal_protocol",
+      "reason": "Daemon heartbeat, claim, report, and execution protocol is machine-to-server traffic."
+    },
     "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result": {
       "cli_exempt": true,
       "category": "daemon_internal_protocol",
