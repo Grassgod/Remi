@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MUL-395 Archive Marker Lifetime</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#202326;font:15px/1.6 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:32px 24px}h1{font-size:27px;line-height:1.25;margin:0 0 16px}h2{font-size:19px;margin-top:28px}p{max-width:95ch}code,pre{font-family:ui-monospace,monospace;font-size:13px;overflow-wrap:anywhere}pre{padding:14px;background:#f2f4f5;white-space:pre-wrap}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #dce1e2;vertical-align:top}th{background:#f2f4f5}.table{overflow:auto}.pass{color:#08745b;font-weight:600}.fail{color:#b12b32;font-weight:600}.note{color:#535d63}a{color:#08745b}@media(max-width:600px){main{padding:20px 14px}h1{font-size:23px}table{min-width:620px}}
+</style></head><body><main>
+<h1>MUL-395: Archive Marker Lifetime</h1>
+<p>QA r2 found workspace markers retained after completed grouped requests. Both count writers now release their own marker on termination, preserving the prior ordering and cancellation guards.</p>
+<p><strong>Before:</strong> <code>a58efb085d13029c11af644136fc6a1a42f13266</code><br><strong>Tested product:</strong> <code>de9fa9e809fc2772750b83bca5ebe2b1a6b0fb98</code><br><strong>Merged main:</strong> <code>889efdeb2bd68c5b1aca41f059a870d21039f7a7</code>, no conflicts.</p>
+<h2>Cleanup And Ordering</h2>
+<p>The internal helper deletes a workspace entry only when its symbol is still current. Empty Maps remove the outer QueryClient entry. An old request cannot delete a newer request's marker; after the newer request ends, its empty slot is undefined and cannot authorize an old symbol.</p>
+<p>Both query functions use <code>finally</code>. Native TanStack <code>Query.promise</code> fulfillment and rejection also run the same idempotent cleanup, covering cancellation, clear and removal while HTTP remains pending. Publication still checks ownership, <code>dataUpdateCount</code> and the lazy cancellation signal. The signal is consumed only at publication, retaining initial request sharing.</p>
+<h2>Does The Promise End?</h2>
+<div class="table"><table><thead><tr><th>Operation</th><th>Observed behavior and cleanup</th></tr></thead><tbody>
+<tr><td>Success / failure</td><td>queryFn settles; finally releases its own marker.</td></tr>
+<tr><td>Cancel / clear / remove</td><td>Native retryer terminates immediately, independently of HTTP; its promise callback releases the marker. Tests keep HTTP unresolved while asserting zero entries.</td></tr>
+<tr><td>Initial unmount, lazy signal unread</td><td>TanStack only cancels retries and preserves the live request for remount sharing. Completion releases its marker; a later cancel/clear/remove also releases it.</td></tr>
+</tbody></table></div>
+<p>Installed TanStack Query core 5.101.2: <code>query.ts:199</code> exposes the retryer promise; <code>:253/:259</code> cancel/destroy; <code>:362</code> observer removal; <code>retryer.ts:88</code> cancellation rejects; <code>queryCache.ts:148</code> destroys removed queries; <code>queryClient.ts:632</code> clears caches.</p>
+<p class="note">The HTTP queryFn promise is not guaranteed to finish on these actions. For an indefinitely pending unmount-only initial request, the marker remains attached to that live request until completion or later cancellation/removal. No finite unmount-only network deadline is claimed. Completed requests leave zero markers; clear/remove clean even when HTTP never settles.</p>
+<h2>Tests And Mutations</h2>
+<p class="pass">22 new lifecycle tests + 15 existing race tests + 13 QA r1/r2 tests = 50 pass / 0 fail.</p>
+<p>Lifecycle tests cover workspace changes, unmount/completion, clear/remove/cancel with pending transports, failure/retry, same-key refetch and both completion orders. Extra SQLite boundaries: 3 pass / 78 assertions. Real HTTP + WS keeps archive count 22 after a canceled old response, then unarchive returns 21; create/state/assignee changes converge without duplicates.</p>
+<div class="table"><table><thead><tr><th>Temporary mutation</th><th>Actual red evidence</th><th>Restored</th></tr></thead><tbody>
+<tr><td>(a) Remove termination deletion</td><td class="fail">22 fail: expected {count:0, hasClient:false}; received {count:1, hasClient:true}, lifecycle:46</td><td class="pass">22 pass</td></tr>
+<tr><td>(b) Delete without ownership check</td><td class="fail">2 fail: expected newer active marker count 1; received 0, lifecycle:117</td><td class="pass">2 targeted pass</td></tr>
+<tr><td>(c) Clean only successful requests</td><td class="fail">4 failure/cancellation tests fail: expected zero/false; received one/true, lifecycle:46</td><td class="pass">Final combined 50 pass</td></tr>
+</tbody></table></div>
+<p>Mutations are restored and product git diff returns zero. QA probe assertions are unchanged. Only the repository lifecycle tests and internal inspection hook are committed.</p>
+<h2>Request Counts And Real Rows</h2>
+<p>Same local SQLite fixture, Chromium 1440x900 and S1 recorder; fixed real row, 300/900ms primary/deferred delays, 3000ms observation, 20000ms timeouts. Three pages, cold and warm, three rounds per phase. <strong class="pass">All 36 samples: actual row shift 0px, recorder jump 0px, disconnected frames 0.</strong> At least 171 row frames per sample.</p>
+<div class="table"><table><thead><tr><th>Page / mode</th><th>n before / after</th><th>List</th><th>Archive</th><th>All API</th><th>Final row p50 before / after</th></tr></thead><tbody>
+<tr><td>Issues cold</td><td>3 / 3</td><td>1 / 1</td><td>0 / 0</td><td>8 / 8</td><td>2660.2 / 2791.7 ms</td></tr>
+<tr><td>Issues warm</td><td>3 / 3</td><td>1 / 1</td><td>0 / 0</td><td>2 / 2</td><td>1542.3 / 1613.5 ms</td></tr>
+<tr><td>My Issues default cold</td><td>3 / 3</td><td>1 / 1</td><td>0 / 0</td><td>8 / 8</td><td>2618.0 / 2618.5 ms</td></tr>
+<tr><td>My Issues default warm</td><td>3 / 3</td><td>1 / 1</td><td>0 / 0</td><td>13 / 13</td><td>1619.5 / 1569.3 ms</td></tr>
+<tr><td>My Issues All cold</td><td>3 / 3</td><td>3 / 3</td><td>0 / 0</td><td>10 / 10</td><td>2640.4 / 2668.7 ms</td></tr>
+<tr><td>My Issues All warm</td><td>3 / 3</td><td>3 / 3</td><td>0 / 0</td><td>15 / 15</td><td>1561.9 / 1648.4 ms</td></tr>
+</tbody></table></div>
+<p class="note">Every sample has Issues / default / All grouped requests 1 / 1 / 3 and archive requests 0. Timing variation is retained. This local dev regression comparison makes no production latency or speed improvement claim. Raw JSON retains actual row frames and sanitized request paths. Existing 404 and temporary remount sharing guards stay green.</p>
+<h2>Regression</h2>
+<p>Core issues 165 pass / 12 files; Issues page 18; status-pages + CLI on SQLite 62 / 1503 assertions; architecture 108 / 3937 assertions; docs tests 13. Root/frontend TypeScript, development context and docs checks pass. No local PG instance is started. Exact pushed-head full regressions and frontend-zero-jump CI links are recorded in the delivery comment.</p>
+<h2>Reproduction</h2>
+<pre># frontend/packages/core
+env -u MULTIREMI_TOKEN bun run test issues/archive-total-lifecycle.test.ts issues/archive-total-races.test.ts --testTimeout 20000
+
+# With the supplied r1 then r2 QA patches in a locked worktree:
+env -u MULTIREMI_TOKEN bun run test issues/mul395-qa.test.ts issues/mul395-r2-qa.test.ts issues/archive-total-lifecycle.test.ts issues/archive-total-races.test.ts --testTimeout 20000
+
+# Root checkout, with a locked baseline fixed at a58efb08:
+env -u MULTIREMI_TOKEN -u MULTIREMI_TEST_POSTGRES_URL bun run tests/manual/mul395-archive-count-browser.ts /tmp/mul395-marker-before --lifecycle</pre>
+<p>The supplied QA probe uses legacy imports from <code>/tmp/mul395-qa-before-5f696786</code>, fixed at <code>5f696786d573986858914246f9f66fe0051b2e19</code>. Reproduction setup and dependency evidence are detailed in the matching Markdown report.</p>
+<p>Owned fixture, Next and browser processes are stopped; ports 18560/18561/18572 are released. Only this task's three worktrees are unlocked/removed. No saved credentials, browser auth state, trace or HAR. <a href="https://github.com/Grassgod/Remi/pull/331">PR #331</a> remains Draft; no merge, Ready transition, production access or release operation.</p>
+</main></body></html>

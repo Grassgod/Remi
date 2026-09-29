@@ -1,0 +1,2956 @@
+{
+  "meta": {
+    "schema": 3,
+    "issue": "MUL-383",
+    "task": "MUL-384",
+    "generatedAt": "2026-09-28T13:48:16.056Z",
+    "beijingTime": "2026/9/28 21:48:16",
+    "window": "offpeak",
+    "baseUrl": "http://localhost:18570",
+    "workspaceSlug": "local",
+    "workspaceName": "Local Workspace",
+    "memberName": "Local User",
+    "rounds": 5,
+    "runner": "n37-066-008 (linux 5.15.120.bsk.3-amd64 x64, 64 vCPU, 248 GiB RAM)",
+    "mode": "headless Chromium (no desktop session) via frontend/scripts/perf/page-speed.ts",
+    "viewport": "1440x900",
+    "readingRule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+    "selectorMode": "auto",
+    "hoverLeadMs": 150,
+    "quietMs": 500,
+    "entryQuietMs": 500,
+    "entryQuietCapMs": 5000,
+    "entryQuietNote": "warm 轮点击前等入口页在阈值内没有新的 /api 请求开始；超过上限照点并记 entrySettled=false。0/关闭时 entryQuietMs 为 null。",
+    "timeBase": "cold 从文档 origin 起算；warm 从页面内记录的 click（navStartMs）起算。帧、跳动、首屏集合都先减 navStartMs，首屏集合另有 startMs >= navStartMs 下界。",
+    "roundTimeoutMs": 20000,
+    "byteAccounting": "encodedBodySize=压缩后传输体积，decodedBodySize=解压后 JSON 体积，transferSize=含响应头的传输体积",
+    "lcpNote": "LCP 由 PerformanceObserver 类型条目读取；无候选时为 null",
+    "writeGuardSelfTest": {
+      "blocked": true,
+      "target": "/api/inbox/unread-count",
+      "detail": "deliberate POST /api/inbox/unread-count was aborted by the guard",
+      "allowedWrites": [
+        "POST /api/inbox/:id/read"
+      ]
+    },
+    "stubbedWriteAllowList": [
+      {
+        "method": "POST",
+        "label": "POST /api/inbox/:id/read",
+        "reason": "auto mark-read is unavoidable on any selection and its abort loop delays the URL commit past the assertion window"
+      }
+    ],
+    "inboxResponseRewrites": [
+      "target-injection",
+      "read-state"
+    ],
+    "ambientLatency": {
+      "before": {
+        "path": "/api/config",
+        "samplesMs": [
+          2.7,
+          2.5,
+          3.7,
+          3.1,
+          2.8,
+          3.2,
+          3
+        ],
+        "minMs": 2.5,
+        "medianMs": 3,
+        "maxMs": 3.7
+      },
+      "after": {
+        "path": "/api/config",
+        "samplesMs": [
+          4.4,
+          4.4,
+          2.8,
+          2.1,
+          2.7,
+          2.4,
+          4.4
+        ],
+        "minMs": 2.1,
+        "medianMs": 2.8,
+        "maxMs": 4.4
+      }
+    },
+    "ambientNote": "生产为共享环境：同一台机器复跑时，先看 /api/config 的中位耗时是否与本次接近，再比较页面数字。",
+    "apiVersion": null,
+    "apiRef": null,
+    "apiPublishedAt": null,
+    "apiImageDigest": null,
+    "webImageDigest": null
+  },
+  "scenarios": [
+    {
+      "key": "page-my-issues",
+      "mode": "cold",
+      "target": {
+        "identifier": "my-issues"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": null,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2805.599998474121,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2805.599998474121,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 10,
+          "serialChain": [
+            "/api/config",
+            "/api/me",
+            "/api/runtimes",
+            "/api/workspaces/:id/members",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 17,
+          "apiFirstScreen": 17,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1385.7,
+              "responseEndMs": 1394.9,
+              "durationMs": 9.2,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1386.9,
+              "responseEndMs": 1396.8,
+              "durationMs": 9.9,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1388.1,
+              "responseEndMs": 1397.2,
+              "durationMs": 9.1,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.9
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 3,
+              "after": 1,
+              "startMs": 2214.9,
+              "responseEndMs": 2225.8,
+              "durationMs": 10.9,
+              "encodedBytes": 512,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 4,
+              "after": 3,
+              "startMs": 2219.3,
+              "responseEndMs": 2230.1,
+              "durationMs": 10.8,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.5
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 5,
+              "after": 4,
+              "startMs": 2222.4,
+              "responseEndMs": 2233.2,
+              "durationMs": 10.8,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 6,
+              "after": 5,
+              "startMs": 2225.2,
+              "responseEndMs": 2233.8,
+              "durationMs": 8.6,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.4
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 7,
+              "after": 6,
+              "startMs": 2227.8,
+              "responseEndMs": 2319.8,
+              "durationMs": 92,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 91.6
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 7,
+              "after": 6,
+              "startMs": 2309,
+              "responseEndMs": 2320.3,
+              "durationMs": 11.3,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.9
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 7,
+              "after": 6,
+              "startMs": 2311.4,
+              "responseEndMs": 2323,
+              "durationMs": 11.6,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 7,
+              "startMs": 2523,
+              "responseEndMs": 2536.2,
+              "durationMs": 13.2,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 7,
+              "startMs": 2525,
+              "responseEndMs": 2542.1,
+              "durationMs": 17.1,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 16.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 7,
+              "startMs": 2526.7,
+              "responseEndMs": 2545.5,
+              "durationMs": 18.8,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 18.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2528.6,
+              "responseEndMs": 2545.6,
+              "durationMs": 17,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 16.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2530.5,
+              "responseEndMs": 2545.4,
+              "durationMs": 14.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2532.2,
+              "responseEndMs": 2546.2,
+              "durationMs": 14,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.4
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 10,
+              "after": 13,
+              "startMs": 2754.5,
+              "responseEndMs": 2814.1,
+              "durationMs": 59.6,
+              "encodedBytes": 129,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 59.2
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 25714413,
+          "lcpMs": 2848,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 2,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2685.6000022888184,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2685.6000022888184,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 11,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/workspaces/:id/members",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/chat/sessions",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 17,
+          "apiFirstScreen": 17,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1279.4,
+              "responseEndMs": 1290,
+              "durationMs": 10.6,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.5
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1280.6,
+              "responseEndMs": 1290.8,
+              "durationMs": 10.2,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1281.5,
+              "responseEndMs": 1291.2,
+              "durationMs": 9.7,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.6
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 1975.1,
+              "responseEndMs": 1986.9,
+              "durationMs": 11.8,
+              "encodedBytes": 512,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.3
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 1979.4,
+              "responseEndMs": 1987.8,
+              "durationMs": 8.4,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.1
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 4,
+              "after": 4,
+              "startMs": 1982.4,
+              "responseEndMs": 1992.8,
+              "durationMs": 10.4,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.9
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 5,
+              "after": 5,
+              "startMs": 1985.2,
+              "responseEndMs": 1993.5,
+              "durationMs": 8.3,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.1
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 6,
+              "after": 6,
+              "startMs": 1987.6,
+              "responseEndMs": 2221.1,
+              "durationMs": 233.5,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 233.1
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 6,
+              "after": 6,
+              "startMs": 2211.5,
+              "responseEndMs": 2222.7,
+              "durationMs": 11.2,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 7,
+              "after": 7,
+              "startMs": 2213.9,
+              "responseEndMs": 2224.1,
+              "durationMs": 10.2,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 9,
+              "startMs": 2456.9,
+              "responseEndMs": 2466.9,
+              "durationMs": 10,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 9,
+              "startMs": 2458.8,
+              "responseEndMs": 2467.7,
+              "durationMs": 8.9,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2460.7,
+              "responseEndMs": 2474.8,
+              "durationMs": 14.1,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2462.5,
+              "responseEndMs": 2473.1,
+              "durationMs": 10.6,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 10,
+              "startMs": 2464.1,
+              "responseEndMs": 2474.9,
+              "durationMs": 10.8,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 13,
+              "startMs": 2466.1,
+              "responseEndMs": 2476.4,
+              "durationMs": 10.3,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 11,
+              "after": 15,
+              "startMs": 2631.2,
+              "responseEndMs": 2694.1,
+              "durationMs": 62.9,
+              "encodedBytes": 129,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 62.4
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 25714413,
+          "lcpMs": 2728,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 3,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2935.7000007629395,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2935.7000007629395,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 9,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/chat/sessions",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 17,
+          "apiFirstScreen": 17,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1382.7,
+              "responseEndMs": 1396.8,
+              "durationMs": 14.1,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1384.4,
+              "responseEndMs": 1397.3,
+              "durationMs": 12.9,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.7
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1385.5,
+              "responseEndMs": 1397.8,
+              "durationMs": 12.3,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.1
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 2239.8,
+              "responseEndMs": 2252.8,
+              "durationMs": 13,
+              "encodedBytes": 512,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.4
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 2244.4,
+              "responseEndMs": 2253.6,
+              "durationMs": 9.2,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.9
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 2247.8,
+              "responseEndMs": 2255.9,
+              "durationMs": 8.1,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.5
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 2250.7,
+              "responseEndMs": 2258.6,
+              "durationMs": 7.9,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.7
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 5,
+              "after": 6,
+              "startMs": 2253.4,
+              "responseEndMs": 2440.5,
+              "durationMs": 187.1,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 186.7
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 5,
+              "after": 6,
+              "startMs": 2432.4,
+              "responseEndMs": 2441.7,
+              "durationMs": 9.3,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.9
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 2434.8,
+              "responseEndMs": 2443.7,
+              "durationMs": 8.9,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 9,
+              "startMs": 2721.6,
+              "responseEndMs": 2730.6,
+              "durationMs": 9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2723.4,
+              "responseEndMs": 2739.4,
+              "durationMs": 16,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 15.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2725.1,
+              "responseEndMs": 2740.4,
+              "durationMs": 15.3,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14.6
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2727.4,
+              "responseEndMs": 2740.3,
+              "durationMs": 12.9,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2729.2,
+              "responseEndMs": 2740.5,
+              "durationMs": 11.3,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2730.9,
+              "responseEndMs": 2741,
+              "durationMs": 10.1,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.5
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 9,
+              "after": 11,
+              "startMs": 2884.4,
+              "responseEndMs": 2942.6,
+              "durationMs": 58.2,
+              "encodedBytes": 129,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 57.8
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 25714413,
+          "lcpMs": 2980,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 4,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2772.7000007629395,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2772.7000007629395,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 1,
+          "cls": 0.002,
+          "serialDepth": 12,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/chat/sessions",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 17,
+          "apiFirstScreen": 17,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1215.2,
+              "responseEndMs": 1225.9,
+              "durationMs": 10.7,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.6
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1216.3,
+              "responseEndMs": 1227.9,
+              "durationMs": 11.6,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.4
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1217.4,
+              "responseEndMs": 1229.6,
+              "durationMs": 12.2,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.1
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 2014.1,
+              "responseEndMs": 2027.5,
+              "durationMs": 13.4,
+              "encodedBytes": 512,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.9
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 2018.3,
+              "responseEndMs": 2029.4,
+              "durationMs": 11.1,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 2021.4,
+              "responseEndMs": 2031,
+              "durationMs": 9.6,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 4,
+              "after": 5,
+              "startMs": 2024.2,
+              "responseEndMs": 2034,
+              "durationMs": 9.8,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.6
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 5,
+              "after": 6,
+              "startMs": 2026.7,
+              "responseEndMs": 2272.7,
+              "durationMs": 246,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 245.6
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 5,
+              "after": 6,
+              "startMs": 2264.5,
+              "responseEndMs": 2274.9,
+              "durationMs": 10.4,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 6,
+              "after": 7,
+              "startMs": 2266.9,
+              "responseEndMs": 2275.8,
+              "durationMs": 8.9,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 7,
+              "after": 9,
+              "startMs": 2557.4,
+              "responseEndMs": 2566.2,
+              "durationMs": 8.8,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 8,
+              "after": 10,
+              "startMs": 2559.5,
+              "responseEndMs": 2568.1,
+              "durationMs": 8.6,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 11,
+              "startMs": 2561.4,
+              "responseEndMs": 2572.3,
+              "durationMs": 10.9,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 11,
+              "startMs": 2563.3,
+              "responseEndMs": 2572.9,
+              "durationMs": 9.6,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.9
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 12,
+              "startMs": 2565.2,
+              "responseEndMs": 2574.6,
+              "durationMs": 9.4,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.9
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 11,
+              "after": 14,
+              "startMs": 2567.2,
+              "responseEndMs": 2576.4,
+              "durationMs": 9.2,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.5
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 12,
+              "after": 15,
+              "startMs": 2721.7,
+              "responseEndMs": 2781.2,
+              "durationMs": 59.5,
+              "encodedBytes": 129,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 59
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 25714413,
+          "lcpMs": 2508,
+          "slowestServerTotalMs": 1,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 5,
+          "navStartMs": 0,
+          "clickT": null,
+          "readyMs": 2910,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 2910,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 11,
+          "serialChain": [
+            "/api/config",
+            "/api/runtimes",
+            "/api/workspaces/:id/members",
+            "/api/chat/pending-tasks",
+            "/api/runtime-workspaces",
+            "/api/projects",
+            "/api/agents",
+            "/api/chat/sessions",
+            "/api/issues",
+            "/api/issues",
+            "/api/assignee-frequency"
+          ],
+          "apiCallsTotal": 17,
+          "apiFirstScreen": 17,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/config",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1336.2,
+              "responseEndMs": 1349.9,
+              "durationMs": 13.7,
+              "encodedBytes": 132,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.6
+            },
+            {
+              "path": "/api/me",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1337.6,
+              "responseEndMs": 1350.8,
+              "durationMs": 13.2,
+              "encodedBytes": 575,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13
+            },
+            {
+              "path": "/api/workspaces",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 1338.9,
+              "responseEndMs": 1350.9,
+              "durationMs": 12,
+              "encodedBytes": 314,
+              "serverTiming": {
+                "total": 0.1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.9
+            },
+            {
+              "path": "/api/runtimes",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 2173,
+              "responseEndMs": 2183.8,
+              "durationMs": 10.8,
+              "encodedBytes": 512,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/workspaces/:id/members",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 2177.4,
+              "responseEndMs": 2187.4,
+              "durationMs": 10,
+              "encodedBytes": 160,
+              "serverTiming": {
+                "total": 0.3,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.7
+            },
+            {
+              "path": "/api/chat/pending-tasks",
+              "method": "GET",
+              "wave": 4,
+              "after": 4,
+              "startMs": 2180.6,
+              "responseEndMs": 2188.6,
+              "durationMs": 8,
+              "encodedBytes": 92,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.5
+            },
+            {
+              "path": "/api/runtime-workspaces",
+              "method": "GET",
+              "wave": 5,
+              "after": 5,
+              "startMs": 2183.5,
+              "responseEndMs": 2192,
+              "durationMs": 8.5,
+              "encodedBytes": 17,
+              "serverTiming": {
+                "total": 0.2,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.3
+            },
+            {
+              "path": "/api/projects",
+              "method": "GET",
+              "wave": 6,
+              "after": 6,
+              "startMs": 2186,
+              "responseEndMs": 2417.3,
+              "durationMs": 231.3,
+              "encodedBytes": 25,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 230.9
+            },
+            {
+              "path": "/api/agents",
+              "method": "GET",
+              "wave": 7,
+              "after": 7,
+              "startMs": 2409.4,
+              "responseEndMs": 2419.5,
+              "durationMs": 10.1,
+              "encodedBytes": 707,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.6
+            },
+            {
+              "path": "/api/chat/sessions",
+              "method": "GET",
+              "wave": 8,
+              "after": 8,
+              "startMs": 2411.8,
+              "responseEndMs": 2420.9,
+              "durationMs": 9.1,
+              "encodedBytes": 412,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 8.6
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 9,
+              "startMs": 2695.7,
+              "responseEndMs": 2707.8,
+              "durationMs": 12.1,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 9,
+              "startMs": 2697.6,
+              "responseEndMs": 2712,
+              "durationMs": 14.4,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.6
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 9,
+              "after": 9,
+              "startMs": 2699.5,
+              "responseEndMs": 2713.4,
+              "durationMs": 13.9,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 10,
+              "startMs": 2701.3,
+              "responseEndMs": 2714.3,
+              "durationMs": 13,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 10,
+              "startMs": 2703.1,
+              "responseEndMs": 2714.7,
+              "durationMs": 11.6,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 10,
+              "after": 10,
+              "startMs": 2704.9,
+              "responseEndMs": 2716.4,
+              "durationMs": 11.5,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/assignee-frequency",
+              "method": "GET",
+              "wave": 11,
+              "after": 13,
+              "startMs": 2858.6,
+              "responseEndMs": 2918.4,
+              "durationMs": 59.8,
+              "encodedBytes": 129,
+              "serverTiming": {
+                "total": 0.4,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 59.4
+            }
+          ],
+          "chunksLoaded": 7,
+          "chunkBytes": 25714413,
+          "lcpMs": 2964,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": null,
+          "entryInflightAtClick": null,
+          "entrySettled": null,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": null,
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 5,
+        "timeouts": 0,
+        "readyP50": 2805.6,
+        "readyP75": 2910,
+        "readyP95": 2935.7,
+        "readyMax": 2935.7,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 12,
+        "apiFirstScreenP50": 17,
+        "slowestServerTotalP50": 0.9,
+        "apiByPath": [
+          {
+            "path": "/api/issues",
+            "method": "GET",
+            "count": 30,
+            "rounds": 5,
+            "totalP50": 0.7,
+            "totalP95": 0.9,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.8
+          },
+          {
+            "path": "/api/chat/pending-tasks",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.5,
+            "totalP95": 0.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9
+          },
+          {
+            "path": "/api/runtimes",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.5,
+            "totalP95": 0.6,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.3
+          },
+          {
+            "path": "/api/agents",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.4,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10
+          },
+          {
+            "path": "/api/assignee-frequency",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.4,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 59.2
+          },
+          {
+            "path": "/api/chat/sessions",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.5,
+            "totalP95": 0.5,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 8.6
+          },
+          {
+            "path": "/api/projects",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.4,
+            "totalP95": 0.4,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 230.9
+          },
+          {
+            "path": "/api/workspaces/:id/members",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.3,
+            "totalP95": 0.3,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 9.7
+          },
+          {
+            "path": "/api/config",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.1,
+            "totalP95": 0.2,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 10.6
+          },
+          {
+            "path": "/api/me",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.2,
+            "totalP95": 0.2,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.4
+          },
+          {
+            "path": "/api/runtime-workspaces",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.2,
+            "totalP95": 0.2,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 8.3
+          },
+          {
+            "path": "/api/workspaces",
+            "method": "GET",
+            "count": 5,
+            "rounds": 5,
+            "totalP50": 0.1,
+            "totalP95": 0.2,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.9
+          }
+        ]
+      }
+    },
+    {
+      "key": "page-my-issues",
+      "mode": "warm",
+      "target": {
+        "identifier": "my-issues"
+      },
+      "rule": "详情/深链：anchor（agent-stream 优先，否则最新一条评论；深链为 target-comment）可见 + 骨架 0 + 之后 500ms 无移动帧。列表：区域内无骨架且至少 1 个真实行可见 + 500ms 安静。chat：最新一条消息可见 + 500ms 安静；legacy 下 chat/列表退回 H1+无骨架。",
+      "anchorRule": "h1-no-skeleton",
+      "selectorMode": "contract",
+      "skipped": false,
+      "skipReason": null,
+      "hoverLeadMs": 150,
+      "rounds": [
+        {
+          "round": 1,
+          "navStartMs": 4202.6,
+          "clickT": 4202.6,
+          "readyMs": 1607.3000015258785,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 36.500002288817996,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 6,
+          "serialChain": [
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues",
+            "/api/issues"
+          ],
+          "apiCallsTotal": 6,
+          "apiFirstScreen": 6,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5641,
+              "responseEndMs": 5652,
+              "durationMs": 11,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5644.7,
+              "responseEndMs": 5654.6,
+              "durationMs": 9.9,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 9.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 3,
+              "after": 1,
+              "startMs": 5648.4,
+              "responseEndMs": 5659.5,
+              "durationMs": 11.1,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 4,
+              "after": 2,
+              "startMs": 5652,
+              "responseEndMs": 5660.3,
+              "durationMs": 8.3,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 5,
+              "after": 3,
+              "startMs": 5653.7,
+              "responseEndMs": 5661.5,
+              "durationMs": 7.8,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 7.2
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 6,
+              "after": 4,
+              "startMs": 5655.5,
+              "responseEndMs": 5671.7,
+              "durationMs": 16.2,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 15.3
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8964605,
+          "lcpMs": 3012,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 3028,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "My Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 2,
+          "navStartMs": 4051.4,
+          "clickT": 4051.4,
+          "readyMs": 1579.3000007629394,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 17.20000228881827,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 2,
+          "serialChain": [
+            "/api/issues",
+            "/api/issues"
+          ],
+          "apiCallsTotal": 6,
+          "apiFirstScreen": 6,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5466.1,
+              "responseEndMs": 5479.5,
+              "durationMs": 13.4,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5468.1,
+              "responseEndMs": 5480.5,
+              "durationMs": 12.4,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5470.1,
+              "responseEndMs": 5484.2,
+              "durationMs": 14.1,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5472.4,
+              "responseEndMs": 5484.7,
+              "durationMs": 12.3,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5474.3,
+              "responseEndMs": 5485.3,
+              "durationMs": 11,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5476.1,
+              "responseEndMs": 5488,
+              "durationMs": 11.9,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.8,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8964605,
+          "lcpMs": 2840,
+          "slowestServerTotalMs": 1,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2871,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "My Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 3,
+          "navStartMs": 4155.1,
+          "clickT": 4155.1,
+          "readyMs": 1525.3000015258785,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 11.60000076293909,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 2,
+          "serialChain": [
+            "/api/issues",
+            "/api/issues"
+          ],
+          "apiCallsTotal": 6,
+          "apiFirstScreen": 6,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5521.7,
+              "responseEndMs": 5534,
+              "durationMs": 12.3,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5523.7,
+              "responseEndMs": 5536.7,
+              "durationMs": 13,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5525.4,
+              "responseEndMs": 5540.1,
+              "durationMs": 14.7,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5527.1,
+              "responseEndMs": 5539.5,
+              "durationMs": 12.4,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5528.8,
+              "responseEndMs": 5540.7,
+              "durationMs": 11.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5530.5,
+              "responseEndMs": 5543.1,
+              "durationMs": 12.6,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.9
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8964605,
+          "lcpMs": 2940,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2968,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "My Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 4,
+          "navStartMs": 4025.6,
+          "clickT": 4025.6,
+          "readyMs": 1581.300001525879,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 21.199999237060638,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 3,
+          "serialChain": [
+            "/api/issues",
+            "/api/issues",
+            "/api/issues"
+          ],
+          "apiCallsTotal": 6,
+          "apiFirstScreen": 6,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5444.4,
+              "responseEndMs": 5458.1,
+              "durationMs": 13.7,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 1,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.7
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5446.3,
+              "responseEndMs": 5458.9,
+              "durationMs": 12.6,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5448.3,
+              "responseEndMs": 5463.3,
+              "durationMs": 15,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14.3
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5450.1,
+              "responseEndMs": 5461.5,
+              "durationMs": 11.4,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.8
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5451.7,
+              "responseEndMs": 5462.5,
+              "durationMs": 10.8,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 3,
+              "after": 3,
+              "startMs": 5453.5,
+              "responseEndMs": 5465.8,
+              "durationMs": 12.3,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.7
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8964605,
+          "lcpMs": 2800,
+          "slowestServerTotalMs": 1,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2834,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "My Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        },
+        {
+          "round": 5,
+          "navStartMs": 4010.3,
+          "clickT": 4010.3,
+          "readyMs": 1595.1000015258787,
+          "readyTimeout": false,
+          "firstRealMs": null,
+          "anchorVisibleMs": 29.100001525878724,
+          "anchorName": "none",
+          "anchorRule": "h1-no-skeleton",
+          "appReadyMs": null,
+          "appReadyForced": false,
+          "dataFreshAtReady": false,
+          "jumpCount": 0,
+          "jumpPx": 0,
+          "jumps": [],
+          "layoutShiftCount": 0,
+          "cls": 0,
+          "serialDepth": 2,
+          "serialChain": [
+            "/api/issues",
+            "/api/issues"
+          ],
+          "apiCallsTotal": 6,
+          "apiFirstScreen": 6,
+          "apiFirstScreenEntries": [
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5438.7,
+              "responseEndMs": 5453.6,
+              "durationMs": 14.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.9,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 14
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5440.7,
+              "responseEndMs": 5453.8,
+              "durationMs": 13.1,
+              "encodedBytes": 702,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 12.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5442.5,
+              "responseEndMs": 5456.6,
+              "durationMs": 14.1,
+              "encodedBytes": 427,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 13.5
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 1,
+              "after": null,
+              "startMs": 5444.1,
+              "responseEndMs": 5455.8,
+              "durationMs": 11.7,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.6,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5445.9,
+              "responseEndMs": 5456.8,
+              "durationMs": 10.9,
+              "encodedBytes": 23,
+              "serverTiming": {
+                "total": 0.5,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 10.4
+            },
+            {
+              "path": "/api/issues",
+              "method": "GET",
+              "wave": 2,
+              "after": 0,
+              "startMs": 5447.6,
+              "responseEndMs": 5459.4,
+              "durationMs": 11.8,
+              "encodedBytes": 708,
+              "serverTiming": {
+                "total": 0.7,
+                "db": 0,
+                "dbp": 0,
+                "dbq": 0,
+                "dbb": 0
+              },
+              "gapMs": 11.1
+            }
+          ],
+          "chunksLoaded": 1,
+          "chunkBytes": 8964605,
+          "lcpMs": 2812,
+          "slowestServerTotalMs": 0.9,
+          "blockedWrites": 0,
+          "stubbedWrites": 0,
+          "urlCommitMs": null,
+          "entryReadyMs": 2836,
+          "entryInflightAtClick": 0,
+          "entrySettled": true,
+          "inboxInjected": false,
+          "inboxPageRequestsBeforeStub": null,
+          "clickedRowText": "My Issues",
+          "heapBytes": null,
+          "anchorRectAtReady": null,
+          "targetDepth": {
+            "timelineRequests": 0,
+            "targetIndexFromLatest": null
+          },
+          "selectorEquivalence": {
+            "scrollRoot": "same",
+            "anchor": "absent",
+            "itemsContractOnly": 0,
+            "itemsLegacyOnly": 0
+          }
+        }
+      ],
+      "stats": {
+        "n": 5,
+        "timeouts": 0,
+        "readyP50": 1581.3,
+        "readyP75": 1595.1,
+        "readyP95": 1607.3,
+        "readyMax": 1607.3,
+        "firstRealP50": null,
+        "jumpsMax": 0,
+        "jumpPxMax": 0,
+        "serialDepthMax": 6,
+        "apiFirstScreenP50": 6,
+        "slowestServerTotalP50": 0.9,
+        "apiByPath": [
+          {
+            "path": "/api/issues",
+            "method": "GET",
+            "count": 30,
+            "rounds": 5,
+            "totalP50": 0.7,
+            "totalP95": 1,
+            "dbP95": 0,
+            "dbqMax": 0,
+            "dbbMax": 0,
+            "gapP50": 11.5
+          }
+        ]
+      }
+    }
+  ],
+  "blockedWrites": [],
+  "stubbedWrites": []
+}

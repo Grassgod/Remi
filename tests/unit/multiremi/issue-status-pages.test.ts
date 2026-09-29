@@ -55,6 +55,7 @@ describe(`MUL-395 status pages (${process.env.MULTIREMI_TEST_POSTGRES_URL ? "Pos
     await equivalent("&project_id=prj_status_primary", STATUSES, 0);
   });
   it("only counts archives when requested, using the workspace-wide count", async () => {
+    await h.request("/api/issues/status-pages?statuses=todo&limit=0");
     const without = await h.request("/api/issues/status-pages?statuses=todo&limit=50&project_id=prj_status_primary");
     const withCount = await h.request("/api/issues/status-pages?statuses=todo&limit=50&project_id=prj_status_primary&include_archived_total=true");
     const single = await h.request("/api/issues?archived_only=true&limit=0");
@@ -76,7 +77,22 @@ describe(`MUL-395 status pages (${process.env.MULTIREMI_TEST_POSTGRES_URL ? "Pos
       expect(response.body).toEqual({ error: "workspace not found" });
     }
   });
+  it("assignee boards opt into the same workspace archive count without changing default responses", async () => {
+    await h.request("/api/issues/grouped?group_by=assignee&project_id=prj_absent");
+    for (const prefix of ["/api/issues", "/api/multiremi/issues"]) {
+      const path = `${prefix}/grouped?group_by=assignee&project_id=prj_absent`;
+      const without = await h.request(path);
+      const withCount = await h.request(`${path}&include_archived_total=true`);
+      expect(without.body).not.toHaveProperty("archived_total");
+      const { archived_total, ...groups } = withCount.body;
+      expect(groups).toEqual(without.body);
+      expect(archived_total).toBe(21);
+      expect(withCount.dbq).toBe(without.dbq + 1);
+      expect((await h.request(`${path}&workspace_id=foreign&include_archived_total=true`)).status).toBe(404);
+    }
+  });
   it("dbq golden: stays constant across 1/4/7 statuses and 1/60/300 issues per status", async () => {
+    await h.request("/api/issues/status-pages?statuses=todo&limit=0");
     const measurements: number[] = [];
     for (const count of [1, 60, 300]) {
       for (const width of [1, 4, 7]) {

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "@multiremi/core/api";
 import type { ApiClient } from "@multiremi/core/api/client";
-import { myIssueListOptions } from "@multiremi/core/issues/queries";
+import { myIssueListOptions, PAGINATED_STATUSES } from "@multiremi/core/issues/queries";
 import { resetAfterFirstScreenForTest } from "@multiremi/core/platform/use-after-first-screen";
 import { NavigationProvider } from "../navigation";
 import { useListPerfMarker } from "./use-list-perf-marker";
@@ -12,10 +12,12 @@ describe("list marker with real my-issues queries", () => {
   it("disappears for scope and sort requests, but persists for a client filter", async () => {
     resetAfterFirstScreenForTest();
     const pending: Array<() => void> = [];
-    const listIssues = vi.fn(() => new Promise((resolve) => {
-      pending.push(() => resolve({ issues: [], total: 0 }));
+    const listIssueStatusPages = vi.fn(() => new Promise((resolve) => {
+      pending.push(() => resolve({ groups: Object.fromEntries(PAGINATED_STATUSES.map((status) => [status, {
+        issues: [], total: 0, has_more: false,
+      }])) }));
     }));
-    setApiInstance({ listIssues } as unknown as ApiClient);
+    setApiInstance({ listIssueStatusPages } as unknown as ApiClient);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     function Probe({ scope, sorted, filter }: { scope: string; sorted: boolean; filter: string }) {
       const query = useQuery(myIssueListOptions(
@@ -40,20 +42,21 @@ describe("list marker with real my-issues queries", () => {
     const { rerender, unmount } = render(tree("assigned"));
     expect(screen.getByTestId("list")).not.toHaveAttribute("data-perf-scroll");
     await settle();
-    const initialRequests = listIssues.mock.calls.length;
+    const initialRequests = listIssueStatusPages.mock.calls.length;
+    expect(initialRequests).toBe(1);
     rerender(tree("created"));
     expect(screen.getByTestId("list")).not.toHaveAttribute("data-perf-scroll");
     await settle();
-    expect(listIssues.mock.calls.length).toBeGreaterThan(initialRequests);
-    const scopeRequests = listIssues.mock.calls.length;
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(initialRequests + 1);
+    const scopeRequests = listIssueStatusPages.mock.calls.length;
     rerender(tree("created", true));
     expect(screen.getByTestId("list")).not.toHaveAttribute("data-perf-scroll");
     await settle();
-    expect(listIssues.mock.calls.length).toBeGreaterThan(scopeRequests);
-    const sortedRequests = listIssues.mock.calls.length;
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(scopeRequests + 1);
+    const sortedRequests = listIssueStatusPages.mock.calls.length;
     rerender(tree("created", true, "todo"));
     expect(screen.getByTestId("list")).toHaveAttribute("data-perf-scroll", "list");
-    expect(listIssues).toHaveBeenCalledTimes(sortedRequests);
+    expect(listIssueStatusPages).toHaveBeenCalledTimes(sortedRequests);
     unmount();
     client.clear();
     resetAfterFirstScreenForTest();

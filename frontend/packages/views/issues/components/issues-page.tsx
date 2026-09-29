@@ -140,8 +140,9 @@ export function IssuesPage() {
   // MUL-472 item 5: prove this list is showing the rows the page's own request
   // returned (`status === "success"` and not `keepPreviousData` leftovers).
   const perfMarker = useListPerfMarker({
-    status: snapshotPending || archivedCountQuery.isPending ? "pending"
-      : archivedCountQuery.isError || (snapshotIsLoadBearing && snapshotQuery.isError) ? "error"
+    status: (usesAssigneeBoard ? assigneeGroupsQuery.isError : statusIssuesQuery.isError)
+      || (snapshotIsLoadBearing && snapshotQuery.isError) ? "error"
+      : snapshotPending || archivedCountQuery.isPending ? "pending"
       : usesAssigneeBoard ? assigneeGroupsQuery.status : statusIssuesQuery.status,
     isPlaceholderData: usesAssigneeBoard
       ? assigneeGroupsQuery.isPlaceholderData
