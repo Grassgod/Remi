@@ -983,7 +983,18 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store);
-  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId));
+  registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId),
+    (taskId, fields) => {
+      // MUL-432 segment 2 item 5. The terminal transition has already
+      // committed, so a failed card write is logged and never fails the report.
+      try {
+        store.recordTurnCardCompletionFields(taskId, fields);
+      } catch (error) {
+        log.warn("Round-card write from the terminal report failed", {
+          taskId, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();

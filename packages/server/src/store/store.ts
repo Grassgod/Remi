@@ -122,6 +122,7 @@ import {
   type TaskTracePointerWriteResult,
 } from "@multiremi/store/repos/task-traces-repo.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import {
   TraceBackfillProgressRepo,
   type TraceBackfillProgress,
@@ -4287,6 +4288,39 @@ runMigrations(this.db);
     fields: Parameters<ConversationLogRepo["updateTurnCardWithinTransaction"]>[1],
   ): ConversationLogEntry | null {
     return this.conversationLog.updateTurnCardWithinTransaction(taskId, fields);
+  }
+
+  /**
+   * MUL-432 segment 2 item 5: write the round-card fields of a daemon's
+   * `task.complete` / `task.fail` frame onto the task's `turn` card. Only
+   * `trace.event_count`, `tool_call_count`, `type_histogram` and `model` are
+   * written, through the same writer as the trace backfill (segment 1 item 8).
+   * The frame's `final_reply_md` is not (ruling (z)): the chat card keeps the
+   * assistant message and the Issue card its `final_entry_id` from the terminal
+   * write path. `null` — a daemon that sent no fields, or malformed ones —
+   * writes nothing.
+   *
+   * The frame seam runs once, after the terminal transition commits, so this
+   * owns its own transaction under the same workspace lock as that path, and
+   * is idempotent per task: a card that already carries the values keeps its
+   * revision. No card (a chat turn whose reply did not land) is skipped.
+   * Returns whether the card changed.
+   */
+  recordTurnCardCompletionFields(taskId: string, fields: DaemonTaskCompletionFields | null): boolean {
+    if (!fields) return false;
+    const task = this.getTask(taskId);
+    if (!task) return false;
+    const summary: TraceBackfillTurnSummary = {
+      taskId,
+      eventCount: fields.trace.event_count,
+      toolCallCount: fields.trace.tool_call_count,
+      typeHistogram: fields.trace.type_histogram.map(({ type, tool, count }) => ({ type, tool, count })),
+      model: fields.model ? { provider: fields.model.provider, model: fields.model.model } : null,
+    };
+    return this.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
+      return this.traceBackfillProgress.fillTurnCards([summary]).updated === 1;
+    })();
   }
 
   appendConversationLog(input: AppendConversationLogInput): ConversationLogEntry {
