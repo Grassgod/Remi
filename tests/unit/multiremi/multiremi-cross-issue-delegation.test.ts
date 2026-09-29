@@ -496,6 +496,6 @@ for (const backend of ["sqlite", "postgres"] as const) {
       // The leader never waited: every child report landed while the leader's
       // own round was already over, and the single queued return is claimable.
       expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(queued[0]!.id);
-    }));
+    }), backend === "postgres" ? 15_000 : 5_000);
   });
 }
