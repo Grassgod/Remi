@@ -440,5 +440,40 @@ for (const backend of backends) {
         expect(report.informational.cross_switch_daemon_owned).toBe(0);
       });
     }, TIMEOUT);
+
+    it("QA2: acknowledged cross-switch reconciliation must reject an unreadable active pointer", async () => {
+      await withWorld(backend, (db) => seedChatTask(db, "tsk_broken", { endedAt: AFTER_CUTOFF, seqs: [1, 40] }), async (world) => {
+        await world.daemonUpload({ tsk_broken: traceFileBody({ events: DAEMON_EVENTS, taskId: "tsk_broken" }) });
+        await world.run({ crossSwitchAck: 1 });
+        const intact = await reconcileTraceBackfill(world.db, { archiveRoot: world.root, oldTableStoppedAt: CUTOFF });
+        expect(intact).toMatchObject({ ok: true, mismatch_total: 0, checked_tasks: 1, checked_rows: 2 });
+        expect(intact.informational.cross_switch_daemon_owned).toBe(1);
+
+        // The daemon's pointer now names a digest its member cannot match: the trace API cannot read it.
+        world.db.run("UPDATE multiremi_task_traces SET sha256 = ? WHERE task_id = ?", "0".repeat(64), "tsk_broken");
+        const reader = new TraceReader({
+          store: world.opened.store,
+          daemon: new InMemoryDaemonTraceReader(() => null),
+          archive: new SessionArchiveReader({ store: world.opened.store, root: world.root }),
+        });
+        expect(await reader.readTrace("tsk_broken")).toMatchObject({ state: "unreachable", reason: "archive_read_failed" });
+
+        const reconciled = await reconcileTraceBackfill(world.db, { archiveRoot: world.root, oldTableStoppedAt: CUTOFF });
+        expect(reconciled.ok).toBe(false);
+        expect(reconciled.mismatches).toMatchObject({ active_pointer: 1, active_member_unreadable: 1 });
+        expect(reconciled.mismatch_total).toBe(2);
+        expect(reconciled.samples.mismatch).toEqual([
+          expect.objectContaining({
+            category: "active_pointer", task_id: "tsk_broken", reason: "pointer disagrees with the index entry: sha256",
+          }),
+          expect.objectContaining({
+            category: "active_member_unreadable", task_id: "tsk_broken", state: "unreachable", reason: "archive_read_failed",
+          }),
+        ]);
+        // The backfill member is still checked against the old rows as the prefix backup, and still agrees.
+        expect(reconciled).toMatchObject({ checked_tasks: 1, checked_rows: 2 });
+        expect(reconciled.informational.cross_switch_daemon_owned).toBe(1);
+      });
+    }, TIMEOUT);
   });
 }

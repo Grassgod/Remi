@@ -17,6 +17,12 @@
  * cross-switch, whose backfill member is still compared as a prefix backup and
  * whose card is left to the daemon.
  *
+ * A daemon-owned pointer is what readers follow, so it is checked on its own
+ * (MUL-432 QA round 2, M1): its archive is ready, the member it names is in
+ * that archive's index exactly as the pointer records it, and
+ * `TraceReader.readTrace` pages through it to the end. Its events count on the
+ * daemon's seq axis, so they are never compared with the old rows.
+ *
  * Nothing here writes: raw SELECTs only, no `MultiremiStore` (its constructor
  * migrates), archives opened read-only without following symlinks.
  */
@@ -24,6 +30,10 @@ import { constants } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { SqlDatabase } from "../../packages/server/src/store/db/postgres.js";
+import type { MultiremiStore } from "../../packages/server/src/store/store.js";
+import type { DaemonTraceReader } from "../../packages/server/src/api/trace/daemon-trace-reader.js";
+import { SessionArchiveReader } from "../../packages/server/src/session-archive/reader.js";
+import { TRACE_READ_MAX_LIMIT, TraceReader } from "../../packages/server/src/trace/trace-reader.js";
 import {
   parseSessionArchiveIndex,
   SESSION_ARCHIVE_INDEX_MEMBER,
@@ -31,6 +41,7 @@ import {
   SESSION_ARCHIVE_TRACES_PREFIX,
   splitTraceMemberLines,
   type SessionArchiveIndex,
+  type MultiremiTaskTrace,
   type SessionArchiveMemberIndexEntry,
 } from "../../packages/contracts/src/session-archive.js";
 import { checkTraceFileLines, isTraceFileTrailer } from "../../packages/contracts/src/trace-file.js";
@@ -69,6 +80,10 @@ export type TraceReconcileMismatch =
   | "index"
   | "pointer"
   | "pointer_owned_by_daemon_unexpected"
+  /** A daemon-owned pointer disagrees with its archive: not ready, member absent, fields differ. */
+  | "active_pointer"
+  /** `TraceReader.readTrace` cannot page through the member a daemon-owned pointer names. */
+  | "active_member_unreadable"
   | "member_missing"
   | "member_unreadable"
   | "archive_missing"
@@ -77,7 +92,8 @@ export type TraceReconcileMismatch =
 
 export const TRACE_RECONCILE_MISMATCHES: readonly TraceReconcileMismatch[] = [
   "seq_set", "line_digest", "event_count", "header", "trailer", "index", "pointer",
-  "pointer_owned_by_daemon_unexpected", "member_missing", "member_unreadable", "archive_missing", "progress", "turn_card",
+  "pointer_owned_by_daemon_unexpected", "active_pointer", "active_member_unreadable",
+  "member_missing", "member_unreadable", "archive_missing", "progress", "turn_card",
 ];
 
 export interface TraceReconcileOptions {
@@ -185,7 +201,10 @@ interface OpenedArchive {
   directory: Map<string, ZipDirectoryEntry>;
 }
 
-/** Open a backfill archive read-only, refusing paths that leave the root or end in a symlink. */
+/**
+ * Open a v2 archive (a backfill's or a daemon's) read-only, refusing paths that
+ * leave the root or end in a symlink.
+ */
 export async function openTraceBackfillArchive(root: string, relativePath: string): Promise<OpenedArchive> {
   const base = resolve(root);
   const path = resolve(base, relativePath);
@@ -583,10 +602,14 @@ async function reconcileSubject(
       }
 
       // Check what a reader reads: a backfill pointer is followed to the member
-      // it names. Under any other owner the backfill member is still checked, as
-      // the prefix backup of a cross-switch task.
+      // it names. A daemon-owned pointer is read the way the trace API reads it,
+      // and the backfill member is still checked, as the prefix backup of a
+      // cross-switch task.
       const pointer = readPointer(db, taskId);
       const backfillPointer = checkPointerOwner(pointer, backfillRow, progress, context, detail);
+      if (pointer?.location === "archive" && pointer.source === "daemon") {
+        await checkActivePointer(db, taskId, pointer, context, detail);
+      }
       const archiveId = backfillPointer ? pointer!.archive_id! : backfillRow.archive_id;
       const archive = await openArchive(archiveId);
       if (archive instanceof Error) {
@@ -752,6 +775,123 @@ function checkPointerEntry(
     && pointer.head_seq === head
     && pointer.closed;
   if (!same) context.mismatch("pointer", { ...detail, reason: "pointer disagrees with the index entry" });
+}
+
+/**
+ * A daemon-owned pointer is what the trace API serves for its task, so it must
+ * lead somewhere readable (MUL-432 QA round 2, M1). Two verdicts, each counted
+ * at most once per task:
+ * - `active_pointer`: its archive row is `ready`, the member it names is in
+ *   that archive's index for this task, the index entry agrees with the
+ *   central directory, and the pointer carries the entry's fields exactly as
+ *   ingest copies them (`buildTracePointers`);
+ * - `active_member_unreadable`: `TraceReader.readTrace` — the class
+ *   `GET /api/tasks/:id/trace` uses, which verifies the member's sha256 —
+ *   pages from seq 0 to eof, every page `ok` from the archive.
+ * The member's events are on the daemon's seq axis, so neither its heads nor
+ * its lines are compared with the old rows or the backfill member.
+ */
+async function checkActivePointer(
+  db: SqlDatabase,
+  taskId: string,
+  pointer: PointerRow,
+  context: SubjectContext,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  const where = { ...detail, archive_id: pointer.archive_id, member_path: pointer.member_path };
+  const inconsistency = await activePointerInconsistency(db, taskId, pointer, context.root);
+  if (inconsistency) context.mismatch("active_pointer", { ...where, reason: inconsistency });
+
+  // The reader sees only this pointer and the archive rows: it never reaches the
+  // store's task, runtime or pointer lookups, nor the daemon, for an archive pointer.
+  const archives = {
+    getSessionArchive: (archiveId: string) => {
+      const row = readArchiveRow(db, archiveId);
+      return row ? { id: row.id, status: row.status, relativePath: row.relativePath } : null;
+    },
+  } as unknown as MultiremiStore;
+  const noDaemon: DaemonTraceReader = {
+    read: () => Promise.reject(new Error("reconcile reads archive pointers only")),
+  };
+  const trace: MultiremiTaskTrace = {
+    taskId,
+    location: "archive",
+    runtimeId: null,
+    archiveId: pointer.archive_id,
+    memberPath: pointer.member_path,
+    dataOffset: pointer.data_offset,
+    compressedSize: pointer.compressed_size,
+    uncompressedSize: pointer.uncompressed_size,
+    sha256: pointer.sha256,
+    eventCount: pointer.event_count,
+    headSeq: pointer.head_seq,
+    closed: pointer.closed,
+    updatedAt: "",
+  };
+  const reader = new TraceReader({
+    store: archives,
+    daemon: noDaemon,
+    archive: new SessionArchiveReader({ store: archives, root: resolve(context.root) }),
+    getPointer: () => trace,
+  });
+  let after = 0;
+  for (let pages = 1; ; pages++) {
+    const page = await reader.readTrace(taskId, after, TRACE_READ_MAX_LIMIT);
+    if (page.state !== "ok" || page.source !== "archive") {
+      context.mismatch("active_member_unreadable", {
+        ...where, after_seq: after, state: page.state, source: page.source, reason: page.reason ?? null,
+      });
+      return;
+    }
+    if (page.eof) return;
+    if (page.next_after_seq <= after) {
+      context.mismatch("active_member_unreadable", { ...where, after_seq: after, pages, reason: "no progress before eof" });
+      return;
+    }
+    after = page.next_after_seq;
+  }
+}
+
+/** Why a daemon-owned pointer disagrees with the archive it names, or null when it agrees. */
+async function activePointerInconsistency(
+  db: SqlDatabase,
+  taskId: string,
+  pointer: PointerRow,
+  root: string,
+): Promise<string | null> {
+  if (!pointer.archive_id || !pointer.member_path) return "pointer names no archive member";
+  const row = readArchiveRow(db, pointer.archive_id);
+  if (!row) return "archive has no row";
+  if (row.status !== "ready") return `archive is ${row.status}`;
+  let archive: OpenedArchive;
+  try {
+    archive = await openTraceBackfillArchive(root, row.relativePath);
+  } catch (error) {
+    return `archive cannot be opened: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  try {
+    const entry = archive.index.members.find((member) => member.path === pointer.member_path);
+    if (!entry) return "member is not in the archive index";
+    if (entry.kind !== "trace" || entry.task_id !== taskId) return `member belongs to ${entry.task_id ?? entry.kind}`;
+    const central = archive.directory.get(entry.path);
+    if (!central || central.dataOffset !== entry.data_offset || central.compressedSize !== entry.compressed_size
+      || central.uncompressedSize !== entry.uncompressed_size || central.localHeaderOffset !== entry.local_header_offset) {
+      return "index entry disagrees with the central directory";
+    }
+    const fields = [
+      ["data_offset", pointer.data_offset, entry.data_offset],
+      ["compressed_size", pointer.compressed_size, entry.compressed_size],
+      ["uncompressed_size", pointer.uncompressed_size, entry.uncompressed_size],
+      ["sha256", pointer.sha256, entry.sha256],
+      ["event_count", pointer.event_count, entry.event_count ?? null],
+      ["head_seq", pointer.head_seq, entry.head ?? 0],
+      ["closed", pointer.closed, entry.closed ?? false],
+    ] as const;
+    const differ = fields.filter(([, actual, expected]) => actual !== expected).map(([name]) => name);
+    return differ.length ? `pointer disagrees with the index entry: ${differ.join(", ")}` : null;
+  } finally {
+    await archive.handle.close().catch(() => {});
+  }
 }
 
 /**

@@ -40,6 +40,7 @@ import {
   truncatedJsonText,
   type SyntheticMessage,
 } from "../../../scripts/lib/task-trace-synthetic.js";
+import { buildArchiveFixture, traceFileBody } from "./session-archive-fixtures.js";
 import { traceBackfillBackends, type OpenedStore, type StoreBackend } from "./trace-backfill-backends.js";
 
 const TIMEOUT = 120_000;
@@ -103,7 +104,34 @@ function insertPointer(
   );
 }
 
-/** A daemon-uploaded archive row. Its bytes are never read by the backfill. */
+/**
+ * The daemon archive that already owns `tsk_old_a` (head 1) and `tsk_old_b`
+ * (head 9). Its bytes are real and every world writes them at the row's path:
+ * reconcile reads a daemon-owned pointer the way the trace API does (MUL-432
+ * QA round 2, M1).
+ */
+const DAEMON_OLD = await buildArchiveFixture({
+  subject: { kind: "issue", id: "iss_old" },
+  traces: {
+    tsk_old_a: traceFileBody({ events: 1, taskId: "tsk_old_a" }),
+    tsk_old_b: traceFileBody({ events: 9, taskId: "tsk_old_b" }),
+  },
+});
+const DAEMON_OLD_PATH = "workspaces/x/sar_daemon_old/sessions.zip";
+
+/** A pointer at a member of `DAEMON_OLD`, carrying its index entry as ingest writes it. */
+function insertDaemonOldPointer(db: SqlDatabase, taskId: string): void {
+  const entry = DAEMON_OLD.index.members.find((member) => member.task_id === taskId)!;
+  db.run(
+    `INSERT INTO multiremi_task_traces (task_id, location, runtime_id, archive_id, member_path, data_offset,
+       compressed_size, uncompressed_size, sha256, event_count, head_seq, closed, updated_at)
+     VALUES (?, 'archive', ?, 'sar_daemon_old', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    taskId, RUNTIME, entry.path, entry.data_offset, entry.compressed_size, entry.uncompressed_size, entry.sha256,
+    entry.event_count ?? null, entry.head ?? 0, entry.closed ? 1 : 0, T0,
+  );
+}
+
+/** A daemon-uploaded archive row. Only `sar_daemon_old` has bytes on disk. */
 function insertDaemonArchive(
   db: SqlDatabase,
   input: { id: string; kind: "issue" | "chat"; subjectId: string; traceTaskIds: string[] },
@@ -199,10 +227,10 @@ function seedWorld(db: SqlDatabase): void {
   insertDaemonArchive(db, { id: "sar_daemon_old", kind: "issue", subjectId: "iss_old", traceTaskIds: ["tsk_old_a", "tsk_old_b"] });
   insertSyntheticTask(db, task("tsk_old_a", { issueId: "iss_old" }));
   insertSyntheticMessages(db, "tsk_old_a", rows([1, 2]));
-  insertPointer(db, { taskId: "tsk_old_a", location: "archive", archiveId: "sar_daemon_old", eventCount: 1, headSeq: 1 });
+  insertDaemonOldPointer(db, "tsk_old_a");
   insertSyntheticTask(db, task("tsk_old_b", { issueId: "iss_old" }));
   insertSyntheticMessages(db, "tsk_old_b", rows([1, 2]));
-  insertPointer(db, { taskId: "tsk_old_b", location: "archive", archiveId: "sar_daemon_old", eventCount: 9, headSeq: 9 });
+  insertDaemonOldPointer(db, "tsk_old_b");
 
   insertSyntheticTask(db, task("tsk_gone", { issueId: "iss_gone" }));
   insertSyntheticMessages(db, "tsk_gone", rows([1]));
@@ -230,6 +258,10 @@ async function withWorld(
   const root = await mkdtemp(join(tmpdir(), "m432-bf-"));
   try {
     seed(opened.db);
+    if (count(opened.db, "multiremi_session_archives", "id = ?", "sar_daemon_old")) {
+      await mkdir(dirname(join(root, DAEMON_OLD_PATH)), { recursive: true });
+      await writeFile(join(root, DAEMON_OLD_PATH), DAEMON_OLD.bytes);
+    }
     const service = new SessionArchiveService(opened.store, { root, minFreeBytes: 0 });
     const logs: string[] = [];
     const world: World = {
@@ -388,7 +420,9 @@ for (const backend of backends) {
         expect(oldTableDigest(world.db)).toBe(before);
         expect(count(world.db, "multiremi_session_archives")).toBe(archivesBefore);
         expect(count(world.db, "multiremi_trace_backfill_progress")).toBe(0);
-        expect(await listDir(world.root)).toEqual([]);
+        // Nothing but the daemon archive the world started with.
+        expect(await listDir(world.root)).toEqual(["workspaces"]);
+        expect(await listDir(join(world.root, "workspaces"))).toEqual(["x"]);
       });
     }, TIMEOUT);
 
@@ -620,6 +654,8 @@ for (const backend of backends) {
           index: 2,
           pointer: 2,
           pointer_owned_by_daemon_unexpected: 0,
+          active_pointer: 0,
+          active_member_unreadable: 0,
           member_missing: 0,
           member_unreadable: 0,
           archive_missing: 0,
