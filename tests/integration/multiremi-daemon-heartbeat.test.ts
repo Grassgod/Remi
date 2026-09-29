@@ -177,9 +177,10 @@ describe("daemon heartbeat network recovery", () => {
     const bed = await faultTestBed("retired-body");
     try {
       await waitUntil(() => bed.state.claims > 0, "initial healthy polling");
+      // Block v2 hb before retirement so its 4410 cannot preempt the HTTP authority probe.
+      bed.state.armed = true;
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");
       expect(bed.store.retireDaemon("local", "heartbeat-test", plan.snapshot, "local").status).toBe("retired");
-      bed.state.armed = true;
       // The response headers are enough to detect the revocation even when the
       // body never arrives, and local cleanup still runs.
       await waitUntil(() => bed.state.cleanupCalls >= 1, "retirement cleanup after an incomplete authority response", 1_500);
