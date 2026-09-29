@@ -176,5 +176,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(() => f.store.updateQueuedChatTask(chat.id, sent.task!.id, "Tampered")).toThrow();
     expect(() => f.store.prioritizeQueuedChatTask(chat.id, sent.task!.id)).toThrow();
     expect(() => f.store.removeQueuedChatTasks(chat.id, sent.task!.id)).toThrow();
+    f.store.removeQueuedChatTasks(chat.id);
+    expect(f.store.getTask(sent.task!.id)?.status).toBe("queued");
   });
 });

@@ -311,7 +311,7 @@ export class ChatRepo {
     const cancelled = this.ctx.db.transaction(() => {
       this.lockActiveSession(chatSessionId);
       const tasks = taskId ? [this.requireQueuedTask(chatSessionId, taskId)]
-        : this.pendingTasks(chatSessionId).slice(1).filter((task) => task.status === "queued");
+        : this.pendingTasks(chatSessionId).slice(1).filter((task) => task.status === "queued" && !task.wakeSource);
       return tasks.map((task) => {
         const result = this.ctx.tasks().cancelTaskWithinTransaction(task.id, childStatusChangesQ, deferredEventsQ);
         this.ctx.db.run(`UPDATE multiremi_attachments SET chat_message_id = NULL WHERE chat_message_id IN
