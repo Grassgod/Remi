@@ -3673,7 +3673,14 @@ ${routing.sql}
       const now = nowIso();
       const repool = () =>
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          `UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL,
+             work_dir = NULL, dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
+             projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
+             inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
+             inherited_projection_from_seq = NULL, inherited_projection_to_seq = NULL,
+             inherited_projection_token_budget = NULL, inherited_projection_recorded_at = NULL,
+             updated_at = ? WHERE id = ?`,
           [now, String(row.id)],
         );
       // local_directory is checked FIRST, before archived/agent-missing — the
@@ -3686,7 +3693,14 @@ ${routing.sql}
         const rt = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
         this.ctx.db.run(
-          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          `UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL,
+             dispatched_at = NULL, projection_from_seq = NULL, projection_to_seq = NULL,
+             projection_mode = NULL, projection_truncated = 0, projection_omitted_events = 0,
+             projection_estimated_tokens = 0, inherited_projection_truncated = NULL,
+             inherited_projection_omitted_events = NULL, inherited_projection_estimated_tokens = NULL,
+             inherited_projection_from_seq = NULL, inherited_projection_to_seq = NULL,
+             inherited_projection_token_budget = NULL, inherited_projection_recorded_at = NULL,
+             updated_at = ? WHERE id = ?`,
           [newRuntimeId, now, String(row.id)],
         );
       } else if (!task.agent || task.agent.archivedAt || !runtime) {
@@ -3875,7 +3889,7 @@ ${routing.sql}
     // lets any member stamp an arbitrary agent+runtime (a stamp is not proof
     // of authorization). Kept as a JS comment, not inline SQL: an apostrophe
     // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
-    const row = this.ctx.db.query(
+    const claimOne = (): Row | null => this.ctx.db.query(
       `UPDATE multiremi_tasks
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, wait_reason = NULL, updated_at = ?
        WHERE id = (
@@ -3970,12 +3984,35 @@ ${placementAfter.sql}
        AND status = 'queued'
        RETURNING *`,
     ).get(...params) as Row | null;
-    if (!row) return null;
+    for (;;) {
+      const row = claimOne();
+      if (!row) return null;
 
-    // The caller hydrates the selected task exactly once and threads that object through the
-    // snapshot and the response. Hydrating here as well would read the Agent's Skills, files,
-    // project and wiki context a second time for the same task.
-    return this.getTask(String(row.id));
+      const task = this.getTask(String(row.id))!;
+      if (task.issueSessionId && task.wakeSource !== null) {
+        const cursorSeq = this.ctx.issueSessions().getSessionAgentLane(
+          task.issueSessionId, task.agentId, taskExecutionScope(task),
+        )?.cursorSeq ?? 0;
+        const wakeSeq = Number(row.wake_seq ?? 0);
+        if (cursorSeq >= wakeSeq
+          && this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, cursorSeq) === null) {
+          const cancelledAt = nowIso();
+          this.ctx.db.run(`UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?,
+            updated_at = ? WHERE id = ? AND status = 'dispatched'`, [cancelledAt, cancelledAt, task.id]);
+          this.ctx.conversationLog().updateTurnCardWithinTransaction(task.id, { status: "cancelled" });
+          appendPendingTurnAuditWithinTransaction(this.ctx.db, task, "pending_turn_skipped", {
+            reason: "already_covered", wake_source: task.wakeSource,
+            wake_seq: wakeSeq, cursor_seq: cursorSeq,
+          });
+          continue;
+        }
+      }
+
+      // The caller hydrates the selected task exactly once and threads that object through the
+      // snapshot and the response. Hydrating here as well would read the Agent's Skills, files,
+      // project and wiki context a second time for the same task.
+      return task;
+    }
   }
 
   startTask(taskId: string): MultiremiTask {
@@ -4969,7 +5006,8 @@ ${placementAfter.sql}
       && parent.executionFingerprint !== CHAT_ISSUE_DECOUPLED_FINGERPRINT
       && parentAgent != null && parent.provider === parentAgent.provider
       && (invalidatedChatWorkspace || !hasRuntimeProfile || parentRuntimeUsable);
-    if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
+    const promoted = resumeSafe && parent.issueSessionId
+      ? this.promoteSessionAgentLane(parent) : false;
     const retryInput: CreateTaskInput = {
       agentId: parent.agentId,
       taskKind: parent.taskKind,
@@ -5029,6 +5067,7 @@ ${placementAfter.sql}
     const retry = workspaceLockHeld
       ? this.createTaskWithinWorkspaceLock(retryInput, childStatusChanges, deferredEvents)
       : this.createTask(retryInput);
+    if (promoted) this.reRingUnreadIssueLane(parent, childStatusChanges, deferredEvents);
     if (retry.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -5847,8 +5886,13 @@ ${placementAfter.sql}
         // is still caught by laneResumable() at claim time, and a genuinely unresumable
         // transcript surfaces next run as stale_session / api_invalid_request — both
         // resume-unsafe, which resets the lane then and falls back to a bounded bootstrap.
-        if (status === "completed") this.promoteSessionAgentLane(task);
-        else if (!retry && status !== "cancelled")
+        if (status === "completed") {
+          this.promoteSessionAgentLane(task);
+          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+        } else if (status === "cancelled") {
+          this.reRingUnreadIssueLane(task, childStatusChanges, deferredEvents);
+        }
+        else if (!retry)
           this.resetSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task), {
             reason: task.failureReason ? `terminal_failure:${task.failureReason}` : "terminal_failure",
             taskId: task.id,
@@ -6129,8 +6173,8 @@ ${placementAfter.sql}
     }
   }
 
-  private promoteSessionAgentLane(task: MultiremiTask): void {
-    if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return;
+  private promoteSessionAgentLane(task: MultiremiTask): boolean {
+    if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return false;
     const cursorSeq = Math.max(0, task.projectionToSeq ?? 0);
     const now = nowIso();
     const lane = this.ctx.issueSessions().getOrCreateSessionAgentLane(task.issueSessionId, task.agentId, taskExecutionScope(task));
@@ -6175,14 +6219,48 @@ ${placementAfter.sql}
     ];
     // Keep the NULL comparison out of a placeholder expression: SQLite accepts
     // `? IS NULL`, while Postgres cannot infer that placeholder's data type.
-    if (expectedProviderSessionId == null) {
-      this.ctx.db.run(`${update} AND provider_session_id IS NULL`, params);
-    } else {
-      this.ctx.db.run(`${update} AND provider_session_id = ?`, [...params, expectedProviderSessionId]);
-    }
+    const updated = expectedProviderSessionId == null
+      ? this.ctx.db.run(`${update} AND provider_session_id IS NULL`, params)
+      : this.ctx.db.run(`${update} AND provider_session_id = ?`, [...params, expectedProviderSessionId]);
     // Keep the lane row created above even when the guarded update intentionally
     // loses a race; callers can inspect it to diagnose lineage replacement.
     void lane;
+    return updated.changes === 1;
+  }
+
+  private unreadNowEnvelopeSeq(sessionId: string, agentId: string, cursorSeq: number): number | null {
+    const entries = this.ctx.conversationLog().listConversationLogShown(sessionId, { sinceSeq: cursorSeq });
+    return entries.find(entry => entry.author_id !== agentId && entry.metadata.envelope?.wake === "now")?.seq ?? null;
+  }
+
+  private reRingUnreadIssueLane(
+    task: MultiremiTask,
+    childStatusChanges: ChildStatusChangeCollector,
+    deferredEvents: CommitEventQueue,
+  ): void {
+    if (!task.issueSessionId || !task.issueId || task.chatSessionId) return;
+    const executionScope = taskExecutionScope(task);
+    const lane = this.ctx.issueSessions().getSessionAgentLane(task.issueSessionId, task.agentId, executionScope);
+    const cursorSeq = lane?.cursorSeq ?? 0;
+    const seq = this.unreadNowEnvelopeSeq(task.issueSessionId, task.agentId, cursorSeq);
+    if (seq === null) return;
+    const result = this.ensurePendingTurnWithinTransaction({
+      lane: { kind: "issue", issueSessionId: task.issueSessionId, agentId: task.agentId, executionScope },
+      wake: { reason: "re_ring", seq },
+      create: () => this.createTaskWithinWorkspaceLock({
+        agentId: task.agentId,
+        issueId: task.issueId!,
+        issueSessionId: task.issueSessionId!,
+        prompt: `读收件箱。Session ${task.issueSessionId}，从 seq ${cursorSeq + 1} 读取。`,
+        wakeSource: "re_ring",
+        triggerCommentId: null,
+      }, childStatusChanges, deferredEvents, null, executionScope),
+    });
+    if (!result.task) return;
+    if (result.action === "created") deferredEvents.enqueuedTasks.push(result.task);
+    appendPendingTurnAuditWithinTransaction(this.ctx.db, result.task, "re_ring", {
+      action: result.action, wake_source: "re_ring", seq,
+    });
   }
 
   // Post the agent's final reply as an issue comment so the outcome is visible
